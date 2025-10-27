@@ -6,23 +6,38 @@ module command_handler_module
     use yank_stack_module
     use clipboard_module
     use help_display_module, only: show_help
+    use undo_stack_module
     implicit none
     private
 
     public :: handle_key_command, init_command_handler, cleanup_command_handler
 
     type(yank_stack_t) :: yank_stack
+    type(undo_stack_t) :: undo_stack
     character(len=:), allocatable :: search_pattern  ! For ctrl-d functionality
+    logical :: last_action_was_edit = .false.
 
 contains
 
     subroutine init_command_handler()
         call init_yank_stack(yank_stack)
+        call init_undo_stack(undo_stack)
+        last_action_was_edit = .false.
     end subroutine init_command_handler
 
     subroutine cleanup_command_handler()
         call cleanup_yank_stack(yank_stack)
+        call cleanup_undo_stack(undo_stack)
+        if (allocated(search_pattern)) deallocate(search_pattern)
     end subroutine cleanup_command_handler
+
+    subroutine save_undo_state(buffer, editor)
+        type(buffer_t), intent(in) :: buffer
+        type(editor_state_t), intent(in) :: editor
+
+        ! Save current state to undo stack
+        call push_undo_state(undo_stack, buffer, editor%cursors(editor%active_cursor))
+    end subroutine save_undo_state
 
     subroutine handle_key_command(key_str, editor, buffer, should_quit)
         character(len=*), intent(in) :: key_str
@@ -30,9 +45,11 @@ contains
         type(buffer_t), intent(inout) :: buffer
         logical, intent(out) :: should_quit
         integer :: line_count
+        logical :: is_edit_action
 
         should_quit = .false.
         line_count = buffer_get_line_count(buffer)
+        is_edit_action = .false.
 
         select case(trim(key_str))
         ! File operations
@@ -43,6 +60,26 @@ contains
             ! Show help menu
             call show_help(editor)
             ! Screen will be redrawn automatically by main loop
+
+        ! Undo/Redo
+        case('ctrl-z')
+            ! Undo
+            if (can_undo(undo_stack)) then
+                call perform_undo(undo_stack, buffer, editor%cursors(editor%active_cursor))
+                call update_viewport(editor)
+            end if
+
+        case('ctrl-shift-z', 'ctrl-y')
+            ! Redo (ctrl-y conflicts with yank, so we'll use ctrl-shift-z primarily)
+            if (trim(key_str) == 'ctrl-shift-z' .or. &
+                (trim(key_str) == 'ctrl-y' .and. can_redo(undo_stack))) then
+                call perform_redo(undo_stack, buffer, editor%cursors(editor%active_cursor))
+                call update_viewport(editor)
+            else if (trim(key_str) == 'ctrl-y') then
+                ! If not redo, do yank
+                call yank_text(editor%cursors(editor%active_cursor), buffer)
+                is_edit_action = .true.
+            end if
 
         ! Navigation
         case('up')
@@ -127,80 +164,119 @@ contains
             call update_viewport(editor)
 
         case('alt-up')
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             call move_line_up(editor%cursors(editor%active_cursor), buffer)
             call update_viewport(editor)
+            is_edit_action = .true.
 
         case('alt-down')
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             call move_line_down(editor%cursors(editor%active_cursor), buffer)
             call update_viewport(editor)
+            is_edit_action = .true.
 
         case('alt-shift-up')
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             call duplicate_line_up(editor%cursors(editor%active_cursor), buffer)
             call update_viewport(editor)
+            is_edit_action = .true.
 
         case('alt-shift-down')
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             call duplicate_line_down(editor%cursors(editor%active_cursor), buffer)
             call update_viewport(editor)
+            is_edit_action = .true.
 
         ! Text modification
         case('backspace')
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             call handle_backspace(editor%cursors(editor%active_cursor), buffer)
+            is_edit_action = .true.
 
         case('delete')
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             call handle_delete(editor%cursors(editor%active_cursor), buffer)
+            is_edit_action = .true.
 
         case('enter')
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             call handle_enter(editor%cursors(editor%active_cursor), buffer)
+            is_edit_action = .true.
 
         case('tab')
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             call handle_tab(editor%cursors(editor%active_cursor), buffer)
+            is_edit_action = .true.
 
         ! Editing keybinds
         case('ctrl-k')
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             call kill_line_forward(editor%cursors(editor%active_cursor), buffer)
+            is_edit_action = .true.
 
         case('ctrl-u')
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             call kill_line_backward(editor%cursors(editor%active_cursor), buffer)
-
-        case('ctrl-y')
-            call yank_text(editor%cursors(editor%active_cursor), buffer)
+            is_edit_action = .true.
 
         case('ctrl-w')
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             ! Delete word backward (ctrl-w)
             call delete_word_backward(editor%cursors(editor%active_cursor), buffer)
+            is_edit_action = .true.
 
         case('alt-d')
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             ! Delete word forward
             call delete_word_forward(editor%cursors(editor%active_cursor), buffer)
+            is_edit_action = .true.
 
         case('alt-backspace')
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             ! Delete word backward (alt+backspace)
             call delete_word_backward(editor%cursors(editor%active_cursor), buffer)
+            is_edit_action = .true.
 
         case('ctrl-t')
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             ! Transpose characters
             call transpose_characters(editor%cursors(editor%active_cursor), buffer)
+            is_edit_action = .true.
 
         case('ctrl-x')
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             call cut_selection_or_line(editor%cursors(editor%active_cursor), buffer)
+            is_edit_action = .true.
 
         case('ctrl-c')
             call copy_selection_or_line(editor%cursors(editor%active_cursor), buffer)
 
         case('ctrl-v')
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             call paste_clipboard(editor%cursors(editor%active_cursor), buffer)
+            is_edit_action = .true.
 
         case('ctrl-s')
             call save_file(editor, buffer)
 
         case("ctrl-'", "ctrl-apostrophe")
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             call cycle_quotes(editor%cursors(editor%active_cursor), buffer)
+            is_edit_action = .true.
 
         case('ctrl-opt-backspace', 'ctrl-alt-backspace')
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             call remove_brackets(editor%cursors(editor%active_cursor), buffer)
+            is_edit_action = .true.
 
         case('ctrl-d')
             call select_next_match(editor, buffer)
+
+        case('opt-meta-up')
+            call add_cursor_above(editor, buffer)
+
+        case('opt-meta-down')
+            call add_cursor_below(editor, buffer)
 
         case default
             ! Check for mouse events
@@ -208,14 +284,19 @@ contains
                 call handle_mouse_event_action(key_str, editor, buffer)
             ! Regular character input
             else if (len_trim(key_str) == 1) then
+                if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
                 ! Handle character input for all cursors
                 if (size(editor%cursors) > 1) then
                     call insert_char_multiple_cursors(editor, buffer, key_str(1:1))
                 else
                     call insert_char(editor%cursors(editor%active_cursor), buffer, key_str(1:1))
                 end if
+                is_edit_action = .true.
             end if
         end select
+
+        ! Update edit action state
+        last_action_was_edit = is_edit_action
     end subroutine handle_key_command
 
     subroutine move_cursor_up(cursor, line_count)
@@ -275,10 +356,10 @@ contains
             cursor%column = cursor%column + 1
             cursor%desired_column = cursor%column
         else if (cursor%line < line_count) then
-            ! Move to beginning of next line
+            ! Move to start of next line
             cursor%line = cursor%line + 1
             cursor%column = 1
-            cursor%desired_column = 1
+            cursor%desired_column = cursor%column
         end if
 
         if (allocated(line)) deallocate(line)
@@ -286,6 +367,8 @@ contains
 
     subroutine move_cursor_home(cursor)
         type(cursor_t), intent(inout) :: cursor
+
+        cursor%has_selection = .false.  ! Clear selection
         cursor%column = 1
         cursor%desired_column = 1
     end subroutine move_cursor_home
@@ -295,6 +378,7 @@ contains
         type(buffer_t), intent(in) :: buffer
         character(len=:), allocatable :: line
 
+        cursor%has_selection = .false.  ! Clear selection
         line = buffer_get_line(buffer, cursor%line)
         cursor%column = len(line) + 1
         cursor%desired_column = cursor%column
@@ -303,175 +387,142 @@ contains
 
     subroutine move_cursor_page_up(cursor, editor, line_count)
         type(cursor_t), intent(inout) :: cursor
-        type(editor_state_t), intent(inout) :: editor
+        type(editor_state_t), intent(in) :: editor
         integer, intent(in) :: line_count
         integer :: page_size
 
-        page_size = editor%screen_rows - 2  ! Minus status bar and margin
+        cursor%has_selection = .false.  ! Clear selection
+        page_size = editor%screen_rows - 2  ! Leave room for status bar
         cursor%line = max(1, cursor%line - page_size)
-        editor%viewport_line = max(1, editor%viewport_line - page_size)
+        cursor%column = cursor%desired_column
     end subroutine move_cursor_page_up
 
     subroutine move_cursor_page_down(cursor, editor, line_count)
         type(cursor_t), intent(inout) :: cursor
-        type(editor_state_t), intent(inout) :: editor
+        type(editor_state_t), intent(in) :: editor
         integer, intent(in) :: line_count
         integer :: page_size
 
-        page_size = editor%screen_rows - 2  ! Minus status bar and margin
+        cursor%has_selection = .false.  ! Clear selection
+        page_size = editor%screen_rows - 2  ! Leave room for status bar
         cursor%line = min(line_count, cursor%line + page_size)
-        editor%viewport_line = min(max(1, line_count - page_size), editor%viewport_line + page_size)
+        cursor%column = cursor%desired_column
     end subroutine move_cursor_page_down
 
-    function get_buffer_position(cursor, buffer) result(pos)
-        type(cursor_t), intent(in) :: cursor
-        type(buffer_t), intent(in) :: buffer
-        integer :: pos
-        integer :: line_num
-        character(len=:), allocatable :: line
-
-        pos = 0
-        ! Calculate byte position in buffer
-        do line_num = 1, cursor%line - 1
-            line = buffer_get_line(buffer, line_num)
-            pos = pos + len(line) + 1  ! +1 for newline
-            if (allocated(line)) deallocate(line)
-        end do
-        pos = pos + cursor%column
-    end function get_buffer_position
-
-    subroutine insert_char(cursor, buffer, ch)
+    subroutine move_cursor_word_left(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
-        type(buffer_t), intent(inout) :: buffer
-        character(len=1), intent(in) :: ch
-        integer :: pos, selection_start_pos, delete_count
+        type(buffer_t), intent(in) :: buffer
+        character(len=:), allocatable :: line
+        integer :: pos
+        logical :: in_word
 
-        ! If there's a selection, delete it first
-        if (cursor%has_selection) then
-            if (cursor%selection_start_line == cursor%line) then
-                ! Single-line selection
-                selection_start_pos = get_buffer_position_at(buffer, &
-                                        cursor%selection_start_line, cursor%selection_start_col)
-                delete_count = cursor%column - cursor%selection_start_col
-                call buffer_delete(buffer, selection_start_pos, delete_count)
+        cursor%has_selection = .false.  ! Clear selection
+        line = buffer_get_line(buffer, cursor%line)
+        pos = cursor%column - 1
 
-                ! Move cursor to selection start
-                cursor%column = cursor%selection_start_col
-                cursor%has_selection = .false.
-            end if
+        ! Skip whitespace to the left
+        do while (pos > 0 .and. line(pos:pos) == ' ')
+            pos = pos - 1
+        end do
+
+        ! Find start of current/previous word
+        if (pos > 0) then
+            in_word = is_word_char(line(pos:pos))
+            do while (pos > 0 .and. is_word_char(line(pos:pos)) .eqv. in_word)
+                pos = pos - 1
+            end do
+            cursor%column = pos + 1
+        else if (cursor%line > 1) then
+            ! Move to end of previous line
+            cursor%line = cursor%line - 1
+            if (allocated(line)) deallocate(line)
+            line = buffer_get_line(buffer, cursor%line)
+            cursor%column = len(line) + 1
+        else
+            cursor%column = 1
         end if
 
-        pos = get_buffer_position(cursor, buffer)
-        call buffer_insert(buffer, pos, ch)
-        cursor%column = cursor%column + 1
         cursor%desired_column = cursor%column
-    end subroutine insert_char
+        if (allocated(line)) deallocate(line)
+    end subroutine move_cursor_word_left
 
-    function get_buffer_position_at(buffer, line_num, col) result(pos)
+    subroutine move_cursor_word_right(cursor, buffer)
+        type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
-        integer, intent(in) :: line_num, col
-        integer :: pos
-        integer :: current_line
-        character :: ch
+        character(len=:), allocatable :: line
+        integer :: pos, line_count
+        logical :: in_word
 
-        pos = 1
-        current_line = 1
+        cursor%has_selection = .false.  ! Clear selection
+        line = buffer_get_line(buffer, cursor%line)
+        line_count = buffer_get_line_count(buffer)
+        pos = cursor%column
 
-        ! Find position of line
-        do while (current_line < line_num)
-            ch = buffer_get_char(buffer, pos)
-            if (ch == char(10)) then
-                current_line = current_line + 1
-            end if
-            pos = pos + 1
-        end do
+        if (pos <= len(line)) then
+            ! Skip current word
+            in_word = is_word_char(line(pos:pos))
+            do while (pos <= len(line) .and. is_word_char(line(pos:pos)) .eqv. in_word)
+                pos = pos + 1
+            end do
 
-        ! Add column offset
-        pos = pos + col - 1
-    end function get_buffer_position_at
+            ! Skip whitespace
+            do while (pos <= len(line) .and. line(pos:pos) == ' ')
+                pos = pos + 1
+            end do
 
-    subroutine insert_char_multiple_cursors(editor, buffer, ch)
-        type(editor_state_t), intent(inout) :: editor
-        type(buffer_t), intent(inout) :: buffer
-        character(len=1), intent(in) :: ch
-        integer :: i, offset
-        integer, allocatable :: line_offsets(:)
+            cursor%column = pos
+        else if (cursor%line < line_count) then
+            ! Move to start of next line
+            cursor%line = cursor%line + 1
+            cursor%column = 1
+        else
+            cursor%column = len(line) + 1
+        end if
 
-        ! Track line offsets as we modify the buffer
-        allocate(line_offsets(size(editor%cursors)))
-        line_offsets = 0
+        cursor%desired_column = cursor%column
+        if (allocated(line)) deallocate(line)
+    end subroutine move_cursor_word_right
 
-        ! Process cursors from bottom to top to avoid position conflicts
-        do i = size(editor%cursors), 1, -1
-            ! Apply offset from previous insertions on the same line
-            if (i < size(editor%cursors)) then
-                if (editor%cursors(i)%line == editor%cursors(i+1)%line) then
-                    ! Same line - adjust column by previous insertions
-                    editor%cursors(i)%column = editor%cursors(i)%column + line_offsets(i+1)
-                    if (editor%cursors(i)%has_selection) then
-                        editor%cursors(i)%selection_start_col = &
-                            editor%cursors(i)%selection_start_col + line_offsets(i+1)
-                    end if
-                end if
-            end if
+    function is_word_char(ch) result(is_word)
+        character, intent(in) :: ch
+        logical :: is_word
 
-            ! Insert character at this cursor
-            call insert_char(editor%cursors(i), buffer, ch)
-
-            ! Track offset for this line
-            if (editor%cursors(i)%has_selection) then
-                ! Selection was replaced - net change is 1 char minus selection length
-                line_offsets(i) = 1
-            else
-                ! Simple insertion
-                line_offsets(i) = 1
-            end if
-
-            ! Pass offset to previous cursors on same line
-            if (i > 1) then
-                if (editor%cursors(i-1)%line == editor%cursors(i)%line) then
-                    line_offsets(i-1) = line_offsets(i)
-                end if
-            end if
-        end do
-
-        deallocate(line_offsets)
-    end subroutine insert_char_multiple_cursors
+        is_word = (ch >= 'a' .and. ch <= 'z') .or. &
+                  (ch >= 'A' .and. ch <= 'Z') .or. &
+                  (ch >= '0' .and. ch <= '9') .or. &
+                  ch == '_'
+    end function is_word_char
 
     subroutine handle_backspace(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
-        integer :: pos
 
         if (cursor%column > 1) then
+            ! Delete character before cursor
             cursor%column = cursor%column - 1
-            pos = get_buffer_position(cursor, buffer)
-            call buffer_delete(buffer, pos, 1)
+            call buffer_delete_at_cursor(buffer, cursor)
             cursor%desired_column = cursor%column
         else if (cursor%line > 1) then
             ! Join with previous line
-            call move_cursor_left(cursor, buffer)
-            pos = get_buffer_position(cursor, buffer)
-            call buffer_delete(buffer, pos, 1)  ! Delete the newline
+            call join_line_with_previous(cursor, buffer)
         end if
     end subroutine handle_backspace
 
     subroutine handle_delete(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
-        integer :: pos
         character(len=:), allocatable :: line
         integer :: line_count
 
         line = buffer_get_line(buffer, cursor%line)
         line_count = buffer_get_line_count(buffer)
 
-        pos = get_buffer_position(cursor, buffer)
         if (cursor%column <= len(line)) then
-            call buffer_delete(buffer, pos, 1)
+            ! Delete character at cursor
+            call buffer_delete_at_cursor(buffer, cursor)
         else if (cursor%line < line_count) then
-            ! Delete newline to join with next line
-            call buffer_delete(buffer, pos, 1)
+            ! Join with next line
+            call join_line_with_next(cursor, buffer)
         end if
 
         if (allocated(line)) deallocate(line)
@@ -480,10 +531,8 @@ contains
     subroutine handle_enter(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
-        integer :: pos
 
-        pos = get_buffer_position(cursor, buffer)
-        call buffer_insert(buffer, pos, char(10))  ! Insert newline
+        call buffer_insert_newline(buffer, cursor)
         cursor%line = cursor%line + 1
         cursor%column = 1
         cursor%desired_column = 1
@@ -492,234 +541,262 @@ contains
     subroutine handle_tab(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
-        integer :: pos, spaces_to_add, i
+        integer :: i
 
-        pos = get_buffer_position(cursor, buffer)
-        spaces_to_add = 4 - mod(cursor%column - 1, 4)
-
-        do i = 1, spaces_to_add
-            call buffer_insert(buffer, pos + i - 1, ' ')
+        ! Insert 4 spaces
+        do i = 1, 4
+            call buffer_insert_char(buffer, cursor, ' ')
+            cursor%column = cursor%column + 1
         end do
-
-        cursor%column = cursor%column + spaces_to_add
         cursor%desired_column = cursor%column
     end subroutine handle_tab
+
+    subroutine insert_char(cursor, buffer, ch)
+        type(cursor_t), intent(inout) :: cursor
+        type(buffer_t), intent(inout) :: buffer
+        character, intent(in) :: ch
+
+        cursor%has_selection = .false.  ! Clear selection
+        call buffer_insert_char(buffer, cursor, ch)
+        cursor%column = cursor%column + 1
+        cursor%desired_column = cursor%column
+    end subroutine insert_char
+
+    subroutine insert_char_multiple_cursors(editor, buffer, ch)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character, intent(in) :: ch
+        integer :: i
+        integer :: offset_adjust
+        integer :: cursors_before
+
+        ! Sort cursors by position to handle offset adjustments
+        call sort_cursors_by_position(editor)
+
+        offset_adjust = 0
+        do i = 1, size(editor%cursors)
+            ! For cursors with selection, delete selection first
+            if (editor%cursors(i)%has_selection) then
+                call delete_selection(editor%cursors(i), buffer)
+                editor%cursors(i)%has_selection = .false.
+            end if
+
+            ! Insert character
+            call buffer_insert_char(buffer, editor%cursors(i), ch)
+            editor%cursors(i)%column = editor%cursors(i)%column + 1
+            editor%cursors(i)%desired_column = editor%cursors(i)%column
+        end do
+    end subroutine insert_char_multiple_cursors
+
+    subroutine delete_selection(cursor, buffer)
+        type(cursor_t), intent(inout) :: cursor
+        type(buffer_t), intent(inout) :: buffer
+        integer :: start_line, start_col, end_line, end_col
+        integer :: i
+        character(len=:), allocatable :: line
+
+        if (.not. cursor%has_selection) return
+
+        ! Determine start and end of selection
+        if (cursor%line < cursor%selection_start_line .or. &
+            (cursor%line == cursor%selection_start_line .and. &
+             cursor%column < cursor%selection_start_col)) then
+            start_line = cursor%line
+            start_col = cursor%column
+            end_line = cursor%selection_start_line
+            end_col = cursor%selection_start_col
+        else
+            start_line = cursor%selection_start_line
+            start_col = cursor%selection_start_col
+            end_line = cursor%line
+            end_col = cursor%column
+        end if
+
+        ! For single-line selection
+        if (start_line == end_line) then
+            line = buffer_get_line(buffer, start_line)
+            cursor%line = start_line
+            cursor%column = start_col
+            do i = start_col, end_col - 1
+                call buffer_delete_at_cursor(buffer, cursor)
+            end do
+            if (allocated(line)) deallocate(line)
+        end if
+
+        cursor%has_selection = .false.
+    end subroutine delete_selection
+
+    subroutine sort_cursors_by_position(editor)
+        type(editor_state_t), intent(inout) :: editor
+        type(cursor_t) :: temp
+        integer :: i, j
+        logical :: swapped
+
+        ! Simple bubble sort for small number of cursors
+        do i = 1, size(editor%cursors) - 1
+            swapped = .false.
+            do j = 1, size(editor%cursors) - i
+                if (editor%cursors(j)%line > editor%cursors(j+1)%line .or. &
+                    (editor%cursors(j)%line == editor%cursors(j+1)%line .and. &
+                     editor%cursors(j)%column > editor%cursors(j+1)%column)) then
+                    temp = editor%cursors(j)
+                    editor%cursors(j) = editor%cursors(j+1)
+                    editor%cursors(j+1) = temp
+                    if (editor%active_cursor == j) then
+                        editor%active_cursor = j + 1
+                    else if (editor%active_cursor == j + 1) then
+                        editor%active_cursor = j
+                    end if
+                    swapped = .true.
+                end if
+            end do
+            if (.not. swapped) exit
+        end do
+    end subroutine sort_cursors_by_position
+
+    subroutine join_line_with_previous(cursor, buffer)
+        type(cursor_t), intent(inout) :: cursor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: prev_line
+        integer :: new_column
+
+        prev_line = buffer_get_line(buffer, cursor%line - 1)
+        new_column = len(prev_line) + 1
+
+        ! Move to end of previous line
+        cursor%line = cursor%line - 1
+        cursor%column = new_column
+
+        ! Delete the newline
+        call buffer_delete_at_cursor(buffer, cursor)
+
+        cursor%desired_column = cursor%column
+        if (allocated(prev_line)) deallocate(prev_line)
+    end subroutine join_line_with_previous
+
+    subroutine join_line_with_next(cursor, buffer)
+        type(cursor_t), intent(inout) :: cursor
+        type(buffer_t), intent(inout) :: buffer
+
+        ! Delete the newline at end of current line
+        call buffer_delete_at_cursor(buffer, cursor)
+    end subroutine join_line_with_next
 
     subroutine kill_line_forward(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
-        integer :: pos, delete_count
-        character(len=:), allocatable :: line, killed_text
+        character(len=:), allocatable :: line
+        character(len=:), allocatable :: killed_text
+        integer :: i
 
         line = buffer_get_line(buffer, cursor%line)
-        pos = get_buffer_position(cursor, buffer)
-        delete_count = len(line) - cursor%column + 1
 
-        if (delete_count > 0) then
-            ! Save killed text to yank stack
-            allocate(character(len=delete_count) :: killed_text)
-            killed_text = line(cursor%column:len(line))
-            call push_yank(yank_stack, killed_text)
-            call buffer_delete(buffer, pos, delete_count)
-            deallocate(killed_text)
-        else if (cursor%line < buffer_get_line_count(buffer)) then
-            ! Delete the newline and save it
-            call push_yank(yank_stack, char(10))
-            call buffer_delete(buffer, pos, 1)
+        if (cursor%column <= len(line)) then
+            ! Kill from cursor to end of line
+            killed_text = line(cursor%column:)
+            do i = cursor%column, len(line)
+                call buffer_delete_at_cursor(buffer, cursor)
+            end do
+        else
+            ! At end of line - kill the newline
+            killed_text = char(10)  ! newline
+            call buffer_delete_at_cursor(buffer, cursor)
         end if
 
+        ! Add to yank stack
+        if (len(killed_text) > 0) then
+            call push_yank(yank_stack, killed_text)
+        end if
+
+        buffer%modified = .true.
         if (allocated(line)) deallocate(line)
+        if (allocated(killed_text)) deallocate(killed_text)
     end subroutine kill_line_forward
 
     subroutine kill_line_backward(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
-        integer :: pos, delete_count
-        character(len=:), allocatable :: line, killed_text
+        character(len=:), allocatable :: line
+        character(len=:), allocatable :: killed_text
+        integer :: i, start_col
+
+        line = buffer_get_line(buffer, cursor%line)
+        start_col = cursor%column
 
         if (cursor%column > 1) then
-            line = buffer_get_line(buffer, cursor%line)
-            pos = get_buffer_position(cursor, buffer)
-            delete_count = cursor%column - 1
-
-            ! Save killed text to yank stack
-            allocate(character(len=delete_count) :: killed_text)
+            ! Kill from start of line to cursor
             killed_text = line(1:cursor%column-1)
-            call push_yank(yank_stack, killed_text)
-
-            call buffer_delete(buffer, pos - delete_count, delete_count)
             cursor%column = 1
+            do i = 1, start_col - 1
+                call buffer_delete_at_cursor(buffer, cursor)
+            end do
             cursor%desired_column = 1
-
-            deallocate(killed_text)
-            if (allocated(line)) deallocate(line)
         end if
+
+        ! Add to yank stack
+        if (allocated(killed_text)) then
+            if (len(killed_text) > 0) then
+                call push_yank(yank_stack, killed_text)
+            end if
+        end if
+
+        buffer%modified = .true.
+        if (allocated(line)) deallocate(line)
+        if (allocated(killed_text)) deallocate(killed_text)
     end subroutine kill_line_backward
 
     subroutine yank_text(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
-        character(len=:), allocatable :: yanked_text
-        integer :: pos, i
+        character(len=:), allocatable :: text
+        integer :: i
 
-        yanked_text = pop_yank(yank_stack)
-        if (len(yanked_text) > 0) then
-            pos = get_buffer_position(cursor, buffer)
-            call buffer_insert(buffer, pos, yanked_text)
-
-            ! Move cursor past inserted text
-            do i = 1, len(yanked_text)
-                if (yanked_text(i:i) == char(10)) then
+        text = pop_yank(yank_stack)
+        if (allocated(text)) then
+            do i = 1, len(text)
+                if (text(i:i) == char(10)) then
+                    call buffer_insert_newline(buffer, cursor)
                     cursor%line = cursor%line + 1
                     cursor%column = 1
                 else
+                    call buffer_insert_char(buffer, cursor, text(i:i))
                     cursor%column = cursor%column + 1
                 end if
             end do
             cursor%desired_column = cursor%column
+            buffer%modified = .true.
+            deallocate(text)
         end if
-
-        if (allocated(yanked_text)) deallocate(yanked_text)
     end subroutine yank_text
-
-    subroutine move_cursor_word_left(cursor, buffer)
-        type(cursor_t), intent(inout) :: cursor
-        type(buffer_t), intent(in) :: buffer
-        character(len=:), allocatable :: line
-        integer :: i
-        logical :: in_word, found_word
-
-        line = buffer_get_line(buffer, cursor%line)
-
-        if (cursor%column > 1) then
-            i = cursor%column - 1
-            in_word = .false.
-            found_word = .false.
-
-            ! Move left through whitespace
-            do while (i > 0 .and. is_whitespace(line(i:i)))
-                i = i - 1
-            end do
-
-            ! Move left through word characters
-            do while (i > 0 .and. .not. is_whitespace(line(i:i)))
-                i = i - 1
-                found_word = .true.
-            end do
-
-            if (found_word .and. i > 0) then
-                cursor%column = i + 1
-            else
-                cursor%column = 1
-            end if
-            cursor%desired_column = cursor%column
-
-        else if (cursor%line > 1) then
-            ! Move to end of previous line
-            cursor%line = cursor%line - 1
-            line = buffer_get_line(buffer, cursor%line)
-            cursor%column = len(line) + 1
-            cursor%desired_column = cursor%column
-        end if
-
-        if (allocated(line)) deallocate(line)
-    end subroutine move_cursor_word_left
-
-    subroutine move_cursor_word_right(cursor, buffer)
-        type(cursor_t), intent(inout) :: cursor
-        type(buffer_t), intent(in) :: buffer
-        character(len=:), allocatable :: line
-        integer :: i, line_len, line_count
-        logical :: found_word
-
-        line = buffer_get_line(buffer, cursor%line)
-        line_len = len(line)
-        line_count = buffer_get_line_count(buffer)
-
-        if (cursor%column <= line_len) then
-            i = cursor%column
-            found_word = .false.
-
-            ! Move right through current word
-            do while (i <= line_len .and. .not. is_whitespace(line(i:i)))
-                i = i + 1
-                found_word = .true.
-            end do
-
-            ! Move right through whitespace
-            do while (i <= line_len .and. is_whitespace(line(i:i)))
-                i = i + 1
-            end do
-
-            cursor%column = i
-            cursor%desired_column = cursor%column
-
-        else if (cursor%line < line_count) then
-            ! Move to beginning of next line
-            cursor%line = cursor%line + 1
-            cursor%column = 1
-            cursor%desired_column = 1
-        end if
-
-        if (allocated(line)) deallocate(line)
-    end subroutine move_cursor_word_right
-
-    function is_whitespace(ch) result(is_space)
-        character(len=1), intent(in) :: ch
-        logical :: is_space
-
-        is_space = (ch == ' ' .or. ch == char(9))  ! Space or tab
-    end function is_whitespace
-
-    subroutine save_file(editor, buffer)
-        use iso_fortran_env, only: error_unit
-        type(editor_state_t), intent(in) :: editor
-        type(buffer_t), intent(inout) :: buffer
-        integer :: status
-
-        if (allocated(editor%filename)) then
-            call buffer_save_file(buffer, editor%filename, status)
-            if (status /= 0) then
-                write(error_unit, *) 'Error saving file'
-            end if
-        else
-            write(error_unit, *) 'No filename specified'
-        end if
-    end subroutine save_file
 
     subroutine move_line_up(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: current_line, prev_line
-        integer :: current_line_start, current_line_end
-        integer :: prev_line_start, prev_line_end
-        integer :: line_count
+        integer :: current_start, current_end, prev_start, prev_end
 
-        line_count = buffer_get_line_count(buffer)
-        if (cursor%line <= 1) return  ! Can't move first line up
+        if (cursor%line <= 1) return
 
-        ! Get both lines
+        ! Get line positions
+        call get_line_positions(buffer, cursor%line, current_start, current_end)
+        call get_line_positions(buffer, cursor%line - 1, prev_start, prev_end)
+
+        ! Swap lines in buffer
         current_line = buffer_get_line(buffer, cursor%line)
         prev_line = buffer_get_line(buffer, cursor%line - 1)
 
-        ! Calculate positions
-        call get_line_positions(buffer, cursor%line - 1, prev_line_start, prev_line_end)
-        call get_line_positions(buffer, cursor%line, current_line_start, current_line_end)
+        ! Delete current line first
+        cursor%column = 1
+        do while (current_start <= current_end)
+            call buffer_delete_at_cursor(buffer, cursor)
+            current_end = current_end - 1
+        end do
 
-        ! Delete both lines (current first, then previous)
-        call buffer_delete(buffer, current_line_start, current_line_end - current_line_start + 1)
-        call buffer_delete(buffer, prev_line_start, prev_line_end - prev_line_start + 1)
-
-        ! Insert in swapped order
-        call buffer_insert(buffer, prev_line_start, current_line // char(10) // prev_line)
-        if (cursor%line == line_count) then
-            ! If we were on the last line, don't add extra newline
-            call buffer_insert(buffer, prev_line_start + len(current_line) + len(prev_line) + 1, char(10))
-        end if
-
-        ! Update cursor position
+        ! Move cursor up and insert the line
         cursor%line = cursor%line - 1
+        call insert_line_text(buffer, cursor, current_line)
 
+        buffer%modified = .true.
         if (allocated(current_line)) deallocate(current_line)
         if (allocated(prev_line)) deallocate(prev_line)
     end subroutine move_line_up
@@ -728,35 +805,34 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: current_line, next_line
-        integer :: current_line_start, current_line_end
-        integer :: next_line_start, next_line_end
         integer :: line_count
 
         line_count = buffer_get_line_count(buffer)
-        if (cursor%line >= line_count) return  ! Can't move last line down
+        if (cursor%line >= line_count) return
 
-        ! Get both lines
         current_line = buffer_get_line(buffer, cursor%line)
         next_line = buffer_get_line(buffer, cursor%line + 1)
 
-        ! Calculate positions
-        call get_line_positions(buffer, cursor%line, current_line_start, current_line_end)
-        call get_line_positions(buffer, cursor%line + 1, next_line_start, next_line_end)
+        ! Store current column
+        integer :: saved_column
+        saved_column = cursor%column
 
-        ! Delete both lines (next first, then current)
-        call buffer_delete(buffer, next_line_start, next_line_end - next_line_start + 1)
-        call buffer_delete(buffer, current_line_start, current_line_end - current_line_start + 1)
+        ! Delete current line
+        cursor%column = 1
+        call delete_entire_line(buffer, cursor)
 
-        ! Insert in swapped order
-        call buffer_insert(buffer, current_line_start, next_line // char(10) // current_line)
-        if (cursor%line + 1 == line_count) then
-            ! If next was the last line, don't add extra newline
-            call buffer_insert(buffer, current_line_start + len(next_line) + len(current_line) + 1, char(10))
-        end if
-
-        ! Update cursor position
+        ! Insert after next line (which is now at cursor%line)
+        cursor%column = len(next_line) + 1
+        call buffer_insert_newline(buffer, cursor)
         cursor%line = cursor%line + 1
+        cursor%column = 1
+        call insert_line_text(buffer, cursor, current_line)
 
+        ! Restore column position
+        cursor%column = min(saved_column, len(current_line) + 1)
+        cursor%desired_column = cursor%column
+
+        buffer%modified = .true.
         if (allocated(current_line)) deallocate(current_line)
         if (allocated(next_line)) deallocate(next_line)
     end subroutine move_line_down
@@ -765,14 +841,19 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: line
-        integer :: line_start, line_end
 
         line = buffer_get_line(buffer, cursor%line)
-        call get_line_positions(buffer, cursor%line, line_start, line_end)
 
-        ! Insert duplicate above current line
-        call buffer_insert(buffer, line_start, line // char(10))
+        ! Move to start of line
+        cursor%column = 1
+        ! Insert newline before
+        call buffer_insert_newline(buffer, cursor)
+        ! Insert the duplicated text
+        call insert_line_text(buffer, cursor, line)
+        ! Stay on original line
+        cursor%line = cursor%line + 1
 
+        buffer%modified = .true.
         if (allocated(line)) deallocate(line)
     end subroutine duplicate_line_up
 
@@ -780,292 +861,333 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: line
-        integer :: line_start, line_end
+        integer :: saved_column
 
         line = buffer_get_line(buffer, cursor%line)
-        call get_line_positions(buffer, cursor%line, line_start, line_end)
+        saved_column = cursor%column
 
-        ! Insert duplicate below current line
-        call buffer_insert(buffer, line_end + 1, char(10) // line)
-
-        ! Move cursor to duplicated line
+        ! Move to end of line
+        cursor%column = len(line) + 1
+        ! Insert newline
+        call buffer_insert_newline(buffer, cursor)
         cursor%line = cursor%line + 1
+        cursor%column = 1
+        ! Insert the duplicated text
+        call insert_line_text(buffer, cursor, line)
 
+        ! Return to original position
+        cursor%line = cursor%line - 1
+        cursor%column = saved_column
+        cursor%desired_column = saved_column
+
+        buffer%modified = .true.
         if (allocated(line)) deallocate(line)
     end subroutine duplicate_line_down
+
+    subroutine delete_entire_line(buffer, cursor)
+        type(buffer_t), intent(inout) :: buffer
+        type(cursor_t), intent(inout) :: cursor
+        character(len=:), allocatable :: line
+        integer :: i
+
+        line = buffer_get_line(buffer, cursor%line)
+        cursor%column = 1
+
+        ! Delete all characters in line
+        do i = 1, len(line)
+            call buffer_delete_at_cursor(buffer, cursor)
+        end do
+
+        ! Delete the newline if not the last line
+        if (cursor%line < buffer_get_line_count(buffer)) then
+            call buffer_delete_at_cursor(buffer, cursor)
+        end if
+
+        if (allocated(line)) deallocate(line)
+    end subroutine delete_entire_line
+
+    subroutine insert_line_text(buffer, cursor, text)
+        type(buffer_t), intent(inout) :: buffer
+        type(cursor_t), intent(inout) :: cursor
+        character(len=*), intent(in) :: text
+        integer :: i
+
+        do i = 1, len(text)
+            call buffer_insert_char(buffer, cursor, text(i:i))
+            cursor%column = cursor%column + 1
+        end do
+    end subroutine insert_line_text
 
     subroutine get_line_positions(buffer, line_num, start_pos, end_pos)
         type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: line_num
         integer, intent(out) :: start_pos, end_pos
-        integer :: current_line, pos
-        character :: ch
+        integer :: current_line, i
 
         current_line = 1
         start_pos = 1
-        pos = 1
 
         ! Find start of requested line
-        do while (current_line < line_num)
-            ch = buffer_get_char(buffer, pos)
-            if (ch == char(10)) then
-                current_line = current_line + 1
-                start_pos = pos + 1
+        do i = 1, buffer%size
+            if (current_line == line_num) then
+                start_pos = i
+                exit
             end if
-            pos = pos + 1
+            if (i < buffer%gap_start .or. i >= buffer%gap_end) then
+                if (buffer_get_char_at(buffer, i) == char(10)) then
+                    current_line = current_line + 1
+                end if
+            end if
         end do
 
         ! Find end of line
         end_pos = start_pos
-        do
-            ch = buffer_get_char(buffer, end_pos)
-            if (ch == char(10) .or. ch == char(0)) exit
-            end_pos = end_pos + 1
+        do i = start_pos, buffer%size
+            if (buffer_get_char_at(buffer, i) == char(10)) then
+                end_pos = i
+                exit
+            end if
+            end_pos = i
         end do
-        end_pos = end_pos - 1  ! Point to last character, not newline
     end subroutine get_line_positions
+
+    function buffer_get_char_at(buffer, pos) result(ch)
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: pos
+        character :: ch
+
+        if (pos < buffer%gap_start) then
+            ch = buffer%data(pos:pos)
+        else
+            ch = buffer%data(pos + (buffer%gap_end - buffer%gap_start):&
+                           pos + (buffer%gap_end - buffer%gap_start))
+        end if
+    end function buffer_get_char_at
+
+    subroutine cut_selection_or_line(cursor, buffer)
+        type(cursor_t), intent(inout) :: cursor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: text
+
+        ! Get current line or selection
+        text = buffer_get_line(buffer, cursor%line)
+
+        ! Copy to clipboard
+        call copy_to_clipboard(text)
+
+        ! Delete the line
+        cursor%column = 1
+        call delete_entire_line(buffer, cursor)
+
+        buffer%modified = .true.
+        if (allocated(text)) deallocate(text)
+    end subroutine cut_selection_or_line
+
+    subroutine copy_selection_or_line(cursor, buffer)
+        type(cursor_t), intent(in) :: cursor
+        type(buffer_t), intent(in) :: buffer
+        character(len=:), allocatable :: text
+
+        ! Get current line or selection
+        text = buffer_get_line(buffer, cursor%line)
+
+        ! Copy to clipboard
+        call copy_to_clipboard(text)
+
+        if (allocated(text)) deallocate(text)
+    end subroutine copy_selection_or_line
+
+    subroutine paste_clipboard(cursor, buffer)
+        type(cursor_t), intent(inout) :: cursor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: text
+        integer :: i
+
+        ! Get text from clipboard
+        text = paste_from_clipboard()
+
+        if (allocated(text)) then
+            ! Insert text at cursor position
+            do i = 1, len(text)
+                if (text(i:i) == char(10)) then
+                    call buffer_insert_newline(buffer, cursor)
+                    cursor%line = cursor%line + 1
+                    cursor%column = 1
+                else
+                    call buffer_insert_char(buffer, cursor, text(i:i))
+                    cursor%column = cursor%column + 1
+                end if
+            end do
+            cursor%desired_column = cursor%column
+            buffer%modified = .true.
+            deallocate(text)
+        end if
+    end subroutine paste_clipboard
+
+    subroutine save_file(editor, buffer)
+        type(editor_state_t), intent(in) :: editor
+        type(buffer_t), intent(inout) :: buffer
+
+        if (allocated(editor%filename)) then
+            call buffer_save_to_file(buffer, editor%filename)
+            buffer%modified = .false.
+        end if
+    end subroutine save_file
 
     subroutine cycle_quotes(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: line
-        integer :: quote_start, quote_end, pos
+        integer :: quote_start, quote_end
         character :: current_quote, new_quote
-        character(len=3) :: quote_cycle = '"' // "'" // '`'
-        integer :: quote_index, i
 
         line = buffer_get_line(buffer, cursor%line)
 
-        ! Find quotes around cursor position
-        quote_start = 0
-        quote_end = 0
+        ! Find surrounding quotes
+        call find_surrounding_quotes(line, cursor%column, quote_start, quote_end, current_quote)
 
-        ! Search backward for opening quote
-        do i = cursor%column - 1, 1, -1
-            if (i <= len(line)) then
-                if (line(i:i) == '"' .or. line(i:i) == "'" .or. line(i:i) == '`') then
-                    quote_start = i
-                    current_quote = line(i:i)
-                    exit
-                end if
-            end if
-        end do
+        if (quote_start > 0 .and. quote_end > 0) then
+            ! Determine next quote type
+            select case(current_quote)
+            case('"')
+                new_quote = "'"
+            case("'")
+                new_quote = '`'
+            case('`')
+                new_quote = '"'
+            case default
+                return
+            end select
 
-        ! Search forward for closing quote (must match opening)
-        if (quote_start > 0) then
-            do i = cursor%column, len(line)
-                if (line(i:i) == current_quote) then
-                    quote_end = i
-                    exit
-                end if
-            end do
-        end if
+            ! Replace quotes
+            cursor%column = quote_start
+            call buffer_delete_at_cursor(buffer, cursor)
+            call buffer_insert_char(buffer, cursor, new_quote)
 
-        ! If we found matching quotes, cycle them
-        if (quote_start > 0 .and. quote_end > 0 .and. quote_start < quote_end) then
-            ! Find current quote in cycle
-            quote_index = index(quote_cycle, current_quote)
-            if (quote_index > 0) then
-                ! Get next quote in cycle
-                quote_index = mod(quote_index, 3) + 1
-                new_quote = quote_cycle(quote_index:quote_index)
+            cursor%column = quote_end
+            call buffer_delete_at_cursor(buffer, cursor)
+            call buffer_insert_char(buffer, cursor, new_quote)
 
-                ! Replace closing quote first (so positions don't change)
-                call replace_char_at_position(buffer, cursor%line, quote_end, new_quote)
-                ! Replace opening quote
-                call replace_char_at_position(buffer, cursor%line, quote_start, new_quote)
-            end if
+            ! Restore cursor position
+            cursor%column = quote_end
+            buffer%modified = .true.
         end if
 
         if (allocated(line)) deallocate(line)
     end subroutine cycle_quotes
 
-    subroutine remove_brackets(cursor, buffer)
-        type(cursor_t), intent(inout) :: cursor
-        type(buffer_t), intent(inout) :: buffer
-        character(len=:), allocatable :: line
-        integer :: bracket_start, bracket_end, i
-        character :: open_bracket, close_bracket
-        character(len=3) :: open_brackets = '([{'
-        character(len=3) :: close_brackets = ')]}'
-        integer :: bracket_type
+    subroutine find_surrounding_quotes(line, pos, start_pos, end_pos, quote_char)
+        character(len=*), intent(in) :: line
+        integer, intent(in) :: pos
+        integer, intent(out) :: start_pos, end_pos
+        character, intent(out) :: quote_char
+        integer :: i
 
-        line = buffer_get_line(buffer, cursor%line)
+        start_pos = 0
+        end_pos = 0
+        quote_char = ' '
 
-        ! Find brackets around cursor position
-        bracket_start = 0
-        bracket_end = 0
-
-        ! Search backward for opening bracket
-        do i = cursor%column - 1, 1, -1
-            if (i <= len(line)) then
-                bracket_type = index(open_brackets, line(i:i))
-                if (bracket_type > 0) then
-                    bracket_start = i
-                    open_bracket = line(i:i)
-                    close_bracket = close_brackets(bracket_type:bracket_type)
-                    exit
-                end if
+        ! Search backward for opening quote
+        do i = pos - 1, 1, -1
+            if (line(i:i) == '"' .or. line(i:i) == "'" .or. line(i:i) == '`') then
+                start_pos = i
+                quote_char = line(i:i)
+                exit
             end if
         end do
 
-        ! Search forward for matching closing bracket
-        if (bracket_start > 0) then
-            do i = cursor%column, len(line)
-                if (line(i:i) == close_bracket) then
-                    bracket_end = i
+        if (start_pos > 0) then
+            ! Search forward for closing quote
+            do i = pos, len(line)
+                if (line(i:i) == quote_char) then
+                    end_pos = i
                     exit
                 end if
             end do
         end if
+    end subroutine find_surrounding_quotes
 
-        ! If we found matching brackets, remove them
-        if (bracket_start > 0 .and. bracket_end > 0 .and. bracket_start < bracket_end) then
-            ! Delete closing bracket first (so positions don't change)
-            call delete_char_at_position(buffer, cursor%line, bracket_end)
+    subroutine remove_brackets(cursor, buffer)
+        type(cursor_t), intent(inout) :: cursor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: line
+        integer :: bracket_start, bracket_end
+        character :: open_bracket, close_bracket
+
+        line = buffer_get_line(buffer, cursor%line)
+
+        ! Find surrounding brackets
+        call find_surrounding_brackets(line, cursor%column, bracket_start, bracket_end, &
+                                       open_bracket, close_bracket)
+
+        if (bracket_start > 0 .and. bracket_end > 0) then
+            ! Delete closing bracket first (to maintain positions)
+            cursor%column = bracket_end
+            call buffer_delete_at_cursor(buffer, cursor)
+
             ! Delete opening bracket
-            call delete_char_at_position(buffer, cursor%line, bracket_start)
+            cursor%column = bracket_start
+            call buffer_delete_at_cursor(buffer, cursor)
 
-            ! Adjust cursor position if needed
-            if (cursor%column > bracket_start) then
-                cursor%column = cursor%column - 1
-                if (cursor%column > bracket_end - 1) then
-                    cursor%column = cursor%column - 1
-                end if
-            end if
+            buffer%modified = .true.
         end if
 
         if (allocated(line)) deallocate(line)
     end subroutine remove_brackets
 
-    subroutine replace_char_at_position(buffer, line_num, col_pos, new_char)
-        type(buffer_t), intent(inout) :: buffer
-        integer, intent(in) :: line_num, col_pos
-        character(len=1), intent(in) :: new_char
-        integer :: buffer_pos, line_start, current_line, pos
-        character :: ch
+    subroutine find_surrounding_brackets(line, pos, start_pos, end_pos, open_br, close_br)
+        character(len=*), intent(in) :: line
+        integer, intent(in) :: pos
+        integer, intent(out) :: start_pos, end_pos
+        character, intent(out) :: open_br, close_br
+        integer :: i
 
-        ! Calculate buffer position for line_num:col_pos
-        current_line = 1
-        buffer_pos = 0
-        pos = 1
+        start_pos = 0
+        end_pos = 0
+        open_br = ' '
+        close_br = ' '
 
-        ! Find start of target line
-        do while (current_line < line_num)
-            ch = buffer_get_char(buffer, pos)
-            if (ch == char(10)) then
-                current_line = current_line + 1
-            end if
-            pos = pos + 1
+        ! Search backward for opening bracket
+        do i = pos - 1, 1, -1
+            select case(line(i:i))
+            case('(')
+                start_pos = i
+                open_br = '('
+                close_br = ')'
+                exit
+            case('[')
+                start_pos = i
+                open_br = '['
+                close_br = ']'
+                exit
+            case('{')
+                start_pos = i
+                open_br = '{'
+                close_br = '}'
+                exit
+            end select
         end do
 
-        ! Add column offset
-        buffer_pos = pos + col_pos - 1
-
-        ! Delete old character and insert new one
-        call buffer_delete(buffer, buffer_pos, 1)
-        call buffer_insert(buffer, buffer_pos, new_char)
-    end subroutine replace_char_at_position
-
-    subroutine delete_char_at_position(buffer, line_num, col_pos)
-        type(buffer_t), intent(inout) :: buffer
-        integer, intent(in) :: line_num, col_pos
-        integer :: buffer_pos, current_line, pos
-        character :: ch
-
-        ! Calculate buffer position for line_num:col_pos
-        current_line = 1
-        buffer_pos = 0
-        pos = 1
-
-        ! Find start of target line
-        do while (current_line < line_num)
-            ch = buffer_get_char(buffer, pos)
-            if (ch == char(10)) then
-                current_line = current_line + 1
-            end if
-            pos = pos + 1
-        end do
-
-        ! Add column offset
-        buffer_pos = pos + col_pos - 1
-
-        ! Delete the character
-        call buffer_delete(buffer, buffer_pos, 1)
-    end subroutine delete_char_at_position
-
-    subroutine copy_selection_or_line(cursor, buffer)
-        type(cursor_t), intent(in) :: cursor
-        type(buffer_t), intent(in) :: buffer
-        character(len=:), allocatable :: text_to_copy
-
-        if (cursor%has_selection) then
-            ! Copy selected text (not implemented yet)
-            text_to_copy = ''  ! Would get selection
-        else
-            ! Copy current line
-            text_to_copy = buffer_get_line(buffer, cursor%line)
-        end if
-
-        if (allocated(text_to_copy)) then
-            call copy_to_clipboard(text_to_copy)
-            deallocate(text_to_copy)
-        end if
-    end subroutine copy_selection_or_line
-
-    subroutine cut_selection_or_line(cursor, buffer)
-        type(cursor_t), intent(inout) :: cursor
-        type(buffer_t), intent(inout) :: buffer
-        character(len=:), allocatable :: text_to_cut
-        integer :: line_start, line_end
-
-        if (cursor%has_selection) then
-            ! Cut selected text (not implemented yet)
-            text_to_cut = ''  ! Would get selection and delete it
-        else
-            ! Cut current line
-            text_to_cut = buffer_get_line(buffer, cursor%line) // char(10)
-            call copy_to_clipboard(text_to_cut)
-
-            ! Delete the line
-            call get_line_positions(buffer, cursor%line, line_start, line_end)
-            call buffer_delete(buffer, line_start, line_end - line_start + 2)  ! +2 for newline
-
-            ! Adjust cursor
-            cursor%column = 1
-            cursor%desired_column = 1
-        end if
-
-        if (allocated(text_to_cut)) then
-            deallocate(text_to_cut)
-        end if
-    end subroutine cut_selection_or_line
-
-    subroutine paste_clipboard(cursor, buffer)
-        type(cursor_t), intent(inout) :: cursor
-        type(buffer_t), intent(inout) :: buffer
-        character(len=:), allocatable :: clipboard_text
-        integer :: pos, i
-
-        clipboard_text = paste_from_clipboard()
-        if (len(clipboard_text) > 0) then
-            pos = get_buffer_position(cursor, buffer)
-            call buffer_insert(buffer, pos, clipboard_text)
-
-            ! Move cursor past inserted text
-            do i = 1, len(clipboard_text)
-                if (clipboard_text(i:i) == char(10)) then
-                    cursor%line = cursor%line + 1
-                    cursor%column = 1
-                else
-                    cursor%column = cursor%column + 1
+        if (start_pos > 0) then
+            ! Search forward for matching closing bracket
+            do i = pos, len(line)
+                if (line(i:i) == close_br) then
+                    end_pos = i
+                    exit
                 end if
             end do
-            cursor%desired_column = cursor%column
         end if
+    end subroutine find_surrounding_brackets
 
-        if (allocated(clipboard_text)) deallocate(clipboard_text)
-    end subroutine paste_clipboard
+    subroutine init_cursor(cursor)
+        type(cursor_t), intent(out) :: cursor
+        cursor%line = 1
+        cursor%column = 1
+        cursor%desired_column = 1
+        cursor%has_selection = .false.
+        cursor%selection_start_line = 1
+        cursor%selection_start_col = 1
+    end subroutine init_cursor
 
     subroutine handle_mouse_event_action(key_str, editor, buffer)
         character(len=*), intent(in) :: key_str
@@ -1120,7 +1242,28 @@ contains
                         editor%active_cursor = 1
                     end if
                 end if
+                ! Clear selection
+                editor%cursors(editor%active_cursor)%has_selection = .false.
             end if
+
+        case('mouse-drag')
+            ! Mouse drag - extend selection
+            if (.not. editor%cursors(editor%active_cursor)%has_selection) then
+                ! Start selection from current position
+                editor%cursors(editor%active_cursor)%has_selection = .true.
+                editor%cursors(editor%active_cursor)%selection_start_line = &
+                    editor%cursors(editor%active_cursor)%line
+                editor%cursors(editor%active_cursor)%selection_start_col = &
+                    editor%cursors(editor%active_cursor)%column
+            end if
+            ! Move cursor to drag position (extends selection)
+            call position_cursor_at_screen(editor%cursors(editor%active_cursor), &
+                                          editor, buffer, row, col)
+            call update_viewport(editor)
+
+        case('mouse-release')
+            ! Mouse button released - nothing special to do
+            continue
 
         case('mouse-alt')
             ! Alt+click - add or remove cursor
@@ -1163,14 +1306,6 @@ contains
                     editor%cursors = new_cursors
                     editor%active_cursor = size(editor%cursors)
                 end if
-            end if
-
-        case('mouse-shift')
-            ! Shift+click - create selection (future implementation)
-            ! For now, just move cursor
-            if (button == 4) then  ! Shift + left click
-                call position_cursor_at_screen(editor%cursors(editor%active_cursor), &
-                                              editor, buffer, row, col)
             end if
 
         end select
@@ -1217,211 +1352,262 @@ contains
 
         cursor_screen_row = cursor%line - editor%viewport_line + 1
         cursor_screen_col = cursor%column - editor%viewport_column + 1
-
         at_pos = (cursor_screen_row == screen_row .and. cursor_screen_col == screen_col)
     end function is_cursor_at_screen_pos
 
-    subroutine init_cursor(cursor)
-        type(cursor_t), intent(out) :: cursor
-        cursor%line = 1
-        cursor%column = 1
-        cursor%desired_column = 1
-        cursor%has_selection = .false.
-        cursor%selection_start_line = 1
-        cursor%selection_start_col = 1
-    end subroutine init_cursor
+    subroutine toggle_cursor_at_position(editor, buffer, row, col)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: row, col
+        integer :: i, cursor_exists
+        type(cursor_t), allocatable :: new_cursors(:)
+
+        ! Check if cursor already exists at this position
+        cursor_exists = 0
+        do i = 1, size(editor%cursors)
+            if (is_cursor_at_screen_pos(editor%cursors(i), editor, row, col)) then
+                cursor_exists = i
+                exit
+            end if
+        end do
+
+        if (cursor_exists > 0) then
+            ! Remove the cursor
+            if (size(editor%cursors) > 1) then
+                allocate(new_cursors(size(editor%cursors) - 1))
+                do i = 1, cursor_exists - 1
+                    new_cursors(i) = editor%cursors(i)
+                end do
+                do i = cursor_exists + 1, size(editor%cursors)
+                    new_cursors(i-1) = editor%cursors(i)
+                end do
+                deallocate(editor%cursors)
+                editor%cursors = new_cursors
+                if (editor%active_cursor >= cursor_exists) then
+                    editor%active_cursor = max(1, editor%active_cursor - 1)
+                end if
+            end if
+        else
+            ! Add a new cursor
+            allocate(new_cursors(size(editor%cursors) + 1))
+            do i = 1, size(editor%cursors)
+                new_cursors(i) = editor%cursors(i)
+            end do
+            call init_cursor(new_cursors(size(new_cursors)))
+            call position_cursor_at_screen(new_cursors(size(new_cursors)), &
+                                          editor, buffer, row, col)
+            deallocate(editor%cursors)
+            editor%cursors = new_cursors
+            editor%active_cursor = size(editor%cursors)
+        end if
+    end subroutine toggle_cursor_at_position
+
+    subroutine handle_mouse_click(editor, buffer, row, col)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: row, col
+
+        ! Clear multiple cursors
+        if (allocated(editor%cursors)) then
+            if (size(editor%cursors) > 1) then
+                deallocate(editor%cursors)
+                allocate(editor%cursors(1))
+                call init_cursor(editor%cursors(1))
+                editor%active_cursor = 1
+            end if
+        end if
+
+        ! Move cursor to click position
+        call position_cursor_at_screen(editor%cursors(1), editor, buffer, row, col)
+        call update_viewport(editor)
+    end subroutine handle_mouse_click
 
     subroutine select_next_match(editor, buffer)
         type(editor_state_t), intent(inout) :: editor
-        type(buffer_t), intent(in) :: buffer
-        type(cursor_t) :: main_cursor
-        character(len=:), allocatable :: selected_text, line
-        integer :: word_start, word_end
-        integer :: i, search_line, search_col
-        logical :: found_match
+        type(buffer_t), intent(inout) :: buffer
         type(cursor_t), allocatable :: new_cursors(:)
+        character(len=:), allocatable :: word
+        integer :: i
+        integer :: found_line, found_col
+        logical :: found
 
-        main_cursor = editor%cursors(editor%active_cursor)
-
-        ! If no selection, select current word
-        if (.not. main_cursor%has_selection) then
+        ! If no pattern selected yet, select word at cursor
+        if (.not. allocated(search_pattern)) then
             call select_word_at_cursor(editor%cursors(editor%active_cursor), buffer)
-
-            ! Store the selected word as search pattern
-            if (editor%cursors(editor%active_cursor)%has_selection) then
-                selected_text = get_selection_text(editor%cursors(editor%active_cursor), buffer)
-                if (allocated(search_pattern)) deallocate(search_pattern)
-                allocate(character(len=len(selected_text)) :: search_pattern)
-                search_pattern = selected_text
+            word = get_selected_text(editor%cursors(editor%active_cursor), buffer)
+            if (allocated(word)) then
+                search_pattern = word
             end if
         else
-            ! We have a selection, find next occurrence
-            if (.not. allocated(search_pattern)) then
-                selected_text = get_selection_text(main_cursor, buffer)
-                allocate(character(len=len(selected_text)) :: search_pattern)
-                search_pattern = selected_text
-            end if
-
-            ! Search for next occurrence starting from last cursor position
+            ! Search for next occurrence
             call find_next_occurrence(buffer, search_pattern, &
                                      editor%cursors(size(editor%cursors))%line, &
-                                     editor%cursors(size(editor%cursors))%selection_start_col + 1, &
-                                     search_line, search_col, found_match)
+                                     editor%cursors(size(editor%cursors))%column, &
+                                     found, found_line, found_col)
 
-            if (found_match) then
-                ! Add new cursor with selection at found position
+            if (found) then
+                ! Add a new cursor at the found position
                 allocate(new_cursors(size(editor%cursors) + 1))
                 do i = 1, size(editor%cursors)
                     new_cursors(i) = editor%cursors(i)
                 end do
 
-                ! Initialize new cursor at found position
+                ! Initialize new cursor
                 call init_cursor(new_cursors(size(new_cursors)))
-                new_cursors(size(new_cursors))%line = search_line
-                new_cursors(size(new_cursors))%column = search_col + len(search_pattern)
-                new_cursors(size(new_cursors))%desired_column = search_col + len(search_pattern)
+                new_cursors(size(new_cursors))%line = found_line
+                new_cursors(size(new_cursors))%column = found_col
                 new_cursors(size(new_cursors))%has_selection = .true.
-                new_cursors(size(new_cursors))%selection_start_line = search_line
-                new_cursors(size(new_cursors))%selection_start_col = search_col
+                new_cursors(size(new_cursors))%selection_start_line = found_line
+                new_cursors(size(new_cursors))%selection_start_col = found_col
+                new_cursors(size(new_cursors))%column = found_col + len(search_pattern)
 
                 deallocate(editor%cursors)
                 editor%cursors = new_cursors
                 editor%active_cursor = size(editor%cursors)
             end if
         end if
-
-        if (allocated(selected_text)) deallocate(selected_text)
-        if (allocated(line)) deallocate(line)
     end subroutine select_next_match
 
     subroutine select_word_at_cursor(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
         character(len=:), allocatable :: line
-        integer :: word_start, word_end, i
+        integer :: word_start, word_end
 
         line = buffer_get_line(buffer, cursor%line)
-        if (cursor%column > len(line)) then
-            if (allocated(line)) deallocate(line)
-            return
-        end if
 
         ! Find word boundaries
-        word_start = cursor%column
-        word_end = cursor%column
+        call find_word_boundaries(line, cursor%column, word_start, word_end)
 
-        ! Check if we're on a word character
-        if (cursor%column <= len(line)) then
-            if (.not. is_word_char(line(cursor%column:cursor%column))) then
-                if (allocated(line)) deallocate(line)
-                return
-            end if
-        else
-            if (allocated(line)) deallocate(line)
-            return
+        if (word_start > 0 .and. word_end >= word_start) then
+            ! Select the word
+            cursor%has_selection = .true.
+            cursor%selection_start_line = cursor%line
+            cursor%selection_start_col = word_start
+            cursor%column = word_end + 1
+            cursor%desired_column = cursor%column
         end if
-
-        ! Find start of word
-        do i = cursor%column - 1, 1, -1
-            if (.not. is_word_char(line(i:i))) exit
-            word_start = i
-        end do
-
-        ! Find end of word
-        do i = cursor%column, len(line)
-            if (.not. is_word_char(line(i:i))) exit
-            word_end = i
-        end do
-
-        ! Set selection
-        cursor%has_selection = .true.
-        cursor%selection_start_line = cursor%line
-        cursor%selection_start_col = word_start
-        cursor%column = word_end + 1
-        cursor%desired_column = cursor%column
 
         if (allocated(line)) deallocate(line)
     end subroutine select_word_at_cursor
 
-    function is_word_char(ch) result(is_word)
-        character(len=1), intent(in) :: ch
-        logical :: is_word
-
-        is_word = (ch >= 'a' .and. ch <= 'z') .or. &
-                  (ch >= 'A' .and. ch <= 'Z') .or. &
-                  (ch >= '0' .and. ch <= '9') .or. &
-                  ch == '_'
-    end function is_word_char
-
-    function get_selection_text(cursor, buffer) result(text)
+    function get_selected_text(cursor, buffer) result(text)
         type(cursor_t), intent(in) :: cursor
         type(buffer_t), intent(in) :: buffer
-        character(len=:), allocatable :: text, line
+        character(len=:), allocatable :: text
+        character(len=:), allocatable :: line
+        integer :: start_col, end_col
 
         if (.not. cursor%has_selection) then
-            text = ''
+            allocate(character(len=0) :: text)
             return
         end if
 
-        ! For now, only handle single-line selections
+        ! For single-line selection only (for now)
         if (cursor%selection_start_line == cursor%line) then
             line = buffer_get_line(buffer, cursor%line)
-            if (cursor%selection_start_col <= len(line)) then
-                allocate(character(len=cursor%column - cursor%selection_start_col) :: text)
-                text = line(cursor%selection_start_col:min(cursor%column - 1, len(line)))
+            start_col = min(cursor%selection_start_col, cursor%column)
+            end_col = max(cursor%selection_start_col, cursor%column) - 1
+
+            if (start_col <= len(line) .and. end_col <= len(line)) then
+                text = line(start_col:end_col)
             else
-                text = ''
+                allocate(character(len=0) :: text)
             end if
             if (allocated(line)) deallocate(line)
         else
-            text = ''
+            allocate(character(len=0) :: text)
         end if
-    end function get_selection_text
+    end function get_selected_text
+
+    subroutine find_word_boundaries(line, pos, word_start, word_end)
+        character(len=*), intent(in) :: line
+        integer, intent(in) :: pos
+        integer, intent(out) :: word_start, word_end
+        integer :: i
+
+        word_start = 0
+        word_end = 0
+
+        ! Check if we're on a word character
+        if (pos <= len(line)) then
+            if (.not. is_word_char(line(pos:pos))) then
+                return
+            end if
+
+            ! Find start of word
+            word_start = pos
+            do i = pos - 1, 1, -1
+                if (is_word_char(line(i:i))) then
+                    word_start = i
+                else
+                    exit
+                end if
+            end do
+
+            ! Find end of word
+            word_end = pos
+            do i = pos + 1, len(line)
+                if (is_word_char(line(i:i))) then
+                    word_end = i
+                else
+                    exit
+                end if
+            end do
+        end if
+    end subroutine find_word_boundaries
 
     subroutine find_next_occurrence(buffer, pattern, start_line, start_col, &
-                                   found_line, found_col, found)
+                                    found, found_line, found_col)
         type(buffer_t), intent(in) :: buffer
         character(len=*), intent(in) :: pattern
         integer, intent(in) :: start_line, start_col
-        integer, intent(out) :: found_line, found_col
         logical, intent(out) :: found
+        integer, intent(out) :: found_line, found_col
         character(len=:), allocatable :: line
         integer :: line_count, current_line, pos
+        integer :: search_col
 
         found = .false.
+        found_line = 0
+        found_col = 0
         line_count = buffer_get_line_count(buffer)
 
-        ! Search from current position to end of file
+        ! Search from current position to end
         do current_line = start_line, line_count
             line = buffer_get_line(buffer, current_line)
 
             if (current_line == start_line) then
-                pos = index(line(min(start_col, len(line)+1):), pattern)
-                if (pos > 0) then
-                    found = .true.
-                    found_line = current_line
-                    found_col = start_col + pos - 1
-                    if (allocated(line)) deallocate(line)
-                    return
-                end if
+                search_col = start_col + 1
             else
-                pos = index(line, pattern)
-                if (pos > 0) then
-                    found = .true.
-                    found_line = current_line
-                    found_col = pos
-                    if (allocated(line)) deallocate(line)
-                    return
-                end if
+                search_col = 1
             end if
 
+            pos = index(line(search_col:), pattern)
+            if (pos > 0) then
+                found = .true.
+                found_line = current_line
+                found_col = search_col + pos - 1
+                if (allocated(line)) deallocate(line)
+                return
+            end if
             if (allocated(line)) deallocate(line)
         end do
 
-        ! Wrap around and search from beginning
-        do current_line = 1, start_line - 1
+        ! Wrap around to beginning
+        do current_line = 1, start_line
             line = buffer_get_line(buffer, current_line)
-            pos = index(line, pattern)
+
+            if (current_line == start_line) then
+                ! Search only up to start position
+                if (start_col > 1) then
+                    pos = index(line(1:start_col-1), pattern)
+                else
+                    pos = 0
+                end if
+            else
+                pos = index(line, pattern)
+            end if
 
             if (pos > 0) then
                 found = .true.
@@ -1434,6 +1620,79 @@ contains
             if (allocated(line)) deallocate(line)
         end do
     end subroutine find_next_occurrence
+
+    ! ========================================================================
+    ! Multiple Cursor Addition Above/Below
+    ! ========================================================================
+
+    subroutine add_cursor_above(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(in) :: buffer
+        type(cursor_t), allocatable :: new_cursors(:)
+        type(cursor_t) :: active_cursor
+        integer :: i, new_line
+
+        active_cursor = editor%cursors(editor%active_cursor)
+        new_line = active_cursor%line - 1
+
+        ! Check if we can add a cursor above
+        if (new_line < 1) return
+
+        ! Allocate space for additional cursor
+        allocate(new_cursors(size(editor%cursors) + 1))
+
+        ! Copy existing cursors
+        do i = 1, size(editor%cursors)
+            new_cursors(i) = editor%cursors(i)
+        end do
+
+        ! Add new cursor above
+        new_cursors(size(new_cursors))%line = new_line
+        new_cursors(size(new_cursors))%column = active_cursor%column
+        new_cursors(size(new_cursors))%desired_column = active_cursor%desired_column
+        new_cursors(size(new_cursors))%has_selection = .false.
+
+        ! Replace cursors array
+        call move_alloc(new_cursors, editor%cursors)
+
+        ! Set the new cursor as active
+        editor%active_cursor = size(editor%cursors)
+    end subroutine add_cursor_above
+
+    subroutine add_cursor_below(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(in) :: buffer
+        type(cursor_t), allocatable :: new_cursors(:)
+        type(cursor_t) :: active_cursor
+        integer :: i, new_line, line_count
+
+        active_cursor = editor%cursors(editor%active_cursor)
+        line_count = buffer_get_line_count(buffer)
+        new_line = active_cursor%line + 1
+
+        ! Check if we can add a cursor below
+        if (new_line > line_count) return
+
+        ! Allocate space for additional cursor
+        allocate(new_cursors(size(editor%cursors) + 1))
+
+        ! Copy existing cursors
+        do i = 1, size(editor%cursors)
+            new_cursors(i) = editor%cursors(i)
+        end do
+
+        ! Add new cursor below
+        new_cursors(size(new_cursors))%line = new_line
+        new_cursors(size(new_cursors))%column = active_cursor%column
+        new_cursors(size(new_cursors))%desired_column = active_cursor%desired_column
+        new_cursors(size(new_cursors))%has_selection = .false.
+
+        ! Replace cursors array
+        call move_alloc(new_cursors, editor%cursors)
+
+        ! Set the new cursor as active
+        editor%active_cursor = size(editor%cursors)
+    end subroutine add_cursor_below
 
     ! ========================================================================
     ! Selection Extension Subroutines
@@ -1829,18 +2088,6 @@ contains
             pos = buffer%size + 1
         end if
     end function get_line_start_pos
-
-    function buffer_get_char_at(buffer, pos) result(ch)
-        type(buffer_t), intent(in) :: buffer
-        integer, intent(in) :: pos
-        character :: ch
-
-        if (pos < buffer%gap_start) then
-            ch = buffer%data(pos:pos)
-        else if (pos >= buffer%gap_start) then
-            ch = buffer%data(pos + (buffer%gap_end - buffer%gap_start):pos + (buffer%gap_end - buffer%gap_start))
-        end if
-    end function buffer_get_char_at
 
     subroutine delete_range(buffer, start_line, start_col, end_line, end_col)
         type(buffer_t), intent(inout) :: buffer
