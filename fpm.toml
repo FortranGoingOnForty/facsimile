@@ -1,0 +1,22 @@
+name = "facsimile"
+version = "0.1.0"
+license = "MIT"
+author = "matthew forrester wolffe"
+maintainer = "mfw (espadonne@outlook.com)"
+copyright = "2025 mfw"
+
+[build]
+auto-executables = true
+auto-tests = true
+
+[install]
+library = false
+
+[[executable]]
+name = "fac"
+source-dir = "app"
+main = "main.f90"
+
+[dependencies]
+# We'll add stdlib when needed
+# stdlib = "*"
