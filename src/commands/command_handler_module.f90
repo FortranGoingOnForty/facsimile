@@ -7,6 +7,9 @@ module command_handler_module
     use yank_stack_module
     use clipboard_module
     use help_display_module, only: show_help
+    use goto_prompt_module, only: show_goto_prompt
+    use search_prompt_module, only: show_search_prompt, search_forward, search_backward
+    use replace_prompt_module, only: show_replace_prompt
     use undo_stack_module
     use terminal_io_module, only: terminal_move_cursor, terminal_write
     implicit none
@@ -62,6 +65,11 @@ contains
             ! Show help menu
             call show_help(editor)
             ! Screen will be redrawn automatically by main loop
+
+        case('ctrl-g')
+            ! Go to line:column
+            call show_goto_prompt(editor, buffer)
+            call update_viewport(editor)
 
         ! Undo/Redo
         case('ctrl-z')
@@ -280,6 +288,26 @@ contains
 
         case('opt-meta-down')
             call add_cursor_below(editor, buffer)
+
+        ! Search commands
+        case('/')
+            call show_search_prompt(editor, buffer)
+            call update_viewport(editor)
+
+        case('ctrl-r')
+            ! Find and replace
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call show_replace_prompt(editor, buffer)
+            call update_viewport(editor)
+            is_edit_action = .true.
+
+        case('n')
+            call search_forward(editor, buffer)
+            call update_viewport(editor)
+
+        case('N')
+            call search_backward(editor, buffer)
+            call update_viewport(editor)
 
         case default
             ! Check for mouse events

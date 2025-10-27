@@ -9,6 +9,10 @@ module renderer_module
     public :: render_screen, update_viewport, init_renderer, cleanup_renderer
     public :: render_status_bar, render_cursor
 
+    ! Configuration
+    logical :: show_line_numbers = .true.
+    integer, parameter :: LINE_NUMBER_WIDTH = 5  ! Width for line number display
+
     ! Screen buffer for double buffering
     type :: screen_buffer_t
         character(len=:), allocatable :: lines(:)
@@ -46,11 +50,20 @@ contains
         character(len=:), allocatable :: line_content
         character(len=1) :: ch
         integer :: col, buffer_pos, line_start_pos
+        integer :: content_width
+        character(len=16) :: line_num_str
 
         call terminal_hide_cursor()
 
         ! Get total lines in buffer
         line_count = buffer_get_line_count(buffer)
+
+        ! Calculate content width (accounting for line numbers)
+        if (show_line_numbers) then
+            content_width = editor%screen_cols - LINE_NUMBER_WIDTH - 1  ! -1 for separator
+        else
+            content_width = editor%screen_cols
+        end if
 
         ! Clear and render each visible line
         do screen_row = 1, editor%screen_rows - 1  ! Leave last row for status bar
@@ -58,18 +71,38 @@ contains
 
             call terminal_move_cursor(screen_row, 1)
 
+            ! Render line number if enabled
+            if (show_line_numbers) then
+                if (buffer_line <= line_count) then
+                    ! Format line number, right-aligned
+                    write(line_num_str, '(i5)') buffer_line
+
+                    ! Highlight current line number
+                    if (buffer_line == editor%cursors(editor%active_cursor)%line) then
+                        call terminal_write(char(27) // '[1;33m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
+                                          // char(27) // '[0m ')
+                    else
+                        call terminal_write(char(27) // '[90m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
+                                          // char(27) // '[0m ')
+                    end if
+                else
+                    ! Empty line number area for lines beyond file
+                    call terminal_write(repeat(' ', LINE_NUMBER_WIDTH + 1))
+                end if
+            end if
+
             if (buffer_line <= line_count) then
                 ! Render actual line content with selections
                 call render_line_with_selections(buffer, editor, buffer_line, &
-                                                editor%viewport_column, editor%screen_cols)
+                                                editor%viewport_column, content_width)
             else
                 ! Render empty line indicator
                 if (buffer_line == line_count + 1 .and. line_count == 0) then
                     ! Empty file
-                    call terminal_write('~' // repeat(' ', editor%screen_cols - 1))
+                    call terminal_write('~' // repeat(' ', content_width - 1))
                 else
                     ! Beyond file content
-                    call terminal_write('~' // repeat(' ', editor%screen_cols - 1))
+                    call terminal_write('~' // repeat(' ', content_width - 1))
                 end if
             end if
         end do
@@ -239,6 +272,14 @@ contains
         type(cursor_t) :: cursor
         integer :: screen_row, screen_col
         integer :: i
+        integer :: col_offset
+
+        ! Calculate column offset for line numbers
+        if (show_line_numbers) then
+            col_offset = LINE_NUMBER_WIDTH + 1  ! +1 for separator space
+        else
+            col_offset = 0
+        end if
 
         ! For multiple cursors, show them all with block cursor for inactive ones
         if (size(editor%cursors) > 1) then
@@ -247,7 +288,7 @@ contains
 
                 ! Calculate screen position from buffer position
                 screen_row = cursor%line - editor%viewport_line + 1
-                screen_col = cursor%column - editor%viewport_column + 1
+                screen_col = cursor%column - editor%viewport_column + 1 + col_offset
 
                 ! Ensure cursor is within screen bounds
                 if (screen_row >= 1 .and. screen_row < editor%screen_rows .and. &
@@ -273,7 +314,7 @@ contains
 
             ! Calculate screen position from buffer position
             screen_row = cursor%line - editor%viewport_line + 1
-            screen_col = cursor%column - editor%viewport_column + 1
+            screen_col = cursor%column - editor%viewport_column + 1 + col_offset
 
             ! Ensure cursor is within screen bounds
             if (screen_row >= 1 .and. screen_row < editor%screen_rows .and. &

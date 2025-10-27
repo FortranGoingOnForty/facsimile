@@ -38,6 +38,7 @@ contains
              "ctrl-e/end      end of line                     ", &
              "alt-left/right  word jump                       ", &
              "pageup/down     page scroll                     ", &
+             "ctrl-g          go to line:column               ", &
              "click           position cursor                 ", &
              "alt-click       add/remove cursor               "])
 
@@ -72,10 +73,17 @@ contains
             ["alt-up/down         move line                   ", &
              "alt-shift-up/down   duplicate line              "])
 
+        ! Search & Replace
+        call display_section(row, max_rows, "SEARCH & REPLACE", &
+            ["/                   search forward              ", &
+             "ctrl-r              find and replace            ", &
+             "n                   next match                  ", &
+             "N                   previous match              ", &
+             "ctrl-d              select next match           "])
+
         ! Multiple Cursors
         call display_section(row, max_rows, "MULTIPLE CURSORS", &
-            ["ctrl-d              select next match           ", &
-             "alt-click           add/remove cursor           ", &
+            ["alt-click           add/remove cursor           ", &
              "opt-meta-up/down    cursor above/below          "])
 
         ! Special
