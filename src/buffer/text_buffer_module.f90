@@ -25,18 +25,20 @@ contains
     subroutine init_buffer(buffer, initial_content)
         type(buffer_t), intent(out) :: buffer
         character(len=*), intent(in), optional :: initial_content
-        integer :: content_len
+        integer :: content_len, alloc_size
 
         if (present(initial_content)) then
             content_len = len(initial_content)
-            buffer%size = max(INITIAL_SIZE, content_len * 2)
+            alloc_size = max(INITIAL_SIZE, content_len * 2)
         else
             content_len = 0
-            buffer%size = INITIAL_SIZE
+            alloc_size = INITIAL_SIZE
         end if
 
-        allocate(character(len=buffer%size) :: buffer%data)
-        buffer%data = ' '  ! Initialize with spaces
+        ! Allocate the buffer data
+        allocate(character(len=alloc_size) :: buffer%data)
+        buffer%data = repeat(' ', alloc_size)  ! Initialize with spaces
+        buffer%size = alloc_size
 
         if (present(initial_content) .and. content_len > 0) then
             buffer%data(1:content_len) = initial_content
@@ -61,29 +63,29 @@ contains
     subroutine buffer_move_gap(buffer, position)
         type(buffer_t), intent(inout) :: buffer
         integer, intent(in) :: position
-        integer :: gap_size, move_size
-        character(len=:), allocatable :: temp
+        integer :: gap_size, move_size, i
+        character :: ch
 
         if (position == buffer%gap_start) return
 
         gap_size = buffer%gap_end - buffer%gap_start
 
         if (position < buffer%gap_start) then
-            ! Move gap left
+            ! Move gap left - copy character by character to avoid allocation issues
             move_size = buffer%gap_start - position
-            allocate(character(len=move_size) :: temp)
-            temp = buffer%data(position:buffer%gap_start-1)
-            buffer%data(buffer%gap_end-move_size:buffer%gap_end-1) = temp
-            deallocate(temp)
+            do i = 1, move_size
+                ch = buffer%data(position + i - 1:position + i - 1)
+                buffer%data(buffer%gap_end - move_size + i - 1:buffer%gap_end - move_size + i - 1) = ch
+            end do
             buffer%gap_start = position
             buffer%gap_end = position + gap_size
         else
-            ! Move gap right
+            ! Move gap right - copy character by character to avoid allocation issues
             move_size = position - buffer%gap_start
-            allocate(character(len=move_size) :: temp)
-            temp = buffer%data(buffer%gap_end:buffer%gap_end+move_size-1)
-            buffer%data(buffer%gap_start:buffer%gap_start+move_size-1) = temp
-            deallocate(temp)
+            do i = 1, move_size
+                ch = buffer%data(buffer%gap_end + i - 1:buffer%gap_end + i - 1)
+                buffer%data(buffer%gap_start + i - 1:buffer%gap_start + i - 1) = ch
+            end do
             buffer%gap_start = position
             buffer%gap_end = position + gap_size
         end if
@@ -110,7 +112,7 @@ contains
             end do
 
             allocate(character(len=new_size) :: new_data)
-            new_data = ' '
+            new_data = repeat(' ', new_size)
 
             ! Copy data before gap
             if (buffer%gap_start > 1) then
@@ -150,14 +152,32 @@ contains
         type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: position
         character :: ch
+        integer :: actual_pos
+
+        ! Check bounds
+        if (position < 1 .or. position > buffer%size - (buffer%gap_end - buffer%gap_start)) then
+            ch = char(0)
+            return
+        end if
+
+        if (.not. allocated(buffer%data)) then
+            ch = char(0)
+            return
+        end if
 
         if (position < buffer%gap_start) then
-            ch = buffer%data(position:position)
-        else if (position >= buffer%gap_start) then
-            ch = buffer%data(position + (buffer%gap_end - buffer%gap_start):&
-                            position + (buffer%gap_end - buffer%gap_start))
+            if (position <= len(buffer%data)) then
+                ch = buffer%data(position:position)
+            else
+                ch = char(0)
+            end if
         else
-            ch = char(0)
+            actual_pos = position + (buffer%gap_end - buffer%gap_start)
+            if (actual_pos > 0 .and. actual_pos <= len(buffer%data)) then
+                ch = buffer%data(actual_pos:actual_pos)
+            else
+                ch = char(0)
+            end if
         end if
     end function buffer_get_char
 
@@ -165,13 +185,14 @@ contains
         type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: line_num
         character(len=:), allocatable :: line
-        integer :: current_line, pos, start_pos, end_pos
+        integer :: current_line, pos, start_pos, end_pos, logical_size
         character :: ch
 
         line = ''
         current_line = 1
         pos = 1
         start_pos = 1
+        logical_size = buffer%size - (buffer%gap_end - buffer%gap_start)
 
         ! Find start of requested line
         do while (current_line < line_num)
@@ -180,8 +201,9 @@ contains
                 current_line = current_line + 1
                 start_pos = pos + 1
             end if
+            if (ch == char(0)) return  ! Null terminator
             pos = pos + 1
-            if (pos > buffer%size) return
+            if (pos > logical_size) return
         end do
 
         ! Find end of line
@@ -190,28 +212,36 @@ contains
             ch = buffer_get_char(buffer, end_pos)
             if (ch == char(10) .or. ch == char(0)) exit
             end_pos = end_pos + 1
-            if (end_pos > buffer%size) exit
+            if (end_pos > logical_size) exit
         end do
 
         ! Extract line
-        allocate(character(len=end_pos-start_pos) :: line)
-        do pos = start_pos, end_pos - 1
-            line(pos-start_pos+1:pos-start_pos+1) = buffer_get_char(buffer, pos)
-        end do
+        if (allocated(line)) deallocate(line)
+        if (end_pos > start_pos) then
+            allocate(character(len=end_pos-start_pos) :: line)
+            do pos = start_pos, end_pos - 1
+                line(pos-start_pos+1:pos-start_pos+1) = buffer_get_char(buffer, pos)
+            end do
+        else
+            ! Empty line
+            allocate(character(len=0) :: line)
+        end if
     end function buffer_get_line
 
     function buffer_get_line_count(buffer) result(count)
         type(buffer_t), intent(in) :: buffer
         integer :: count
-        integer :: pos
+        integer :: pos, logical_size
         character :: ch
 
         count = 1
         pos = 1
+        logical_size = buffer%size - (buffer%gap_end - buffer%gap_start)
 
-        do while (pos <= buffer%size)
+        do while (pos <= logical_size)
             ch = buffer_get_char(buffer, pos)
             if (ch == char(10)) count = count + 1
+            if (ch == char(0)) exit  ! Stop at null terminator
             pos = pos + 1
         end do
     end function buffer_get_line_count
@@ -266,14 +296,23 @@ contains
         end if
 
         ! Write content, skipping gap
-        do pos = 1, buffer%size
-            if (pos >= buffer%gap_start .and. pos < buffer%gap_end) cycle
-            ch = buffer_get_char(buffer, pos)
-            if (ch /= ' ' .or. pos < buffer%gap_start) then
-                write(unit, iostat=ios) ch
-                if (ios /= 0) exit
-            end if
+        ! Write content before gap
+        do pos = 1, buffer%gap_start - 1
+            ch = buffer%data(pos:pos)
+            write(unit, iostat=ios) ch
+            if (ios /= 0) exit
         end do
+
+        ! Write content after gap
+        if (ios == 0 .and. buffer%gap_end <= buffer%size) then
+            do pos = buffer%gap_end, buffer%size
+                ch = buffer%data(pos:pos)
+                if (ch /= char(0)) then  ! Only write non-null characters
+                    write(unit, iostat=ios) ch
+                    if (ios /= 0) exit
+                end if
+            end do
+        end if
 
         close(unit)
         if (ios == 0) then
