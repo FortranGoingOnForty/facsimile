@@ -128,7 +128,7 @@ contains
         type(undo_stack_t), intent(in) :: stack
         logical :: can
 
-        can = (stack%current_pos > 1)
+        can = (stack%current_pos >= 1)
     end function can_undo
 
     function can_redo(stack) result(can)
@@ -142,13 +142,24 @@ contains
         type(undo_stack_t), intent(inout) :: stack
         type(buffer_t), intent(inout) :: buffer
         type(cursor_t), intent(inout) :: cursor
+        type(undo_state_t) :: temp_state
 
         if (can_undo(stack)) then
-            ! Move to previous state
-            stack%current_pos = stack%current_pos - 1
+            ! If we're at the end of the stack (haven't undone yet),
+            ! save current state for redo
+            if (stack%current_pos == stack%stack_size .and. &
+                stack%current_pos < MAX_UNDO_LEVELS) then
+                ! Save current state at next position for redo
+                call save_buffer_state(temp_state, buffer, cursor)
+                stack%stack_size = stack%current_pos + 1
+                stack%states(stack%stack_size) = temp_state
+            end if
 
-            ! Restore that state
+            ! Restore the state at current position
             call restore_buffer_state(buffer, cursor, stack%states(stack%current_pos))
+
+            ! Move position back
+            stack%current_pos = stack%current_pos - 1
         end if
     end subroutine perform_undo
 
@@ -158,8 +169,16 @@ contains
         type(cursor_t), intent(inout) :: cursor
 
         if (can_redo(stack)) then
-            ! Move to next state
-            stack%current_pos = stack%current_pos + 1
+            ! When we undo, we save the current state at position stack_size
+            ! So when we redo, if we're at position 0, we should jump to stack_size
+            ! Otherwise just move forward by 1
+            if (stack%current_pos == 0 .and. stack%stack_size > 1) then
+                ! Jump to the redo state
+                stack%current_pos = stack%stack_size
+            else
+                ! Normal forward movement
+                stack%current_pos = stack%current_pos + 1
+            end if
 
             ! Restore that state
             call restore_buffer_state(buffer, cursor, stack%states(stack%current_pos))
