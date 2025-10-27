@@ -3,7 +3,7 @@ module editor_state_module
     implicit none
     private
 
-    public :: editor_state_t, init_editor, cleanup_editor
+    public :: editor_state_t, cursor_t, init_editor, cleanup_editor
 
     ! Cursor position and selection
     type :: cursor_t
