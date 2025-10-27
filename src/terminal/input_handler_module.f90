@@ -109,9 +109,18 @@ contains
                 ! Could be modified arrow key
                 call handle_modified_key(key_str)
             end select
+        else if (ch1 == 'A') then
+            ! Could be Alt-Shift-Up
+            key_str = 'alt-shift-up'
+        else if (ch1 == 'B') then
+            ! Could be Alt-Shift-Down
+            key_str = 'alt-shift-down'
         else if (ch1 >= 'a' .and. ch1 <= 'z') then
             ! Alt+letter
             write(key_str, '(a,a)') 'alt-', ch1
+        else if (ch1 >= 'A' .and. ch1 <= 'Z') then
+            ! Alt+Shift+letter
+            write(key_str, '(a,a)') 'alt-shift-', achar(iachar(ch1) - iachar('A') + iachar('a'))
         end if
 
     end subroutine handle_escape_sequence
