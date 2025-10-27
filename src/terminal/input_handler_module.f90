@@ -59,7 +59,9 @@ contains
             key_str = 'tab'
         case(10, 13)  ! Enter
             key_str = 'enter'
-        case(1:8, 11:12, 14:26)  ! Ctrl keys (excluding Tab, Enter, and ESC)
+        case(8)  ! Ctrl-H (backspace)
+            key_str = 'backspace'
+        case(1:7, 11:12, 14:26)  ! Ctrl keys (excluding Ctrl-H, Tab, Enter, and ESC)
             write(key_str, '(a,a)') 'ctrl-', achar(iachar('a') + iachar(ch) - 1)
         case(127)  ! Backspace
             key_str = 'backspace'
@@ -109,15 +111,21 @@ contains
                 read(input_unit, '(a1)', advance='no', iostat=ios) ch3
                 if (ios == 0 .and. ch3 == '~') then
                     key_str = 'pageup'
+                else if (ios == 0 .and. ch3 == ';') then
+                    ! Modified page up (e.g., shift+pageup)
+                    call handle_modified_special_key(key_str, 5)
                 end if
             case('6')
                 ! Could be page down
                 read(input_unit, '(a1)', advance='no', iostat=ios) ch3
                 if (ios == 0 .and. ch3 == '~') then
                     key_str = 'pagedown'
+                else if (ios == 0 .and. ch3 == ';') then
+                    ! Modified page down (e.g., shift+pagedown)
+                    call handle_modified_special_key(key_str, 6)
                 end if
             case('1')
-                ! Could be modified arrow key
+                ! Could be modified arrow key or home/end
                 call handle_modified_key(key_str)
             case('<')
                 ! Mouse event in SGR mode
@@ -129,6 +137,12 @@ contains
         else if (ch1 == 'B') then
             ! Could be Alt-Shift-Down
             key_str = 'alt-shift-down'
+        else if (ch1 == achar(127)) then
+            ! Alt+Backspace (ESC followed by DEL/127)
+            key_str = 'alt-backspace'
+        else if (ch1 == achar(8)) then
+            ! Alt+Backspace (ESC followed by Ctrl-H)
+            key_str = 'alt-backspace'
         else if (ch1 >= 'a' .and. ch1 <= 'z') then
             ! Alt+letter
             write(key_str, '(a,a)') 'alt-', ch1
@@ -151,8 +165,8 @@ contains
         do
             read(input_unit, '(a1)', advance='no', iostat=ios) ch
             if (ios /= 0) exit
-            if (ch >= 'A' .and. ch <= 'D') then
-                ! End of sequence, it's an arrow key
+            if ((ch >= 'A' .and. ch <= 'D') .or. ch == 'H' .or. ch == 'F' .or. ch == '~') then
+                ! End of sequence
                 exit
             end if
             modifier_seq = trim(modifier_seq) // ch
@@ -167,6 +181,8 @@ contains
                     key_str = 'shift-'
                 case(3)  ! Alt
                     key_str = 'alt-'
+                case(4)  ! Alt+Shift
+                    key_str = 'alt-shift-'
                 case(5)  ! Ctrl
                     key_str = 'ctrl-'
                 case(6)  ! Ctrl+Shift
@@ -177,7 +193,7 @@ contains
                     key_str = ''
                 end select
 
-                ! Append the arrow key
+                ! Append the key type
                 select case(ch)
                 case('A')
                     key_str = trim(key_str) // 'up'
@@ -187,10 +203,70 @@ contains
                     key_str = trim(key_str) // 'right'
                 case('D')
                     key_str = trim(key_str) // 'left'
+                case('H')
+                    key_str = trim(key_str) // 'home'
+                case('F')
+                    key_str = trim(key_str) // 'end'
+                case('~')
+                    ! Check what special key it is based on the beginning of modifier_seq
+                    if (index(modifier_seq, ';') == 1 .and. len_trim(modifier_seq) > 1) then
+                        ! Already read the ;2 or ;5 etc, the key type should be before
+                        key_str = trim(key_str) // 'unknown'
+                    end if
                 end select
             end if
         end if
     end subroutine handle_modified_key
+
+    subroutine handle_modified_special_key(key_str, key_code)
+        character(len=*), intent(out) :: key_str
+        integer, intent(in) :: key_code
+        character :: ch
+        character(len=10) :: modifier_seq
+        integer :: ios, modifier
+
+        modifier_seq = ''
+
+        ! Read modifier sequence (already past the semicolon)
+        do
+            read(input_unit, '(a1)', advance='no', iostat=ios) ch
+            if (ios /= 0) exit
+            if (ch == '~') then
+                ! End of sequence
+                exit
+            end if
+            modifier_seq = trim(modifier_seq) // ch
+        end do
+
+        ! Parse modifier
+        if (len_trim(modifier_seq) > 0) then
+            read(modifier_seq, '(i10)', iostat=ios) modifier
+            if (ios == 0) then
+                select case(modifier)
+                case(2)  ! Shift
+                    key_str = 'shift-'
+                case(3)  ! Alt
+                    key_str = 'alt-'
+                case(4)  ! Alt+Shift
+                    key_str = 'alt-shift-'
+                case(5)  ! Ctrl
+                    key_str = 'ctrl-'
+                case(6)  ! Ctrl+Shift
+                    key_str = 'ctrl-shift-'
+                case default
+                    key_str = ''
+                end select
+
+                ! Append the key type based on key_code
+                select case(key_code)
+                case(5)
+                    key_str = trim(key_str) // 'pageup'
+                case(6)
+                    key_str = trim(key_str) // 'pagedown'
+                end select
+            end if
+        end if
+    end subroutine handle_modified_special_key
 
     subroutine handle_mouse_event(key_str)
         character(len=*), intent(out) :: key_str
