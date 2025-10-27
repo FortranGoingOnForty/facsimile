@@ -5,7 +5,7 @@ program facsimile
     use editor_state_module
     use text_buffer_module
     use renderer_module
-    use command_handler_module, only: handle_key_command
+    use command_handler_module
     implicit none
 
     type(editor_state_t) :: editor
@@ -38,6 +38,9 @@ program facsimile
 
     ! Initialize renderer
     call init_renderer(rows, cols)
+
+    ! Initialize command handler (for yank stack)
+    call init_command_handler()
 
     ! Initialize buffer and load file if specified
     if (len_trim(filename) > 0) then
@@ -83,6 +86,7 @@ program facsimile
 
     ! Cleanup
     call cleanup_renderer()
+    call cleanup_command_handler()
     call terminal_cleanup()
     call cleanup_editor(editor)
     call cleanup_buffer(buffer)
