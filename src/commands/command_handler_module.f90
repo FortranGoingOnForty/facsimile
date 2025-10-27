@@ -1,5 +1,6 @@
 module command_handler_module
-    use iso_fortran_env, only: int32
+    use iso_fortran_env, only: int32, error_unit
+    use iso_c_binding, only: c_int
     use editor_state_module, only: editor_state_t, cursor_t
     use text_buffer_module
     use renderer_module, only: update_viewport
@@ -7,6 +8,7 @@ module command_handler_module
     use clipboard_module
     use help_display_module, only: show_help
     use undo_stack_module
+    use terminal_io_module, only: terminal_move_cursor, terminal_write
     implicit none
     private
 
@@ -69,17 +71,18 @@ contains
                 call update_viewport(editor)
             end if
 
-        case('ctrl-shift-z', 'ctrl-y')
-            ! Redo (ctrl-y conflicts with yank, so we'll use ctrl-shift-z primarily)
-            if (trim(key_str) == 'ctrl-shift-z' .or. &
-                (trim(key_str) == 'ctrl-y' .and. can_redo(undo_stack))) then
+        case('ctrl-shift-z')
+            ! Redo
+            if (can_redo(undo_stack)) then
                 call perform_redo(undo_stack, buffer, editor%cursors(editor%active_cursor))
                 call update_viewport(editor)
-            else if (trim(key_str) == 'ctrl-y') then
-                ! If not redo, do yank
-                call yank_text(editor%cursors(editor%active_cursor), buffer)
-                is_edit_action = .true.
             end if
+
+        case('ctrl-y')
+            ! Yank (paste from yank stack)
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call yank_text(editor%cursors(editor%active_cursor), buffer)
+            is_edit_action = .true.
 
         ! Navigation
         case('up')
@@ -626,6 +629,83 @@ contains
         cursor%has_selection = .false.
     end subroutine delete_selection
 
+    function get_selection_text(cursor, buffer) result(text)
+        type(cursor_t), intent(in) :: cursor
+        type(buffer_t), intent(in) :: buffer
+        character(len=:), allocatable :: text
+        integer :: start_line, start_col, end_line, end_col
+        integer :: i
+        character(len=:), allocatable :: line
+
+        if (.not. cursor%has_selection) then
+            allocate(character(len=0) :: text)
+            return
+        end if
+
+        ! Determine start and end of selection
+        if (cursor%line < cursor%selection_start_line .or. &
+            (cursor%line == cursor%selection_start_line .and. &
+             cursor%column < cursor%selection_start_col)) then
+            start_line = cursor%line
+            start_col = cursor%column
+            end_line = cursor%selection_start_line
+            end_col = cursor%selection_start_col
+        else
+            start_line = cursor%selection_start_line
+            start_col = cursor%selection_start_col
+            end_line = cursor%line
+            end_col = cursor%column
+        end if
+
+        ! Extract text based on selection
+        if (start_line == end_line) then
+            ! Single-line selection
+            line = buffer_get_line(buffer, start_line)
+            if (allocated(line) .and. start_col <= len(line) + 1 .and. end_col <= len(line) + 1) then
+                if (end_col > start_col) then
+                    allocate(character(len=end_col - start_col) :: text)
+                    text = line(start_col:end_col - 1)
+                else
+                    allocate(character(len=0) :: text)
+                end if
+            else
+                allocate(character(len=0) :: text)
+            end if
+            if (allocated(line)) deallocate(line)
+        else
+            ! Multi-line selection
+            text = ""
+
+            ! First line (from start_col to end)
+            line = buffer_get_line(buffer, start_line)
+            if (allocated(line)) then
+                if (start_col <= len(line)) then
+                    text = text // line(start_col:)
+                end if
+                text = text // char(10)  ! newline
+                deallocate(line)
+            end if
+
+            ! Middle lines (complete lines)
+            do i = start_line + 1, end_line - 1
+                line = buffer_get_line(buffer, i)
+                if (allocated(line)) then
+                    text = text // line // char(10)
+                    deallocate(line)
+                end if
+            end do
+
+            ! Last line (from beginning to end_col)
+            line = buffer_get_line(buffer, end_line)
+            if (allocated(line)) then
+                if (end_col > 1 .and. end_col <= len(line) + 1) then
+                    text = text // line(1:end_col - 1)
+                end if
+                deallocate(line)
+            end if
+        end if
+    end function get_selection_text
+
     subroutine sort_cursors_by_position(editor)
         type(editor_state_t), intent(inout) :: editor
         type(cursor_t) :: temp
@@ -805,7 +885,7 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: current_line, next_line
-        integer :: line_count
+        integer :: line_count, saved_column
 
         line_count = buffer_get_line_count(buffer)
         if (cursor%line >= line_count) return
@@ -814,7 +894,6 @@ contains
         next_line = buffer_get_line(buffer, cursor%line + 1)
 
         ! Store current column
-        integer :: saved_column
         saved_column = cursor%column
 
         ! Delete current line
@@ -969,15 +1048,28 @@ contains
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: text
 
-        ! Get current line or selection
-        text = buffer_get_line(buffer, cursor%line)
+        if (cursor%has_selection) then
+            ! Get selected text
+            text = get_selection_text(cursor, buffer)
 
-        ! Copy to clipboard
-        call copy_to_clipboard(text)
+            ! Copy to clipboard
+            if (allocated(text)) then
+                call copy_to_clipboard(text)
+            end if
 
-        ! Delete the line
-        cursor%column = 1
-        call delete_entire_line(buffer, cursor)
+            ! Delete the selection
+            call delete_selection(cursor, buffer)
+        else
+            ! Get current line
+            text = buffer_get_line(buffer, cursor%line)
+
+            ! Copy to clipboard
+            call copy_to_clipboard(text)
+
+            ! Delete the line
+            cursor%column = 1
+            call delete_entire_line(buffer, cursor)
+        end if
 
         buffer%modified = .true.
         if (allocated(text)) deallocate(text)
@@ -988,13 +1080,19 @@ contains
         type(buffer_t), intent(in) :: buffer
         character(len=:), allocatable :: text
 
-        ! Get current line or selection
-        text = buffer_get_line(buffer, cursor%line)
+        if (cursor%has_selection) then
+            ! Get selected text
+            text = get_selection_text(cursor, buffer)
+        else
+            ! Get current line
+            text = buffer_get_line(buffer, cursor%line)
+        end if
 
         ! Copy to clipboard
-        call copy_to_clipboard(text)
-
-        if (allocated(text)) deallocate(text)
+        if (allocated(text)) then
+            call copy_to_clipboard(text)
+            deallocate(text)
+        end if
     end subroutine copy_selection_or_line
 
     subroutine paste_clipboard(cursor, buffer)
@@ -1027,12 +1125,69 @@ contains
     subroutine save_file(editor, buffer)
         type(editor_state_t), intent(in) :: editor
         type(buffer_t), intent(inout) :: buffer
+        integer :: ios, temp_unit
+        character(len=256) :: temp_filename, command
+        character(len=1024) :: error_msg
+        logical :: file_exists, has_write_permission
 
-        if (allocated(editor%filename)) then
-            call buffer_save_to_file(buffer, editor%filename)
+        if (.not. allocated(editor%filename)) return
+
+        ! First try normal save
+        call buffer_save_file(buffer, editor%filename, ios)
+
+        if (ios == 0) then
             buffer%modified = .false.
+            return
+        end if
+
+        ! Check if file exists and we have write permission
+        inquire(file=editor%filename, exist=file_exists)
+
+        ! If save failed, try sudo save
+        write(temp_filename, '(a,i0)') '/tmp/facsimile_sudo_', getpid()
+
+        ! Save to temporary file
+        call buffer_save_file(buffer, temp_filename, ios)
+        if (ios /= 0) then
+            ! Can't even save to /tmp, serious problem
+            write(error_unit, *) 'Error: Cannot save file even to /tmp'
+            return
+        end if
+
+        ! Use sudo to move the file
+        write(command, '(a,a,a,a,a)') 'sudo mv ', trim(temp_filename), ' ', &
+                                       trim(editor%filename), ' 2>/dev/null'
+
+        ! Show message to user
+        call terminal_move_cursor(editor%screen_rows, 1)
+        call terminal_write('[sudo] password required to save file')
+
+        ! Execute sudo command
+        call execute_command_line(command, exitstat=ios)
+
+        if (ios == 0) then
+            buffer%modified = .false.
+            call terminal_move_cursor(editor%screen_rows, 1)
+            call terminal_write('File saved with sudo                  ')
+        else
+            ! Clean up temp file
+            write(command, '(a,a)') 'rm -f ', trim(temp_filename)
+            call execute_command_line(command)
+            call terminal_move_cursor(editor%screen_rows, 1)
+            call terminal_write('Save failed - permission denied        ')
         end if
     end subroutine save_file
+
+    function getpid() result(pid)
+        integer :: pid
+        interface
+            function c_getpid() bind(C, name="getpid")
+                use iso_c_binding, only: c_int
+                integer(c_int) :: c_getpid
+            end function
+        end interface
+        pid = c_getpid()
+    end function getpid
 
     subroutine cycle_quotes(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
@@ -1620,6 +1775,87 @@ contains
             if (allocated(line)) deallocate(line)
         end do
     end subroutine find_next_occurrence
+
+    ! ========================================================================
+    ! Buffer Helper Functions - Wrappers for cursor-based operations
+    ! ========================================================================
+
+    subroutine buffer_delete_at_cursor(buffer, cursor)
+        type(buffer_t), intent(inout) :: buffer
+        type(cursor_t), intent(in) :: cursor
+        integer :: pos
+
+        ! Convert cursor position to buffer position
+        pos = get_buffer_position(buffer, cursor%line, cursor%column)
+        if (pos > 0 .and. pos <= get_buffer_content_size(buffer)) then
+            call buffer_delete(buffer, pos, 1)
+        end if
+    end subroutine buffer_delete_at_cursor
+
+    subroutine buffer_insert_char(buffer, cursor, ch)
+        type(buffer_t), intent(inout) :: buffer
+        type(cursor_t), intent(in) :: cursor
+        character, intent(in) :: ch
+        integer :: pos
+
+        ! Convert cursor position to buffer position
+        pos = get_buffer_position(buffer, cursor%line, cursor%column)
+        call buffer_insert(buffer, pos, ch)
+    end subroutine buffer_insert_char
+
+    subroutine buffer_insert_newline(buffer, cursor)
+        type(buffer_t), intent(inout) :: buffer
+        type(cursor_t), intent(in) :: cursor
+        integer :: pos
+
+        ! Convert cursor position to buffer position
+        pos = get_buffer_position(buffer, cursor%line, cursor%column)
+        call buffer_insert(buffer, pos, char(10))
+    end subroutine buffer_insert_newline
+
+    function get_buffer_position(buffer, line, column) result(pos)
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: line, column
+        integer :: pos
+        integer :: current_line, i
+        character :: ch
+
+        pos = 1
+        current_line = 1
+
+        ! Find the position for the given line and column
+        do i = 1, get_buffer_content_size(buffer)
+            if (current_line == line .and. pos == column) then
+                return
+            end if
+
+            ch = buffer_get_char(buffer, i)
+            if (ch == char(10)) then
+                if (current_line == line) then
+                    ! We're at the end of the target line
+                    return
+                end if
+                current_line = current_line + 1
+                pos = 1
+            else if (current_line == line) then
+                pos = pos + 1
+            end if
+        end do
+
+        ! If we reach here, we're at the end of the buffer
+        if (current_line == line) then
+            pos = i
+        else
+            pos = get_buffer_content_size(buffer) + 1
+        end if
+    end function get_buffer_position
+
+    function get_buffer_content_size(buffer) result(size)
+        type(buffer_t), intent(in) :: buffer
+        integer :: size
+
+        size = buffer%size - (buffer%gap_end - buffer%gap_start)
+    end function get_buffer_content_size
 
     ! ========================================================================
     ! Multiple Cursor Addition Above/Below

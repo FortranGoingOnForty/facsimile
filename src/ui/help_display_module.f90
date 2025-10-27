@@ -74,13 +74,16 @@ contains
 
         ! Multiple Cursors
         call display_section(row, max_rows, "MULTIPLE CURSORS", &
-            ["ctrl-d          select next match               ", &
-             "alt-click       add/remove cursor               "])
+            ["ctrl-d              select next match           ", &
+             "alt-click           add/remove cursor           ", &
+             "opt-meta-up/down    cursor above/below          "])
 
         ! Special
         call display_section(row, max_rows, "SPECIAL", &
             ["ctrl-'              cycle quotes                ", &
-             "ctrl-opt-backspace  remove brackets             "])
+             "ctrl-opt-backspace  remove brackets             ", &
+             "ctrl-z              undo                        ", &
+             "ctrl-shift-z        redo                        "])
 
         ! File
         call display_section(row, max_rows, "FILE", &
