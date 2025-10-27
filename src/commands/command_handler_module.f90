@@ -237,7 +237,20 @@ contains
 
         case('tab')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-            call handle_tab(editor%cursors(editor%active_cursor), buffer)
+            if (editor%cursors(editor%active_cursor)%has_selection) then
+                call indent_selection(editor%cursors(editor%active_cursor), buffer)
+            else
+                call handle_tab(editor%cursors(editor%active_cursor), buffer)
+            end if
+            is_edit_action = .true.
+
+        case('shift-tab')
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            if (editor%cursors(editor%active_cursor)%has_selection) then
+                call dedent_selection(editor%cursors(editor%active_cursor), buffer)
+            else
+                call dedent_current_line(editor%cursors(editor%active_cursor), buffer)
+            end if
             is_edit_action = .true.
 
         ! Editing keybinds
@@ -273,6 +286,12 @@ contains
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             ! Transpose characters
             call transpose_characters(editor%cursors(editor%active_cursor), buffer)
+            is_edit_action = .true.
+
+        case('ctrl-j')
+            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            ! Join lines
+            call join_lines(editor%cursors(editor%active_cursor), buffer)
             is_edit_action = .true.
 
         case('ctrl-x')
@@ -661,14 +680,159 @@ contains
         cursor%desired_column = cursor%column
     end subroutine handle_tab
 
+    subroutine indent_selection(cursor, buffer)
+        type(cursor_t), intent(inout) :: cursor
+        type(buffer_t), intent(inout) :: buffer
+        integer :: start_line, end_line, i
+        character(len=:), allocatable :: line
+
+        if (.not. cursor%has_selection) return
+
+        ! Get the range of lines to indent
+        start_line = min(cursor%selection_start_line, cursor%line)
+        end_line = max(cursor%selection_start_line, cursor%line)
+
+        ! Indent each line in the selection
+        do i = start_line, end_line
+            line = buffer_get_line(buffer, i)
+            ! Insert 4 spaces at the beginning of the line
+            call buffer_insert_text_at(buffer, i, 1, "    ")
+            if (allocated(line)) deallocate(line)
+        end do
+
+        ! Adjust cursor position if needed
+        if (cursor%column > 1) then
+            cursor%column = cursor%column + 4
+        end if
+        if (cursor%selection_start_col > 1) then
+            cursor%selection_start_col = cursor%selection_start_col + 4
+        end if
+    end subroutine indent_selection
+
+    subroutine dedent_selection(cursor, buffer)
+        type(cursor_t), intent(inout) :: cursor
+        type(buffer_t), intent(inout) :: buffer
+        integer :: start_line, end_line, i, spaces_to_remove
+        character(len=:), allocatable :: line
+
+        if (.not. cursor%has_selection) return
+
+        ! Get the range of lines to dedent
+        start_line = min(cursor%selection_start_line, cursor%line)
+        end_line = max(cursor%selection_start_line, cursor%line)
+
+        ! Dedent each line in the selection
+        do i = start_line, end_line
+            line = buffer_get_line(buffer, i)
+            spaces_to_remove = 0
+
+            ! Count how many spaces we can remove (max 4)
+            do while (spaces_to_remove < 4 .and. spaces_to_remove < len(line))
+                if (line(spaces_to_remove + 1:spaces_to_remove + 1) == ' ') then
+                    spaces_to_remove = spaces_to_remove + 1
+                else
+                    exit
+                end if
+            end do
+
+            ! Remove the spaces
+            if (spaces_to_remove > 0) then
+                call buffer_delete_range(buffer, i, 1, i, spaces_to_remove + 1)
+
+                ! Adjust cursor position for current line
+                if (i == cursor%line .and. cursor%column > spaces_to_remove) then
+                    cursor%column = cursor%column - spaces_to_remove
+                else if (i == cursor%line .and. cursor%column <= spaces_to_remove) then
+                    cursor%column = 1
+                end if
+
+                if (i == cursor%selection_start_line .and. cursor%selection_start_col > spaces_to_remove) then
+                    cursor%selection_start_col = cursor%selection_start_col - spaces_to_remove
+                else if (i == cursor%selection_start_line .and. cursor%selection_start_col <= spaces_to_remove) then
+                    cursor%selection_start_col = 1
+                end if
+            end if
+
+            if (allocated(line)) deallocate(line)
+        end do
+    end subroutine dedent_selection
+
+    subroutine dedent_current_line(cursor, buffer)
+        type(cursor_t), intent(inout) :: cursor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: line
+        integer :: spaces_to_remove
+
+        line = buffer_get_line(buffer, cursor%line)
+        spaces_to_remove = 0
+
+        ! Count how many spaces we can remove (max 4)
+        do while (spaces_to_remove < 4 .and. spaces_to_remove < len(line))
+            if (line(spaces_to_remove + 1:spaces_to_remove + 1) == ' ') then
+                spaces_to_remove = spaces_to_remove + 1
+            else
+                exit
+            end if
+        end do
+
+        ! Remove the spaces
+        if (spaces_to_remove > 0) then
+            call buffer_delete_range(buffer, cursor%line, 1, cursor%line, spaces_to_remove + 1)
+
+            ! Adjust cursor position
+            if (cursor%column > spaces_to_remove) then
+                cursor%column = cursor%column - spaces_to_remove
+            else
+                cursor%column = 1
+            end if
+            cursor%desired_column = cursor%column
+        end if
+
+        if (allocated(line)) deallocate(line)
+    end subroutine dedent_current_line
+
     subroutine insert_char(cursor, buffer, ch)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character, intent(in) :: ch
+        character :: closing_char
+        logical :: should_auto_close
 
         cursor%has_selection = .false.  ! Clear selection
+
+        ! Check if we should auto-close brackets/quotes
+        should_auto_close = .false.
+        select case(ch)
+        case('(')
+            closing_char = ')'
+            should_auto_close = .true.
+        case('[')
+            closing_char = ']'
+            should_auto_close = .true.
+        case('{')
+            closing_char = '}'
+            should_auto_close = .true.
+        case('"')
+            closing_char = '"'
+            should_auto_close = .true.
+        case("'")
+            closing_char = "'"
+            should_auto_close = .true.
+        case('`')
+            closing_char = '`'
+            should_auto_close = .true.
+        end select
+
+        ! Insert the character
         call buffer_insert_char(buffer, cursor, ch)
         cursor%column = cursor%column + 1
+
+        ! If auto-close is enabled, insert the closing character
+        if (should_auto_close) then
+            call buffer_insert_char(buffer, cursor, closing_char)
+            ! Don't move cursor forward - stay between the brackets/quotes
+        end if
+
         cursor%desired_column = cursor%column
     end subroutine insert_char
 
@@ -1920,6 +2084,32 @@ contains
         call buffer_insert(buffer, pos, char(10))
     end subroutine buffer_insert_newline
 
+    subroutine buffer_insert_text_at(buffer, line, column, text)
+        type(buffer_t), intent(inout) :: buffer
+        integer, intent(in) :: line, column
+        character(len=*), intent(in) :: text
+        integer :: pos
+
+        ! Convert line/column to buffer position
+        pos = get_buffer_position(buffer, line, column)
+        call buffer_insert(buffer, pos, text)
+    end subroutine buffer_insert_text_at
+
+    subroutine buffer_delete_range(buffer, start_line, start_col, end_line, end_col)
+        type(buffer_t), intent(inout) :: buffer
+        integer, intent(in) :: start_line, start_col, end_line, end_col
+        integer :: start_pos, end_pos, count
+
+        ! Convert positions to buffer positions
+        start_pos = get_buffer_position(buffer, start_line, start_col)
+        end_pos = get_buffer_position(buffer, end_line, end_col)
+        count = end_pos - start_pos
+
+        if (count > 0) then
+            call buffer_delete(buffer, start_pos, count)
+        end if
+    end subroutine buffer_delete_range
+
     function get_buffer_position(buffer, line, column) result(pos)
         type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: line, column
@@ -2427,6 +2617,45 @@ contains
 
         if (allocated(line)) deallocate(line)
     end subroutine transpose_characters
+
+    subroutine join_lines(cursor, buffer)
+        type(cursor_t), intent(inout) :: cursor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: current_line, next_line
+        integer :: line_count, current_len
+
+        line_count = buffer_get_line_count(buffer)
+
+        ! Can't join if we're on the last line
+        if (cursor%line >= line_count) return
+
+        ! Get the current line and next line
+        current_line = buffer_get_line(buffer, cursor%line)
+        next_line = buffer_get_line(buffer, cursor%line + 1)
+        current_len = len(current_line)
+
+        ! Delete the newline at the end of the current line
+        call buffer_delete_range(buffer, cursor%line, current_len + 1, cursor%line + 1, 1)
+
+        ! If the next line wasn't empty, insert a space between the lines
+        if (len(trim(next_line)) > 0) then
+            ! Find first non-whitespace character in next line
+            do while (len(next_line) > 0 .and. &
+                     (next_line(1:1) == ' ' .or. next_line(1:1) == char(9)))
+                next_line = next_line(2:)
+            end do
+
+            ! Insert a space if current line doesn't end with space and next line has content
+            if (current_len > 0 .and. len(next_line) > 0) then
+                if (current_line(current_len:current_len) /= ' ') then
+                    call buffer_insert_text_at(buffer, cursor%line, current_len + 1, ' ')
+                end if
+            end if
+        end if
+
+        if (allocated(current_line)) deallocate(current_line)
+        if (allocated(next_line)) deallocate(next_line)
+    end subroutine join_lines
 
     function get_line_start_pos(buffer, line_num) result(pos)
         type(buffer_t), intent(in) :: buffer

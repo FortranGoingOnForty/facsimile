@@ -12,6 +12,7 @@ module renderer_module
 
     ! Configuration
     logical :: show_line_numbers = .true.
+    logical :: highlight_current_line = .true.
     integer, parameter :: LINE_NUMBER_WIDTH = 5  ! Width for line number display
 
     ! Bracket matching state
@@ -194,11 +195,14 @@ contains
         integer, intent(in) :: line_num, start_col, width
         character(len=:), allocatable :: line
         integer :: i, col, line_len
-        logical :: in_selection, is_bracket_match
+        logical :: in_selection, is_bracket_match, is_current_line
         character :: ch
 
         line = buffer_get_line(buffer, line_num)
         line_len = len(line)
+
+        ! Check if this is the current line
+        is_current_line = (line_num == editor%cursors(editor%active_cursor)%line) .and. highlight_current_line
 
         ! Render each character with selection highlighting
         do col = start_col, min(start_col + width - 1, line_len + 1)
@@ -239,6 +243,9 @@ contains
             else if (is_bracket_match) then
                 ! Highlight matching brackets with cyan background
                 call terminal_write(char(27) // '[46m' // ch // char(27) // '[0m')
+            else if (is_current_line) then
+                ! Subtle background for current line (dark gray)
+                call terminal_write(char(27) // '[48;5;236m' // ch // char(27) // '[0m')
             else
                 call terminal_write(ch)
             end if
@@ -264,6 +271,8 @@ contains
 
             if (in_selection) then
                 call terminal_write(char(27) // '[7m ' // char(27) // '[0m')
+            else if (is_current_line) then
+                call terminal_write(char(27) // '[48;5;236m ' // char(27) // '[0m')
             else
                 call terminal_write(' ')
             end if

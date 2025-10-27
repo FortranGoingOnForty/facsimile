@@ -56,13 +56,16 @@ contains
         call display_section(row, max_rows, "EDITING", &
             ["backspace/ctrl-h    delete backward             ", &
              "delete              delete forward              ", &
-             "tab                 insert 4 spaces             ", &
+             "tab                 insert 4 spaces/indent      ", &
+             "shift-tab           dedent selection/line       ", &
              "ctrl-k              kill line forward           ", &
              "ctrl-u              kill line backward          ", &
              "ctrl-y              yank from stack             ", &
              "ctrl-w/alt-bksp     delete word backward        ", &
              "alt-d               delete word forward         ", &
-             "ctrl-t              transpose characters        "])
+             "ctrl-t              transpose characters        ", &
+             "ctrl-j              join lines                  ", &
+             "auto-close          brackets/quotes             "])
 
         ! Clipboard
         call display_section(row, max_rows, "CLIPBOARD", &
