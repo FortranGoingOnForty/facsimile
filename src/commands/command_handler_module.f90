@@ -561,16 +561,23 @@ contains
         pos = cursor%column
 
         if (pos <= len(line)) then
-            ! Skip current word
-            in_word = is_word_char(line(pos:pos))
-            do while (pos <= len(line) .and. is_word_char(line(pos:pos)) .eqv. in_word)
-                pos = pos + 1
-            end do
-
-            ! Skip whitespace
-            do while (pos <= len(line) .and. line(pos:pos) == ' ')
-                pos = pos + 1
-            end do
+            ! Check what we're currently on
+            if (pos <= len(line) .and. is_word_char(line(pos:pos))) then
+                ! We're on a word character - skip to end of word
+                do while (pos <= len(line) .and. is_word_char(line(pos:pos)))
+                    pos = pos + 1
+                end do
+            else
+                ! We're on whitespace or punctuation - skip to next word
+                ! Skip non-word characters
+                do while (pos <= len(line) .and. .not. is_word_char(line(pos:pos)))
+                    pos = pos + 1
+                end do
+                ! Then skip to end of that word
+                do while (pos <= len(line) .and. is_word_char(line(pos:pos)))
+                    pos = pos + 1
+                end do
+            end if
 
             cursor%column = pos
         else if (cursor%line < line_count) then
@@ -2114,15 +2121,17 @@ contains
         type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: line, column
         integer :: pos
-        integer :: current_line, i
+        integer :: current_line, i, col_in_line
         character :: ch
 
         pos = 1
         current_line = 1
+        col_in_line = 1
 
         ! Find the position for the given line and column
         do i = 1, get_buffer_content_size(buffer)
-            if (current_line == line .and. pos == column) then
+            if (current_line == line .and. col_in_line == column) then
+                pos = i
                 return
             end if
 
@@ -2130,21 +2139,18 @@ contains
             if (ch == char(10)) then
                 if (current_line == line) then
                     ! We're at the end of the target line
+                    pos = i
                     return
                 end if
                 current_line = current_line + 1
-                pos = 1
-            else if (current_line == line) then
-                pos = pos + 1
+                col_in_line = 1
+            else
+                col_in_line = col_in_line + 1
             end if
         end do
 
         ! If we reach here, we're at the end of the buffer
-        if (current_line == line) then
-            pos = i
-        else
-            pos = get_buffer_content_size(buffer) + 1
-        end if
+        pos = get_buffer_content_size(buffer) + 1
     end function get_buffer_position
 
     function get_buffer_content_size(buffer) result(size)
@@ -2622,7 +2628,7 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: current_line, next_line
-        integer :: line_count, current_len
+        integer :: line_count, current_len, leading_spaces
 
         line_count = buffer_get_line_count(buffer)
 
@@ -2634,19 +2640,25 @@ contains
         next_line = buffer_get_line(buffer, cursor%line + 1)
         current_len = len(current_line)
 
-        ! Delete the newline at the end of the current line
-        call buffer_delete_range(buffer, cursor%line, current_len + 1, cursor%line + 1, 1)
+        ! Count leading whitespace in next line
+        leading_spaces = 0
+        do while (leading_spaces < len(next_line) .and. &
+                 (next_line(leading_spaces + 1:leading_spaces + 1) == ' ' .or. &
+                  next_line(leading_spaces + 1:leading_spaces + 1) == char(9)))
+            leading_spaces = leading_spaces + 1
+        end do
 
-        ! If the next line wasn't empty, insert a space between the lines
-        if (len(trim(next_line)) > 0) then
-            ! Find first non-whitespace character in next line
-            do while (len(next_line) > 0 .and. &
-                     (next_line(1:1) == ' ' .or. next_line(1:1) == char(9)))
-                next_line = next_line(2:)
-            end do
+        ! Delete the newline and leading whitespace from next line
+        if (leading_spaces > 0) then
+            call buffer_delete_range(buffer, cursor%line, current_len + 1, cursor%line + 1, leading_spaces + 1)
+        else
+            call buffer_delete_range(buffer, cursor%line, current_len + 1, cursor%line + 1, 1)
+        end if
 
-            ! Insert a space if current line doesn't end with space and next line has content
-            if (current_len > 0 .and. len(next_line) > 0) then
+        ! If the next line had non-whitespace content, insert a space between the lines
+        if (leading_spaces < len(next_line)) then
+            ! Insert a space if current line doesn't end with space
+            if (current_len > 0) then
                 if (current_line(current_len:current_len) /= ' ') then
                     call buffer_insert_text_at(buffer, cursor%line, current_len + 1, ' ')
                 end if

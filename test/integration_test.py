@@ -48,9 +48,21 @@ class FacsimileTest:
     def stop(self) -> None:
         """Stop the editor and clean up."""
         if self.process:
-            self.send_key('ctrl-q')
-            self.process.expect(pexpect.EOF)
-            self.process = None
+            try:
+                # Save first to avoid unsaved changes prompt
+                self.send_key('ctrl-s')
+                time.sleep(0.1)
+                # Now quit
+                self.send_key('ctrl-q')
+                self.process.expect(pexpect.EOF, timeout=2)
+            except pexpect.TIMEOUT:
+                # Force terminate if it doesn't exit cleanly
+                self.process.terminate()
+                time.sleep(0.1)
+            except:
+                pass
+            finally:
+                self.process = None
 
         # Clean up temp file
         if self.test_file:
@@ -70,22 +82,27 @@ class FacsimileTest:
             'ctrl-q': '\x11', 'ctrl-r': '\x12', 'ctrl-s': '\x13', 'ctrl-t': '\x14',
             'ctrl-u': '\x15', 'ctrl-v': '\x16', 'ctrl-w': '\x17', 'ctrl-x': '\x18',
             'ctrl-y': '\x19', 'ctrl-z': '\x1a',
+            'ctrl-shift-z': '\x1a',  # Redo (may need different mapping)
             'escape': '\x1b', 'enter': '\n', 'tab': '\t',
             'backspace': '\x7f', 'delete': '\x1b[3~',
             'up': '\x1b[A', 'down': '\x1b[B', 'right': '\x1b[C', 'left': '\x1b[D',
             'home': '\x1b[H', 'end': '\x1b[F',
             'pageup': '\x1b[5~', 'pagedown': '\x1b[6~',
             'alt-[': '\x1b[', 'alt-]': '\x1b]',
+            'alt-right': '\x1b[1;3C', 'alt-left': '\x1b[1;3D',
         }
 
         if key in key_map:
             self.process.send(key_map[key])
+            time.sleep(0.05)  # Small delay between key presses
         else:
             print(f"Warning: Unknown key '{key}'")
 
     def type_text(self, text: str) -> None:
         """Type regular text into the editor."""
-        self.process.send(text)
+        for char in text:
+            self.process.send(char)
+            time.sleep(0.01)  # Small delay between characters
 
     def save_file(self) -> None:
         """Save the current file."""
@@ -125,17 +142,24 @@ class TestRunner:
         print("=" * 60)
 
         for name, test_func in self.tests:
+            editor = None
             try:
                 editor = FacsimileTest()
                 test_func(editor)
                 print(f"✓ {name}")
                 self.passed += 1
-            except Exception as e:
+            except AssertionError as e:
                 print(f"✗ {name}: {str(e)}")
                 self.failed += 1
+            except Exception as e:
+                print(f"✗ {name}: Unexpected error: {e.__class__.__name__}: {str(e)}")
+                self.failed += 1
             finally:
-                if 'editor' in locals():
-                    editor.stop()
+                if editor:
+                    try:
+                        editor.stop()
+                    except:
+                        pass  # Ignore cleanup errors
 
         print("-" * 60)
         print(f"Tests run: {self.passed + self.failed}, Passed: {self.passed}, Failed: {self.failed}")
@@ -153,6 +177,7 @@ def test_basic_typing(editor: FacsimileTest):
     """Test basic text input."""
     editor.start("")
     editor.type_text("Hello World")
+    time.sleep(0.5)  # Give more time for text to be typed
     content = editor.get_file_content()
     assert content == "Hello World", f"Expected 'Hello World', got '{content}'"
 
