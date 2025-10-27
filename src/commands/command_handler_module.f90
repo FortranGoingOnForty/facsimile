@@ -136,8 +136,11 @@ contains
             call remove_brackets(editor%cursors(editor%active_cursor), buffer)
 
         case default
+            ! Check for mouse events
+            if (index(key_str, 'mouse-') == 1) then
+                call handle_mouse_event_action(key_str, editor, buffer)
             ! Regular character input
-            if (len_trim(key_str) == 1) then
+            else if (len_trim(key_str) == 1) then
                 call insert_char(editor%cursors(editor%active_cursor), buffer, key_str(1:1))
             end if
         end select
@@ -901,5 +904,169 @@ contains
 
         if (allocated(clipboard_text)) deallocate(clipboard_text)
     end subroutine paste_clipboard
+
+    subroutine handle_mouse_event_action(key_str, editor, buffer)
+        character(len=*), intent(in) :: key_str
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(in) :: buffer
+        integer :: button, row, col
+        integer :: colon1, colon2, colon3
+        character(len=100) :: event_type
+        integer :: ios, line_count
+        logical :: is_alt_click
+        type(cursor_t), allocatable :: new_cursors(:)
+        integer :: i, cursor_exists
+
+        line_count = buffer_get_line_count(buffer)
+
+        ! Parse the mouse event string format: "mouse-type:button:row:col"
+        colon1 = index(key_str, ':')
+        if (colon1 == 0) return
+
+        event_type = key_str(1:colon1-1)
+        colon2 = index(key_str(colon1+1:), ':') + colon1
+        if (colon2 == colon1) return
+
+        colon3 = index(key_str(colon2+1:), ':') + colon2
+        if (colon3 == colon2) return
+
+        ! Parse button, row, and col
+        read(key_str(colon1+1:colon2-1), '(i10)', iostat=ios) button
+        if (ios /= 0) return
+
+        read(key_str(colon2+1:colon3-1), '(i10)', iostat=ios) row
+        if (ios /= 0) return
+
+        read(key_str(colon3+1:), '(i10)', iostat=ios) col
+        if (ios /= 0) return
+
+        ! Handle different mouse event types
+        select case(trim(event_type))
+        case('mouse-click')
+            ! Regular click - move cursor to position
+            if (button == 0) then  ! Left click
+                call position_cursor_at_screen(editor%cursors(editor%active_cursor), &
+                                              editor, buffer, row, col)
+                ! Clear other cursors (single cursor mode)
+                if (allocated(editor%cursors)) then
+                    if (size(editor%cursors) > 1) then
+                        deallocate(editor%cursors)
+                        allocate(editor%cursors(1))
+                        call init_cursor(editor%cursors(1))
+                        call position_cursor_at_screen(editor%cursors(1), &
+                                                      editor, buffer, row, col)
+                        editor%active_cursor = 1
+                    end if
+                end if
+            end if
+
+        case('mouse-alt')
+            ! Alt+click - add or remove cursor
+            if (button == 8) then  ! Alt + left click (button code includes alt modifier)
+                ! Check if cursor already exists at this position
+                cursor_exists = 0
+                do i = 1, size(editor%cursors)
+                    if (is_cursor_at_screen_pos(editor%cursors(i), editor, row, col)) then
+                        cursor_exists = i
+                        exit
+                    end if
+                end do
+
+                if (cursor_exists > 0) then
+                    ! Remove the cursor
+                    if (size(editor%cursors) > 1) then
+                        allocate(new_cursors(size(editor%cursors) - 1))
+                        do i = 1, cursor_exists - 1
+                            new_cursors(i) = editor%cursors(i)
+                        end do
+                        do i = cursor_exists + 1, size(editor%cursors)
+                            new_cursors(i-1) = editor%cursors(i)
+                        end do
+                        deallocate(editor%cursors)
+                        editor%cursors = new_cursors
+                        if (editor%active_cursor >= cursor_exists) then
+                            editor%active_cursor = max(1, editor%active_cursor - 1)
+                        end if
+                    end if
+                else
+                    ! Add a new cursor
+                    allocate(new_cursors(size(editor%cursors) + 1))
+                    do i = 1, size(editor%cursors)
+                        new_cursors(i) = editor%cursors(i)
+                    end do
+                    call init_cursor(new_cursors(size(new_cursors)))
+                    call position_cursor_at_screen(new_cursors(size(new_cursors)), &
+                                                  editor, buffer, row, col)
+                    deallocate(editor%cursors)
+                    editor%cursors = new_cursors
+                    editor%active_cursor = size(editor%cursors)
+                end if
+            end if
+
+        case('mouse-shift')
+            ! Shift+click - create selection (future implementation)
+            ! For now, just move cursor
+            if (button == 4) then  ! Shift + left click
+                call position_cursor_at_screen(editor%cursors(editor%active_cursor), &
+                                              editor, buffer, row, col)
+            end if
+
+        end select
+    end subroutine handle_mouse_event_action
+
+    subroutine position_cursor_at_screen(cursor, editor, buffer, screen_row, screen_col)
+        type(cursor_t), intent(inout) :: cursor
+        type(editor_state_t), intent(in) :: editor
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: screen_row, screen_col
+        integer :: target_line, target_col
+        character(len=:), allocatable :: line
+        integer :: line_count
+
+        line_count = buffer_get_line_count(buffer)
+
+        ! Convert screen position to buffer position
+        target_line = editor%viewport_line + screen_row - 1
+        target_col = editor%viewport_column + screen_col - 1
+
+        ! Clamp to valid range
+        if (target_line < 1) target_line = 1
+        if (target_line > line_count) target_line = line_count
+
+        ! Get line and adjust column
+        line = buffer_get_line(buffer, target_line)
+        if (target_col < 1) target_col = 1
+        if (target_col > len(line) + 1) target_col = len(line) + 1
+
+        ! Set cursor position
+        cursor%line = target_line
+        cursor%column = target_col
+        cursor%desired_column = target_col
+
+        if (allocated(line)) deallocate(line)
+    end subroutine position_cursor_at_screen
+
+    function is_cursor_at_screen_pos(cursor, editor, screen_row, screen_col) result(at_pos)
+        type(cursor_t), intent(in) :: cursor
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(in) :: screen_row, screen_col
+        logical :: at_pos
+        integer :: cursor_screen_row, cursor_screen_col
+
+        cursor_screen_row = cursor%line - editor%viewport_line + 1
+        cursor_screen_col = cursor%column - editor%viewport_column + 1
+
+        at_pos = (cursor_screen_row == screen_row .and. cursor_screen_col == screen_col)
+    end function is_cursor_at_screen_pos
+
+    subroutine init_cursor(cursor)
+        type(cursor_t), intent(out) :: cursor
+        cursor%line = 1
+        cursor%column = 1
+        cursor%desired_column = 1
+        cursor%has_selection = .false.
+        cursor%selection_start_line = 1
+        cursor%selection_start_col = 1
+    end subroutine init_cursor
 
 end module command_handler_module

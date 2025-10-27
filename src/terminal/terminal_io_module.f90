@@ -7,7 +7,7 @@ module terminal_io_module
     public :: terminal_init, terminal_cleanup, terminal_clear_screen
     public :: terminal_move_cursor, terminal_hide_cursor, terminal_show_cursor
     public :: terminal_get_size, terminal_enable_raw_mode, terminal_disable_raw_mode
-    public :: terminal_write
+    public :: terminal_write, terminal_enable_mouse, terminal_disable_mouse
 
     ! ANSI escape codes
     character(len=*), parameter :: ESC = char(27)
@@ -35,12 +35,14 @@ contains
 
     subroutine terminal_init()
         call terminal_enable_raw_mode()
+        call terminal_enable_mouse()
         call terminal_clear_screen()
         call terminal_hide_cursor()
     end subroutine terminal_init
 
     subroutine terminal_cleanup()
         call terminal_show_cursor()
+        call terminal_disable_mouse()
         call terminal_clear_screen()
         call terminal_move_cursor(1, 1)
         call terminal_disable_raw_mode()
@@ -136,5 +138,24 @@ contains
         read(response(semicolon_pos+1:r_pos-1), '(i10)', iostat=ios) col
         if (ios /= 0) return
     end subroutine parse_cursor_response
+
+    subroutine terminal_enable_mouse()
+        ! Enable mouse tracking modes:
+        ! 1000 - Enable normal mouse tracking
+        ! 1002 - Enable button-motion tracking (for drag)
+        ! 1006 - Enable SGR extended mode (for large terminals)
+        write(output_unit, '(a)', advance='no') CSI // '?1000h'
+        write(output_unit, '(a)', advance='no') CSI // '?1002h'
+        write(output_unit, '(a)', advance='no') CSI // '?1006h'
+        flush(output_unit)
+    end subroutine terminal_enable_mouse
+
+    subroutine terminal_disable_mouse()
+        ! Disable mouse tracking modes
+        write(output_unit, '(a)', advance='no') CSI // '?1006l'
+        write(output_unit, '(a)', advance='no') CSI // '?1002l'
+        write(output_unit, '(a)', advance='no') CSI // '?1000l'
+        flush(output_unit)
+    end subroutine terminal_disable_mouse
 
 end module terminal_io_module

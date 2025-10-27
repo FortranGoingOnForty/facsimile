@@ -3,7 +3,7 @@ module input_handler_module
     implicit none
     private
 
-    public :: get_key_input, key_type
+    public :: get_key_input, key_type, mouse_event_t
 
     ! Key type constants
     enum, bind(C)
@@ -11,12 +11,23 @@ module input_handler_module
         enumerator :: KEY_CTRL
         enumerator :: KEY_ALT
         enumerator :: KEY_SPECIAL
+        enumerator :: KEY_MOUSE
     end enum
 
     type :: key_type
         integer :: type = KEY_NORMAL
         character(len=32) :: value = ''
     end type key_type
+
+    type :: mouse_event_t
+        integer :: button   ! 0=left, 1=middle, 2=right
+        integer :: row      ! Terminal row (1-based)
+        integer :: col      ! Terminal column (1-based)
+        logical :: pressed  ! True=press, False=release
+        logical :: shift    ! Shift modifier
+        logical :: alt      ! Alt modifier
+        logical :: ctrl     ! Ctrl modifier
+    end type mouse_event_t
 
     character(len=*), parameter :: ESC = char(27)
 
@@ -108,6 +119,9 @@ contains
             case('1')
                 ! Could be modified arrow key
                 call handle_modified_key(key_str)
+            case('<')
+                ! Mouse event in SGR mode
+                call handle_mouse_event(key_str)
             end select
         else if (ch1 == 'A') then
             ! Could be Alt-Shift-Up
@@ -177,5 +191,66 @@ contains
             end if
         end if
     end subroutine handle_modified_key
+
+    subroutine handle_mouse_event(key_str)
+        character(len=*), intent(out) :: key_str
+        character :: ch
+        character(len=100) :: buffer
+        integer :: i, ios, button, col, row
+        integer :: semicolon1, semicolon2
+        logical :: is_release
+
+        buffer = ''
+        i = 1
+
+        ! Read until 'M' (press) or 'm' (release)
+        do
+            read(input_unit, '(a1)', advance='no', iostat=ios) ch
+            if (ios /= 0) exit
+            if (ch == 'M' .or. ch == 'm') then
+                is_release = (ch == 'm')
+                exit
+            end if
+            if (i <= 100) then
+                buffer(i:i) = ch
+                i = i + 1
+            end if
+        end do
+
+        ! Parse the mouse event format: button;col;row
+        semicolon1 = index(buffer, ';')
+        if (semicolon1 > 0) then
+            semicolon2 = index(buffer(semicolon1+1:), ';') + semicolon1
+            if (semicolon2 > semicolon1) then
+                read(buffer(1:semicolon1-1), '(i10)', iostat=ios) button
+                if (ios == 0) then
+                    read(buffer(semicolon1+1:semicolon2-1), '(i10)', iostat=ios) col
+                    if (ios == 0) then
+                        read(buffer(semicolon2+1:i-1), '(i10)', iostat=ios) row
+                        if (ios == 0) then
+                            ! Format mouse event as key string
+                            if (is_release) then
+                                write(key_str, '(a,i0,a,i0,a,i0)') 'mouse-release:', button, ':', row, ':', col
+                            else
+                                ! Check modifiers in button code
+                                if (iand(button, 4) /= 0) then  ! Shift
+                                    write(key_str, '(a,i0,a,i0,a,i0)') 'mouse-shift:', button, ':', row, ':', col
+                                else if (iand(button, 8) /= 0) then  ! Alt
+                                    write(key_str, '(a,i0,a,i0,a,i0)') 'mouse-alt:', button, ':', row, ':', col
+                                else if (iand(button, 16) /= 0) then  ! Ctrl
+                                    write(key_str, '(a,i0,a,i0,a,i0)') 'mouse-ctrl:', button, ':', row, ':', col
+                                else
+                                    write(key_str, '(a,i0,a,i0,a,i0)') 'mouse-click:', button, ':', row, ':', col
+                                end if
+                            end if
+                            return
+                        end if
+                    end if
+                end if
+            end if
+        end if
+
+        key_str = ''
+    end subroutine handle_mouse_event
 
 end module input_handler_module

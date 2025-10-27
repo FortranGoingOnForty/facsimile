@@ -138,7 +138,12 @@ contains
                    merge(' [modified]', '           ', buffer%modified)
         end if
 
-        write(status_right, '(a,i0,a,i0,a)') 'Ln ', cursor%line, ', Col ', cursor%column, ' '
+        if (size(editor%cursors) > 1) then
+            write(status_right, '(a,i0,a,a,i0,a,i0,a)') '[', size(editor%cursors), ' cursors] ', &
+                   'Ln ', cursor%line, ', Col ', cursor%column, ' '
+        else
+            write(status_right, '(a,i0,a,i0,a)') 'Ln ', cursor%line, ', Col ', cursor%column, ' '
+        end if
 
         ! Create full status bar with padding
         padding_len = editor%screen_cols - len_trim(status_left) - len_trim(status_right)
@@ -158,17 +163,49 @@ contains
         type(editor_state_t), intent(in) :: editor
         type(cursor_t) :: cursor
         integer :: screen_row, screen_col
+        integer :: i
 
-        cursor = editor%cursors(editor%active_cursor)
+        ! For multiple cursors, show them all with block cursor for inactive ones
+        if (size(editor%cursors) > 1) then
+            do i = 1, size(editor%cursors)
+                cursor = editor%cursors(i)
 
-        ! Calculate screen position from buffer position
-        screen_row = cursor%line - editor%viewport_line + 1
-        screen_col = cursor%column - editor%viewport_column + 1
+                ! Calculate screen position from buffer position
+                screen_row = cursor%line - editor%viewport_line + 1
+                screen_col = cursor%column - editor%viewport_column + 1
 
-        ! Ensure cursor is within screen bounds
-        if (screen_row >= 1 .and. screen_row < editor%screen_rows .and. &
-            screen_col >= 1 .and. screen_col <= editor%screen_cols) then
-            call terminal_move_cursor(screen_row, screen_col)
+                ! Ensure cursor is within screen bounds
+                if (screen_row >= 1 .and. screen_row < editor%screen_rows .and. &
+                    screen_col >= 1 .and. screen_col <= editor%screen_cols) then
+
+                    call terminal_move_cursor(screen_row, screen_col)
+
+                    if (i == editor%active_cursor) then
+                        ! Active cursor - use normal cursor
+                        call terminal_show_cursor()
+                    else
+                        ! Inactive cursor - draw with reverse video
+                        call terminal_write(char(27) // '[7m ')  ! Inverse video
+                        call terminal_write(char(27) // '[0m')   ! Reset
+                        ! Move back one position
+                        call terminal_move_cursor(screen_row, screen_col)
+                    end if
+                end if
+            end do
+        else
+            ! Single cursor mode
+            cursor = editor%cursors(editor%active_cursor)
+
+            ! Calculate screen position from buffer position
+            screen_row = cursor%line - editor%viewport_line + 1
+            screen_col = cursor%column - editor%viewport_column + 1
+
+            ! Ensure cursor is within screen bounds
+            if (screen_row >= 1 .and. screen_row < editor%screen_rows .and. &
+                screen_col >= 1 .and. screen_col <= editor%screen_cols) then
+                call terminal_move_cursor(screen_row, screen_col)
+                call terminal_show_cursor()
+            end if
         end if
     end subroutine render_cursor
 
