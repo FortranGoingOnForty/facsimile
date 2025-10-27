@@ -5,6 +5,7 @@ module command_handler_module
     use renderer_module, only: update_viewport
     use yank_stack_module
     use clipboard_module
+    use help_display_module, only: show_help
     implicit none
     private
 
@@ -37,6 +38,11 @@ contains
         ! File operations
         case('ctrl-q')
             should_quit = .true.
+
+        case('ctrl-?')
+            ! Show help menu
+            call show_help(editor)
+            ! Screen will be redrawn automatically by main loop
 
         ! Navigation
         case('up')

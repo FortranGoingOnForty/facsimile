@@ -61,6 +61,8 @@ contains
             key_str = 'enter'
         case(8)  ! Ctrl-H (backspace)
             key_str = 'backspace'
+        case(31)  ! Ctrl-/ (also ctrl-?)
+            key_str = 'ctrl-?'
         case(1:7, 11:12, 14:26)  ! Ctrl keys (excluding Ctrl-H, Tab, Enter, and ESC)
             write(key_str, '(a,a)') 'ctrl-', achar(iachar('a') + iachar(ch) - 1)
         case(127)  ! Backspace
