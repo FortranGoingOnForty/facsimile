@@ -65,6 +65,9 @@ fpm build
 - `ctrl-s` - save
 - `ctrl-q` - quit
 
+### Help
+- `ctrl-?` - show keybindings
+
 ## Implementation
 
 Gap buffer for text storage. Pure Fortran with ANSI escape sequences.
