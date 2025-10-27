@@ -3,6 +3,7 @@ module renderer_module
     use terminal_io_module
     use text_buffer_module
     use editor_state_module, only: editor_state_t, cursor_t
+    use bracket_matching_module
     implicit none
     private
 
@@ -12,6 +13,12 @@ module renderer_module
     ! Configuration
     logical :: show_line_numbers = .true.
     integer, parameter :: LINE_NUMBER_WIDTH = 5  ! Width for line number display
+
+    ! Bracket matching state
+    integer :: bracket_line = 0
+    integer :: bracket_col = 0
+    integer :: matching_bracket_line = 0
+    integer :: matching_bracket_col = 0
 
     ! Screen buffer for double buffering
     type :: screen_buffer_t
@@ -48,12 +55,42 @@ contains
         type(editor_state_t), intent(in) :: editor
         integer :: screen_row, buffer_line, line_count
         character(len=:), allocatable :: line_content
-        character(len=1) :: ch
+        character(len=1) :: ch, cursor_char
         integer :: col, buffer_pos, line_start_pos
         integer :: content_width
         character(len=16) :: line_num_str
+        logical :: found_match
+        type(cursor_t) :: cursor
 
         call terminal_hide_cursor()
+
+        ! Check if cursor is on a bracket and find its match
+        cursor = editor%cursors(editor%active_cursor)
+        line_content = buffer_get_line(buffer, cursor%line)
+        if (cursor%column >= 1 .and. cursor%column <= len(line_content)) then
+            cursor_char = line_content(cursor%column:cursor%column)
+            if (is_opening_bracket(cursor_char) .or. is_closing_bracket(cursor_char)) then
+                bracket_line = cursor%line
+                bracket_col = cursor%column
+                call find_matching_bracket(buffer, bracket_line, bracket_col, &
+                                         found_match, matching_bracket_line, matching_bracket_col)
+                if (.not. found_match) then
+                    matching_bracket_line = 0
+                    matching_bracket_col = 0
+                end if
+            else
+                bracket_line = 0
+                bracket_col = 0
+                matching_bracket_line = 0
+                matching_bracket_col = 0
+            end if
+        else
+            bracket_line = 0
+            bracket_col = 0
+            matching_bracket_line = 0
+            matching_bracket_col = 0
+        end if
+        if (allocated(line_content)) deallocate(line_content)
 
         ! Get total lines in buffer
         line_count = buffer_get_line_count(buffer)
@@ -157,7 +194,7 @@ contains
         integer, intent(in) :: line_num, start_col, width
         character(len=:), allocatable :: line
         integer :: i, col, line_len
-        logical :: in_selection
+        logical :: in_selection, is_bracket_match
         character :: ch
 
         line = buffer_get_line(buffer, line_num)
@@ -166,6 +203,7 @@ contains
         ! Render each character with selection highlighting
         do col = start_col, min(start_col + width - 1, line_len + 1)
             in_selection = .false.
+            is_bracket_match = .false.
 
             ! Check if this position is in any cursor's selection
             do i = 1, size(editor%cursors)
@@ -182,6 +220,12 @@ contains
                 end if
             end do
 
+            ! Check if this position is a bracket or its match
+            if ((line_num == bracket_line .and. col == bracket_col) .or. &
+                (line_num == matching_bracket_line .and. col == matching_bracket_col)) then
+                is_bracket_match = .true.
+            end if
+
             ! Render character with or without highlighting
             if (col <= line_len) then
                 ch = line(col:col)
@@ -192,6 +236,9 @@ contains
             if (in_selection) then
                 ! Highlight selected text with reverse video
                 call terminal_write(char(27) // '[7m' // ch // char(27) // '[0m')
+            else if (is_bracket_match) then
+                ! Highlight matching brackets with cyan background
+                call terminal_write(char(27) // '[46m' // ch // char(27) // '[0m')
             else
                 call terminal_write(ch)
             end if

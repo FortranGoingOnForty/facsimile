@@ -34,9 +34,11 @@ contains
         ! Navigation
         call display_section(row, max_rows, "NAVIGATION", &
             ["arrows          move cursor                     ", &
-             "ctrl-a/home     start of line                   ", &
+             "ctrl-a/home     smart home (toggle)             ", &
              "ctrl-e/end      end of line                     ", &
+             "ctrl-home/end   file start/end                  ", &
              "alt-left/right  word jump                       ", &
+             "alt-[/alt-]     jump to matching bracket        ", &
              "pageup/down     page scroll                     ", &
              "ctrl-g          go to line:column               ", &
              "click           position cursor                 ", &
@@ -79,7 +81,9 @@ contains
              "ctrl-r              find and replace            ", &
              "n                   next match                  ", &
              "N                   previous match              ", &
-             "ctrl-d              select next match           "])
+             "ctrl-d              select next match           ", &
+             "alt-c (in search)   toggle case sensitive       ", &
+             "alt-w (in search)   toggle whole word match     "])
 
         ! Multiple Cursors
         call display_section(row, max_rows, "MULTIPLE CURSORS", &
@@ -91,7 +95,8 @@ contains
             ["ctrl-'              cycle quotes                ", &
              "ctrl-opt-backspace  remove brackets             ", &
              "ctrl-z              undo                        ", &
-             "ctrl-shift-z        redo                        "])
+             "ctrl-shift-z        redo                        ", &
+             "ctrl-l              clear/redraw screen         "])
 
         ! File
         call display_section(row, max_rows, "FILE", &

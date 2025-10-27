@@ -11,7 +11,8 @@ module command_handler_module
     use search_prompt_module, only: show_search_prompt, search_forward, search_backward
     use replace_prompt_module, only: show_replace_prompt
     use undo_stack_module
-    use terminal_io_module, only: terminal_move_cursor, terminal_write
+    use terminal_io_module, only: terminal_move_cursor, terminal_write, terminal_clear_screen
+    use bracket_matching_module, only: find_matching_bracket
     implicit none
     private
 
@@ -71,6 +72,11 @@ contains
             call show_goto_prompt(editor, buffer)
             call update_viewport(editor)
 
+        case('ctrl-l')
+            ! Clear and redraw screen
+            call terminal_clear_screen()
+            ! Screen will be redrawn automatically by main loop
+
         ! Undo/Redo
         case('ctrl-z')
             ! Undo
@@ -127,7 +133,7 @@ contains
             call update_viewport(editor)
 
         case('home', 'ctrl-a')
-            call move_cursor_home(editor%cursors(editor%active_cursor))
+            call move_cursor_smart_home(editor%cursors(editor%active_cursor), buffer)
             call update_viewport(editor)
 
         case('end', 'ctrl-e')
@@ -148,6 +154,21 @@ contains
 
         case('pagedown')
             call move_cursor_page_down(editor%cursors(editor%active_cursor), editor, line_count)
+            call update_viewport(editor)
+
+        case('ctrl-home')
+            ! Jump to beginning of file
+            editor%cursors(editor%active_cursor)%line = 1
+            editor%cursors(editor%active_cursor)%column = 1
+            editor%cursors(editor%active_cursor)%desired_column = 1
+            editor%cursors(editor%active_cursor)%has_selection = .false.
+            call update_viewport(editor)
+
+        case('ctrl-end')
+            ! Jump to end of file
+            line_count = buffer_get_line_count(buffer)
+            editor%cursors(editor%active_cursor)%line = line_count
+            call move_cursor_end(editor%cursors(editor%active_cursor), buffer)
             call update_viewport(editor)
 
         case('shift-pageup')
@@ -283,6 +304,10 @@ contains
         case('ctrl-d')
             call select_next_match(editor, buffer)
 
+        case('alt-[', 'alt-]')
+            ! Jump to matching bracket
+            call jump_to_matching_bracket(editor, buffer)
+
         case('opt-meta-up')
             call add_cursor_above(editor, buffer)
 
@@ -396,13 +421,40 @@ contains
         if (allocated(line)) deallocate(line)
     end subroutine move_cursor_right
 
-    subroutine move_cursor_home(cursor)
+    subroutine move_cursor_smart_home(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
+        type(buffer_t), intent(in) :: buffer
+        character(len=:), allocatable :: line
+        integer :: first_non_whitespace, i
 
         cursor%has_selection = .false.  ! Clear selection
-        cursor%column = 1
-        cursor%desired_column = 1
-    end subroutine move_cursor_home
+
+        ! Get the current line
+        line = buffer_get_line(buffer, cursor%line)
+
+        ! Find the first non-whitespace character
+        first_non_whitespace = 1
+        do i = 1, len(line)
+            if (line(i:i) /= ' ' .and. line(i:i) /= char(9)) then  ! Not space or tab
+                first_non_whitespace = i
+                exit
+            end if
+        end do
+
+        ! Smart home behavior:
+        ! If we're already at the first non-whitespace, go to column 1
+        ! If we're at column 1, go to first non-whitespace
+        ! Otherwise, go to first non-whitespace
+        if (cursor%column == first_non_whitespace .and. first_non_whitespace > 1) then
+            cursor%column = 1
+        else
+            cursor%column = first_non_whitespace
+        end if
+
+        cursor%desired_column = cursor%column
+
+        if (allocated(line)) deallocate(line)
+    end subroutine move_cursor_smart_home
 
     subroutine move_cursor_end(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
@@ -562,11 +614,38 @@ contains
     subroutine handle_enter(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: current_line
+        integer :: indent_level, i
 
+        ! Get the current line to determine indentation
+        current_line = buffer_get_line(buffer, cursor%line)
+
+        ! Count leading spaces/tabs for auto-indent
+        indent_level = 0
+        do i = 1, len(current_line)
+            if (current_line(i:i) == ' ') then
+                indent_level = indent_level + 1
+            else if (current_line(i:i) == char(9)) then  ! Tab
+                indent_level = indent_level + 4  ! Treat tab as 4 spaces
+            else
+                exit  ! Found non-whitespace character
+            end if
+        end do
+
+        ! Insert the newline
         call buffer_insert_newline(buffer, cursor)
         cursor%line = cursor%line + 1
         cursor%column = 1
-        cursor%desired_column = 1
+
+        ! Insert the same indentation on the new line
+        do i = 1, indent_level
+            call buffer_insert_char(buffer, cursor, ' ')
+            cursor%column = cursor%column + 1
+        end do
+
+        cursor%desired_column = cursor%column
+
+        if (allocated(current_line)) deallocate(current_line)
     end subroutine handle_enter
 
     subroutine handle_tab(cursor, buffer)
@@ -1957,6 +2036,29 @@ contains
         ! Set the new cursor as active
         editor%active_cursor = size(editor%cursors)
     end subroutine add_cursor_below
+
+    subroutine jump_to_matching_bracket(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(in) :: buffer
+        logical :: found
+        integer :: match_line, match_col
+
+        ! Find matching bracket from current cursor position
+        call find_matching_bracket(buffer, &
+                                  editor%cursors(editor%active_cursor)%line, &
+                                  editor%cursors(editor%active_cursor)%column, &
+                                  found, match_line, match_col)
+
+        if (found) then
+            ! Jump to the matching bracket
+            editor%cursors(editor%active_cursor)%line = match_line
+            editor%cursors(editor%active_cursor)%column = match_col
+            editor%cursors(editor%active_cursor)%desired_column = match_col
+
+            ! Update viewport to ensure cursor is visible
+            call update_viewport(editor)
+        end if
+    end subroutine jump_to_matching_bracket
 
     ! ========================================================================
     ! Selection Extension Subroutines
