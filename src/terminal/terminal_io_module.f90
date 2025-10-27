@@ -1,6 +1,10 @@
 module terminal_io_module
     use iso_c_binding
     use iso_fortran_env, only: output_unit, input_unit
+    use raw_mode_module, only: raw_enable_raw_mode => enable_raw_mode, &
+                               raw_disable_raw_mode => disable_raw_mode, &
+                               raw_input_available => input_available, &
+                               raw_read_char_timeout => read_char_timeout
     implicit none
     private
 
@@ -8,28 +12,11 @@ module terminal_io_module
     public :: terminal_move_cursor, terminal_hide_cursor, terminal_show_cursor
     public :: terminal_get_size, terminal_enable_raw_mode, terminal_disable_raw_mode
     public :: terminal_write, terminal_enable_mouse, terminal_disable_mouse
+    public :: terminal_input_available, terminal_read_char
 
     ! ANSI escape codes
     character(len=*), parameter :: ESC = char(27)
     character(len=*), parameter :: CSI = ESC // '['
-
-    ! Terminal settings (platform specific - using C bindings)
-    interface
-        function tcgetattr(fd, termios_ptr) bind(C, name="tcgetattr")
-            use iso_c_binding
-            integer(c_int), value :: fd
-            type(c_ptr), value :: termios_ptr
-            integer(c_int) :: tcgetattr
-        end function tcgetattr
-
-        function tcsetattr(fd, optional_actions, termios_ptr) bind(C, name="tcsetattr")
-            use iso_c_binding
-            integer(c_int), value :: fd
-            integer(c_int), value :: optional_actions
-            type(c_ptr), value :: termios_ptr
-            integer(c_int) :: tcsetattr
-        end function tcsetattr
-    end interface
 
 contains
 
@@ -100,14 +87,36 @@ contains
     end subroutine terminal_get_size
 
     subroutine terminal_enable_raw_mode()
-        ! Platform-specific implementation needed
-        ! For now, this is a stub - would need proper termios handling
+        logical :: success
+
+        success = raw_enable_raw_mode()
+        if (.not. success) then
+            ! Fallback - just disable echo
+            write(output_unit, '(a)', advance='no') ESC // '[12l'
+            flush(output_unit)
+        end if
     end subroutine terminal_enable_raw_mode
 
     subroutine terminal_disable_raw_mode()
-        ! Platform-specific implementation needed
-        ! For now, this is a stub - would need proper termios handling
+        logical :: success
+
+        success = raw_disable_raw_mode()
+        if (.not. success) then
+            ! Fallback - re-enable echo
+            write(output_unit, '(a)', advance='no') ESC // '[12h'
+            flush(output_unit)
+        end if
     end subroutine terminal_disable_raw_mode
+
+    function terminal_input_available() result(available)
+        logical :: available
+        available = raw_input_available()
+    end function terminal_input_available
+
+    function terminal_read_char() result(ch)
+        integer :: ch
+        ch = raw_read_char_timeout()
+    end function terminal_read_char
 
     subroutine terminal_write(text)
         character(len=*), intent(in) :: text

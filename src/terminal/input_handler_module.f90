@@ -61,9 +61,11 @@ contains
             key_str = 'enter'
         case(8)  ! Ctrl-H (backspace)
             key_str = 'backspace'
+        case(26)  ! Ctrl-Z
+            key_str = 'ctrl-z'
         case(31)  ! Ctrl-/ (also ctrl-?)
             key_str = 'ctrl-?'
-        case(1:7, 11:12, 14:26)  ! Ctrl keys (excluding Ctrl-H, Tab, Enter, and ESC)
+        case(1:7, 11:12, 14:25)  ! Ctrl keys (excluding Ctrl-H, Ctrl-Z, Tab, Enter, and ESC)
             write(key_str, '(a,a)') 'ctrl-', achar(iachar('a') + iachar(ch) - 1)
         case(127)  ! Backspace
             key_str = 'backspace'
@@ -191,6 +193,10 @@ contains
                     key_str = 'ctrl-shift-'
                 case(7)  ! Alt+Ctrl
                     key_str = 'alt-ctrl-'
+                case(8)  ! Alt+Shift (or Option+Shift)
+                    key_str = 'alt-shift-'
+                case(9)  ! Alt+Cmd (or Option+Cmd on macOS)
+                    key_str = 'opt-meta-'
                 case default
                     key_str = ''
                 end select
@@ -209,6 +215,13 @@ contains
                     key_str = trim(key_str) // 'home'
                 case('F')
                     key_str = trim(key_str) // 'end'
+                case('Z')
+                    ! Shift+Z could be ctrl-shift-z for redo
+                    if (index(key_str, 'ctrl-shift') == 1) then
+                        key_str = 'ctrl-shift-z'
+                    else
+                        key_str = trim(key_str) // 'Z'
+                    end if
                 case('~')
                     ! Check what special key it is based on the beginning of modifier_seq
                     if (index(modifier_seq, ';') == 1 .and. len_trim(modifier_seq) > 1) then
@@ -317,6 +330,8 @@ contains
                                     write(key_str, '(a,i0,a,i0,a,i0)') 'mouse-alt:', button, ':', row, ':', col
                                 else if (iand(button, 16) /= 0) then  ! Ctrl
                                     write(key_str, '(a,i0,a,i0,a,i0)') 'mouse-ctrl:', button, ':', row, ':', col
+                                else if (iand(button, 32) /= 0) then  ! Mouse motion (drag)
+                                    write(key_str, '(a,i0,a,i0,a,i0)') 'mouse-drag:', button, ':', row, ':', col
                                 else
                                     write(key_str, '(a,i0,a,i0,a,i0)') 'mouse-click:', button, ':', row, ':', col
                                 end if
