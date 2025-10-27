@@ -66,8 +66,13 @@ contains
 
         do i = 1, len(text)
             ! Convert character to key string
-            write(key_str, '(A)') text(i:i)
-            call handle_key_command(trim(key_str), editor, buffer, should_quit)
+            key_str = text(i:i)  ! Don't use write statement, just assign directly
+            ! Don't trim spaces - they're valid input
+            if (text(i:i) == ' ') then
+                call handle_key_command(' ', editor, buffer, should_quit)
+            else
+                call handle_key_command(trim(key_str), editor, buffer, should_quit)
+            end if
         end do
     end subroutine simulate_typing
 
@@ -94,19 +99,47 @@ contains
     function get_buffer_text(buffer) result(text)
         type(buffer_t), intent(in) :: buffer
         character(len=:), allocatable :: text
-        integer :: i, pos
+        integer :: i, pos, logical_size
         character :: ch
 
-        allocate(character(len=buffer%size) :: text)
+        ! Calculate logical size (total size minus gap)
+        logical_size = buffer%size - (buffer%gap_end - buffer%gap_start)
+
+        if (logical_size <= 0) then
+            text = ''
+            return
+        end if
+
+        allocate(character(len=logical_size) :: text)
+        text = repeat(' ', logical_size)  ! Initialize with spaces instead of empty string
         pos = 0
 
-        do i = 1, buffer%size
-            ch = buffer_get_char_at(buffer, i)
-            pos = pos + 1
-            text(pos:pos) = ch
+        ! Get text before gap
+        do i = 1, buffer%gap_start - 1
+            if (i <= len(buffer%data)) then
+                ch = buffer%data(i:i)
+                pos = pos + 1
+                if (pos <= len(text)) text(pos:pos) = ch
+            end if
         end do
 
-        text = text(1:pos)
+        ! Get text after gap
+        do i = buffer%gap_end, buffer%size
+            if (i <= len(buffer%data)) then
+                ch = buffer%data(i:i)
+                if (ch /= char(0)) then  ! Skip null characters
+                    pos = pos + 1
+                    if (pos <= len(text)) text(pos:pos) = ch
+                end if
+            end if
+        end do
+
+        ! Trim to actual content length
+        if (pos > 0) then
+            text = text(1:pos)
+        else
+            text = ''
+        end if
     end function get_buffer_text
 
     function get_line_text(buffer, line_num) result(text)
@@ -181,7 +214,7 @@ contains
 
         if (actual /= expected) then
             if (present(test_name)) then
-                write(msg, '(A,A,I0)') trim(test_name), ": Line ", line_num, " mismatch"
+                write(msg, '(A,A,I0,A)') trim(test_name), ": Line ", line_num, " mismatch"
             else
                 write(msg, '(A,I0,A)') "Line ", line_num, " mismatch"
             end if
@@ -196,16 +229,23 @@ contains
         type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: position
         character :: ch
+        integer :: actual_pos
 
         if (position < 1 .or. position > buffer%size) then
             ch = char(0)
             return
         end if
 
-        if (position <= buffer%gap_start) then
+        if (position < buffer%gap_start) then
             ch = buffer%data(position:position)
         else
-            ch = buffer%data(position + (buffer%gap_end - buffer%gap_start - 1):position + (buffer%gap_end - buffer%gap_start - 1))
+            ! Adjust position for gap
+            actual_pos = position + (buffer%gap_end - buffer%gap_start)
+            if (actual_pos <= len(buffer%data)) then
+                ch = buffer%data(actual_pos:actual_pos)
+            else
+                ch = char(0)
+            end if
         end if
     end function buffer_get_char_at
 
