@@ -16,6 +16,7 @@ library = false
 name = "fac"
 source-dir = "app"
 main = "main.f90"
+link = ["c"]
 
 [dependencies]
 # We'll add stdlib when needed
