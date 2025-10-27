@@ -59,8 +59,9 @@ contains
             call terminal_move_cursor(screen_row, 1)
 
             if (buffer_line <= line_count) then
-                ! Render actual line content
-                call render_line(buffer, buffer_line, editor%viewport_column, editor%screen_cols)
+                ! Render actual line content with selections
+                call render_line_with_selections(buffer, editor, buffer_line, &
+                                                editor%viewport_column, editor%screen_cols)
             else
                 ! Render empty line indicator
                 if (buffer_line == line_count + 1 .and. line_count == 0) then
@@ -116,6 +117,80 @@ contains
         if (allocated(line)) deallocate(line)
         if (allocated(visible_part)) deallocate(visible_part)
     end subroutine render_line
+
+    subroutine render_line_with_selections(buffer, editor, line_num, start_col, width)
+        type(buffer_t), intent(in) :: buffer
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(in) :: line_num, start_col, width
+        character(len=:), allocatable :: line
+        integer :: i, col, line_len
+        logical :: in_selection
+        character :: ch
+
+        line = buffer_get_line(buffer, line_num)
+        line_len = len(line)
+
+        ! Render each character with selection highlighting
+        do col = start_col, min(start_col + width - 1, line_len + 1)
+            in_selection = .false.
+
+            ! Check if this position is in any cursor's selection
+            do i = 1, size(editor%cursors)
+                if (editor%cursors(i)%has_selection) then
+                    if (editor%cursors(i)%selection_start_line == line_num .and. &
+                        editor%cursors(i)%line == line_num) then
+                        ! Single-line selection
+                        if (col >= editor%cursors(i)%selection_start_col .and. &
+                            col < editor%cursors(i)%column) then
+                            in_selection = .true.
+                            exit
+                        end if
+                    end if
+                end if
+            end do
+
+            ! Render character with or without highlighting
+            if (col <= line_len) then
+                ch = line(col:col)
+            else
+                ch = ' '
+            end if
+
+            if (in_selection) then
+                ! Highlight selected text with reverse video
+                call terminal_write(char(27) // '[7m' // ch // char(27) // '[0m')
+            else
+                call terminal_write(ch)
+            end if
+        end do
+
+        ! Fill remaining width with spaces
+        do col = max(line_len + 1, start_col), start_col + width - 1
+            in_selection = .false.
+
+            ! Check if end of line position is in selection
+            do i = 1, size(editor%cursors)
+                if (editor%cursors(i)%has_selection) then
+                    if (editor%cursors(i)%selection_start_line == line_num .and. &
+                        editor%cursors(i)%line == line_num) then
+                        if (col >= editor%cursors(i)%selection_start_col .and. &
+                            col < editor%cursors(i)%column) then
+                            in_selection = .true.
+                            exit
+                        end if
+                    end if
+                end if
+            end do
+
+            if (in_selection) then
+                call terminal_write(char(27) // '[7m ' // char(27) // '[0m')
+            else
+                call terminal_write(' ')
+            end if
+        end do
+
+        if (allocated(line)) deallocate(line)
+    end subroutine render_line_with_selections
 
     subroutine render_status_bar(editor, buffer)
         type(editor_state_t), intent(in) :: editor
