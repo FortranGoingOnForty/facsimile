@@ -77,8 +77,6 @@ contains
             key_str = ch
         end select
 
-        ! Temporary debug removed - now shown in status bar
-
     end subroutine get_key_input
 
     subroutine handle_escape_sequence(key_str)
@@ -112,6 +110,9 @@ contains
                 key_str = 'home'
             case('F')
                 key_str = 'end'
+            case('Z')
+                ! Shift+Tab sends ESC[Z
+                key_str = 'shift-tab'
             case('3')
                 ! Could be delete
                 char_code = terminal_read_char()
@@ -168,7 +169,7 @@ contains
             if (char_code >= 0) then
                 ch2 = achar(char_code)
                 if (ch2 == '[') then
-                    ! ESC ESC [ - Alt+arrow keys
+                    ! ESC ESC [ - Alt+arrow keys or Alt+modified keys
                     char_code = terminal_read_char()
                     if (char_code >= 0) then
                         ch3 = achar(char_code)
@@ -181,6 +182,9 @@ contains
                             key_str = 'alt-right'
                         case('D')
                             key_str = 'alt-left'
+                        case('1', '2', '4', '7', '8')
+                            ! ESC ESC [ 1 ; modifier format (Alt+Shift+arrow, etc)
+                            call handle_alt_modified_key(key_str, ch3)
                         end select
                     end if
                 end if
@@ -368,6 +372,80 @@ contains
         end select
     end subroutine handle_alternate_modified_key
 
+    subroutine handle_alt_modified_key(key_str, first_char)
+        character(len=*), intent(out) :: key_str
+        character, intent(in) :: first_char
+        character :: ch, terminator
+        character(len=10) :: modifier_seq
+        integer :: ios, modifier, char_code, read_count
+
+        key_str = ''
+        modifier_seq = ''
+        terminator = ''
+        read_count = 0
+
+        ! For ESC ESC [ 1 ; modifier format, we already read the '1'
+        ! Read the rest of the sequence (should be ";modifier" then key)
+        do
+            read_count = read_count + 1
+            if (read_count > 20) exit
+
+            char_code = terminal_read_char()
+            if (char_code < 0) exit
+
+            ch = achar(char_code)
+            if ((ch >= 'A' .and. ch <= 'D') .or. ch == 'H' .or. ch == 'F') then
+                terminator = ch
+                exit
+            end if
+            modifier_seq = trim(modifier_seq) // ch
+        end do
+
+        if (terminator == '') return
+
+        ! Parse modifier from sequence like ";4" (Alt+Shift)
+        if (len_trim(modifier_seq) > 1 .and. modifier_seq(1:1) == ';') then
+            if (len_trim(modifier_seq) >= 2) then
+                read(modifier_seq(2:len_trim(modifier_seq)), '(i10)', iostat=ios) modifier
+            else
+                return
+            end if
+
+            ! Build the key string with alt- prefix
+            select case(modifier)
+            case(2)  ! Alt+Shift (ESC ESC [ 1 ; 2 is Alt+Shift)
+                key_str = 'alt-shift-'
+            case(3)  ! Alt+Alt? (unusual)
+                key_str = 'alt-'
+            case(4)  ! Alt+Shift (alternate)
+                key_str = 'alt-shift-'
+            case(5)  ! Alt+Ctrl
+                key_str = 'alt-ctrl-'
+            case(6)  ! Alt+Ctrl+Shift
+                key_str = 'alt-ctrl-shift-'
+            case default
+                ! Unknown modifier with Alt
+                key_str = 'alt-'
+            end select
+
+            ! Append the key
+            select case(terminator)
+            case('A')
+                key_str = trim(key_str) // 'up'
+            case('B')
+                key_str = trim(key_str) // 'down'
+            case('C')
+                key_str = trim(key_str) // 'right'
+            case('D')
+                key_str = trim(key_str) // 'left'
+            case('H')
+                key_str = trim(key_str) // 'home'
+            case('F')
+                key_str = trim(key_str) // 'end'
+            end select
+        end if
+    end subroutine handle_alt_modified_key
+
     subroutine handle_modified_special_key(key_str, key_code)
         character(len=*), intent(out) :: key_str
         integer, intent(in) :: key_code
@@ -470,8 +548,13 @@ contains
                             if (is_release) then
                                 write(key_str, '(a,i0,a,i0,a,i0)') 'mouse-release:', button, ':', row, ':', col
                             else
+                                ! Check for scroll wheel events (button 64 = scroll up, 65 = scroll down)
+                                if (button == 64) then
+                                    key_str = 'mouse-scroll-up'
+                                else if (button == 65) then
+                                    key_str = 'mouse-scroll-down'
                                 ! Check modifiers in button code
-                                if (iand(button, 4) /= 0) then  ! Shift
+                                else if (iand(button, 4) /= 0) then  ! Shift
                                     write(key_str, '(a,i0,a,i0,a,i0)') 'mouse-shift:', button, ':', row, ':', col
                                 else if (iand(button, 8) /= 0) then  ! Alt
                                     write(key_str, '(a,i0,a,i0,a,i0)') 'mouse-alt:', button, ':', row, ':', col
