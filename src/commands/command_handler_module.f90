@@ -345,13 +345,15 @@ contains
             call update_viewport(editor)
             is_edit_action = .true.
 
-        case('n')
-            call search_forward(editor, buffer)
-            call update_viewport(editor)
-
-        case('N')
-            call search_backward(editor, buffer)
-            call update_viewport(editor)
+        ! Note: 'n' and 'N' for next/previous search disabled to allow typing 'n'
+        ! TODO: Use ctrl-n/ctrl-shift-n or F3/Shift-F3 for search navigation
+        ! case('n')
+        !     call search_forward(editor, buffer)
+        !     call update_viewport(editor)
+        !
+        ! case('N')
+        !     call search_backward(editor, buffer)
+        !     call update_viewport(editor)
 
         case default
             ! Check for mouse events

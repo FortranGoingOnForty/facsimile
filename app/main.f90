@@ -80,10 +80,8 @@ program facsimile
         end if
     end do
 
-    ! Save file if modified (optional prompt in future)
-    if (buffer%modified .and. allocated(editor%filename)) then
-        call buffer_save_file(buffer, editor%filename, status)
-    end if
+    ! Don't auto-save on quit - user must explicitly save with Ctrl+S
+    ! In the future, we could prompt if there are unsaved changes
 
     ! Cleanup
     call cleanup_renderer()
