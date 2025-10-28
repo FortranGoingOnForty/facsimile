@@ -579,21 +579,32 @@ contains
 
         if (pos <= len(line)) then
             ! Check what we're currently on
-            if (pos <= len(line) .and. is_word_char(line(pos:pos))) then
+            if (is_word_char(line(pos:pos))) then
                 ! We're on a word character - skip to end of word
-                do while (pos <= len(line) .and. is_word_char(line(pos:pos)))
+                do while (pos < len(line))
+                    if (.not. is_word_char(line(pos+1:pos+1))) exit
                     pos = pos + 1
                 end do
+                pos = pos + 1  ! Move past the word
             else
                 ! We're on whitespace or punctuation - skip to next word
                 ! Skip non-word characters
-                do while (pos <= len(line) .and. .not. is_word_char(line(pos:pos)))
+                do while (pos < len(line))
+                    if (is_word_char(line(pos+1:pos+1))) exit
                     pos = pos + 1
                 end do
-                ! Then skip to end of that word
-                do while (pos <= len(line) .and. is_word_char(line(pos:pos)))
-                    pos = pos + 1
-                end do
+
+                ! If we found a word, move to its end
+                if (pos < len(line)) then
+                    pos = pos + 1  ! Move to start of word
+                    do while (pos < len(line))
+                        if (.not. is_word_char(line(pos+1:pos+1))) exit
+                        pos = pos + 1
+                    end do
+                    pos = pos + 1  ! Move past the word
+                else
+                    pos = len(line) + 1  ! At end of line
+                end if
             end if
 
             cursor%column = pos

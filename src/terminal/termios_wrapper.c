@@ -14,7 +14,6 @@ int enable_raw_mode() {
     if (raw_mode_enabled) return 0;
 
     if (tcgetattr(STDIN_FILENO, &orig_termios) == -1) {
-        fprintf(stderr, "DEBUG: Failed to get terminal attributes\n");
         return -1;
     }
 
@@ -37,12 +36,10 @@ int enable_raw_mode() {
     raw.c_cc[VTIME] = 1; // 100ms timeout (unit is 1/10 second)
 
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) {
-        fprintf(stderr, "DEBUG: Failed to set terminal attributes\n");
         return -1;
     }
 
     raw_mode_enabled = 1;
-    fprintf(stderr, "DEBUG: Raw mode enabled successfully\n");
     return 0;
 }
 
@@ -72,8 +69,6 @@ int read_char_timeout() {
     char c;
     int nread = read(STDIN_FILENO, &c, 1);
     if (nread == 1) {
-        fprintf(stderr, "DEBUG: Read char: %d ('%c')\n", (unsigned char)c,
-                (c >= 32 && c <= 126) ? c : '?');
         return (unsigned char)c;
     } else {
         return -1; // No input or error

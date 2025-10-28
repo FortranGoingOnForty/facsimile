@@ -157,6 +157,29 @@ contains
                 ! Mouse event in SGR mode
                 call handle_mouse_event(key_str)
             end select
+        else if (ch1 == achar(27)) then
+            ! ESC ESC - likely Alt+something
+            char_code = terminal_read_char()
+            if (char_code >= 0) then
+                ch2 = achar(char_code)
+                if (ch2 == '[') then
+                    ! ESC ESC [ - Alt+arrow keys
+                    char_code = terminal_read_char()
+                    if (char_code >= 0) then
+                        ch3 = achar(char_code)
+                        select case(ch3)
+                        case('A')
+                            key_str = 'alt-up'
+                        case('B')
+                            key_str = 'alt-down'
+                        case('C')
+                            key_str = 'alt-right'
+                        case('D')
+                            key_str = 'alt-left'
+                        end select
+                    end if
+                end if
+            end if
         else if (ch1 == 'A') then
             ! Could be Alt-Shift-Up
             key_str = 'alt-shift-up'
