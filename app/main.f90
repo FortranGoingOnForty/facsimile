@@ -15,6 +15,7 @@ program facsimile
     logical :: running, should_quit
     integer :: status, argc, rows, cols
 
+
     ! Get command line arguments
     argc = command_argument_count()
     if (argc > 0) then

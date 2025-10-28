@@ -358,7 +358,7 @@ contains
             if (index(key_str, 'mouse-') == 1) then
                 call handle_mouse_event_action(key_str, editor, buffer)
             ! Regular character input (including space)
-            else if (len(key_str) == 1) then
+            else if (len(trim(key_str)) == 1) then
                 if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
                 ! Handle character input for all cursors
                 if (size(editor%cursors) > 1) then

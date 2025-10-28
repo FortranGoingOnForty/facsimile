@@ -1,5 +1,6 @@
 module input_handler_module
-    use iso_fortran_env, only: input_unit, int8
+    use iso_fortran_env, only: input_unit, int8, error_unit
+    use terminal_io_module, only: terminal_read_char
     implicit none
     private
 
@@ -37,18 +38,19 @@ contains
         character(len=*), intent(out) :: key_str
         integer, intent(out) :: status
         character :: ch
-        integer :: ios
+        integer :: char_code
 
         key_str = ''
         status = -1
 
-        ! Read single character (non-blocking would be better)
-        read(input_unit, '(a1)', advance='no', iostat=ios) ch
+        ! Read single character using raw mode function
+        char_code = terminal_read_char()
 
-        if (ios /= 0) then
+        if (char_code < 0) then
             return
         end if
 
+        ch = achar(char_code)
         status = 0
 
         ! Check for special keys
@@ -75,23 +77,26 @@ contains
             key_str = ch
         end select
 
+
     end subroutine get_key_input
 
     subroutine handle_escape_sequence(key_str)
         character(len=*), intent(out) :: key_str
         character :: ch1, ch2, ch3
-        integer :: ios
+        integer :: char_code, ios
 
         key_str = 'esc'
 
-        ! Try to read next character (with timeout would be better)
-        read(input_unit, '(a1)', advance='no', iostat=ios) ch1
-        if (ios /= 0) return
+        ! Try to read next character (with timeout)
+        char_code = terminal_read_char()
+        if (char_code < 0) return
+        ch1 = achar(char_code)
 
         if (ch1 == '[') then
             ! CSI sequence
-            read(input_unit, '(a1)', advance='no', iostat=ios) ch2
-            if (ios /= 0) return
+            char_code = terminal_read_char()
+            if (char_code < 0) return
+            ch2 = achar(char_code)
 
             select case(ch2)
             case('A')
@@ -108,13 +113,22 @@ contains
                 key_str = 'end'
             case('3')
                 ! Could be delete
-                read(input_unit, '(a1)', advance='no', iostat=ios) ch3
-                if (ios == 0 .and. ch3 == '~') then
-                    key_str = 'delete'
+                char_code = terminal_read_char()
+                if (char_code >= 0) then
+                    ch3 = achar(char_code)
+                    if (ch3 == '~') then
+                        key_str = 'delete'
+                    end if
                 end if
             case('5')
                 ! Could be page up
-                read(input_unit, '(a1)', advance='no', iostat=ios) ch3
+                char_code = terminal_read_char()
+                if (char_code >= 0) then
+                    ch3 = achar(char_code)
+                    ios = 0
+                else
+                    ios = -1
+                end if
                 if (ios == 0 .and. ch3 == '~') then
                     key_str = 'pageup'
                 else if (ios == 0 .and. ch3 == ';') then
@@ -123,7 +137,13 @@ contains
                 end if
             case('6')
                 ! Could be page down
-                read(input_unit, '(a1)', advance='no', iostat=ios) ch3
+                char_code = terminal_read_char()
+                if (char_code >= 0) then
+                    ch3 = achar(char_code)
+                    ios = 0
+                else
+                    ios = -1
+                end if
                 if (ios == 0 .and. ch3 == '~') then
                     key_str = 'pagedown'
                 else if (ios == 0 .and. ch3 == ';') then
@@ -163,13 +183,19 @@ contains
         character(len=*), intent(out) :: key_str
         character :: ch
         character(len=10) :: modifier_seq
-        integer :: ios, modifier
+        integer :: ios, modifier, char_code
 
         modifier_seq = ''
 
         ! Read modifier sequence (e.g., ";5" for Ctrl)
         do
-            read(input_unit, '(a1)', advance='no', iostat=ios) ch
+            char_code = terminal_read_char()
+            if (char_code >= 0) then
+                ch = achar(char_code)
+                ios = 0
+            else
+                ios = -1
+            end if
             if (ios /= 0) exit
             if ((ch >= 'A' .and. ch <= 'D') .or. ch == 'H' .or. ch == 'F' .or. ch == '~') then
                 ! End of sequence
@@ -240,13 +266,19 @@ contains
         integer, intent(in) :: key_code
         character :: ch
         character(len=10) :: modifier_seq
-        integer :: ios, modifier
+        integer :: ios, modifier, char_code
 
         modifier_seq = ''
 
         ! Read modifier sequence (already past the semicolon)
         do
-            read(input_unit, '(a1)', advance='no', iostat=ios) ch
+            char_code = terminal_read_char()
+            if (char_code >= 0) then
+                ch = achar(char_code)
+                ios = 0
+            else
+                ios = -1
+            end if
             if (ios /= 0) exit
             if (ch == '~') then
                 ! End of sequence
@@ -289,7 +321,7 @@ contains
         character(len=*), intent(out) :: key_str
         character :: ch
         character(len=100) :: buffer
-        integer :: i, ios, button, col, row
+        integer :: i, ios, button, col, row, char_code
         integer :: semicolon1, semicolon2
         logical :: is_release
 
@@ -298,7 +330,13 @@ contains
 
         ! Read until 'M' (press) or 'm' (release)
         do
-            read(input_unit, '(a1)', advance='no', iostat=ios) ch
+            char_code = terminal_read_char()
+            if (char_code >= 0) then
+                ch = achar(char_code)
+                ios = 0
+            else
+                ios = -1
+            end if
             if (ios /= 0) exit
             if (ch == 'M' .or. ch == 'm') then
                 is_release = (ch == 'm')
