@@ -958,8 +958,9 @@ contains
             end_col = cursor%column
         end if
 
-        ! For single-line selection
+        ! Delete the selection
         if (start_line == end_line) then
+            ! Single-line selection
             line = buffer_get_line(buffer, start_line)
             cursor%line = start_line
             cursor%column = start_col
@@ -967,6 +968,57 @@ contains
                 call buffer_delete_at_cursor(buffer, cursor)
             end do
             if (allocated(line)) deallocate(line)
+        else
+            ! Multi-line selection
+            ! Delete from start_col to end of first line
+            cursor%line = start_line
+            cursor%column = start_col
+            line = buffer_get_line(buffer, start_line)
+            do i = start_col, len(line)
+                call buffer_delete_at_cursor(buffer, cursor)
+            end do
+            if (allocated(line)) deallocate(line)
+
+            ! Delete entire lines in between
+            do i = start_line + 1, end_line - 1
+                ! After deleting from first line, the next line moves up
+                ! So we keep deleting line at position start_line + 1
+                if (buffer_get_line_count(buffer) > start_line) then
+                    ! Delete the newline to join with next line
+                    line = buffer_get_line(buffer, start_line)
+                    cursor%column = len(line) + 1
+                    call buffer_delete_at_cursor(buffer, cursor)  ! Delete newline
+                    if (allocated(line)) deallocate(line)
+
+                    ! Delete all content of the joined line
+                    line = buffer_get_line(buffer, start_line)
+                    cursor%column = len(line)
+                    do while (cursor%column > start_col .and. cursor%column > 0)
+                        call buffer_delete_at_cursor(buffer, cursor)
+                        cursor%column = cursor%column - 1
+                    end do
+                    if (allocated(line)) deallocate(line)
+                end if
+            end do
+
+            ! Delete from beginning of last line to end_col
+            if (buffer_get_line_count(buffer) > start_line) then
+                line = buffer_get_line(buffer, start_line)
+                cursor%column = len(line) + 1
+                call buffer_delete_at_cursor(buffer, cursor)  ! Delete newline
+                if (allocated(line)) deallocate(line)
+
+                ! Delete from start to end_col
+                cursor%column = start_col
+                do i = 1, end_col - 1
+                    if (cursor%column <= buffer_get_line_count(buffer)) then
+                        call buffer_delete_at_cursor(buffer, cursor)
+                    end if
+                end do
+            end if
+
+            cursor%line = start_line
+            cursor%column = start_col
         end if
 
         cursor%has_selection = .false.

@@ -196,6 +196,7 @@ contains
         integer, intent(in) :: line_num, start_col, width
         character(len=:), allocatable :: line
         integer :: i, col, line_len
+        integer :: sel_start_line, sel_start_col, sel_end_line, sel_end_col
         logical :: in_selection, is_bracket_match, is_current_line
         character :: ch
 
@@ -213,11 +214,43 @@ contains
             ! Check if this position is in any cursor's selection
             do i = 1, size(editor%cursors)
                 if (editor%cursors(i)%has_selection) then
-                    if (editor%cursors(i)%selection_start_line == line_num .and. &
-                        editor%cursors(i)%line == line_num) then
-                        ! Single-line selection (handle both left and right selection)
-                        if (col >= min(editor%cursors(i)%selection_start_col, editor%cursors(i)%column) .and. &
-                            col < max(editor%cursors(i)%selection_start_col, editor%cursors(i)%column)) then
+                    ! Determine selection bounds (handle both directions)
+                    if (editor%cursors(i)%line < editor%cursors(i)%selection_start_line .or. &
+                        (editor%cursors(i)%line == editor%cursors(i)%selection_start_line .and. &
+                         editor%cursors(i)%column < editor%cursors(i)%selection_start_col)) then
+                        ! Cursor is before selection start (selecting upward)
+                        sel_start_line = editor%cursors(i)%line
+                        sel_start_col = editor%cursors(i)%column
+                        sel_end_line = editor%cursors(i)%selection_start_line
+                        sel_end_col = editor%cursors(i)%selection_start_col
+                    else
+                        ! Cursor is after selection start (selecting downward)
+                        sel_start_line = editor%cursors(i)%selection_start_line
+                        sel_start_col = editor%cursors(i)%selection_start_col
+                        sel_end_line = editor%cursors(i)%line
+                        sel_end_col = editor%cursors(i)%column
+                    end if
+
+                    ! Check if this position is selected
+                    if (line_num > sel_start_line .and. line_num < sel_end_line) then
+                        ! Fully selected line (between start and end)
+                        in_selection = .true.
+                        exit
+                    else if (line_num == sel_start_line .and. line_num == sel_end_line) then
+                        ! Single-line selection
+                        if (col >= sel_start_col .and. col < sel_end_col) then
+                            in_selection = .true.
+                            exit
+                        end if
+                    else if (line_num == sel_start_line .and. line_num < sel_end_line) then
+                        ! First line of multi-line selection
+                        if (col >= sel_start_col) then
+                            in_selection = .true.
+                            exit
+                        end if
+                    else if (line_num == sel_end_line .and. line_num > sel_start_line) then
+                        ! Last line of multi-line selection
+                        if (col < sel_end_col) then
                             in_selection = .true.
                             exit
                         end if
@@ -259,11 +292,41 @@ contains
             ! Check if end of line position is in selection
             do i = 1, size(editor%cursors)
                 if (editor%cursors(i)%has_selection) then
-                    if (editor%cursors(i)%selection_start_line == line_num .and. &
-                        editor%cursors(i)%line == line_num) then
-                        ! Handle both left and right selection
-                        if (col >= min(editor%cursors(i)%selection_start_col, editor%cursors(i)%column) .and. &
-                            col < max(editor%cursors(i)%selection_start_col, editor%cursors(i)%column)) then
+                    ! Determine selection bounds (handle both directions)
+                    if (editor%cursors(i)%line < editor%cursors(i)%selection_start_line .or. &
+                        (editor%cursors(i)%line == editor%cursors(i)%selection_start_line .and. &
+                         editor%cursors(i)%column < editor%cursors(i)%selection_start_col)) then
+                        sel_start_line = editor%cursors(i)%line
+                        sel_start_col = editor%cursors(i)%column
+                        sel_end_line = editor%cursors(i)%selection_start_line
+                        sel_end_col = editor%cursors(i)%selection_start_col
+                    else
+                        sel_start_line = editor%cursors(i)%selection_start_line
+                        sel_start_col = editor%cursors(i)%selection_start_col
+                        sel_end_line = editor%cursors(i)%line
+                        sel_end_col = editor%cursors(i)%column
+                    end if
+
+                    ! Check if this position is selected (multi-line aware)
+                    if (line_num > sel_start_line .and. line_num < sel_end_line) then
+                        ! Fully selected line
+                        in_selection = .true.
+                        exit
+                    else if (line_num == sel_start_line .and. line_num == sel_end_line) then
+                        ! Single-line selection
+                        if (col >= sel_start_col .and. col < sel_end_col) then
+                            in_selection = .true.
+                            exit
+                        end if
+                    else if (line_num == sel_start_line .and. line_num < sel_end_line) then
+                        ! First line of multi-line selection
+                        if (col >= sel_start_col) then
+                            in_selection = .true.
+                            exit
+                        end if
+                    else if (line_num == sel_end_line .and. line_num > sel_start_line) then
+                        ! Last line of multi-line selection
+                        if (col < sel_end_col) then
                             in_selection = .true.
                             exit
                         end if
