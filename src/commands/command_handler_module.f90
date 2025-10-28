@@ -532,25 +532,59 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
         character(len=:), allocatable :: line
-        integer :: pos
+        integer :: pos, line_len
         logical :: in_word
 
         cursor%has_selection = .false.  ! Clear selection
         line = buffer_get_line(buffer, cursor%line)
-        pos = cursor%column - 1
+        line_len = len(line)
+        pos = cursor%column
 
-        ! Skip whitespace to the left
-        do while (pos > 0 .and. line(pos:pos) == ' ')
-            pos = pos - 1
-        end do
+        ! Handle empty lines
+        if (line_len == 0) then
+            if (cursor%line > 1) then
+                ! Move to end of previous line
+                cursor%line = cursor%line - 1
+                if (allocated(line)) deallocate(line)
+                line = buffer_get_line(buffer, cursor%line)
+                cursor%column = len(line) + 1
+            else
+                cursor%column = 1
+            end if
+            cursor%desired_column = cursor%column
+            if (allocated(line)) deallocate(line)
+            return
+        end if
 
-        ! Find start of current/previous word
-        if (pos > 0) then
-            in_word = is_word_char(line(pos:pos))
-            do while (pos > 0 .and. is_word_char(line(pos:pos)) .eqv. in_word)
+        if (pos > 1 .and. line_len > 0) then
+            ! Simple algorithm: move left one position at a time until we find a word start
+            ! A word start is: a word char that's either at position 1 OR preceded by a non-word char
+
+            pos = pos - 1  ! Move left one position
+
+            ! Skip any whitespace
+            do while (pos > 1 .and. pos <= line_len)
+                if (line(pos:pos) /= ' ') exit
                 pos = pos - 1
             end do
-            cursor%column = pos + 1
+
+            ! If we're on a word character, go to the start of this word
+            if (pos >= 1 .and. pos <= line_len) then
+                if (is_word_char(line(pos:pos))) then
+                    ! Move to the start of the current word
+                    do while (pos > 1)
+                        if (pos-1 < 1) exit  ! Safety check
+                        if (.not. is_word_char(line(pos-1:pos-1))) exit
+                        pos = pos - 1
+                    end do
+                end if
+            end if
+
+            ! Clamp to valid range
+            if (pos < 1) pos = 1
+            if (pos > line_len + 1) pos = line_len + 1
+
+            cursor%column = pos
         else if (cursor%line > 1) then
             ! Move to end of previous line
             cursor%line = cursor%line - 1
@@ -1773,19 +1807,27 @@ contains
     end subroutine handle_mouse_event_action
 
     subroutine position_cursor_at_screen(cursor, editor, buffer, screen_row, screen_col)
+        use renderer_module, only: show_line_numbers, LINE_NUMBER_WIDTH
         type(cursor_t), intent(inout) :: cursor
         type(editor_state_t), intent(in) :: editor
         type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: screen_row, screen_col
-        integer :: target_line, target_col
+        integer :: target_line, target_col, col_offset
         character(len=:), allocatable :: line
         integer :: line_count
 
         line_count = buffer_get_line_count(buffer)
 
+        ! Account for line number display offset
+        if (show_line_numbers) then
+            col_offset = LINE_NUMBER_WIDTH + 1  ! +1 for separator space
+        else
+            col_offset = 0
+        end if
+
         ! Convert screen position to buffer position
         target_line = editor%viewport_line + screen_row - 1
-        target_col = editor%viewport_column + screen_col - 1
+        target_col = editor%viewport_column + max(1, screen_col - col_offset)
 
         ! Clamp to valid range
         if (target_line < 1) target_line = 1

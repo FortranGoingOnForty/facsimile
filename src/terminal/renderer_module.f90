@@ -9,6 +9,7 @@ module renderer_module
 
     public :: render_screen, update_viewport, init_renderer, cleanup_renderer
     public :: render_status_bar, render_cursor
+    public :: show_line_numbers, LINE_NUMBER_WIDTH
 
     ! Configuration
     logical :: show_line_numbers = .true.
