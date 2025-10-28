@@ -867,7 +867,10 @@ contains
         character :: closing_char
         logical :: should_auto_close
 
-        cursor%has_selection = .false.  ! Clear selection
+        ! Delete selection if one exists
+        if (cursor%has_selection) then
+            call delete_selection(cursor, buffer)
+        end if
 
         ! Check if we should auto-close brackets/quotes
         should_auto_close = .false.

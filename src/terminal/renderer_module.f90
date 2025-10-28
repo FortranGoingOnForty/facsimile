@@ -215,9 +215,9 @@ contains
                 if (editor%cursors(i)%has_selection) then
                     if (editor%cursors(i)%selection_start_line == line_num .and. &
                         editor%cursors(i)%line == line_num) then
-                        ! Single-line selection
-                        if (col >= editor%cursors(i)%selection_start_col .and. &
-                            col < editor%cursors(i)%column) then
+                        ! Single-line selection (handle both left and right selection)
+                        if (col >= min(editor%cursors(i)%selection_start_col, editor%cursors(i)%column) .and. &
+                            col < max(editor%cursors(i)%selection_start_col, editor%cursors(i)%column)) then
                             in_selection = .true.
                             exit
                         end if
@@ -261,8 +261,9 @@ contains
                 if (editor%cursors(i)%has_selection) then
                     if (editor%cursors(i)%selection_start_line == line_num .and. &
                         editor%cursors(i)%line == line_num) then
-                        if (col >= editor%cursors(i)%selection_start_col .and. &
-                            col < editor%cursors(i)%column) then
+                        ! Handle both left and right selection
+                        if (col >= min(editor%cursors(i)%selection_start_col, editor%cursors(i)%column) .and. &
+                            col < max(editor%cursors(i)%selection_start_col, editor%cursors(i)%column)) then
                             in_selection = .true.
                             exit
                         end if

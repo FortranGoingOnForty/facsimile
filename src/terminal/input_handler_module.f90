@@ -77,6 +77,7 @@ contains
             key_str = ch
         end select
 
+        ! Temporary debug removed - now shown in status bar
 
     end subroutine get_key_input
 
@@ -151,8 +152,12 @@ contains
                     call handle_modified_special_key(key_str, 6)
                 end if
             case('1')
-                ! Could be modified arrow key or home/end
+                ! Modified arrow key or home/end: ESC [ 1 ; 2 A format
                 call handle_modified_key(key_str)
+            case('2', '4', '7', '8')
+                ! Alternate format: ESC [ 2 A (modifier directly, no '1')
+                ! This is sent by some terminals for shift+arrows
+                call handle_alternate_modified_key(key_str, ch2)
             case('<')
                 ! Mouse event in SGR mode
                 call handle_mouse_event(key_str)
@@ -204,32 +209,48 @@ contains
 
     subroutine handle_modified_key(key_str)
         character(len=*), intent(out) :: key_str
-        character :: ch
+        character :: ch, terminator
         character(len=10) :: modifier_seq
-        integer :: ios, modifier, char_code
+        integer :: ios, modifier, char_code, read_count
 
+        key_str = ''  ! Initialize to empty
         modifier_seq = ''
+        ch = ''  ! Initialize
+        terminator = ''  ! To store the final character
+        read_count = 0
 
-        ! Read modifier sequence (e.g., ";5" for Ctrl)
+        ! Read modifier sequence (e.g., ";2" for Shift)
         do
+            read_count = read_count + 1
+            if (read_count > 20) exit  ! Safety limit
+
             char_code = terminal_read_char()
             if (char_code >= 0) then
                 ch = achar(char_code)
                 ios = 0
             else
                 ios = -1
+                exit
             end if
-            if (ios /= 0) exit
-            if ((ch >= 'A' .and. ch <= 'D') .or. ch == 'H' .or. ch == 'F' .or. ch == '~') then
-                ! End of sequence
+            if ((ch >= 'A' .and. ch <= 'D') .or. ch == 'H' .or. ch == 'F' .or. ch == '~' .or. ch == 'Z') then
+                ! End of sequence - save the terminator
+                terminator = ch
                 exit
             end if
             modifier_seq = trim(modifier_seq) // ch
         end do
 
+        ! If we didn't get a terminator, return
+        if (terminator == '') return
+
         ! Parse modifier
-        if (len_trim(modifier_seq) > 1) then
-            read(modifier_seq(2:), '(i10)', iostat=ios) modifier
+        if (len_trim(modifier_seq) > 1 .and. modifier_seq(1:1) == ';') then
+            ! Standard format: ";2" where 2 is the modifier
+            if (len_trim(modifier_seq) >= 2) then
+                read(modifier_seq(2:len_trim(modifier_seq)), '(i10)', iostat=ios) modifier
+            else
+                ios = -1
+            end if
             if (ios == 0) then
                 select case(modifier)
                 case(2)  ! Shift
@@ -252,8 +273,8 @@ contains
                     key_str = ''
                 end select
 
-                ! Append the key type
-                select case(ch)
+                ! Append the key type using the terminator character
+                select case(terminator)
                 case('A')
                     key_str = trim(key_str) // 'up'
                 case('B')
@@ -283,6 +304,69 @@ contains
             end if
         end if
     end subroutine handle_modified_key
+
+    subroutine handle_alternate_modified_key(key_str, modifier_char)
+        character(len=*), intent(out) :: key_str
+        character, intent(in) :: modifier_char
+        character :: ch
+        integer :: char_code, modifier
+
+        key_str = ''
+
+        ! The modifier_char ('2', '4', '7', '8') indicates the modifier
+        read(modifier_char, '(i1)') modifier
+
+        ! Read the next character - might be the key or a semicolon
+        char_code = terminal_read_char()
+        if (char_code < 0) return
+        ch = achar(char_code)
+
+        ! Check if there's a semicolon (ESC [ 2 ; A format) or direct key (ESC [ 2 A)
+        if (ch == ';') then
+            ! Read the actual key
+            char_code = terminal_read_char()
+            if (char_code < 0) return
+            ch = achar(char_code)
+        end if
+
+        ! Map modifier to key prefix
+        select case(modifier)
+        case(2)  ! Shift
+            key_str = 'shift-'
+        case(3)  ! Alt
+            key_str = 'alt-'
+        case(4)  ! Alt+Shift
+            key_str = 'alt-shift-'
+        case(5)  ! Ctrl
+            key_str = 'ctrl-'
+        case(6)  ! Ctrl+Shift
+            key_str = 'ctrl-shift-'
+        case(7)  ! Alt+Ctrl
+            key_str = 'alt-ctrl-'
+        case(8)  ! Alt+Shift (alternate)
+            key_str = 'alt-shift-'
+        case default
+            return
+        end select
+
+        ! Append the key type
+        select case(ch)
+        case('A')
+            key_str = trim(key_str) // 'up'
+        case('B')
+            key_str = trim(key_str) // 'down'
+        case('C')
+            key_str = trim(key_str) // 'right'
+        case('D')
+            key_str = trim(key_str) // 'left'
+        case('H')
+            key_str = trim(key_str) // 'home'
+        case('F')
+            key_str = trim(key_str) // 'end'
+        case default
+            key_str = ''
+        end select
+    end subroutine handle_alternate_modified_key
 
     subroutine handle_modified_special_key(key_str, key_code)
         character(len=*), intent(out) :: key_str

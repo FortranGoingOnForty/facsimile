@@ -25,7 +25,6 @@ module editor_state_module
         integer(int32) :: screen_cols = 80
         character(len=:), allocatable :: filename
         logical :: modified = .false.
-        character(len=32) :: last_key = ''  ! Track last key for status display
     end type editor_state_t
 
 contains
