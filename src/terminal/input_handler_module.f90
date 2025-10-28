@@ -81,7 +81,7 @@ contains
 
     subroutine handle_escape_sequence(key_str)
         character(len=*), intent(out) :: key_str
-        character :: ch1, ch2, ch3
+        character :: ch1, ch2, ch3, modifier_ch
         integer :: char_code, ios
 
         key_str = 'esc'
@@ -114,12 +114,29 @@ contains
                 ! Shift+Tab sends ESC[Z
                 key_str = 'shift-tab'
             case('3')
-                ! Could be delete
+                ! Could be delete or Alt+Delete
                 char_code = terminal_read_char()
                 if (char_code >= 0) then
                     ch3 = achar(char_code)
                     if (ch3 == '~') then
                         key_str = 'delete'
+                    else if (ch3 == ';') then
+                        ! Modified delete: ESC [ 3 ; modifier ~
+                        ! Read the modifier
+                        char_code = terminal_read_char()
+                        if (char_code >= 0) then
+                            modifier_ch = achar(char_code)
+                            ! Read the terminating ~
+                            char_code = terminal_read_char()
+                            if (char_code >= 0 .and. achar(char_code) == '~') then
+                                ! Check modifier: 3 = Alt
+                                if (modifier_ch == '3') then
+                                    key_str = 'alt-delete'
+                                else
+                                    key_str = 'delete'  ! Other modified deletes default to delete
+                                end if
+                            end if
+                        end if
                     end if
                 end if
             case('5')
