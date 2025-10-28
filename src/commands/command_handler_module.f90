@@ -2728,28 +2728,52 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: line
-        integer :: start_col, end_col
+        integer :: start_col, end_col, line_len
         logical :: in_word
 
         line = buffer_get_line(buffer, cursor%line)
+        line_len = len(line)
         start_col = cursor%column
         end_col = start_col
 
-        if (end_col <= len(line)) then
-            ! Skip current word
+        ! If cursor is past end of line, do nothing (can't delete forward from past the line end)
+        if (start_col > line_len + 1) then
+            if (allocated(line)) deallocate(line)
+            return
+        end if
+
+        if (end_col <= line_len) then
+            ! Skip current word (use nested ifs to avoid bounds issues)
             in_word = is_word_char(line(end_col:end_col))
-            do while (end_col <= len(line) .and. is_word_char(line(end_col:end_col)) .eqv. in_word)
-                end_col = end_col + 1
+            do while (end_col < line_len)
+                if (is_word_char(line(end_col:end_col)) .eqv. in_word) then
+                    end_col = end_col + 1
+                else
+                    exit
+                end if
             end do
 
+            ! Check if we're still on the same word type at end_col
+            if (end_col <= line_len) then
+                if (is_word_char(line(end_col:end_col)) .eqv. in_word) then
+                    end_col = end_col + 1
+                end if
+            end if
+
             ! Skip trailing whitespace
-            do while (end_col <= len(line) .and. line(end_col:end_col) == ' ')
-                end_col = end_col + 1
+            do while (end_col <= line_len)
+                if (line(end_col:end_col) == ' ') then
+                    end_col = end_col + 1
+                else
+                    exit
+                end if
             end do
 
             ! Delete from cursor to end position
-            call delete_range(buffer, cursor%line, start_col, cursor%line, end_col - 1)
-            buffer%modified = .true.
+            if (end_col > start_col) then
+                call delete_range(buffer, cursor%line, start_col, cursor%line, end_col - 1)
+                buffer%modified = .true.
+            end if
         end if
 
         if (allocated(line)) deallocate(line)
@@ -2759,31 +2783,41 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: line
-        integer :: start_col, end_col
+        integer :: start_col, end_col, line_len
         logical :: in_word
 
         line = buffer_get_line(buffer, cursor%line)
+        line_len = len(line)
         end_col = cursor%column - 1
         start_col = end_col
 
-        ! Skip whitespace to the left
-        do while (start_col > 0 .and. line(start_col:start_col) == ' ')
-            start_col = start_col - 1
+        ! Skip whitespace to the left (use nested ifs for safety)
+        do while (start_col > 0 .and. start_col <= line_len)
+            if (line(start_col:start_col) == ' ') then
+                start_col = start_col - 1
+            else
+                exit
+            end if
         end do
 
         ! Delete word to the left
-        if (start_col > 0) then
+        if (start_col > 0 .and. start_col <= line_len) then
             in_word = is_word_char(line(start_col:start_col))
-            do while (start_col > 0 .and. is_word_char(line(start_col:start_col)) .eqv. in_word)
-                start_col = start_col - 1
+            do while (start_col > 1)
+                if (is_word_char(line(start_col-1:start_col-1)) .eqv. in_word) then
+                    start_col = start_col - 1
+                else
+                    exit
+                end if
             end do
-            start_col = start_col + 1
 
             ! Delete from start position to cursor
-            call delete_range(buffer, cursor%line, start_col, cursor%line, end_col)
-            cursor%column = start_col
-            cursor%desired_column = cursor%column
-            buffer%modified = .true.
+            if (start_col <= end_col) then
+                call delete_range(buffer, cursor%line, start_col, cursor%line, end_col)
+                cursor%column = start_col
+                cursor%desired_column = cursor%column
+                buffer%modified = .true.
+            end if
         end if
 
         if (allocated(line)) deallocate(line)
