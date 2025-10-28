@@ -8,7 +8,8 @@ module command_handler_module
     use clipboard_module
     use help_display_module, only: show_help
     use goto_prompt_module, only: show_goto_prompt
-    use search_prompt_module, only: show_search_prompt, search_forward, search_backward
+    use search_prompt_module, only: show_search_prompt, search_forward, search_backward, &
+                                     current_search_pattern
     use replace_prompt_module, only: show_replace_prompt
     use undo_stack_module
     use terminal_io_module, only: terminal_move_cursor, terminal_write, terminal_clear_screen
@@ -345,15 +346,29 @@ contains
             call update_viewport(editor)
             is_edit_action = .true.
 
-        ! Note: 'n' and 'N' for next/previous search disabled to allow typing 'n'
-        ! TODO: Use ctrl-n/ctrl-shift-n or F3/Shift-F3 for search navigation
-        ! case('n')
-        !     call search_forward(editor, buffer)
-        !     call update_viewport(editor)
-        !
-        ! case('N')
-        !     call search_backward(editor, buffer)
-        !     call update_viewport(editor)
+        case('n')
+            ! Only use 'n' for search navigation if we have an active search
+            if (allocated(current_search_pattern)) then
+                call search_forward(editor, buffer)
+                call update_viewport(editor)
+            else
+                ! No active search, treat as regular character
+                if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+                call insert_char(editor%cursors(editor%active_cursor), buffer, 'n')
+                is_edit_action = .true.
+            end if
+
+        case('N')
+            ! Only use 'N' for search navigation if we have an active search
+            if (allocated(current_search_pattern)) then
+                call search_backward(editor, buffer)
+                call update_viewport(editor)
+            else
+                ! No active search, treat as regular character
+                if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+                call insert_char(editor%cursors(editor%active_cursor), buffer, 'N')
+                is_edit_action = .true.
+            end if
 
         case default
             ! Check for mouse events
