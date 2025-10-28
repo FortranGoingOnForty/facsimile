@@ -280,9 +280,9 @@ contains
             call delete_word_backward(editor%cursors(editor%active_cursor), buffer)
             is_edit_action = .true.
 
-        case('alt-d')
+        case('alt-d', 'alt-delete')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-            ! Delete word forward
+            ! Delete word forward (Alt-D or Alt+Delete/Fn+Alt+Backspace on laptops)
             call delete_word_forward(editor%cursors(editor%active_cursor), buffer)
             is_edit_action = .true.
 

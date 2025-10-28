@@ -182,6 +182,12 @@ contains
                             key_str = 'alt-right'
                         case('D')
                             key_str = 'alt-left'
+                        case('3')
+                            ! Could be Alt+Delete (ESC ESC [ 3 ~)
+                            char_code = terminal_read_char()
+                            if (char_code >= 0 .and. achar(char_code) == '~') then
+                                key_str = 'alt-delete'
+                            end if
                         case('1', '2', '4', '7', '8')
                             ! ESC ESC [ 1 ; modifier format (Alt+Shift+arrow, etc)
                             call handle_alt_modified_key(key_str, ch3)
