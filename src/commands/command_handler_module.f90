@@ -478,10 +478,16 @@ contains
             ! Jump to matching bracket
             call jump_to_matching_bracket(editor, buffer)
 
-        case('opt-meta-up')
+        case('opt-meta-up', 'ctrl-alt-up', 'alt-ctrl-up')
+            ! Add cursor on line above
+            ! opt-meta-up: Doesn't work (terminals don't send Cmd)
+            ! ctrl-alt-up: Alternative binding that works
             call add_cursor_above(editor, buffer)
 
-        case('opt-meta-down')
+        case('opt-meta-down', 'ctrl-alt-down', 'alt-ctrl-down')
+            ! Add cursor on line below
+            ! opt-meta-down: Doesn't work (terminals don't send Cmd)
+            ! ctrl-alt-down: Alternative binding that works
             call add_cursor_below(editor, buffer)
 
         ! Search commands
