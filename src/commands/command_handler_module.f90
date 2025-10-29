@@ -280,25 +280,57 @@ contains
         ! Text modification
         case('backspace')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-            call handle_backspace(editor%cursors(editor%active_cursor), buffer)
+            if (size(editor%cursors) > 1) then
+                ! Apply to all cursors
+                do i = 1, size(editor%cursors)
+                    call handle_backspace(editor%cursors(i), buffer)
+                end do
+            else
+                call handle_backspace(editor%cursors(editor%active_cursor), buffer)
+            end if
             is_edit_action = .true.
 
         case('delete')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-            call handle_delete(editor%cursors(editor%active_cursor), buffer)
+            if (size(editor%cursors) > 1) then
+                ! Apply to all cursors
+                do i = 1, size(editor%cursors)
+                    call handle_delete(editor%cursors(i), buffer)
+                end do
+            else
+                call handle_delete(editor%cursors(editor%active_cursor), buffer)
+            end if
             is_edit_action = .true.
 
         case('enter')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-            call handle_enter(editor%cursors(editor%active_cursor), buffer)
+            if (size(editor%cursors) > 1) then
+                ! Apply to all cursors
+                do i = 1, size(editor%cursors)
+                    call handle_enter(editor%cursors(i), buffer)
+                end do
+            else
+                call handle_enter(editor%cursors(editor%active_cursor), buffer)
+            end if
             is_edit_action = .true.
 
         case('tab')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-            if (editor%cursors(editor%active_cursor)%has_selection) then
-                call indent_selection(editor%cursors(editor%active_cursor), buffer)
+            if (size(editor%cursors) > 1) then
+                ! Apply to all cursors
+                do i = 1, size(editor%cursors)
+                    if (editor%cursors(i)%has_selection) then
+                        call indent_selection(editor%cursors(i), buffer)
+                    else
+                        call handle_tab(editor%cursors(i), buffer)
+                    end if
+                end do
             else
-                call handle_tab(editor%cursors(editor%active_cursor), buffer)
+                if (editor%cursors(editor%active_cursor)%has_selection) then
+                    call indent_selection(editor%cursors(editor%active_cursor), buffer)
+                else
+                    call handle_tab(editor%cursors(editor%active_cursor), buffer)
+                end if
             end if
             is_edit_action = .true.
 
@@ -314,55 +346,114 @@ contains
         ! Editing keybinds
         case('ctrl-k')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-            call kill_line_forward(editor%cursors(editor%active_cursor), buffer)
+            if (size(editor%cursors) > 1) then
+                ! Apply to all cursors
+                do i = 1, size(editor%cursors)
+                    call kill_line_forward(editor%cursors(i), buffer)
+                end do
+            else
+                call kill_line_forward(editor%cursors(editor%active_cursor), buffer)
+            end if
             is_edit_action = .true.
 
         case('ctrl-u')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-            call kill_line_backward(editor%cursors(editor%active_cursor), buffer)
+            if (size(editor%cursors) > 1) then
+                ! Apply to all cursors
+                do i = 1, size(editor%cursors)
+                    call kill_line_backward(editor%cursors(i), buffer)
+                end do
+            else
+                call kill_line_backward(editor%cursors(editor%active_cursor), buffer)
+            end if
             is_edit_action = .true.
 
         case('ctrl-w')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-            ! Delete word backward (ctrl-w)
-            call delete_word_backward(editor%cursors(editor%active_cursor), buffer)
+            if (size(editor%cursors) > 1) then
+                ! Apply to all cursors
+                do i = 1, size(editor%cursors)
+                    call delete_word_backward(editor%cursors(i), buffer)
+                end do
+            else
+                call delete_word_backward(editor%cursors(editor%active_cursor), buffer)
+            end if
             is_edit_action = .true.
 
         case('alt-d', 'alt-delete')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-            ! Delete word forward (Alt-D or Alt+Delete/Fn+Alt+Backspace on laptops)
-            call delete_word_forward(editor%cursors(editor%active_cursor), buffer)
+            if (size(editor%cursors) > 1) then
+                ! Apply to all cursors
+                do i = 1, size(editor%cursors)
+                    call delete_word_forward(editor%cursors(i), buffer)
+                end do
+            else
+                call delete_word_forward(editor%cursors(editor%active_cursor), buffer)
+            end if
             is_edit_action = .true.
 
         case('alt-backspace')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-            ! Delete word backward (alt+backspace)
-            call delete_word_backward(editor%cursors(editor%active_cursor), buffer)
+            if (size(editor%cursors) > 1) then
+                ! Apply to all cursors
+                do i = 1, size(editor%cursors)
+                    call delete_word_backward(editor%cursors(i), buffer)
+                end do
+            else
+                call delete_word_backward(editor%cursors(editor%active_cursor), buffer)
+            end if
             is_edit_action = .true.
 
         case('ctrl-t')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-            ! Transpose characters
-            call transpose_characters(editor%cursors(editor%active_cursor), buffer)
+            if (size(editor%cursors) > 1) then
+                ! Apply to all cursors
+                do i = 1, size(editor%cursors)
+                    call transpose_characters(editor%cursors(i), buffer)
+                end do
+            else
+                call transpose_characters(editor%cursors(editor%active_cursor), buffer)
+            end if
             is_edit_action = .true.
 
         case('ctrl-j')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-            ! Join lines
-            call join_lines(editor%cursors(editor%active_cursor), buffer)
+            if (size(editor%cursors) > 1) then
+                ! Apply to all cursors
+                do i = 1, size(editor%cursors)
+                    call join_lines(editor%cursors(i), buffer)
+                end do
+            else
+                call join_lines(editor%cursors(editor%active_cursor), buffer)
+            end if
             is_edit_action = .true.
 
         case('ctrl-x')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-            call cut_selection_or_line(editor%cursors(editor%active_cursor), buffer)
+            if (size(editor%cursors) > 1) then
+                ! Apply to all cursors
+                do i = 1, size(editor%cursors)
+                    call cut_selection_or_line(editor%cursors(i), buffer)
+                end do
+            else
+                call cut_selection_or_line(editor%cursors(editor%active_cursor), buffer)
+            end if
             is_edit_action = .true.
 
         case('ctrl-c')
+            ! Copy only needs active cursor (copies to shared clipboard)
             call copy_selection_or_line(editor%cursors(editor%active_cursor), buffer)
 
         case('ctrl-v')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-            call paste_clipboard(editor%cursors(editor%active_cursor), buffer)
+            if (size(editor%cursors) > 1) then
+                ! Apply to all cursors
+                do i = 1, size(editor%cursors)
+                    call paste_clipboard(editor%cursors(i), buffer)
+                end do
+            else
+                call paste_clipboard(editor%cursors(editor%active_cursor), buffer)
+            end if
             is_edit_action = .true.
 
         case('ctrl-s')
@@ -518,7 +609,21 @@ contains
         type(buffer_t), intent(in) :: buffer
         character(len=:), allocatable :: line
 
-        cursor%has_selection = .false.  ! Clear selection
+        ! If we have a selection, move to START of selection (leftmost/earliest position)
+        if (cursor%has_selection) then
+            ! Find which end is further left (start of selection)
+            if (cursor%selection_start_line < cursor%line .or. &
+                (cursor%selection_start_line == cursor%line .and. cursor%selection_start_col < cursor%column)) then
+                ! selection_start is the start - move there
+                cursor%line = cursor%selection_start_line
+                cursor%column = cursor%selection_start_col
+            end if
+            ! Otherwise cursor is already at the start
+            cursor%has_selection = .false.
+            cursor%desired_column = cursor%column
+            return
+        end if
+
         if (cursor%column > 1) then
             cursor%column = cursor%column - 1
             cursor%desired_column = cursor%column
@@ -538,7 +643,21 @@ contains
         character(len=:), allocatable :: line
         integer :: line_count
 
-        cursor%has_selection = .false.  ! Clear selection
+        ! If we have a selection, move to END of selection (rightmost/latest position)
+        if (cursor%has_selection) then
+            ! Find which end is further right (end of selection)
+            if (cursor%selection_start_line > cursor%line .or. &
+                (cursor%selection_start_line == cursor%line .and. cursor%selection_start_col > cursor%column)) then
+                ! selection_start is the end - move there
+                cursor%line = cursor%selection_start_line
+                cursor%column = cursor%selection_start_col
+            end if
+            ! Otherwise cursor is already at the end
+            cursor%has_selection = .false.
+            cursor%desired_column = cursor%column
+            return
+        end if
+
         line = buffer_get_line(buffer, cursor%line)
         line_count = buffer_get_line_count(buffer)
 
