@@ -96,8 +96,6 @@ contains
             ! Undo
             if (can_undo(undo_stack)) then
                 call perform_undo(undo_stack, buffer, editor%cursors(editor%active_cursor))
-                ! Clear selection to avoid rendering issues
-                editor%cursors(editor%active_cursor)%has_selection = .false.
                 call update_viewport(editor)
             end if
 
@@ -107,9 +105,6 @@ contains
             ! ctrl-]: Alternative redo binding
             if (can_redo(undo_stack)) then
                 call perform_redo(undo_stack, buffer, editor%cursors(editor%active_cursor))
-                ! Clear selection to avoid rendering issues
-                editor%cursors(editor%active_cursor)%has_selection = .false.
-                ! Update viewport to follow cursor
                 call update_viewport(editor)
             end if
 

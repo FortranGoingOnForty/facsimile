@@ -71,6 +71,11 @@ contains
         type(cursor_t), intent(in) :: cursor
         integer :: i
 
+        ! DEBUG
+        open(99, file='/tmp/undo_debug.txt', position='append', action='write')
+        write(99, '(a,i0,a,i0)') "PUSH: current_pos=", stack%current_pos, " stack_size=", stack%stack_size
+        close(99)
+
         ! If we're not at the end of the stack (due to undo), clear redo states
         if (stack%current_pos < stack%stack_size) then
             do i = stack%current_pos + 1, stack%stack_size
@@ -99,6 +104,12 @@ contains
 
         ! Store the current state
         call save_buffer_state(stack%states(stack%current_pos), buffer, cursor)
+
+        ! DEBUG
+        open(99, file='/tmp/undo_debug.txt', position='append', action='write')
+        write(99, '(a,i0,a,i0,a,i0)') "PUSH: After - current_pos=", stack%current_pos, " stack_size=", &
+            stack%stack_size, " saved_at=", stack%current_pos
+        close(99)
     end subroutine push_undo_state
 
     subroutine save_buffer_state(state, buffer, cursor)
@@ -119,6 +130,13 @@ contains
 
         ! Save cursor state
         state%cursor_state = cursor
+
+        ! DEBUG
+        open(99, file='/tmp/undo_debug.txt', position='append', action='write')
+        write(99, '(a,l1,a,i0,a,i0,a,i0,a,i0)') "SAVE: has_selection=", cursor%has_selection, &
+            " sel_start=", cursor%selection_start_line, ",", cursor%selection_start_col, &
+            " cursor=", cursor%line, ",", cursor%column
+        close(99)
     end subroutine save_buffer_state
 
     subroutine restore_buffer_state(buffer, cursor, state)
@@ -151,12 +169,27 @@ contains
             buffer%gap_end = buffer%size + 1
         end if
 
-        ! Restore cursor state only if it was a valid saved position
-        ! Position 0 (initial state) has cursor marked as -1 to preserve current position
-        if (state%cursor_state%line >= 1) then
-            cursor = state%cursor_state
+        ! DEBUG
+        open(99, file='/tmp/undo_debug.txt', position='append', action='write')
+        write(99, '(a,l1,a,i0,a,i0,a,i0,a,i0)') "RESTORE: has_selection=", state%cursor_state%has_selection, &
+            " sel_start=", state%cursor_state%selection_start_line, ",", state%cursor_state%selection_start_col, &
+            " cursor=", state%cursor_state%line, ",", state%cursor_state%column
+        close(99)
+
+        ! Restore selection state properly
+        if (state%cursor_state%has_selection) then
+            ! If the saved state had a selection, restore it completely
+            cursor%has_selection = .true.
+            cursor%selection_start_line = state%cursor_state%selection_start_line
+            cursor%selection_start_col = state%cursor_state%selection_start_col
+            ! Also restore cursor position for the other end of selection
+            cursor%line = state%cursor_state%line
+            cursor%column = state%cursor_state%column
+            cursor%desired_column = cursor%column
+        else
+            ! No selection in saved state - keep cursor where it is
+            cursor%has_selection = .false.
         end if
-        ! Otherwise keep cursor where it is
     end subroutine restore_buffer_state
 
     function can_undo(stack) result(can)
@@ -180,6 +213,11 @@ contains
         type(undo_state_t) :: temp_state
 
         if (can_undo(stack)) then
+            ! DEBUG
+            open(99, file='/tmp/undo_debug.txt', position='append', action='write')
+            write(99, '(a,i0,a,i0)') "UNDO: current_pos=", stack%current_pos, " stack_size=", stack%stack_size
+            close(99)
+
             ! If we're at the end of the stack (haven't undone yet),
             ! save current state for redo
             if (stack%current_pos == stack%stack_size .and. &
@@ -188,13 +226,23 @@ contains
                 call save_buffer_state(temp_state, buffer, cursor)
                 stack%stack_size = stack%current_pos + 1
                 stack%states(stack%stack_size) = temp_state
+
+                ! DEBUG
+                open(99, file='/tmp/undo_debug.txt', position='append', action='write')
+                write(99, '(a,i0)') "UNDO: Saved redo state at position ", stack%stack_size
+                close(99)
             end if
 
-            ! Move position back first
-            stack%current_pos = stack%current_pos - 1
+            ! DEBUG
+            open(99, file='/tmp/undo_debug.txt', position='append', action='write')
+            write(99, '(a,i0)') "UNDO: Restoring position ", stack%current_pos
+            close(99)
 
-            ! Restore the state at the previous position
+            ! Restore the state at the CURRENT position (the saved state before the edit)
             call restore_buffer_state(buffer, cursor, stack%states(stack%current_pos))
+
+            ! Move position back AFTER restoring
+            stack%current_pos = stack%current_pos - 1
         end if
     end subroutine perform_undo
 
