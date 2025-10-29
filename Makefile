@@ -1,8 +1,36 @@
 # Makefile for facsimile
+# Detect operating system
+UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
+
+# Default compilers
 FC = gfortran
 CC = gcc
-FFLAGS = -O2 -Wall
-CFLAGS = -O2 -Wall
+
+# Platform-specific settings
+ifeq ($(UNAME_S),Darwin)
+    # macOS
+    ifeq ($(UNAME_M),arm64)
+        # Apple Silicon
+        # Homebrew on Apple Silicon uses /opt/homebrew
+        BREW_PREFIX = /opt/homebrew
+        ifneq ($(wildcard $(BREW_PREFIX)/bin/gfortran-*),)
+            FC = $(shell ls $(BREW_PREFIX)/bin/gfortran-* | head -n1)
+        endif
+        FFLAGS = -O2 -Wall -ffree-line-length-none
+        CFLAGS = -O2 -Wall
+    else
+        # Intel Mac
+        BREW_PREFIX = /usr/local
+        FFLAGS = -O2 -Wall -ffree-line-length-none
+        CFLAGS = -O2 -Wall
+    endif
+else
+    # Linux
+    FFLAGS = -O2 -Wall
+    CFLAGS = -O2 -Wall
+endif
+
 TARGET = fac
 
 # Source files (order matters for dependencies)
