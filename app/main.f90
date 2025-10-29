@@ -59,6 +59,9 @@ program facsimile
         call init_buffer(buffer)
     end if
 
+    ! Save initial file state for undo (position 0)
+    call save_initial_state_for_undo(buffer, editor)
+
     ! Initial render
     call render_screen(buffer, editor)
 

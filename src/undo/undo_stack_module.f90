@@ -6,6 +6,7 @@ module undo_stack_module
 
     public :: undo_stack_t, init_undo_stack, cleanup_undo_stack
     public :: push_undo_state, perform_undo, perform_redo, can_undo, can_redo
+    public :: save_initial_undo_state
 
     integer, parameter :: MAX_UNDO_LEVELS = 100
 
@@ -29,17 +30,33 @@ contains
     subroutine init_undo_stack(stack)
         type(undo_stack_t), intent(out) :: stack
 
-        allocate(stack%states(MAX_UNDO_LEVELS))
+        ! Allocate from 0 to support initial state at position 0
+        allocate(stack%states(0:MAX_UNDO_LEVELS))
         stack%current_pos = 0
         stack%stack_size = 0
     end subroutine init_undo_stack
+
+    subroutine save_initial_undo_state(stack, buffer, cursor)
+        type(undo_stack_t), intent(inout) :: stack
+        type(buffer_t), intent(in) :: buffer
+        type(cursor_t), intent(in) :: cursor
+
+        ! Don't save initial cursor position - just buffer state
+        ! We'll save cursor from the first edit location
+        if (stack%stack_size == 0) then
+            call save_buffer_state(stack%states(0), buffer, cursor)
+            ! Mark that we don't have a valid cursor state at position 0
+            stack%states(0)%cursor_state%line = -1
+            stack%stack_size = 0  ! Keep at 0, first edit will go to position 1
+        end if
+    end subroutine save_initial_undo_state
 
     subroutine cleanup_undo_stack(stack)
         type(undo_stack_t), intent(inout) :: stack
         integer :: i
 
         if (allocated(stack%states)) then
-            do i = 1, stack%stack_size
+            do i = 0, stack%stack_size
                 if (allocated(stack%states(i)%buffer_data)) then
                     deallocate(stack%states(i)%buffer_data)
                 end if
@@ -120,8 +137,26 @@ contains
         buffer%size = state%size
         buffer%modified = state%modified
 
-        ! Restore cursor state
-        cursor = state%cursor_state
+        ! Validate buffer integrity - size must match actual data length
+        if (buffer%size /= len(buffer%data)) then
+            buffer%size = len(buffer%data)
+        end if
+
+        ! Validate gap buffer integrity
+        if (buffer%gap_start < 1) buffer%gap_start = 1
+        if (buffer%gap_end > buffer%size + 1) buffer%gap_end = buffer%size + 1
+        if (buffer%gap_start > buffer%gap_end) then
+            ! Gap is invalid - reset to empty gap at end
+            buffer%gap_start = buffer%size + 1
+            buffer%gap_end = buffer%size + 1
+        end if
+
+        ! Restore cursor state only if it was a valid saved position
+        ! Position 0 (initial state) has cursor marked as -1 to preserve current position
+        if (state%cursor_state%line >= 1) then
+            cursor = state%cursor_state
+        end if
+        ! Otherwise keep cursor where it is
     end subroutine restore_buffer_state
 
     function can_undo(stack) result(can)
@@ -155,11 +190,11 @@ contains
                 stack%states(stack%stack_size) = temp_state
             end if
 
-            ! Restore the state at current position
-            call restore_buffer_state(buffer, cursor, stack%states(stack%current_pos))
-
-            ! Move position back
+            ! Move position back first
             stack%current_pos = stack%current_pos - 1
+
+            ! Restore the state at the previous position
+            call restore_buffer_state(buffer, cursor, stack%states(stack%current_pos))
         end if
     end subroutine perform_undo
 
@@ -169,11 +204,11 @@ contains
         type(cursor_t), intent(inout) :: cursor
 
         if (can_redo(stack)) then
-            ! When we undo, we save the current state at position stack_size
-            ! So when we redo, if we're at position 0, we should jump to stack_size
-            ! Otherwise just move forward by 1
+            ! Move forward to next state
+            ! Special case: if at position 0 and stack_size > 1, we should jump to the
+            ! last saved state (which was saved during undo), not position 1
             if (stack%current_pos == 0 .and. stack%stack_size > 1) then
-                ! Jump to the redo state
+                ! Jump to the state saved during undo (skip intermediate states)
                 stack%current_pos = stack%stack_size
             else
                 ! Normal forward movement

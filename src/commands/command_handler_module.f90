@@ -3,7 +3,7 @@ module command_handler_module
     use iso_c_binding, only: c_int
     use editor_state_module, only: editor_state_t, cursor_t
     use text_buffer_module
-    use renderer_module, only: update_viewport
+    use renderer_module, only: update_viewport, render_screen
     use yank_stack_module
     use clipboard_module
     use help_display_module, only: show_help
@@ -18,6 +18,7 @@ module command_handler_module
     private
 
     public :: handle_key_command, init_command_handler, cleanup_command_handler
+    public :: save_initial_state_for_undo
 
     type(yank_stack_t) :: yank_stack
     type(undo_stack_t) :: undo_stack
@@ -31,6 +32,13 @@ contains
         call init_undo_stack(undo_stack)
         last_action_was_edit = .false.
     end subroutine init_command_handler
+
+    subroutine save_initial_state_for_undo(buffer, editor)
+        use undo_stack_module, only: save_initial_undo_state
+        type(buffer_t), intent(in) :: buffer
+        type(editor_state_t), intent(in) :: editor
+        call save_initial_undo_state(undo_stack, buffer, editor%cursors(editor%active_cursor))
+    end subroutine save_initial_state_for_undo
 
     subroutine cleanup_command_handler()
         call cleanup_yank_stack(yank_stack)
@@ -58,6 +66,11 @@ contains
         line_count = buffer_get_line_count(buffer)
         is_edit_action = .false.
 
+        ! Ignore empty key strings (from terminal position reports, etc)
+        if (len_trim(key_str) == 0 .and. key_str(1:1) /= ' ') then
+            return
+        end if
+
         select case(trim(key_str))
         ! File operations
         case('ctrl-q')
@@ -83,13 +96,20 @@ contains
             ! Undo
             if (can_undo(undo_stack)) then
                 call perform_undo(undo_stack, buffer, editor%cursors(editor%active_cursor))
+                ! Clear selection to avoid rendering issues
+                editor%cursors(editor%active_cursor)%has_selection = .false.
                 call update_viewport(editor)
             end if
 
-        case('ctrl-shift-z')
+        case('ctrl-shift-z', 'ctrl-]')
             ! Redo
+            ! ctrl-shift-z: Standard redo (WezTerm may intercept - disable in config)
+            ! ctrl-]: Alternative redo binding
             if (can_redo(undo_stack)) then
                 call perform_redo(undo_stack, buffer, editor%cursors(editor%active_cursor))
+                ! Clear selection to avoid rendering issues
+                editor%cursors(editor%active_cursor)%has_selection = .false.
+                ! Update viewport to follow cursor
                 call update_viewport(editor)
             end if
 
@@ -622,33 +642,37 @@ contains
         pos = cursor%column
 
         if (pos <= len(line)) then
-            ! Check what we're currently on
-            if (is_word_char(line(pos:pos))) then
-                ! We're on a word character - skip to end of word
+            ! VSCode-style word navigation: stop after each word OR punctuation group
+            if (line(pos:pos) == ' ') then
+                ! On whitespace - skip all whitespace
                 do while (pos < len(line))
-                    if (.not. is_word_char(line(pos+1:pos+1))) exit
+                    if (pos+1 <= len(line) .and. line(pos+1:pos+1) == ' ') then
+                        pos = pos + 1
+                    else
+                        exit
+                    end if
+                end do
+                pos = pos + 1  ! Move past whitespace
+            else if (is_word_char(line(pos:pos))) then
+                ! We're on a word character - skip to end of this word
+                do while (pos < len(line))
+                    if (pos+1 <= line_len) then
+                        if (.not. is_word_char(line(pos+1:pos+1))) exit
+                    end if
                     pos = pos + 1
                 end do
                 pos = pos + 1  ! Move past the word
             else
-                ! We're on whitespace or punctuation - skip to next word
-                ! Skip non-word characters
+                ! We're on punctuation - skip to end of punctuation group
+                ! e.g., "##" should be treated as one group
                 do while (pos < len(line))
-                    if (is_word_char(line(pos+1:pos+1))) exit
+                    if (pos+1 <= line_len) then
+                        ! Stop if next char is word char or space
+                        if (is_word_char(line(pos+1:pos+1)) .or. line(pos+1:pos+1) == ' ') exit
+                    end if
                     pos = pos + 1
                 end do
-
-                ! If we found a word, move to its end
-                if (pos < len(line)) then
-                    pos = pos + 1  ! Move to start of word
-                    do while (pos < len(line))
-                        if (.not. is_word_char(line(pos+1:pos+1))) exit
-                        pos = pos + 1
-                    end do
-                    pos = pos + 1  ! Move past the word
-                else
-                    pos = len(line) + 1  ! At end of line
-                end if
+                pos = pos + 1  ! Move past punctuation
             end if
 
             cursor%column = pos
@@ -678,6 +702,12 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
 
+        ! Delete selection if one exists
+        if (cursor%has_selection) then
+            call delete_selection(cursor, buffer)
+            return
+        end if
+
         if (cursor%column > 1) then
             ! Delete character before cursor
             cursor%column = cursor%column - 1
@@ -694,6 +724,12 @@ contains
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: line
         integer :: line_count
+
+        ! Delete selection if one exists
+        if (cursor%has_selection) then
+            call delete_selection(cursor, buffer)
+            return
+        end if
 
         line = buffer_get_line(buffer, cursor%line)
         line_count = buffer_get_line_count(buffer)
@@ -714,6 +750,11 @@ contains
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: current_line
         integer :: indent_level, i
+
+        ! Delete selection if one exists
+        if (cursor%has_selection) then
+            call delete_selection(cursor, buffer)
+        end if
 
         ! Get the current line to determine indentation
         current_line = buffer_get_line(buffer, cursor%line)

@@ -69,7 +69,9 @@ contains
             key_str = 'ctrl-?'
         case(7)  ! Ctrl-G (goto)
             key_str = 'ctrl-g'
-        case(1:6, 11:12, 14:25)  ! Ctrl keys (excluding Ctrl-G, Ctrl-H, Ctrl-Z, Tab, Enter, and ESC)
+        case(29)  ! Ctrl-] (for redo)
+            key_str = 'ctrl-]'
+        case(1:6, 11:12, 14:25, 28)  ! Ctrl keys (excluding Ctrl-G, Ctrl-H, Ctrl-Z, Tab, Enter, ESC, and Ctrl-])
             write(key_str, '(a,a)') 'ctrl-', achar(iachar('a') + iachar(ch) - 1)
         case(127)  ! Backspace
             key_str = 'backspace'
