@@ -60,6 +60,9 @@ all: $(TARGET)
 $(TARGET): $(OBJECTS) $(C_OBJECTS)
 	$(FC) $(FFLAGS) -o $(TARGET) $(OBJECTS) $(C_OBJECTS)
 
+# Disable parallel builds to ensure correct module compilation order
+.NOTPARALLEL:
+
 %.o: %.f90
 	$(FC) $(FFLAGS) -c $< -o $@
 
