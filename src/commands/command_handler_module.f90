@@ -121,11 +121,11 @@ contains
 
         ! Navigation
         case('up')
-            call move_cursor_up(editor%cursors(editor%active_cursor), line_count)
+            call move_cursor_up(editor%cursors(editor%active_cursor), buffer, line_count)
             call update_viewport(editor)
 
         case('down')
-            call move_cursor_down(editor%cursors(editor%active_cursor), line_count)
+            call move_cursor_down(editor%cursors(editor%active_cursor), buffer, line_count)
             call update_viewport(editor)
 
         case('left')
@@ -138,11 +138,11 @@ contains
 
         ! Selection with shift+motion
         case('shift-up')
-            call extend_selection_up(editor%cursors(editor%active_cursor), line_count)
+            call extend_selection_up(editor%cursors(editor%active_cursor), buffer, line_count)
             call update_viewport(editor)
 
         case('shift-down')
-            call extend_selection_down(editor%cursors(editor%active_cursor), line_count)
+            call extend_selection_down(editor%cursors(editor%active_cursor), buffer, line_count)
             call update_viewport(editor)
 
         case('shift-left')
@@ -421,27 +421,43 @@ contains
         last_action_was_edit = is_edit_action
     end subroutine handle_key_command
 
-    subroutine move_cursor_up(cursor, line_count)
+    subroutine move_cursor_up(cursor, buffer, line_count)
         type(cursor_t), intent(inout) :: cursor
+        type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: line_count
+        character(len=:), allocatable :: line
 
         cursor%has_selection = .false.  ! Clear selection
         if (cursor%line > 1) then
             cursor%line = cursor%line - 1
             cursor%column = cursor%desired_column
-            ! Will adjust column in boundary check
+
+            ! Clamp column to actual line length
+            line = buffer_get_line(buffer, cursor%line)
+            if (cursor%column > len(line) + 1) then
+                cursor%column = len(line) + 1
+            end if
+            if (allocated(line)) deallocate(line)
         end if
     end subroutine move_cursor_up
 
-    subroutine move_cursor_down(cursor, line_count)
+    subroutine move_cursor_down(cursor, buffer, line_count)
         type(cursor_t), intent(inout) :: cursor
+        type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: line_count
+        character(len=:), allocatable :: line
 
         cursor%has_selection = .false.  ! Clear selection
         if (cursor%line < line_count) then
             cursor%line = cursor%line + 1
             cursor%column = cursor%desired_column
-            ! Will adjust column in boundary check
+
+            ! Clamp column to actual line length
+            line = buffer_get_line(buffer, cursor%line)
+            if (cursor%column > len(line) + 1) then
+                cursor%column = len(line) + 1
+            end if
+            if (allocated(line)) deallocate(line)
         end if
     end subroutine move_cursor_down
 
@@ -633,20 +649,21 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
         character(len=:), allocatable :: line
-        integer :: pos, line_count
+        integer :: pos, line_count, line_len
         logical :: in_word
 
         cursor%has_selection = .false.  ! Clear selection
         line = buffer_get_line(buffer, cursor%line)
         line_count = buffer_get_line_count(buffer)
+        line_len = len(line)
         pos = cursor%column
 
-        if (pos <= len(line)) then
+        if (pos <= line_len) then
             ! VSCode-style word navigation: stop after each word OR punctuation group
             if (line(pos:pos) == ' ') then
                 ! On whitespace - skip all whitespace
-                do while (pos < len(line))
-                    if (pos+1 <= len(line) .and. line(pos+1:pos+1) == ' ') then
+                do while (pos < line_len)
+                    if (pos+1 <= line_len .and. line(pos+1:pos+1) == ' ') then
                         pos = pos + 1
                     else
                         exit
@@ -655,7 +672,7 @@ contains
                 pos = pos + 1  ! Move past whitespace
             else if (is_word_char(line(pos:pos))) then
                 ! We're on a word character - skip to end of this word
-                do while (pos < len(line))
+                do while (pos < line_len)
                     if (pos+1 <= line_len) then
                         if (.not. is_word_char(line(pos+1:pos+1))) exit
                     end if
@@ -665,7 +682,7 @@ contains
             else
                 ! We're on punctuation - skip to end of punctuation group
                 ! e.g., "##" should be treated as one group
-                do while (pos < len(line))
+                do while (pos < line_len)
                     if (pos+1 <= line_len) then
                         ! Stop if next char is word char or space
                         if (is_word_char(line(pos+1:pos+1)) .or. line(pos+1:pos+1) == ' ') exit
@@ -2445,9 +2462,11 @@ contains
     ! Selection Extension Subroutines
     ! ========================================================================
 
-    subroutine extend_selection_up(cursor, line_count)
+    subroutine extend_selection_up(cursor, buffer, line_count)
         type(cursor_t), intent(inout) :: cursor
+        type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: line_count
+        character(len=:), allocatable :: line
 
         ! Initialize selection if not already started
         if (.not. cursor%has_selection) then
@@ -2460,13 +2479,21 @@ contains
         if (cursor%line > 1) then
             cursor%line = cursor%line - 1
             cursor%column = cursor%desired_column
-            ! Column will be adjusted in boundary check
+
+            ! Clamp column to actual line length
+            line = buffer_get_line(buffer, cursor%line)
+            if (cursor%column > len(line) + 1) then
+                cursor%column = len(line) + 1
+            end if
+            if (allocated(line)) deallocate(line)
         end if
     end subroutine extend_selection_up
 
-    subroutine extend_selection_down(cursor, line_count)
+    subroutine extend_selection_down(cursor, buffer, line_count)
         type(cursor_t), intent(inout) :: cursor
+        type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: line_count
+        character(len=:), allocatable :: line
 
         ! Initialize selection if not already started
         if (.not. cursor%has_selection) then
@@ -2479,7 +2506,13 @@ contains
         if (cursor%line < line_count) then
             cursor%line = cursor%line + 1
             cursor%column = cursor%desired_column
-            ! Column will be adjusted in boundary check
+
+            ! Clamp column to actual line length
+            line = buffer_get_line(buffer, cursor%line)
+            if (cursor%column > len(line) + 1) then
+                cursor%column = len(line) + 1
+            end if
+            if (allocated(line)) deallocate(line)
         end if
     end subroutine extend_selection_down
 
