@@ -61,6 +61,7 @@ contains
         logical, intent(out) :: should_quit
         integer :: line_count, i
         logical :: is_edit_action
+        type(cursor_t), allocatable :: new_cursors(:)
 
         should_quit = .false.
         line_count = buffer_get_line_count(buffer)
@@ -75,6 +76,21 @@ contains
         ! File operations
         case('ctrl-q')
             should_quit = .true.
+
+        case('esc')
+            ! ESC - Clear selections and return to single cursor mode
+            if (size(editor%cursors) > 1) then
+                ! Keep only the active cursor
+                allocate(new_cursors(1))
+                new_cursors(1) = editor%cursors(editor%active_cursor)
+                new_cursors(1)%has_selection = .false.
+                deallocate(editor%cursors)
+                editor%cursors = new_cursors
+                editor%active_cursor = 1
+            else
+                ! Single cursor - just clear selection
+                editor%cursors(editor%active_cursor)%has_selection = .false.
+            end if
 
         case('ctrl-?')
             ! Show help menu
