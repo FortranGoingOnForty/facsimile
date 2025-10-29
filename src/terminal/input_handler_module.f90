@@ -232,6 +232,9 @@ contains
         else if (ch1 >= 'A' .and. ch1 <= 'Z') then
             ! Alt+Shift+letter
             write(key_str, '(a,a)') 'alt-shift-', achar(iachar(ch1) - iachar('A') + iachar('a'))
+        else if (ch1 == "'") then
+            ! Alt+apostrophe for cycle quotes
+            key_str = "alt-'"
         end if
 
     end subroutine handle_escape_sequence
