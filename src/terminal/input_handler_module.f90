@@ -94,9 +94,13 @@ contains
         ch1 = achar(char_code)
 
         if (ch1 == '[') then
-            ! CSI sequence
+            ! CSI sequence (or Alt+[ if no valid sequence follows)
             char_code = terminal_read_char()
-            if (char_code < 0) return
+            if (char_code < 0) then
+                ! Timeout - no character follows, this is Alt+[
+                key_str = 'alt-['
+                return
+            end if
             ch2 = achar(char_code)
 
             select case(ch2)
@@ -238,6 +242,12 @@ contains
         else if (ch1 == '"') then
             ! Alt+Shift+apostrophe (double quote) for remove brackets
             key_str = "alt-shift-apostrophe"
+        else if (ch1 == '[') then
+            ! Alt+[ for jump to matching bracket
+            key_str = "alt-["
+        else if (ch1 == ']') then
+            ! Alt+] for jump to matching bracket
+            key_str = "alt-]"
         end if
 
     end subroutine handle_escape_sequence
