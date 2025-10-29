@@ -235,6 +235,9 @@ contains
         else if (ch1 == "'") then
             ! Alt+apostrophe for cycle quotes
             key_str = "alt-'"
+        else if (ch1 == '"') then
+            ! Alt+Shift+apostrophe (double quote) for remove brackets
+            key_str = "alt-shift-apostrophe"
         end if
 
     end subroutine handle_escape_sequence

@@ -71,13 +71,6 @@ contains
             return
         end if
 
-        ! DEBUG: Log keys to find what Alt+Shift+Backspace and Alt+' send
-        if (index(key_str, 'alt') > 0 .or. index(key_str, 'shift') > 0 .or. index(key_str, "'") > 0 .or. index(key_str, 'backspace') > 0) then
-            open(99, file='/tmp/key_debug.txt', position='append', action='write')
-            write(99, '(a,a,a)') "Key: '", trim(key_str), "'"
-            close(99)
-        end if
-
         select case(trim(key_str))
         ! File operations
         case('ctrl-q')
@@ -469,10 +462,11 @@ contains
             call cycle_quotes(editor%cursors(editor%active_cursor), buffer)
             is_edit_action = .true.
 
-        case('ctrl-opt-backspace', 'ctrl-alt-backspace', 'alt-shift-backspace')
+        case('ctrl-opt-backspace', 'ctrl-alt-backspace', 'alt-shift-backspace', 'alt-shift-apostrophe')
             ! Remove surrounding brackets/quotes
             ! ctrl-alt-backspace: Doesn't work (terminals send alt-backspace)
-            ! alt-shift-backspace: Alternative binding
+            ! alt-shift-backspace: Doesn't work (terminals send alt-backspace)
+            ! alt-shift-': Alternative binding (Alt+Shift+' = Alt+")
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             call remove_brackets(editor%cursors(editor%active_cursor), buffer)
             is_edit_action = .true.
