@@ -425,19 +425,31 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: line_count
-        character(len=:), allocatable :: line
+        character(len=:), allocatable :: current_line, target_line
 
         cursor%has_selection = .false.  ! Clear selection
         if (cursor%line > 1) then
-            cursor%line = cursor%line - 1
-            cursor%column = cursor%desired_column
+            ! Check if current line is empty
+            current_line = buffer_get_line(buffer, cursor%line)
 
-            ! Clamp column to actual line length
-            line = buffer_get_line(buffer, cursor%line)
-            if (cursor%column > len(line) + 1) then
-                cursor%column = len(line) + 1
+            cursor%line = cursor%line - 1
+            target_line = buffer_get_line(buffer, cursor%line)
+
+            ! If coming from an empty line, go to end of target line
+            if (len(current_line) == 0) then
+                cursor%column = len(target_line) + 1
+                cursor%desired_column = cursor%column
+            else
+                ! Normal behavior - use desired column
+                cursor%column = cursor%desired_column
+                ! Clamp to line bounds
+                if (cursor%column > len(target_line) + 1) then
+                    cursor%column = len(target_line) + 1
+                end if
             end if
-            if (allocated(line)) deallocate(line)
+
+            if (allocated(current_line)) deallocate(current_line)
+            if (allocated(target_line)) deallocate(target_line)
         end if
     end subroutine move_cursor_up
 
@@ -445,19 +457,31 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: line_count
-        character(len=:), allocatable :: line
+        character(len=:), allocatable :: current_line, target_line
 
         cursor%has_selection = .false.  ! Clear selection
         if (cursor%line < line_count) then
-            cursor%line = cursor%line + 1
-            cursor%column = cursor%desired_column
+            ! Check if current line is empty
+            current_line = buffer_get_line(buffer, cursor%line)
 
-            ! Clamp column to actual line length
-            line = buffer_get_line(buffer, cursor%line)
-            if (cursor%column > len(line) + 1) then
-                cursor%column = len(line) + 1
+            cursor%line = cursor%line + 1
+            target_line = buffer_get_line(buffer, cursor%line)
+
+            ! If coming from an empty line, go to column 1 of target line
+            if (len(current_line) == 0) then
+                cursor%column = 1
+                cursor%desired_column = 1
+            else
+                ! Normal behavior - use desired column
+                cursor%column = cursor%desired_column
+                ! Clamp to line bounds
+                if (cursor%column > len(target_line) + 1) then
+                    cursor%column = len(target_line) + 1
+                end if
             end if
-            if (allocated(line)) deallocate(line)
+
+            if (allocated(current_line)) deallocate(current_line)
+            if (allocated(target_line)) deallocate(target_line)
         end if
     end subroutine move_cursor_down
 
@@ -2466,7 +2490,7 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: line_count
-        character(len=:), allocatable :: line
+        character(len=:), allocatable :: current_line, target_line
 
         ! Initialize selection if not already started
         if (.not. cursor%has_selection) then
@@ -2477,15 +2501,23 @@ contains
 
         ! Move cursor up
         if (cursor%line > 1) then
+            current_line = buffer_get_line(buffer, cursor%line)
             cursor%line = cursor%line - 1
-            cursor%column = cursor%desired_column
+            target_line = buffer_get_line(buffer, cursor%line)
 
-            ! Clamp column to actual line length
-            line = buffer_get_line(buffer, cursor%line)
-            if (cursor%column > len(line) + 1) then
-                cursor%column = len(line) + 1
+            ! If coming from empty line, go to end of target line
+            if (len(current_line) == 0) then
+                cursor%column = len(target_line) + 1
+                cursor%desired_column = cursor%column
+            else
+                cursor%column = cursor%desired_column
+                if (cursor%column > len(target_line) + 1) then
+                    cursor%column = len(target_line) + 1
+                end if
             end if
-            if (allocated(line)) deallocate(line)
+
+            if (allocated(current_line)) deallocate(current_line)
+            if (allocated(target_line)) deallocate(target_line)
         end if
     end subroutine extend_selection_up
 
@@ -2493,7 +2525,7 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: line_count
-        character(len=:), allocatable :: line
+        character(len=:), allocatable :: current_line, target_line
 
         ! Initialize selection if not already started
         if (.not. cursor%has_selection) then
@@ -2504,15 +2536,23 @@ contains
 
         ! Move cursor down
         if (cursor%line < line_count) then
+            current_line = buffer_get_line(buffer, cursor%line)
             cursor%line = cursor%line + 1
-            cursor%column = cursor%desired_column
+            target_line = buffer_get_line(buffer, cursor%line)
 
-            ! Clamp column to actual line length
-            line = buffer_get_line(buffer, cursor%line)
-            if (cursor%column > len(line) + 1) then
-                cursor%column = len(line) + 1
+            ! If coming from empty line, go to column 1 of target line
+            if (len(current_line) == 0) then
+                cursor%column = 1
+                cursor%desired_column = 1
+            else
+                cursor%column = cursor%desired_column
+                if (cursor%column > len(target_line) + 1) then
+                    cursor%column = len(target_line) + 1
+                end if
             end if
-            if (allocated(line)) deallocate(line)
+
+            if (allocated(current_line)) deallocate(current_line)
+            if (allocated(target_line)) deallocate(target_line)
         end if
     end subroutine extend_selection_down
 
