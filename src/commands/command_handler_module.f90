@@ -1340,28 +1340,47 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: current_line, prev_line
-        integer :: current_start, current_end, prev_start, prev_end
+        integer :: saved_column, original_line, total_lines
 
         if (cursor%line <= 1) return
 
-        ! Get line positions
-        call get_line_positions(buffer, cursor%line, current_start, current_end)
-        call get_line_positions(buffer, cursor%line - 1, prev_start, prev_end)
+        ! Save state
+        saved_column = cursor%column
+        original_line = cursor%line
+        total_lines = buffer_get_line_count(buffer)
 
-        ! Swap lines in buffer
+        ! Get both lines
         current_line = buffer_get_line(buffer, cursor%line)
         prev_line = buffer_get_line(buffer, cursor%line - 1)
 
-        ! Delete current line first
+        ! Delete current line entirely (including newline)
         cursor%column = 1
-        do while (current_start <= current_end)
-            call buffer_delete_at_cursor(buffer, cursor)
-            current_end = current_end - 1
-        end do
+        call delete_entire_line(buffer, cursor)
 
-        ! Move cursor up and insert the line
+        ! Move to previous line (now current_line position after delete)
         cursor%line = cursor%line - 1
+        cursor%column = 1
+
+        ! Delete previous line entirely (including newline)
+        call delete_entire_line(buffer, cursor)
+
+        ! Now insert current_line first, then prev_line
+        cursor%column = 1
         call insert_line_text(buffer, cursor, current_line)
+        call buffer_insert_newline(buffer, cursor)
+
+        cursor%line = cursor%line + 1
+        cursor%column = 1
+        call insert_line_text(buffer, cursor, prev_line)
+        ! Add newline if we're not at the last line
+        if (original_line < total_lines) then
+            call buffer_insert_newline(buffer, cursor)
+        end if
+
+        ! Restore cursor to moved line
+        cursor%line = cursor%line - 1
+        cursor%column = min(saved_column, len(current_line) + 1)
+        cursor%desired_column = cursor%column
 
         buffer%modified = .true.
         if (allocated(current_line)) deallocate(current_line)
@@ -1372,29 +1391,43 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: current_line, next_line
-        integer :: line_count, saved_column
+        integer :: line_count, saved_column, original_line, total_lines
 
         line_count = buffer_get_line_count(buffer)
         if (cursor%line >= line_count) return
 
+        ! Save state
+        saved_column = cursor%column
+        original_line = cursor%line
+        total_lines = line_count
+
+        ! Get both lines
         current_line = buffer_get_line(buffer, cursor%line)
         next_line = buffer_get_line(buffer, cursor%line + 1)
 
-        ! Store current column
-        saved_column = cursor%column
-
-        ! Delete current line
+        ! Delete current line entirely (including newline)
         cursor%column = 1
         call delete_entire_line(buffer, cursor)
 
-        ! Insert after next line (which is now at cursor%line)
-        cursor%column = len(next_line) + 1
+        ! Delete next line entirely (including newline)
+        ! After deleting current line, next line is now at cursor%line
+        cursor%column = 1
+        call delete_entire_line(buffer, cursor)
+
+        ! Now insert next_line first, then current_line
+        cursor%column = 1
+        call insert_line_text(buffer, cursor, next_line)
         call buffer_insert_newline(buffer, cursor)
+
         cursor%line = cursor%line + 1
         cursor%column = 1
         call insert_line_text(buffer, cursor, current_line)
+        ! Add newline if we're not at the last line
+        if (original_line + 1 < total_lines) then
+            call buffer_insert_newline(buffer, cursor)
+        end if
 
-        ! Restore column position
+        ! Restore cursor position on moved line
         cursor%column = min(saved_column, len(current_line) + 1)
         cursor%desired_column = cursor%column
 
