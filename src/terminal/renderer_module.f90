@@ -404,31 +404,36 @@ contains
 
         ! For multiple cursors, show them all with block cursor for inactive ones
         if (size(editor%cursors) > 1) then
+            ! First draw all inactive cursors
             do i = 1, size(editor%cursors)
-                cursor = editor%cursors(i)
+                if (i /= editor%active_cursor) then
+                    cursor = editor%cursors(i)
 
-                ! Calculate screen position from buffer position
-                screen_row = cursor%line - editor%viewport_line + 1
-                screen_col = cursor%column - editor%viewport_column + 1 + col_offset
+                    ! Calculate screen position from buffer position
+                    screen_row = cursor%line - editor%viewport_line + 1
+                    screen_col = cursor%column - editor%viewport_column + 1 + col_offset
 
-                ! Ensure cursor is within screen bounds
-                if (screen_row >= 1 .and. screen_row < editor%screen_rows .and. &
-                    screen_col >= 1 .and. screen_col <= editor%screen_cols) then
-
-                    call terminal_move_cursor(screen_row, screen_col)
-
-                    if (i == editor%active_cursor) then
-                        ! Active cursor - use normal cursor
-                        call terminal_show_cursor()
-                    else
-                        ! Inactive cursor - draw with reverse video
-                        call terminal_write(char(27) // '[7m ')  ! Inverse video
-                        call terminal_write(char(27) // '[0m')   ! Reset
-                        ! Move back one position
+                    ! Ensure cursor is within screen bounds
+                    if (screen_row >= 1 .and. screen_row < editor%screen_rows .and. &
+                        screen_col >= 1 .and. screen_col <= editor%screen_cols) then
+                        ! Inactive cursor - draw with reverse video block
                         call terminal_move_cursor(screen_row, screen_col)
+                        call terminal_write(char(27) // '[7m ')  ! Inverse video space
+                        call terminal_write(char(27) // '[0m')   ! Reset
                     end if
                 end if
             end do
+
+            ! Then position terminal cursor at active cursor location
+            cursor = editor%cursors(editor%active_cursor)
+            screen_row = cursor%line - editor%viewport_line + 1
+            screen_col = cursor%column - editor%viewport_column + 1 + col_offset
+
+            if (screen_row >= 1 .and. screen_row < editor%screen_rows .and. &
+                screen_col >= 1 .and. screen_col <= editor%screen_cols) then
+                call terminal_move_cursor(screen_row, screen_col)
+                call terminal_show_cursor()
+            end if
         else
             ! Single cursor mode
             cursor = editor%cursors(editor%active_cursor)

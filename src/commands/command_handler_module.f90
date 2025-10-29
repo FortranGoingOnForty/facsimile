@@ -59,7 +59,7 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         logical, intent(out) :: should_quit
-        integer :: line_count
+        integer :: line_count, i
         logical :: is_edit_action
 
         should_quit = .false.
@@ -121,19 +121,47 @@ contains
 
         ! Navigation
         case('up')
-            call move_cursor_up(editor%cursors(editor%active_cursor), buffer, line_count)
+            if (size(editor%cursors) > 1) then
+                ! Move all cursors
+                do i = 1, size(editor%cursors)
+                    call move_cursor_up(editor%cursors(i), buffer, line_count)
+                end do
+            else
+                call move_cursor_up(editor%cursors(editor%active_cursor), buffer, line_count)
+            end if
             call update_viewport(editor)
 
         case('down')
-            call move_cursor_down(editor%cursors(editor%active_cursor), buffer, line_count)
+            if (size(editor%cursors) > 1) then
+                ! Move all cursors
+                do i = 1, size(editor%cursors)
+                    call move_cursor_down(editor%cursors(i), buffer, line_count)
+                end do
+            else
+                call move_cursor_down(editor%cursors(editor%active_cursor), buffer, line_count)
+            end if
             call update_viewport(editor)
 
         case('left')
-            call move_cursor_left(editor%cursors(editor%active_cursor), buffer)
+            if (size(editor%cursors) > 1) then
+                ! Move all cursors
+                do i = 1, size(editor%cursors)
+                    call move_cursor_left(editor%cursors(i), buffer)
+                end do
+            else
+                call move_cursor_left(editor%cursors(editor%active_cursor), buffer)
+            end if
             call update_viewport(editor)
 
         case('right')
-            call move_cursor_right(editor%cursors(editor%active_cursor), buffer)
+            if (size(editor%cursors) > 1) then
+                ! Move all cursors
+                do i = 1, size(editor%cursors)
+                    call move_cursor_right(editor%cursors(i), buffer)
+                end do
+            else
+                call move_cursor_right(editor%cursors(editor%active_cursor), buffer)
+            end if
             call update_viewport(editor)
 
         ! Selection with shift+motion
