@@ -59,7 +59,7 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         logical, intent(out) :: should_quit
-        integer :: line_count, i
+        integer :: line_count, i, j
         logical :: is_edit_action
         type(cursor_t), allocatable :: new_cursors(:)
 
@@ -318,9 +318,17 @@ contains
         case('enter')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (size(editor%cursors) > 1) then
-                ! Apply to all cursors
-                do i = 1, size(editor%cursors)
+                ! Sort cursors and apply from bottom to top to avoid position shifts
+                call sort_cursors_by_position(editor)
+                ! Process in reverse order (bottom to top)
+                do i = size(editor%cursors), 1, -1
                     call handle_enter(editor%cursors(i), buffer)
+                    ! Adjust cursors above this one (their line numbers increased)
+                    do j = 1, i-1
+                        if (editor%cursors(j)%line >= editor%cursors(i)%line) then
+                            editor%cursors(j)%line = editor%cursors(j)%line + 1
+                        end if
+                    end do
                 end do
             else
                 call handle_enter(editor%cursors(editor%active_cursor), buffer)
