@@ -3471,7 +3471,7 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: selected_path
-        integer :: status
+        integer :: status, i
 
         select case(trim(key_str))
         case('j', 'down')
@@ -3481,6 +3481,67 @@ contains
         case('k', 'up')
             ! Move up in tree
             call tree_move_up(tree_state)
+
+        case('left')
+            ! Move up to parent directory
+            if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
+                if (associated(tree_state%selectable_files(tree_state%selected_index)%node)) then
+                    if (associated(tree_state%selectable_files(tree_state%selected_index)%node%parent)) then
+                        ! Find the parent in the selectable list
+                        do i = 1, tree_state%n_selectable
+                            if (associated(tree_state%selectable_files(i)%node, &
+                                         tree_state%selectable_files(tree_state%selected_index)%node%parent)) then
+                                tree_state%selected_index = i
+                                exit
+                            end if
+                        end do
+                    end if
+                end if
+            end if
+
+        case('right')
+            ! Move into first child of directory (and expand if needed)
+            if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
+                if (tree_state%selectable_files(tree_state%selected_index)%is_directory .and. &
+                    associated(tree_state%selectable_files(tree_state%selected_index)%node)) then
+                    ! Expand if collapsed
+                    if (.not. tree_state%selectable_files(tree_state%selected_index)%node%expanded) then
+                        tree_state%selectable_files(tree_state%selected_index)%node%expanded = .true.
+                        ! Rebuild selectable list
+                        if (allocated(tree_state%selectable_files)) deallocate(tree_state%selectable_files)
+                        call build_selectable_list(tree_state%root, tree_state%selectable_files, tree_state%n_selectable)
+                    end if
+                    ! Find first child in selectable list (look for item whose parent is current node)
+                    do i = tree_state%selected_index + 1, tree_state%n_selectable
+                        if (associated(tree_state%selectable_files(i)%node)) then
+                            if (associated(tree_state%selectable_files(i)%node%parent, &
+                                         tree_state%selectable_files(tree_state%selected_index)%node)) then
+                                tree_state%selected_index = i
+                                exit
+                            end if
+                        end if
+                    end do
+                end if
+            end if
+
+        case(' ', 'space')
+            ! Toggle directory expand/collapse
+            if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
+                if (.not. tree_state%selectable_files(tree_state%selected_index)%is_directory) then
+                    ! Not a directory - do nothing
+                else if (associated(tree_state%selectable_files(tree_state%selected_index)%node)) then
+                    ! Toggle expanded
+                    tree_state%selectable_files(tree_state%selected_index)%node%expanded = &
+                        .not. tree_state%selectable_files(tree_state%selected_index)%node%expanded
+                    ! Rebuild selectable list
+                    if (allocated(tree_state%selectable_files)) deallocate(tree_state%selectable_files)
+                    call build_selectable_list(tree_state%root, tree_state%selectable_files, tree_state%n_selectable)
+                    ! Clamp selection
+                    if (tree_state%selected_index > tree_state%n_selectable .and. tree_state%n_selectable > 0) then
+                        tree_state%selected_index = tree_state%n_selectable
+                    end if
+                end if
+            end if
 
         case('a')
             ! Stage file
@@ -3495,10 +3556,14 @@ contains
             end if
 
         case('enter')
-            ! Open selected file in editor
-            selected_path = get_selected_item_path(tree_state)
-            if (len_trim(selected_path) > 0) then
-                call open_file_in_editor(selected_path, editor, buffer)
+            ! Open file in editor (only for files, not directories)
+            if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
+                if (.not. tree_state%selectable_files(tree_state%selected_index)%is_directory) then
+                    selected_path = get_selected_item_path(tree_state)
+                    if (len_trim(selected_path) > 0) then
+                        call open_file_in_editor(selected_path, editor, buffer)
+                    end if
+                end if
             end if
 
         case('esc')

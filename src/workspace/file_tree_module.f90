@@ -6,7 +6,8 @@ module file_tree_module
     public :: tree_node_t, file_entry_t, tree_state_t
     public :: init_tree_state, cleanup_tree_state, refresh_tree_state
     public :: tree_move_up, tree_move_down, get_selected_item_path
-    public :: tree_stage_file, tree_unstage_file
+    public :: tree_stage_file, tree_unstage_file, tree_toggle_expand
+    public :: build_selectable_list
 
     ! Tree node using linked list structure (first-child, next-sibling)
     type :: tree_node_t
@@ -17,6 +18,8 @@ module file_tree_module
         logical :: is_unstaged = .false.
         logical :: is_untracked = .false.
         logical :: has_incoming = .false.
+        logical :: expanded = .true.  ! For directories: true=expanded, false=collapsed
+        type(tree_node_t), pointer :: parent => null()  ! Parent node for sibling navigation
         type(tree_node_t), pointer :: first_child => null()
         type(tree_node_t), pointer :: next_sibling => null()
     end type tree_node_t
@@ -30,12 +33,14 @@ module file_tree_module
         logical :: has_incoming = .false.
     end type file_entry_t
 
-    ! Selectable item (files only, in tree traversal order)
+    ! Selectable item (files and directories, in tree traversal order)
     type :: selectable_file_t
         character(len=512) :: path = ''
+        logical :: is_directory = .false.
         logical :: is_staged = .false.
         logical :: is_unstaged = .false.
         logical :: is_untracked = .false.
+        type(tree_node_t), pointer :: node => null()  ! Pointer to actual tree node
     end type selectable_file_t
 
     ! Tree state for navigation
@@ -281,6 +286,7 @@ contains
                 allocate(new_node)
                 new_node%name = trim(component)
                 new_node%is_file = (len_trim(remaining_path) == 0)
+                new_node%parent => current  ! Set parent pointer
                 new_node%first_child => null()
                 new_node%next_sibling => current%first_child
                 current%first_child => new_node
@@ -321,25 +327,8 @@ contains
         type(tree_node_t), pointer, intent(inout) :: parent
         type(tree_node_t), pointer :: sorted, current, next_node, insert_pos, prev
         logical :: inserted
-        integer :: debug_unit
-        type(tree_node_t), pointer :: check_ptr
 
         if (.not. associated(parent%first_child)) return
-
-        ! DEBUG: Write pre-sort state (both file and stderr)
-        if (trim(parent%name) == 'workspace') then
-            open(newunit=debug_unit, file='/tmp/fac_sort_debug.txt', status='replace', action='write')
-            write(debug_unit, '(A)') '=== Sorting workspace children ==='
-            write(debug_unit, '(A)') 'Before sort:'
-            write(0, '(A)') '[DEBUG] Sorting workspace children'
-            write(0, '(A)') '[DEBUG] Before sort:'
-            check_ptr => parent%first_child
-            do while (associated(check_ptr))
-                write(debug_unit, '(A,A,A,L)') '  ', trim(check_ptr%name), ' next_sib=', associated(check_ptr%next_sibling)
-                write(0, '(A,A,A,L)') '[DEBUG]   ', trim(check_ptr%name), ' next_sib=', associated(check_ptr%next_sibling)
-                check_ptr => check_ptr%next_sibling
-            end do
-        end if
 
         sorted => null()
 
@@ -376,20 +365,6 @@ contains
         end do
 
         parent%first_child => sorted
-
-        ! DEBUG: Write post-sort state (both file and stderr)
-        if (trim(parent%name) == 'workspace') then
-            write(debug_unit, '(A)') 'After sort:'
-            write(0, '(A)') '[DEBUG] After sort:'
-            check_ptr => parent%first_child
-            do while (associated(check_ptr))
-                write(debug_unit, '(A,A,A,L)') '  ', trim(check_ptr%name), ' next_sib=', associated(check_ptr%next_sibling)
-                write(0, '(A,A,A,L)') '[DEBUG]   ', trim(check_ptr%name), ' next_sib=', associated(check_ptr%next_sibling)
-                check_ptr => check_ptr%next_sibling
-            end do
-            write(debug_unit, '(A)') ''
-            close(debug_unit)
-        end if
     end subroutine sort_children
 
     function compare_nodes(a, b) result(cmp)
@@ -443,23 +418,33 @@ contains
 
         if (.not. associated(node)) return
 
-        ! If this is a file, add it to the list
-        if (node%is_file .and. len_trim(node%full_path) > 0) then
+        ! Add both files and directories to selectable list
+        ! Skip root node (name = '.')
+        if (trim(node%name) /= '.') then
             count = count + 1
             if (count <= max_size) then
-                list(count)%path = node%full_path
+                if (node%is_file) then
+                    list(count)%path = node%full_path
+                    list(count)%is_directory = .false.
+                else
+                    list(count)%path = node%name  ! For directories, use name
+                    list(count)%is_directory = .true.
+                end if
                 list(count)%is_staged = node%is_staged
                 list(count)%is_unstaged = node%is_unstaged
                 list(count)%is_untracked = node%is_untracked
+                list(count)%node => node
             end if
         end if
 
-        ! Recursively process children (in order)
-        child => node%first_child
-        do while (associated(child))
-            call collect_files_recursive(child, list, count, max_size)
-            child => child%next_sibling
-        end do
+        ! Recursively process children if this node is expanded (always recurse for root)
+        if (node%expanded .or. trim(node%name) == '.') then
+            child => node%first_child
+            do while (associated(child))
+                call collect_files_recursive(child, list, count, max_size)
+                child => child%next_sibling
+            end do
+        end if
     end subroutine collect_files_recursive
 
     recursive subroutine free_tree(node)
@@ -520,19 +505,63 @@ contains
         end if
     end subroutine extract_repo_name
 
-    ! Navigation functions
+    ! Navigation functions (sibling-only)
     subroutine tree_move_up(state)
         type(tree_state_t), intent(inout) :: state
-        if (state%selected_index > 1) then
-            state%selected_index = state%selected_index - 1
-        end if
+        type(tree_node_t), pointer :: current_parent, candidate_parent
+        integer :: i
+
+        if (state%selected_index < 1 .or. state%selected_index > state%n_selectable) return
+        if (.not. associated(state%selectable_files(state%selected_index)%node)) return
+
+        ! Get current item's parent
+        current_parent => state%selectable_files(state%selected_index)%node%parent
+
+        ! Search backwards for item with same parent
+        do i = state%selected_index - 1, 1, -1
+            if (associated(state%selectable_files(i)%node)) then
+                candidate_parent => state%selectable_files(i)%node%parent
+                ! Check if parents match (same address or both null)
+                if (associated(current_parent) .and. associated(candidate_parent)) then
+                    if (associated(current_parent, candidate_parent)) then
+                        state%selected_index = i
+                        return
+                    end if
+                else if (.not. associated(current_parent) .and. .not. associated(candidate_parent)) then
+                    state%selected_index = i
+                    return
+                end if
+            end if
+        end do
     end subroutine tree_move_up
 
     subroutine tree_move_down(state)
         type(tree_state_t), intent(inout) :: state
-        if (state%selected_index < state%n_selectable) then
-            state%selected_index = state%selected_index + 1
-        end if
+        type(tree_node_t), pointer :: current_parent, candidate_parent
+        integer :: i
+
+        if (state%selected_index < 1 .or. state%selected_index > state%n_selectable) return
+        if (.not. associated(state%selectable_files(state%selected_index)%node)) return
+
+        ! Get current item's parent
+        current_parent => state%selectable_files(state%selected_index)%node%parent
+
+        ! Search forwards for item with same parent
+        do i = state%selected_index + 1, state%n_selectable
+            if (associated(state%selectable_files(i)%node)) then
+                candidate_parent => state%selectable_files(i)%node%parent
+                ! Check if parents match (same address or both null)
+                if (associated(current_parent) .and. associated(candidate_parent)) then
+                    if (associated(current_parent, candidate_parent)) then
+                        state%selected_index = i
+                        return
+                    end if
+                else if (.not. associated(current_parent) .and. .not. associated(candidate_parent)) then
+                    state%selected_index = i
+                    return
+                end if
+            end if
+        end do
     end subroutine tree_move_down
 
     function get_selected_item_path(state) result(path)
@@ -580,5 +609,40 @@ contains
         ! Refresh tree
         call refresh_tree_state(state, workspace_path)
     end subroutine tree_unstage_file
+
+    subroutine tree_toggle_expand(state)
+        type(tree_state_t), intent(inout) :: state
+        type(tree_node_t), pointer :: selected_node
+        integer :: i
+
+        if (state%selected_index < 1 .or. state%selected_index > state%n_selectable) return
+
+        ! Get the selected node via the pointer
+        selected_node => state%selectable_files(state%selected_index)%node
+
+        if (.not. associated(selected_node)) return
+
+        ! Only toggle directories (not files)
+        if (.not. selected_node%is_file .and. associated(selected_node%first_child)) then
+            selected_node%expanded = .not. selected_node%expanded
+
+            ! Rebuild selectable list to reflect new visibility
+            if (allocated(state%selectable_files)) deallocate(state%selectable_files)
+            call build_selectable_list(state%root, state%selectable_files, state%n_selectable)
+
+            ! Find the toggled node in the new list to maintain selection
+            do i = 1, state%n_selectable
+                if (associated(state%selectable_files(i)%node, selected_node)) then
+                    state%selected_index = i
+                    return
+                end if
+            end do
+
+            ! If node not found (shouldn't happen), clamp selected index
+            if (state%selected_index > state%n_selectable .and. state%n_selectable > 0) then
+                state%selected_index = state%n_selectable
+            end if
+        end if
+    end subroutine tree_toggle_expand
 
 end module file_tree_module
