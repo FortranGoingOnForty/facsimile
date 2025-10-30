@@ -166,6 +166,8 @@ contains
                 do i = 1, size(editor%cursors)
                     call move_cursor_up(editor%cursors(i), buffer, line_count)
                 end do
+                ! Remove duplicate cursors that ended up at same position
+                call deduplicate_cursors(editor)
             else
                 call move_cursor_up(editor%cursors(editor%active_cursor), buffer, line_count)
             end if
@@ -177,6 +179,8 @@ contains
                 do i = 1, size(editor%cursors)
                     call move_cursor_down(editor%cursors(i), buffer, line_count)
                 end do
+                ! Remove duplicate cursors that ended up at same position
+                call deduplicate_cursors(editor)
             else
                 call move_cursor_down(editor%cursors(editor%active_cursor), buffer, line_count)
             end if
@@ -188,6 +192,8 @@ contains
                 do i = 1, size(editor%cursors)
                     call move_cursor_left(editor%cursors(i), buffer)
                 end do
+                ! Remove duplicate cursors that ended up at same position
+                call deduplicate_cursors(editor)
             else
                 call move_cursor_left(editor%cursors(editor%active_cursor), buffer)
             end if
@@ -199,6 +205,8 @@ contains
                 do i = 1, size(editor%cursors)
                     call move_cursor_right(editor%cursors(i), buffer)
                 end do
+                ! Remove duplicate cursors that ended up at same position
+                call deduplicate_cursors(editor)
             else
                 call move_cursor_right(editor%cursors(editor%active_cursor), buffer)
             end if
@@ -1491,6 +1499,57 @@ contains
             if (.not. swapped) exit
         end do
     end subroutine sort_cursors_by_position
+
+    subroutine deduplicate_cursors(editor)
+        type(editor_state_t), intent(inout) :: editor
+        type(cursor_t), allocatable :: unique_cursors(:)
+        integer :: i, j, unique_count
+        logical :: is_duplicate
+
+        if (size(editor%cursors) <= 1) return
+
+        ! Count unique cursors
+        unique_count = 0
+        do i = 1, size(editor%cursors)
+            is_duplicate = .false.
+            do j = 1, i-1
+                if (editor%cursors(i)%line == editor%cursors(j)%line .and. &
+                    editor%cursors(i)%column == editor%cursors(j)%column) then
+                    is_duplicate = .true.
+                    exit
+                end if
+            end do
+            if (.not. is_duplicate) then
+                unique_count = unique_count + 1
+            end if
+        end do
+
+        ! If we have duplicates, create new array with only unique cursors
+        if (unique_count < size(editor%cursors)) then
+            allocate(unique_cursors(unique_count))
+            unique_count = 0
+            do i = 1, size(editor%cursors)
+                is_duplicate = .false.
+                do j = 1, i-1
+                    if (editor%cursors(i)%line == editor%cursors(j)%line .and. &
+                        editor%cursors(i)%column == editor%cursors(j)%column) then
+                        is_duplicate = .true.
+                        exit
+                    end if
+                end do
+                if (.not. is_duplicate) then
+                    unique_count = unique_count + 1
+                    unique_cursors(unique_count) = editor%cursors(i)
+                    ! Adjust active cursor index
+                    if (i == editor%active_cursor) then
+                        editor%active_cursor = unique_count
+                    end if
+                end if
+            end do
+            deallocate(editor%cursors)
+            editor%cursors = unique_cursors
+        end if
+    end subroutine deduplicate_cursors
 
     subroutine join_line_with_previous(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
