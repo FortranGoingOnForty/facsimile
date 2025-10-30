@@ -1187,35 +1187,76 @@ contains
         type(buffer_t), intent(inout) :: buffer
         character, intent(in) :: ch
         character :: closing_char
-        logical :: should_auto_close
+        logical :: should_auto_close, should_wrap
+        integer :: start_line, start_col, end_line, end_col
 
-        ! Delete selection if one exists
-        if (cursor%has_selection) then
-            call delete_selection(cursor, buffer)
-        end if
-
-        ! Check if we should auto-close brackets/quotes
+        ! Check if we should auto-close or wrap brackets/quotes
         should_auto_close = .false.
+        should_wrap = .false.
         select case(ch)
         case('(')
             closing_char = ')'
             should_auto_close = .true.
+            if (cursor%has_selection) should_wrap = .true.
         case('[')
             closing_char = ']'
             should_auto_close = .true.
+            if (cursor%has_selection) should_wrap = .true.
         case('{')
             closing_char = '}'
             should_auto_close = .true.
+            if (cursor%has_selection) should_wrap = .true.
         case('"')
             closing_char = '"'
             should_auto_close = .true.
+            if (cursor%has_selection) should_wrap = .true.
         case("'")
             closing_char = "'"
             should_auto_close = .true.
+            if (cursor%has_selection) should_wrap = .true.
         case('`')
             closing_char = '`'
             should_auto_close = .true.
+            if (cursor%has_selection) should_wrap = .true.
         end select
+
+        ! If we should wrap, don't delete - wrap the selection instead
+        if (should_wrap) then
+            ! Find selection bounds
+            if (cursor%line < cursor%selection_start_line .or. &
+                (cursor%line == cursor%selection_start_line .and. cursor%column < cursor%selection_start_col)) then
+                start_line = cursor%line
+                start_col = cursor%column
+                end_line = cursor%selection_start_line
+                end_col = cursor%selection_start_col
+            else
+                start_line = cursor%selection_start_line
+                start_col = cursor%selection_start_col
+                end_line = cursor%line
+                end_col = cursor%column
+            end if
+
+            ! Insert closing character at end
+            cursor%line = end_line
+            cursor%column = end_col
+            call buffer_insert_char(buffer, cursor, closing_char)
+
+            ! Insert opening character at start
+            cursor%line = start_line
+            cursor%column = start_col
+            call buffer_insert_char(buffer, cursor, ch)
+
+            ! Position cursor after the opening bracket (inside the wrapped text)
+            cursor%column = start_col + 1
+            cursor%has_selection = .false.
+            cursor%desired_column = cursor%column
+            return
+        end if
+
+        ! Delete selection if one exists (normal behavior)
+        if (cursor%has_selection) then
+            call delete_selection(cursor, buffer)
+        end if
 
         ! Insert the character
         call buffer_insert_char(buffer, cursor, ch)
