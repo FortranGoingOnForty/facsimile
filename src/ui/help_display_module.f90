@@ -1,6 +1,8 @@
 module help_display_module
     use iso_fortran_env, only: input_unit
-    use terminal_io_module
+    use terminal_io_module, only: terminal_clear_screen, terminal_hide_cursor, terminal_show_cursor, &
+                                   terminal_move_cursor, terminal_write
+    use input_handler_module, only: get_key_input
     use editor_state_module
     implicit none
     private
@@ -13,8 +15,8 @@ contains
         type(editor_state_t), intent(in) :: editor
         integer :: row, col, max_rows
         character(len=100) :: line
-        character(len=1) :: ch
-        integer :: ios
+        character(len=32) :: key_input
+        integer :: status
 
         max_rows = editor%screen_rows
 
@@ -80,7 +82,7 @@ contains
 
         ! Search & Replace
         call display_section(row, max_rows, "SEARCH & REPLACE", &
-            ["/                   search forward              ", &
+            ["ctrl-f              search forward              ", &
              "ctrl-r              find and replace            ", &
              "n                   next match                  ", &
              "N                   previous match              ", &
@@ -118,8 +120,12 @@ contains
         call terminal_move_cursor(max_rows, 1)
         call terminal_show_cursor()
 
-        ! Wait for any key press
-        read(input_unit, '(a1)', advance='no', iostat=ios) ch
+        ! Wait for any key press (use get_key_input to properly consume escape sequences)
+        ! Keep reading until we get a valid key (not timeout)
+        do
+            call get_key_input(key_input, status)
+            if (status == 0) exit  ! Got a valid key, exit loop
+        end do
 
         ! Redraw will happen after returning
     end subroutine show_help

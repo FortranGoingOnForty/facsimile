@@ -92,8 +92,10 @@ contains
                 editor%cursors(editor%active_cursor)%has_selection = .false.
             end if
 
-        case('ctrl-?')
+        case('ctrl-?', 'ctrl-/')
             ! Show help menu
+            ! ctrl-?: Standard (Ctrl+Shift+/)
+            ! ctrl-/: Alternative (Ctrl+/)
             call show_help(editor)
             ! Screen will be redrawn automatically by main loop
 
@@ -507,7 +509,8 @@ contains
             call add_cursor_below(editor, buffer)
 
         ! Search commands
-        case('/')
+        case('ctrl-f')
+            ! Search forward (Ctrl+F)
             call show_search_prompt(editor, buffer)
             call update_viewport(editor)
 

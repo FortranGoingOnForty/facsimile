@@ -65,8 +65,8 @@ contains
             key_str = 'backspace'
         case(26)  ! Ctrl-Z
             key_str = 'ctrl-z'
-        case(31)  ! Ctrl-/ (also ctrl-?)
-            key_str = 'ctrl-?'
+        case(31)  ! Ctrl-/ and Ctrl-? (both send ASCII 31)
+            key_str = 'ctrl-/'
         case(7)  ! Ctrl-G (goto)
             key_str = 'ctrl-g'
         case(29)  ! Ctrl-] (for redo)
