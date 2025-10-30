@@ -527,9 +527,13 @@ contains
                 call search_forward(editor, buffer)
                 call update_viewport(editor)
             else
-                ! No active search, treat as regular character
+                ! No active search, treat as regular character with multi-cursor support
                 if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-                call insert_char(editor%cursors(editor%active_cursor), buffer, 'n')
+                if (size(editor%cursors) > 1) then
+                    call insert_char_multiple_cursors(editor, buffer, 'n')
+                else
+                    call insert_char(editor%cursors(editor%active_cursor), buffer, 'n')
+                end if
                 is_edit_action = .true.
             end if
 
@@ -539,9 +543,13 @@ contains
                 call search_backward(editor, buffer)
                 call update_viewport(editor)
             else
-                ! No active search, treat as regular character
+                ! No active search, treat as regular character with multi-cursor support
                 if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-                call insert_char(editor%cursors(editor%active_cursor), buffer, 'N')
+                if (size(editor%cursors) > 1) then
+                    call insert_char_multiple_cursors(editor, buffer, 'N')
+                else
+                    call insert_char(editor%cursors(editor%active_cursor), buffer, 'N')
+                end if
                 is_edit_action = .true.
             end if
 
