@@ -28,6 +28,9 @@ program facsimile
     call init_editor(editor)
     running = .true.
 
+    ! Set workspace to current directory
+    call get_workspace_path(editor%workspace_path)
+
     ! Initialize terminal
     call terminal_init()
     call terminal_clear_screen()
@@ -78,7 +81,11 @@ program facsimile
                 running = .false.
             else
                 ! Re-render screen after each command
-                call render_screen(buffer, editor)
+                if (editor%fuss_mode_active) then
+                    call render_screen_with_tree(buffer, editor)
+                else
+                    call render_screen(buffer, editor)
+                end if
             end if
         end if
     end do
@@ -92,5 +99,29 @@ program facsimile
     call terminal_cleanup()
     call cleanup_editor(editor)
     call cleanup_buffer(buffer)
+
+contains
+
+    subroutine get_workspace_path(path)
+        character(len=:), allocatable, intent(out) :: path
+        character(len=1024) :: buffer
+        integer :: status
+
+        ! Use execute_command_line to get current directory
+        call execute_command_line('pwd > /tmp/fac_pwd.txt', exitstat=status)
+        if (status == 0) then
+            open(unit=99, file='/tmp/fac_pwd.txt', status='old', action='read', iostat=status)
+            if (status == 0) then
+                read(99, '(A)', iostat=status) buffer
+                close(99, status='delete')
+                if (status == 0) then
+                    path = trim(buffer)
+                    return
+                end if
+            end if
+        end if
+        ! Fallback if command fails
+        path = '.'
+    end subroutine get_workspace_path
 
 end program facsimile

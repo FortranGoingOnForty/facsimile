@@ -4,12 +4,16 @@ module renderer_module
     use text_buffer_module
     use editor_state_module, only: editor_state_t, cursor_t
     use bracket_matching_module
+    use file_tree_module
+    use file_tree_renderer_module
     implicit none
     private
 
     public :: render_screen, update_viewport, init_renderer, cleanup_renderer
     public :: render_status_bar, render_cursor
     public :: show_line_numbers, LINE_NUMBER_WIDTH
+    public :: render_screen_with_tree
+    public :: tree_state
 
     ! Configuration
     logical :: show_line_numbers = .true.
@@ -31,6 +35,9 @@ module renderer_module
     end type screen_buffer_t
 
     type(screen_buffer_t) :: screen_buffer
+
+    ! File tree state (for fuss mode)
+    type(tree_state_t) :: tree_state
 
 contains
 
@@ -473,5 +480,137 @@ contains
             editor%viewport_column = cursor%column - editor%screen_cols + margin
         end if
     end subroutine update_viewport
+
+    ! Render screen with split panes (tree on left, editor on right)
+    subroutine render_screen_with_tree(buffer, editor)
+        type(buffer_t), intent(in) :: buffer
+        type(editor_state_t), intent(in) :: editor
+        integer :: tree_width, editor_start_col, editor_width
+        integer :: separator_col
+        integer :: row
+
+        call terminal_hide_cursor()
+
+        ! Clear screen first to avoid artifacts
+        do row = 1, editor%screen_rows
+            call terminal_move_cursor(row, 1)
+            call terminal_write(repeat(' ', editor%screen_cols))
+        end do
+
+        ! Calculate split: 30% for tree, 70% for editor
+        tree_width = editor%screen_cols * 30 / 100
+        separator_col = tree_width + 1
+        editor_start_col = tree_width + 2
+        editor_width = editor%screen_cols - editor_start_col + 1
+
+        ! Render file tree in left pane
+        call render_file_tree(tree_state, 1, editor%screen_rows - 1, 1, tree_width)
+
+        ! Render vertical separator
+        call render_vertical_separator(separator_col, editor%screen_rows - 1)
+
+        ! Render editor in right pane
+        call render_editor_pane(buffer, editor, editor_start_col, editor_width)
+
+        ! Render status bar (full width)
+        call render_status_bar(editor, buffer)
+
+        ! Position cursor in editor pane
+        call render_cursor_in_pane(editor, editor_start_col, editor_width)
+
+        call terminal_show_cursor()
+    end subroutine render_screen_with_tree
+
+    subroutine render_vertical_separator(col, height)
+        integer, intent(in) :: col, height
+        integer :: row
+
+        do row = 1, height
+            call terminal_move_cursor(row, col)
+            call terminal_write(char(27) // '[90m│' // char(27) // '[0m')  ! Gray vertical line
+        end do
+    end subroutine render_vertical_separator
+
+    subroutine render_editor_pane(buffer, editor, start_col, width)
+        type(buffer_t), intent(in) :: buffer
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(in) :: start_col, width
+        integer :: screen_row, buffer_line, line_count
+        integer :: adjusted_width, line_num_width
+        character(len=16) :: line_num_str
+        character(len=:), allocatable :: padding
+
+        line_count = buffer_get_line_count(buffer)
+
+        ! Calculate content width (accounting for line numbers if enabled)
+        if (show_line_numbers) then
+            line_num_width = LINE_NUMBER_WIDTH + 1
+            adjusted_width = width - line_num_width
+        else
+            line_num_width = 0
+            adjusted_width = width
+        end if
+
+        ! Render each visible line in the editor pane
+        do screen_row = 1, editor%screen_rows - 1
+            buffer_line = editor%viewport_line + screen_row - 1
+
+            ! Position cursor at start of this line in the pane
+            call terminal_move_cursor(screen_row, start_col)
+
+            ! Render line number if enabled
+            if (show_line_numbers) then
+                if (buffer_line <= line_count) then
+                    write(line_num_str, '(i5)') buffer_line
+                    if (buffer_line == editor%cursors(editor%active_cursor)%line) then
+                        call terminal_write(char(27) // '[1;33m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
+                                          // char(27) // '[0m ')
+                    else
+                        call terminal_write(char(27) // '[90m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
+                                          // char(27) // '[0m ')
+                    end if
+                else
+                    call terminal_write(repeat(' ', line_num_width))
+                end if
+            end if
+
+            ! Render content (render_line_with_selections will write exactly adjusted_width chars)
+            if (buffer_line <= line_count) then
+                call render_line_with_selections(buffer, editor, buffer_line, &
+                                                editor%viewport_column, adjusted_width)
+            else
+                ! Empty line beyond file content
+                padding = '~' // repeat(' ', adjusted_width - 1)
+                call terminal_write(padding)
+            end if
+        end do
+    end subroutine render_editor_pane
+
+    subroutine render_cursor_in_pane(editor, pane_start_col, pane_width)
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(in) :: pane_start_col, pane_width
+        type(cursor_t) :: cursor
+        integer :: screen_row, screen_col, col_offset
+
+        ! Calculate column offset for line numbers
+        if (show_line_numbers) then
+            col_offset = LINE_NUMBER_WIDTH + 1
+        else
+            col_offset = 0
+        end if
+
+        cursor = editor%cursors(editor%active_cursor)
+
+        ! Calculate screen position within the editor pane
+        screen_row = cursor%line - editor%viewport_line + 1
+        screen_col = pane_start_col + col_offset + cursor%column - editor%viewport_column
+
+        ! Ensure cursor is within pane bounds
+        if (screen_row >= 1 .and. screen_row < editor%screen_rows .and. &
+            screen_col >= pane_start_col .and. screen_col <= pane_start_col + pane_width) then
+            call terminal_move_cursor(screen_row, screen_col)
+            call terminal_show_cursor()
+        end if
+    end subroutine render_cursor_in_pane
 
 end module renderer_module

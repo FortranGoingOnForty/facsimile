@@ -24,7 +24,9 @@ module editor_state_module
         integer(int32) :: screen_rows = 24
         integer(int32) :: screen_cols = 80
         character(len=:), allocatable :: filename
+        character(len=:), allocatable :: workspace_path  ! Current working directory
         logical :: modified = .false.
+        logical :: fuss_mode_active = .false.  ! Toggle for file tree mode
     end type editor_state_t
 
 contains
@@ -53,6 +55,7 @@ contains
 
         if (allocated(editor%cursors)) deallocate(editor%cursors)
         if (allocated(editor%filename)) deallocate(editor%filename)
+        if (allocated(editor%workspace_path)) deallocate(editor%workspace_path)
     end subroutine cleanup_editor
 
 end module editor_state_module

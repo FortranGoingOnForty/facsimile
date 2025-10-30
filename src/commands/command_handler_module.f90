@@ -3,7 +3,7 @@ module command_handler_module
     use iso_c_binding, only: c_int
     use editor_state_module, only: editor_state_t, cursor_t
     use text_buffer_module
-    use renderer_module, only: update_viewport, render_screen
+    use renderer_module, only: update_viewport, render_screen, tree_state
     use yank_stack_module
     use clipboard_module
     use help_display_module, only: show_help
@@ -14,6 +14,7 @@ module command_handler_module
     use undo_stack_module
     use terminal_io_module, only: terminal_move_cursor, terminal_write, terminal_clear_screen
     use bracket_matching_module, only: find_matching_bracket
+    use file_tree_module
     implicit none
     private
 
@@ -74,10 +75,20 @@ contains
             return
         end if
 
+        ! Route input when in fuss mode (except ctrl-b and ctrl-q which work in both modes)
+        if (editor%fuss_mode_active .and. trim(key_str) /= 'ctrl-b' .and. trim(key_str) /= 'ctrl-q') then
+            call handle_fuss_input(key_str, editor, buffer)
+            return
+        end if
+
         select case(trim(key_str))
         ! File operations
         case('ctrl-q')
             should_quit = .true.
+
+        case('ctrl-b')
+            ! Toggle fuss mode (file tree)
+            call toggle_fuss_mode(editor)
 
         case('esc')
             ! ESC - Clear selections and return to single cursor mode
@@ -3453,5 +3464,102 @@ contains
         buffer%data(buffer%gap_start:buffer%gap_start) = ch
         buffer%gap_start = buffer%gap_start + 1
     end subroutine insert_char_at
+
+    ! Handle input when in fuss mode
+    subroutine handle_fuss_input(key_str, editor, buffer)
+        character(len=*), intent(in) :: key_str
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: selected_path
+        integer :: status
+
+        select case(trim(key_str))
+        case('j', 'down')
+            ! Move down in tree
+            call tree_move_down(tree_state)
+
+        case('k', 'up')
+            ! Move up in tree
+            call tree_move_up(tree_state)
+
+        case('a')
+            ! Stage file
+            if (allocated(editor%workspace_path)) then
+                call tree_stage_file(tree_state, editor%workspace_path)
+            end if
+
+        case('u')
+            ! Unstage file
+            if (allocated(editor%workspace_path)) then
+                call tree_unstage_file(tree_state, editor%workspace_path)
+            end if
+
+        case('enter')
+            ! Open selected file in editor
+            selected_path = get_selected_item_path(tree_state)
+            if (len_trim(selected_path) > 0) then
+                call open_file_in_editor(selected_path, editor, buffer)
+            end if
+
+        case('esc')
+            ! Exit fuss mode
+            editor%fuss_mode_active = .false.
+            call cleanup_tree_state(tree_state)
+
+        end select
+    end subroutine handle_fuss_input
+
+    ! Open a file in the editor
+    subroutine open_file_in_editor(file_path, editor, buffer)
+        character(len=*), intent(in) :: file_path
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: full_path
+        integer :: status
+
+        ! Build full path
+        if (allocated(editor%workspace_path)) then
+            full_path = trim(editor%workspace_path) // '/' // trim(file_path)
+        else
+            full_path = trim(file_path)
+        end if
+
+        ! Load file into buffer
+        call buffer_load_file(buffer, full_path, status)
+        if (status == 0) then
+            ! Update editor filename
+            if (allocated(editor%filename)) deallocate(editor%filename)
+            allocate(character(len=len_trim(full_path)) :: editor%filename)
+            editor%filename = full_path
+
+            ! Reset cursor to top of file
+            editor%cursors(editor%active_cursor)%line = 1
+            editor%cursors(editor%active_cursor)%column = 1
+            editor%cursors(editor%active_cursor)%desired_column = 1
+            editor%viewport_line = 1
+            editor%viewport_column = 1
+
+            ! Exit fuss mode
+            editor%fuss_mode_active = .false.
+            call cleanup_tree_state(tree_state)
+        end if
+    end subroutine open_file_in_editor
+
+    ! Toggle fuss mode (file tree)
+    subroutine toggle_fuss_mode(editor)
+        type(editor_state_t), intent(inout) :: editor
+
+        editor%fuss_mode_active = .not. editor%fuss_mode_active
+
+        if (editor%fuss_mode_active) then
+            ! Entering fuss mode - initialize tree state
+            if (allocated(editor%workspace_path)) then
+                call init_tree_state(tree_state, editor%workspace_path)
+            end if
+        else
+            ! Exiting fuss mode - cleanup tree state
+            call cleanup_tree_state(tree_state)
+        end if
+    end subroutine toggle_fuss_mode
 
 end module command_handler_module
