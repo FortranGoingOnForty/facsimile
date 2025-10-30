@@ -63,6 +63,7 @@ contains
         logical :: is_edit_action
         type(cursor_t), allocatable :: new_cursors(:)
         integer, allocatable :: original_lines(:)
+        character(len=:), allocatable :: line
 
         should_quit = .false.
         line_count = buffer_get_line_count(buffer)
@@ -115,6 +116,22 @@ contains
             ! Undo
             if (can_undo(undo_stack)) then
                 call perform_undo(undo_stack, buffer, editor%cursors(editor%active_cursor))
+                ! If we have multiple cursors, reset to single cursor mode
+                ! (Undo only tracks one cursor's state)
+                if (size(editor%cursors) > 1) then
+                    allocate(new_cursors(1))
+                    new_cursors(1) = editor%cursors(editor%active_cursor)
+                    ! Clamp cursor to actual line length after undo
+                    line = buffer_get_line(buffer, new_cursors(1)%line)
+                    if (new_cursors(1)%column > len(line) + 1) then
+                        new_cursors(1)%column = len(line) + 1
+                    end if
+                    new_cursors(1)%desired_column = new_cursors(1)%column
+                    if (allocated(line)) deallocate(line)
+                    deallocate(editor%cursors)
+                    editor%cursors = new_cursors
+                    editor%active_cursor = 1
+                end if
                 call update_viewport(editor)
             end if
 
@@ -124,6 +141,15 @@ contains
             ! ctrl-]: Alternative redo binding
             if (can_redo(undo_stack)) then
                 call perform_redo(undo_stack, buffer, editor%cursors(editor%active_cursor))
+                ! If we have multiple cursors, reset to single cursor mode
+                ! (Undo only tracks one cursor's state)
+                if (size(editor%cursors) > 1) then
+                    allocate(new_cursors(1))
+                    new_cursors(1) = editor%cursors(editor%active_cursor)
+                    deallocate(editor%cursors)
+                    editor%cursors = new_cursors
+                    editor%active_cursor = 1
+                end if
                 call update_viewport(editor)
             end if
 
