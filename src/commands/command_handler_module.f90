@@ -59,9 +59,10 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         logical, intent(out) :: should_quit
-        integer :: line_count, i, j
+        integer :: line_count, i, j, insert_line
         logical :: is_edit_action
         type(cursor_t), allocatable :: new_cursors(:)
+        integer, allocatable :: original_lines(:)
 
         should_quit = .false.
         line_count = buffer_get_line_count(buffer)
@@ -320,16 +321,29 @@ contains
             if (size(editor%cursors) > 1) then
                 ! Sort cursors and apply from bottom to top to avoid position shifts
                 call sort_cursors_by_position(editor)
+                ! Save original line numbers before any insertions
+                allocate(original_lines(size(editor%cursors)))
+                do i = 1, size(editor%cursors)
+                    original_lines(i) = editor%cursors(i)%line
+                end do
+
                 ! Process in reverse order (bottom to top)
                 do i = size(editor%cursors), 1, -1
+                    ! Save the line where we're inserting
+                    insert_line = original_lines(i)
+
                     call handle_enter(editor%cursors(i), buffer)
-                    ! Adjust cursors above this one (their line numbers increased)
-                    do j = 1, i-1
-                        if (editor%cursors(j)%line >= editor%cursors(i)%line) then
+
+                    ! Adjust ALL other cursors that were BELOW where we inserted
+                    ! (cursors at same line are handled by their own handle_enter)
+                    do j = 1, size(editor%cursors)
+                        if (j /= i .and. original_lines(j) > insert_line) then
+                            ! This cursor was below where we inserted, shift it down
                             editor%cursors(j)%line = editor%cursors(j)%line + 1
                         end if
                     end do
                 end do
+                deallocate(original_lines)
             else
                 call handle_enter(editor%cursors(editor%active_cursor), buffer)
             end if
