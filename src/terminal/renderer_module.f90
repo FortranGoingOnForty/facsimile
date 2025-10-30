@@ -503,8 +503,8 @@ contains
         editor_start_col = tree_width + 2
         editor_width = editor%screen_cols - editor_start_col + 1
 
-        ! Render file tree in left pane
-        call render_file_tree(tree_state, 1, editor%screen_rows - 1, 1, tree_width)
+        ! Render file tree in left pane (start at column 2 to avoid edge cutoff)
+        call render_file_tree(tree_state, 1, editor%screen_rows - 1, 2, tree_width - 2)
 
         ! Render vertical separator
         call render_vertical_separator(separator_col, editor%screen_rows - 1)

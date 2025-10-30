@@ -11,6 +11,7 @@ module file_tree_module
     ! Tree node using linked list structure (first-child, next-sibling)
     type :: tree_node_t
         character(len=256) :: name = ''
+        character(len=512) :: full_path = ''  ! Full path for files (for staging)
         logical :: is_file = .false.
         logical :: is_staged = .false.
         logical :: is_unstaged = .false.
@@ -29,10 +30,20 @@ module file_tree_module
         logical :: has_incoming = .false.
     end type file_entry_t
 
+    ! Selectable item (files only, in tree traversal order)
+    type :: selectable_file_t
+        character(len=512) :: path = ''
+        logical :: is_staged = .false.
+        logical :: is_unstaged = .false.
+        logical :: is_untracked = .false.
+    end type selectable_file_t
+
     ! Tree state for navigation
     type :: tree_state_t
         type(file_entry_t), allocatable :: files(:)
+        type(selectable_file_t), allocatable :: selectable_files(:)
         integer :: n_files = 0
+        integer :: n_selectable = 0
         integer :: selected_index = 1
         integer :: viewport_offset = 1
         type(tree_node_t), pointer :: root => null()
@@ -62,8 +73,10 @@ contains
         type(tree_state_t), intent(inout) :: state
 
         if (allocated(state%files)) deallocate(state%files)
+        if (allocated(state%selectable_files)) deallocate(state%selectable_files)
         if (associated(state%root)) call free_tree(state%root)
         state%n_files = 0
+        state%n_selectable = 0
         state%selected_index = 1
     end subroutine cleanup_tree_state
 
@@ -76,6 +89,7 @@ contains
             call free_tree(state%root)
             state%root => null()
         end if
+        if (allocated(state%selectable_files)) deallocate(state%selectable_files)
 
         ! Get dirty files from git
         call get_dirty_files(workspace_path, state%files, state%n_files)
@@ -83,12 +97,16 @@ contains
         ! Build tree from files
         if (state%n_files > 0) then
             call build_tree(state%files, state%n_files, state%root)
+            ! Build selectable files list in tree traversal order
+            call build_selectable_list(state%root, state%selectable_files, state%n_selectable)
+        else
+            state%n_selectable = 0
         end if
 
         ! Clamp selected index
-        if (state%selected_index > state%n_files .and. state%n_files > 0) then
-            state%selected_index = state%n_files
-        else if (state%n_files == 0) then
+        if (state%selected_index > state%n_selectable .and. state%n_selectable > 0) then
+            state%selected_index = state%n_selectable
+        else if (state%n_selectable == 0) then
             state%selected_index = 1
         end if
     end subroutine refresh_tree_state
@@ -179,6 +197,7 @@ contains
         integer, intent(in) :: n_files
         type(tree_node_t), pointer, intent(out) :: root
         integer :: i
+        integer :: debug_unit
 
         ! Create root
         allocate(root)
@@ -196,7 +215,37 @@ contains
 
         ! Sort tree
         call sort_tree(root)
+
+        ! DEBUG: Write tree structure to file (unconditional)
+        open(newunit=debug_unit, file='/tmp/fac_tree_debug.txt', status='replace', action='write')
+        write(debug_unit, '(A)') '=== FINAL TREE STRUCTURE ==='
+        call debug_print_tree(root, '', debug_unit)
+        close(debug_unit)
+
+        ! Also write to a simpler path
+        open(10, file='fac_debug.txt', status='replace', action='write')
+        write(10, '(A)') '=== FINAL TREE STRUCTURE ==='
+        call debug_print_tree(root, '', 10)
+        close(10)
     end subroutine build_tree
+
+    recursive subroutine debug_print_tree(node, prefix, unit)
+        type(tree_node_t), pointer, intent(in) :: node
+        character(len=*), intent(in) :: prefix
+        integer, intent(in) :: unit
+        type(tree_node_t), pointer :: child
+
+        if (.not. associated(node)) return
+
+        write(unit, '(A,A,A,L,A,L)') trim(prefix), trim(node%name), &
+            ' is_file=', node%is_file, ' has_next_sib=', associated(node%next_sibling)
+
+        child => node%first_child
+        do while (associated(child))
+            call debug_print_tree(child, prefix // '  ', unit)
+            child => child%next_sibling
+        end do
+    end subroutine debug_print_tree
 
     subroutine add_to_tree(root, path, is_staged, is_unstaged, is_untracked, has_incoming)
         type(tree_node_t), pointer, intent(inout) :: root
@@ -238,12 +287,13 @@ contains
                 child => new_node
             end if
 
-            ! If this is the final component, set status
+            ! If this is the final component, set status and full path
             if (len_trim(remaining_path) == 0) then
                 child%is_staged = is_staged
                 child%is_unstaged = is_unstaged
                 child%is_untracked = is_untracked
                 child%has_incoming = has_incoming
+                child%full_path = trim(path)
             end if
 
             current => child
@@ -271,8 +321,25 @@ contains
         type(tree_node_t), pointer, intent(inout) :: parent
         type(tree_node_t), pointer :: sorted, current, next_node, insert_pos, prev
         logical :: inserted
+        integer :: debug_unit
+        type(tree_node_t), pointer :: check_ptr
 
         if (.not. associated(parent%first_child)) return
+
+        ! DEBUG: Write pre-sort state (both file and stderr)
+        if (trim(parent%name) == 'workspace') then
+            open(newunit=debug_unit, file='/tmp/fac_sort_debug.txt', status='replace', action='write')
+            write(debug_unit, '(A)') '=== Sorting workspace children ==='
+            write(debug_unit, '(A)') 'Before sort:'
+            write(0, '(A)') '[DEBUG] Sorting workspace children'
+            write(0, '(A)') '[DEBUG] Before sort:'
+            check_ptr => parent%first_child
+            do while (associated(check_ptr))
+                write(debug_unit, '(A,A,A,L)') '  ', trim(check_ptr%name), ' next_sib=', associated(check_ptr%next_sibling)
+                write(0, '(A,A,A,L)') '[DEBUG]   ', trim(check_ptr%name), ' next_sib=', associated(check_ptr%next_sibling)
+                check_ptr => check_ptr%next_sibling
+            end do
+        end if
 
         sorted => null()
 
@@ -309,6 +376,20 @@ contains
         end do
 
         parent%first_child => sorted
+
+        ! DEBUG: Write post-sort state (both file and stderr)
+        if (trim(parent%name) == 'workspace') then
+            write(debug_unit, '(A)') 'After sort:'
+            write(0, '(A)') '[DEBUG] After sort:'
+            check_ptr => parent%first_child
+            do while (associated(check_ptr))
+                write(debug_unit, '(A,A,A,L)') '  ', trim(check_ptr%name), ' next_sib=', associated(check_ptr%next_sibling)
+                write(0, '(A,A,A,L)') '[DEBUG]   ', trim(check_ptr%name), ' next_sib=', associated(check_ptr%next_sibling)
+                check_ptr => check_ptr%next_sibling
+            end do
+            write(debug_unit, '(A)') ''
+            close(debug_unit)
+        end if
     end subroutine sort_children
 
     function compare_nodes(a, b) result(cmp)
@@ -331,6 +412,55 @@ contains
             end if
         end if
     end function compare_nodes
+
+    ! Build list of selectable files in tree traversal order
+    subroutine build_selectable_list(root, selectable, n_selectable)
+        type(tree_node_t), pointer, intent(in) :: root
+        type(selectable_file_t), allocatable, intent(out) :: selectable(:)
+        integer, intent(out) :: n_selectable
+        type(selectable_file_t), allocatable :: temp(:)
+        integer :: max_size, count
+
+        max_size = 1000
+        allocate(temp(max_size))
+        count = 0
+
+        ! Traverse tree and collect files
+        call collect_files_recursive(root, temp, count, max_size)
+
+        n_selectable = count
+        allocate(selectable(n_selectable))
+        if (n_selectable > 0) selectable(1:n_selectable) = temp(1:n_selectable)
+        deallocate(temp)
+    end subroutine build_selectable_list
+
+    recursive subroutine collect_files_recursive(node, list, count, max_size)
+        type(tree_node_t), pointer, intent(in) :: node
+        type(selectable_file_t), intent(inout) :: list(:)
+        integer, intent(inout) :: count
+        integer, intent(in) :: max_size
+        type(tree_node_t), pointer :: child
+
+        if (.not. associated(node)) return
+
+        ! If this is a file, add it to the list
+        if (node%is_file .and. len_trim(node%full_path) > 0) then
+            count = count + 1
+            if (count <= max_size) then
+                list(count)%path = node%full_path
+                list(count)%is_staged = node%is_staged
+                list(count)%is_unstaged = node%is_unstaged
+                list(count)%is_untracked = node%is_untracked
+            end if
+        end if
+
+        ! Recursively process children (in order)
+        child => node%first_child
+        do while (associated(child))
+            call collect_files_recursive(child, list, count, max_size)
+            child => child%next_sibling
+        end do
+    end subroutine collect_files_recursive
 
     recursive subroutine free_tree(node)
         type(tree_node_t), pointer, intent(inout) :: node
@@ -400,7 +530,7 @@ contains
 
     subroutine tree_move_down(state)
         type(tree_state_t), intent(inout) :: state
-        if (state%selected_index < state%n_files) then
+        if (state%selected_index < state%n_selectable) then
             state%selected_index = state%selected_index + 1
         end if
     end subroutine tree_move_down
@@ -409,8 +539,8 @@ contains
         type(tree_state_t), intent(in) :: state
         character(len=:), allocatable :: path
 
-        if (state%selected_index >= 1 .and. state%selected_index <= state%n_files) then
-            path = trim(state%files(state%selected_index)%path)
+        if (state%selected_index >= 1 .and. state%selected_index <= state%n_selectable) then
+            path = trim(state%selectable_files(state%selected_index)%path)
         else
             path = ''
         end if
@@ -423,11 +553,11 @@ contains
         character(len=1024) :: cmd
         integer :: status
 
-        if (state%selected_index < 1 .or. state%selected_index > state%n_files) return
+        if (state%selected_index < 1 .or. state%selected_index > state%n_selectable) return
 
         ! Stage the file
         write(cmd, '(A,A,A,A,A)') 'cd "', trim(workspace_path), '" && git add "', &
-                                  trim(state%files(state%selected_index)%path), '" 2>/dev/null'
+                                  trim(state%selectable_files(state%selected_index)%path), '" 2>/dev/null'
         call execute_command_line(trim(cmd), exitstat=status)
 
         ! Refresh tree
@@ -440,11 +570,11 @@ contains
         character(len=1024) :: cmd
         integer :: status
 
-        if (state%selected_index < 1 .or. state%selected_index > state%n_files) return
+        if (state%selected_index < 1 .or. state%selected_index > state%n_selectable) return
 
         ! Unstage the file
         write(cmd, '(A,A,A,A,A)') 'cd "', trim(workspace_path), '" && git restore --staged "', &
-                                  trim(state%files(state%selected_index)%path), '" 2>/dev/null'
+                                  trim(state%selectable_files(state%selected_index)%path), '" 2>/dev/null'
         call execute_command_line(trim(cmd), exitstat=status)
 
         ! Refresh tree

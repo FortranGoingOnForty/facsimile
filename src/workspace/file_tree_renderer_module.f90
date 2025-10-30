@@ -31,6 +31,10 @@ contains
 
         current_row = start_row
 
+        ! DEBUG: Visual marker at column 1
+        call terminal_move_cursor(1, 1)
+        call terminal_write('[COL1]')
+
         ! Display repo:branch info at top if available
         if (len_trim(state%repo_name) > 0 .and. len_trim(state%branch_name) > 0) then
             call terminal_move_cursor(current_row, start_col)
@@ -74,18 +78,10 @@ contains
         integer, intent(inout) :: item_idx, current_row
         integer, intent(in) :: end_row, start_col, width
 
-        character(len=1024) :: line, new_prefix
+        character(len=:), allocatable :: line, new_prefix, branch
         type(tree_node_t), pointer :: child
-        integer :: n_children, i
-        logical :: is_selected
-
-        ! Count children
-        n_children = 0
-        child => node%first_child
-        do while (associated(child))
-            n_children = n_children + 1
-            child => child%next_sibling
-        end do
+        logical :: is_selected, is_last_child
+        integer :: prefix_len, i
 
         ! Don't print root node
         if (.not. is_root) then
@@ -100,21 +96,47 @@ contains
             if (current_row <= end_row) then
                 ! Build line with tree structure
                 if (is_last) then
-                    line = trim(prefix) // BRANCH_LAST // ' ' // trim(node%name)
+                    branch = BRANCH_LAST
                 else
-                    line = trim(prefix) // BRANCH_MID // ' ' // trim(node%name)
+                    branch = BRANCH_MID
+                end if
+
+                ! DEBUG: Check branch assignment for root's children
+                if (len_trim(prefix) == 0 .and. trim(node%name) == 'src') then
+                    open(98, file='/tmp/fac_branch_debug.txt', status='replace')
+                    write(98, '(A,L,A,I0)') 'is_last=', is_last, ' len(branch)=', len(branch)
+                    write(98, '(A,Z2.2,Z2.2,Z2.2)') 'branch bytes: ', &
+                        ichar(branch(1:1)), ichar(branch(2:2)), ichar(branch(3:3))
+                    write(98, '(A)') 'BRANCH_MID='//BRANCH_MID
+                    write(98, '(A)') 'BRANCH_LAST='//BRANCH_LAST
+                    close(98)
+                end if
+
+                ! Construct the line - prefix can be empty string, that's fine
+                line = prefix // branch // ' ' // trim(node%name)
+
+                ! DEBUG: Check what's actually in line for src
+                if (trim(node%name) == 'src') then
+                    open(96, file='/tmp/fac_line_debug.txt', status='replace')
+                    write(96, '(A,I0)') 'len(line)=', len(line)
+                    write(96, '(A,I0)') 'len(prefix)=', len(prefix)
+                    write(96, '(A,I0)') 'len(branch)=', len(branch)
+                    write(96, '(A)') 'line bytes (first 20):'
+                    write(96, '(20(Z2.2,1X))') (ichar(line(i:i)), i=1,min(20,len(line)))
+                    write(96, '(A)') 'Full line: >'//line//'<'
+                    close(96)
                 end if
 
                 ! Add status indicators for files only
                 if (node%is_file) then
                     if (node%is_staged) then
-                        line = trim(line) // ' ' // ESC // '[32m↑' // ESC // '[0m'  ! Green up arrow
+                        line = line // ' ' // ESC // '[32m↑' // ESC // '[0m'  ! Green up arrow
                     end if
                     if (node%is_unstaged) then
-                        line = trim(line) // ' ' // ESC // '[31m✗' // ESC // '[0m'  ! Red X
+                        line = line // ' ' // ESC // '[31m✗' // ESC // '[0m'  ! Red X
                     end if
                     if (node%is_untracked) then
-                        line = trim(line) // ' ' // ESC // '[90m✗' // ESC // '[0m'  ! Gray X
+                        line = line // ' ' // ESC // '[90m✗' // ESC // '[0m'  ! Gray X
                     end if
                 end if
 
@@ -122,9 +144,9 @@ contains
                 call terminal_move_cursor(current_row, start_col)
                 if (is_selected) then
                     ! Selection highlight (reverse video)
-                    call terminal_write(ESC // '[7m' // trim(line) // ESC // '[0m')
+                    call terminal_write(ESC // '[7m' // line // ESC // '[0m')
                 else
-                    call terminal_write(trim(line))
+                    call terminal_write(line)
                 end if
 
                 current_row = current_row + 1
@@ -132,22 +154,49 @@ contains
         end if
 
         ! Render children
-        i = 0
         child => node%first_child
         do while (associated(child) .and. current_row <= end_row)
-            i = i + 1
+            ! Determine if this is the last sibling
+            is_last_child = .not. associated(child%next_sibling)
 
+            ! DEBUG: Write sibling info for workspace children
+            if (trim(node%name) == 'workspace') then
+                open(99, file='/tmp/fac_render_debug.txt', position='append')
+                write(99, '(A,A,A,L)') 'Child: ', trim(child%name), ' has_next_sib=', associated(child%next_sibling)
+                close(99)
+            end if
+
+
+            ! Build prefix for child based on current node's position
             if (is_root) then
+                ! Root's children start with no prefix
                 new_prefix = ''
             else
+                ! Non-root children inherit prefix and add continuation
+                ! IMPORTANT: Don't trim prefix! It contains accumulated indentation
                 if (is_last) then
-                    new_prefix = trim(prefix) // '    '
+                    ! Current node is last, so children get spaces (no vertical line continues)
+                    new_prefix = prefix // '    '
                 else
-                    new_prefix = trim(prefix) // VERTICAL // '   '
+                    ! Current node is not last, so vertical line continues for children
+                    new_prefix = prefix // VERTICAL // '   '
                 end if
             end if
 
-            call render_tree_node(child, new_prefix, i == n_children, .false., &
+            ! DEBUG: Log prefix building for src
+            if (trim(node%name) == 'src' .or. trim(child%name) == 'workspace') then
+                open(97, file='/tmp/fac_prefix_debug.txt', position='append')
+                write(97, '(A,A,A,L,A,A,A,A)') &
+                    'Node: ', trim(node%name), ' is_root=', is_root, ' is_last=', merge('T', 'F', is_last), &
+                    ' Child: ', trim(child%name)
+                write(97, '(A,I0,A)') 'new_prefix len=', len(new_prefix), ' content=>'//new_prefix//'<'
+                if (.not. is_root .and. .not. is_last) then
+                    write(97, '(A)') 'Should have added VERTICAL: '//VERTICAL
+                end if
+                close(97)
+            end if
+
+            call render_tree_node(child, new_prefix, is_last_child, .false., &
                                 state, item_idx, current_row, end_row, start_col, width)
             child => child%next_sibling
         end do
