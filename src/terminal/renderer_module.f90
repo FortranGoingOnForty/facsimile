@@ -653,22 +653,35 @@ contains
             return
         end if
 
-        ! Render each pane
+        ! Clear the editor area first with background
+        do i = 2, editor%screen_rows - 1
+            call terminal_move_cursor(i, 1)
+            call terminal_write(repeat(' ', screen_width))
+        end do
+
+        ! Render each pane with gaps
         do i = 1, n_panes
             pane = editor%tabs(tab_idx)%panes(i)
 
-            ! Calculate actual screen coordinates
+            ! Calculate actual screen coordinates with gap consideration
+            ! Add 1 column gap on right side of each pane except the last
             pane_col = 1 + int(pane%x_start * real(screen_width))
-            pane_width = int((pane%x_end - pane%x_start) * real(screen_width))
+            if (i < n_panes) then
+                ! Reserve 1 column for the border/gap
+                pane_width = int((pane%x_end - pane%x_start) * real(screen_width)) - 1
+            else
+                ! Last pane uses full width
+                pane_width = int((pane%x_end - pane%x_start) * real(screen_width))
+            end if
             pane_row = 2 + int(pane%y_start * real(screen_height))
             pane_height = int((pane%y_end - pane%y_start) * real(screen_height))
 
             ! Render the pane content
             call render_single_pane(buffer, editor, i, pane_col, pane_row, pane_width, pane_height)
 
-            ! Draw pane borders (vertical lines between panes)
-            if (i < n_panes .and. abs(pane%x_end - 1.0) > 0.01) then
-                call render_pane_border(pane_col + pane_width, pane_row, pane_height, pane%is_active)
+            ! Draw vertical separator between panes
+            if (i < n_panes) then
+                call render_pane_separator(pane_col + pane_width, pane_row, pane_height)
             end if
         end do
     end subroutine render_all_panes
@@ -679,7 +692,7 @@ contains
         type(editor_state_t), intent(in) :: editor
         integer, intent(in) :: pane_idx, col, row, width, height
         type(pane_t) :: pane
-        integer :: screen_row, buffer_line
+        integer :: screen_row, buffer_line, content_start_row, content_height
         integer :: tab_idx
 
         tab_idx = editor%active_tab_index
@@ -688,15 +701,24 @@ contains
 
         pane = editor%tabs(tab_idx)%panes(pane_idx)
 
-        ! Clear the pane area first
-        do screen_row = row, row + height - 1
+        ! No offset needed, use full height
+        content_start_row = row
+        content_height = height
+
+        ! Clear the pane area with subtle background for inactive panes
+        do screen_row = content_start_row, content_start_row + content_height - 1
             call terminal_move_cursor(screen_row, col)
+            if (.not. pane%is_active) then
+                ! Subtle dark background for inactive panes
+                call terminal_write(char(27) // '[48;5;234m')  ! Very dark gray
+            end if
             call terminal_write(repeat(' ', width))
+            call terminal_write(char(27) // '[0m')
         end do
 
         ! Render buffer content with pane's viewport
-        do screen_row = row, row + height - 1
-            buffer_line = pane%viewport_line + (screen_row - row)
+        do screen_row = content_start_row, content_start_row + content_height - 1
+            buffer_line = pane%viewport_line + (screen_row - content_start_row)
             if (buffer_line > 0 .and. buffer_line <= buffer_get_line_count(buffer)) then
                 call render_buffer_line_in_pane(buffer, editor, pane_idx, buffer_line, &
                                                screen_row, col, width)
@@ -712,6 +734,7 @@ contains
         character(len=:), allocatable :: line
         type(pane_t) :: pane
         integer :: tab_idx, start_col, end_col, i
+        logical :: is_current_line
 
         tab_idx = editor%active_tab_index
         pane = editor%tabs(tab_idx)%panes(pane_idx)
@@ -724,21 +747,29 @@ contains
         start_col = pane%viewport_column
         end_col = min(start_col + width - 1, len(line))
 
-        ! Move to position and render line
+        ! Move to position
         call terminal_move_cursor(screen_row, col)
 
-        ! Highlight if active pane
+        ! Check if this is the current line with a cursor
+        is_current_line = .false.
+        if (allocated(pane%cursors)) then
+            do i = 1, size(pane%cursors)
+                if (pane%cursors(i)%line == line_num) then
+                    is_current_line = .true.
+                    exit
+                end if
+            end do
+        end if
+
+        ! Set background based on pane state
         if (pane%is_active) then
-            ! Check if any cursor is on this line
-            if (allocated(pane%cursors)) then
-                do i = 1, size(pane%cursors)
-                    if (pane%cursors(i)%line == line_num) then
-                        ! Highlight current line in active pane
-                        call terminal_write(char(27) // '[48;5;236m')
-                        exit
-                    end if
-                end do
+            if (is_current_line) then
+                ! Highlight current line in active pane
+                call terminal_write(char(27) // '[48;5;237m')  ! Slightly brighter gray
             end if
+        else
+            ! Inactive pane gets subtle dark background
+            call terminal_write(char(27) // '[48;5;234m')  ! Very dark gray
         end if
 
         ! Render the visible portion of the line
@@ -746,36 +777,43 @@ contains
             call terminal_write(line(start_col:min(end_col, len(line))))
         end if
 
-        ! Reset attributes
-        call terminal_write(char(27) // '[0m')
-
-        ! Fill remaining width
+        ! Fill remaining width with the same background
         if (end_col - start_col + 1 < width) then
             call terminal_write(repeat(' ', width - (end_col - start_col + 1)))
         end if
+
+        ! Reset attributes
+        call terminal_write(char(27) // '[0m')
     end subroutine render_buffer_line_in_pane
 
-    subroutine render_pane_border(col, start_row, height, is_active)
+    subroutine render_pane_separator(col, start_row, height)
         integer, intent(in) :: col, start_row, height
-        logical, intent(in) :: is_active
         integer :: row
 
-        ! Set border color based on active state
-        if (is_active) then
-            call terminal_write(char(27) // '[36m')  ! Cyan for active
-        else
-            call terminal_write(char(27) // '[90m')  ! Dark gray for inactive
-        end if
-
-        ! Draw vertical line
+        ! Draw vertical separator with distinct visual
         do row = start_row, start_row + height - 1
             call terminal_move_cursor(row, col)
-            call terminal_write('|')  ! Use ASCII vertical bar
+            ! Use reverse video for a solid separator
+            call terminal_write(char(27) // '[7m ')  ! Reverse video space
+            call terminal_write(char(27) // '[0m')   ! Reset
         end do
+    end subroutine render_pane_separator
 
-        ! Reset color
+    subroutine render_pane_frame(col, row, width, height, is_active)
+        integer, intent(in) :: col, row, width, height
+        logical, intent(in) :: is_active
+
+        if (.not. is_active) return  ! Only draw frame for active pane
+
+        ! Draw a colored bar at the top of active pane as indicator
+        call terminal_move_cursor(row, col)
+        call terminal_write(char(27) // '[46m')  ! Cyan background
+        call terminal_write(' ACTIVE ')
+        if (width > 8) then
+            call terminal_write(repeat(' ', width - 8))
+        end if
         call terminal_write(char(27) // '[0m')
-    end subroutine render_pane_border
+    end subroutine render_pane_frame
 
     subroutine render_cursor_in_pane(editor, pane_start_col, pane_width)
         type(editor_state_t), intent(in) :: editor

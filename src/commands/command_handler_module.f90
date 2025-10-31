@@ -566,16 +566,16 @@ contains
             end if
 
         case('ctrl-w')
-            ! Close current tab (original behavior for backward compatibility)
+            ! Close current pane, then tab if only one pane remains
             if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
-                call close_tab(editor, editor%active_tab_index)
+                call close_pane(editor)
 
                 ! If tabs remain, copy the new active tab's buffer to display
                 if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
                     call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
                     editor%modified = editor%tabs(editor%active_tab_index)%modified
                 else
-                    ! No tabs left - reset to empty state or open fuss
+                    ! No tabs left - open fuss mode
                     editor%fuss_mode_active = .true.
                     if (allocated(editor%workspace_path)) then
                         call init_tree_state(tree_state, editor%workspace_path)

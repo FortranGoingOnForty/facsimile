@@ -343,7 +343,7 @@ contains
     subroutine split_pane_vertical(editor)
         type(editor_state_t), intent(inout) :: editor
         type(pane_t), allocatable :: temp_panes(:)
-        integer :: tab_idx, pane_idx, n_panes, new_idx
+        integer :: tab_idx, pane_idx, n_panes, new_idx, i
         real :: mid_x
 
         ! Get active tab
@@ -395,8 +395,12 @@ contains
             ! Replace panes array
             call move_alloc(temp_panes, editor%tabs(tab_idx)%panes)
 
+            ! Clear all is_active flags first
+            do i = 1, size(editor%tabs(tab_idx)%panes)
+                editor%tabs(tab_idx)%panes(i)%is_active = .false.
+            end do
+
             ! Set new pane as active
-            editor%tabs(tab_idx)%panes(pane_idx)%is_active = .false.
             editor%tabs(tab_idx)%panes(new_idx)%is_active = .true.
             editor%tabs(tab_idx)%active_pane_index = new_idx
 
@@ -409,7 +413,7 @@ contains
     subroutine split_pane_horizontal(editor)
         type(editor_state_t), intent(inout) :: editor
         type(pane_t), allocatable :: temp_panes(:)
-        integer :: tab_idx, pane_idx, n_panes, new_idx
+        integer :: tab_idx, pane_idx, n_panes, new_idx, i
         real :: mid_y
 
         ! Get active tab
@@ -461,8 +465,12 @@ contains
             ! Replace panes array
             call move_alloc(temp_panes, editor%tabs(tab_idx)%panes)
 
+            ! Clear all is_active flags first
+            do i = 1, size(editor%tabs(tab_idx)%panes)
+                editor%tabs(tab_idx)%panes(i)%is_active = .false.
+            end do
+
             ! Set new pane as active
-            editor%tabs(tab_idx)%panes(pane_idx)%is_active = .false.
             editor%tabs(tab_idx)%panes(new_idx)%is_active = .true.
             editor%tabs(tab_idx)%active_pane_index = new_idx
 
