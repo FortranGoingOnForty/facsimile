@@ -539,8 +539,12 @@ contains
             if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
                 call close_tab(editor, editor%active_tab_index)
 
+                ! If tabs remain, copy the new active tab's buffer to display
+                if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
+                    call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+                    editor%modified = editor%tabs(editor%active_tab_index)%modified
                 ! If no tabs left, open fuss mode
-                if (size(editor%tabs) == 0) then
+                else
                     editor%fuss_mode_active = .true.
                     if (allocated(editor%workspace_path)) then
                         call init_tree_state(tree_state, editor%workspace_path)
