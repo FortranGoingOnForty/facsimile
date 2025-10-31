@@ -111,6 +111,17 @@ contains
              "ctrl-alt-right      next tab                    ", &
              "ctrl-b              toggle file tree (fuss)     "])
 
+        ! Git (in fuss mode)
+        call display_section(row, max_rows, "GIT (in fuss mode)", &
+            ["a                   stage file/add                           ", &
+             "u                   unstage file                             ", &
+             "m                   commit with message                      ", &
+             "p                   push to remote                           ", &
+             "f                   fetch from remote                        ", &
+             "l                   pull from remote                         ", &
+             "t                   create tag                               ", &
+             "Markers: staged, modified, untracked, incoming               "])
+
         ! File
         call display_section(row, max_rows, "FILE", &
             ["ctrl-s          save                            ", &

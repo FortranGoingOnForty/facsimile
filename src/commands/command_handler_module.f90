@@ -15,6 +15,8 @@ module command_handler_module
     use terminal_io_module, only: terminal_move_cursor, terminal_write, terminal_clear_screen
     use bracket_matching_module, only: find_matching_bracket
     use file_tree_module
+    use git_ops_module
+    use text_prompt_module, only: show_text_prompt
     implicit none
     private
 
@@ -3675,6 +3677,36 @@ contains
                 call tree_unstage_file(tree_state, editor%workspace_path)
             end if
 
+        case('m')
+            ! Git commit with message
+            if (allocated(editor%workspace_path)) then
+                call handle_git_commit(editor)
+            end if
+
+        case('p')
+            ! Git push
+            if (allocated(editor%workspace_path)) then
+                call handle_git_push(editor)
+            end if
+
+        case('f')
+            ! Git fetch
+            if (allocated(editor%workspace_path)) then
+                call handle_git_fetch(editor)
+            end if
+
+        case('l')
+            ! Git pull
+            if (allocated(editor%workspace_path)) then
+                call handle_git_pull(editor)
+            end if
+
+        case('t')
+            ! Git tag
+            if (allocated(editor%workspace_path)) then
+                call handle_git_tag(editor)
+            end if
+
         case('enter', 'o')
             ! Open file in editor (only for files, not directories)
             if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
@@ -3760,5 +3792,160 @@ contains
             call cleanup_tree_state(tree_state)
         end if
     end subroutine toggle_fuss_mode
+
+    ! Handle git commit with message prompt
+    subroutine handle_git_commit(editor)
+        type(editor_state_t), intent(inout) :: editor
+        character(len=512) :: commit_message
+        logical :: cancelled, success
+
+        ! Show prompt for commit message
+        call show_text_prompt('Commit message: ', commit_message, cancelled, editor%screen_rows)
+
+        if (.not. cancelled .and. len_trim(commit_message) > 0) then
+            call git_commit(editor%workspace_path, commit_message, success)
+
+            ! Show feedback message
+            call terminal_move_cursor(editor%screen_rows, 1)
+            call terminal_write(repeat(' ', 200))
+            call terminal_move_cursor(editor%screen_rows, 1)
+            if (success) then
+                call terminal_write(char(27) // '[32m✓ Committed successfully!' // char(27) // '[0m')
+            else
+                call terminal_write(char(27) // '[31m✗ Commit failed (nothing staged?)' // char(27) // '[0m')
+            end if
+
+            ! Brief pause
+            call execute_command_line('sleep 1')
+
+            ! Refresh tree
+            call refresh_tree_state(tree_state, editor%workspace_path)
+        end if
+    end subroutine handle_git_commit
+
+    ! Handle git push
+    subroutine handle_git_push(editor)
+        type(editor_state_t), intent(inout) :: editor
+        logical :: success
+
+        ! Show progress message
+        call terminal_move_cursor(editor%screen_rows, 1)
+        call terminal_write(repeat(' ', 200))
+        call terminal_move_cursor(editor%screen_rows, 1)
+        call terminal_write('Pushing to remote...')
+
+        call git_push(editor%workspace_path, success)
+
+        ! Show result
+        call terminal_move_cursor(editor%screen_rows, 1)
+        call terminal_write(repeat(' ', 200))
+        call terminal_move_cursor(editor%screen_rows, 1)
+        if (success) then
+            call terminal_write(char(27) // '[32m✓ Pushed successfully!' // char(27) // '[0m')
+        else
+            call terminal_write(char(27) // '[31m✗ Push failed (check remote/branch)' // char(27) // '[0m')
+        end if
+
+        ! Brief pause
+        call execute_command_line('sleep 1')
+
+        ! Refresh tree
+        call refresh_tree_state(tree_state, editor%workspace_path)
+    end subroutine handle_git_push
+
+    ! Handle git fetch
+    subroutine handle_git_fetch(editor)
+        type(editor_state_t), intent(inout) :: editor
+        logical :: success
+
+        ! Show progress message
+        call terminal_move_cursor(editor%screen_rows, 1)
+        call terminal_write(repeat(' ', 200))
+        call terminal_move_cursor(editor%screen_rows, 1)
+        call terminal_write('Fetching from remote...')
+
+        call git_fetch(editor%workspace_path, success)
+
+        ! Show result
+        call terminal_move_cursor(editor%screen_rows, 1)
+        call terminal_write(repeat(' ', 200))
+        call terminal_move_cursor(editor%screen_rows, 1)
+        if (success) then
+            call terminal_write(char(27) // '[32m✓ Fetch completed!' // char(27) // '[0m')
+        else
+            call terminal_write(char(27) // '[31m✗ Fetch failed!' // char(27) // '[0m')
+        end if
+
+        ! Brief pause
+        call execute_command_line('sleep 1')
+
+        ! Refresh tree
+        call refresh_tree_state(tree_state, editor%workspace_path)
+    end subroutine handle_git_fetch
+
+    ! Handle git pull
+    subroutine handle_git_pull(editor)
+        type(editor_state_t), intent(inout) :: editor
+        logical :: success
+
+        ! Show progress message
+        call terminal_move_cursor(editor%screen_rows, 1)
+        call terminal_write(repeat(' ', 200))
+        call terminal_move_cursor(editor%screen_rows, 1)
+        call terminal_write('Pulling from remote...')
+
+        call git_pull(editor%workspace_path, success)
+
+        ! Show result
+        call terminal_move_cursor(editor%screen_rows, 1)
+        call terminal_write(repeat(' ', 200))
+        call terminal_move_cursor(editor%screen_rows, 1)
+        if (success) then
+            call terminal_write(char(27) // '[32m✓ Pull completed!' // char(27) // '[0m')
+        else
+            call terminal_write(char(27) // '[31m✗ Pull failed!' // char(27) // '[0m')
+        end if
+
+        ! Brief pause
+        call execute_command_line('sleep 1')
+
+        ! Refresh tree
+        call refresh_tree_state(tree_state, editor%workspace_path)
+    end subroutine handle_git_pull
+
+    ! Handle git tag
+    subroutine handle_git_tag(editor)
+        type(editor_state_t), intent(inout) :: editor
+        character(len=256) :: tag_name, tag_message
+        logical :: cancelled, success
+
+        ! Show prompt for tag name
+        call show_text_prompt('Tag name: ', tag_name, cancelled, editor%screen_rows)
+
+        if (.not. cancelled .and. len_trim(tag_name) > 0) then
+            ! Show prompt for tag message (optional)
+            call show_text_prompt('Tag message (optional): ', tag_message, cancelled, editor%screen_rows)
+
+            if (.not. cancelled) then
+                call git_tag(editor%workspace_path, tag_name, tag_message, success)
+
+                ! Show result
+                call terminal_move_cursor(editor%screen_rows, 1)
+                call terminal_write(repeat(' ', 200))
+                call terminal_move_cursor(editor%screen_rows, 1)
+                if (success) then
+                    call terminal_write(char(27) // '[32m✓ Tag created: ' // trim(tag_name) // char(27) // '[0m')
+                else
+                    call terminal_write(char(27) // '[31m✗ Failed to create tag' // char(27) // '[0m')
+                end if
+
+                ! Brief pause
+                call execute_command_line('sleep 1')
+
+                ! Refresh tree
+                call refresh_tree_state(tree_state, editor%workspace_path)
+            end if
+        end if
+    end subroutine handle_git_tag
 
 end module command_handler_module

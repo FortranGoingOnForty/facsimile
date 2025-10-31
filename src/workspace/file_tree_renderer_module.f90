@@ -124,6 +124,9 @@ contains
                     if (node%is_untracked) then
                         line = line // ' ' // ESC // '[90m✗' // ESC // '[0m'  ! Gray X
                     end if
+                    if (node%has_incoming) then
+                        line = line // ' ' // ESC // '[34m↓' // ESC // '[0m'  ! Blue down arrow
+                    end if
                 end if
 
                 ! Render with selection highlight for files only

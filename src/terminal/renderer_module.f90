@@ -519,14 +519,14 @@ contains
             call terminal_write(repeat(' ', editor%screen_cols))
         end do
 
-        ! Render tab bar if there are any tabs (after clearing screen)
-        call render_tab_bar(editor)
-
         ! Calculate split: 30% for tree, 70% for editor
         tree_width = editor%screen_cols * 30 / 100
         separator_col = tree_width + 1
         editor_start_col = tree_width + 2
         editor_width = editor%screen_cols - editor_start_col + 1
+
+        ! Render tab bar if there are any tabs (positioned in editor pane area)
+        call render_tab_bar(editor, editor_start_col, editor_width)
 
         ! Render file tree in left pane (start at row 2 for tab bar)
         call render_file_tree(tree_state, 2, editor%screen_rows - 1, 2, tree_width - 2)
@@ -656,23 +656,39 @@ contains
     end subroutine render_cursor_in_pane
 
     ! Render tab bar at top of screen
-    subroutine render_tab_bar(editor)
+    ! Optional start_col and width parameters for positioning in split view
+    subroutine render_tab_bar(editor, start_col, width)
         type(editor_state_t), intent(in) :: editor
+        integer, intent(in), optional :: start_col, width
         integer :: i, col, tab_count
         character(len=:), allocatable :: tab_label, filename_only
         character(len=256) :: temp_label
         integer :: slash_pos, last_slash
         character(len=1) :: modified_marker
+        integer :: start_column, max_width
 
         tab_count = size(editor%tabs)
         if (tab_count == 0) return  ! No tabs to display
 
-        ! Move to top row and clear it
-        call terminal_move_cursor(1, 1)
-        call terminal_write(repeat(' ', editor%screen_cols))
+        ! Use provided start_col and width, or default to full screen
+        if (present(start_col)) then
+            start_column = start_col
+        else
+            start_column = 1
+        end if
+
+        if (present(width)) then
+            max_width = width
+        else
+            max_width = editor%screen_cols
+        end if
+
+        ! Move to top row at starting column and clear the tab bar area
+        call terminal_move_cursor(1, start_column)
+        call terminal_write(repeat(' ', max_width))
 
         ! Render each tab
-        col = 1
+        col = start_column
         do i = 1, tab_count
             ! Extract filename from full path
             filename_only = editor%tabs(i)%filename
@@ -699,7 +715,7 @@ contains
             tab_label = trim(temp_label)
 
             ! Check if we have room for this tab
-            if (col + len(tab_label) > editor%screen_cols) exit
+            if (col + len(tab_label) > start_column + max_width) exit
 
             ! Position cursor
             call terminal_move_cursor(1, col)
