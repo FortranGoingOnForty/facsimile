@@ -44,9 +44,11 @@ SOURCES = src/buffer/text_buffer_module.f90 \
           src/editor_state_module.f90 \
           src/undo/undo_stack_module.f90 \
           src/workspace/file_tree_module.f90 \
+          src/workspace/git_ops_module.f90 \
           src/workspace/file_tree_renderer_module.f90 \
           src/terminal/renderer_module.f90 \
           src/ui/help_display_module.f90 \
+          src/ui/text_prompt_module.f90 \
           src/ui/search_prompt_module.f90 \
           src/ui/replace_prompt_module.f90 \
           src/ui/goto_prompt_module.f90 \
