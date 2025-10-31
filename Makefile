@@ -43,6 +43,8 @@ SOURCES = src/buffer/text_buffer_module.f90 \
           src/utils/bracket_matching_module.f90 \
           src/editor_state_module.f90 \
           src/undo/undo_stack_module.f90 \
+          src/workspace/file_tree_module.f90 \
+          src/workspace/file_tree_renderer_module.f90 \
           src/terminal/renderer_module.f90 \
           src/ui/help_display_module.f90 \
           src/ui/search_prompt_module.f90 \
@@ -70,6 +72,6 @@ $(TARGET): $(OBJECTS) $(C_OBJECTS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(OBJECTS) $(C_OBJECTS) $(TARGET) *.mod src/*/*.mod
+	rm -f $(OBJECTS) $(C_OBJECTS) $(TARGET) *.mod src/*/*.mod src/workspace/*.o
 
 .PHONY: all clean
