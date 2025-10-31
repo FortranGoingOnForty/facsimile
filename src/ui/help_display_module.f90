@@ -120,6 +120,7 @@ contains
              "f                   fetch from remote                        ", &
              "l                   pull from remote                         ", &
              "t                   create tag                               ", &
+             "d                   diff file in new tab                     ", &
              "Markers: staged, modified, untracked, incoming               "])
 
         ! File

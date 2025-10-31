@@ -4,7 +4,7 @@ module git_ops_module
     private
 
     public :: git_commit, git_push, git_fetch, git_pull, git_tag
-    public :: git_check_upstream
+    public :: git_check_upstream, git_diff_file
 
 contains
 
@@ -129,5 +129,102 @@ contains
 
         has_upstream = (status == 0)
     end subroutine git_check_upstream
+
+    subroutine git_diff_file(workspace_path, file_path, diff_content, branch_name, success)
+        character(len=*), intent(in) :: workspace_path
+        character(len=*), intent(in) :: file_path
+        character(len=:), allocatable, intent(out) :: diff_content
+        character(len=*), intent(out) :: branch_name
+        logical, intent(out) :: success
+        character(len=2048) :: command
+        character(len=512) :: temp_file, line
+        integer :: status, unit_num, ios
+        integer :: total_size, current_pos
+
+        success = .false.
+        branch_name = ''
+
+        ! Get current branch name
+        temp_file = '/tmp/fac_branch.tmp'
+        write(command, '(A,A,A,A,A)') 'cd "', trim(workspace_path), &
+            '" && git rev-parse --abbrev-ref HEAD > "', trim(temp_file), '" 2>&1'
+        call execute_command_line(trim(command), exitstat=status)
+
+        if (status == 0) then
+            open(newunit=unit_num, file=trim(temp_file), status='old', action='read', iostat=ios)
+            if (ios == 0) then
+                read(unit_num, '(A)', iostat=ios) branch_name
+                close(unit_num)
+            end if
+            call execute_command_line('rm -f "' // trim(temp_file) // '"')
+        end if
+
+        ! Get diff output
+        temp_file = '/tmp/fac_diff.tmp'
+        write(command, '(A,A,A,A,A,A,A)') 'cd "', trim(workspace_path), &
+            '" && git diff HEAD -- "', trim(file_path), '" > "', trim(temp_file), '" 2>&1'
+        call execute_command_line(trim(command), exitstat=status)
+
+        if (status /= 0) then
+            call execute_command_line('rm -f "' // trim(temp_file) // '"')
+            diff_content = ''
+            return
+        end if
+
+        ! Read diff content from temp file
+        open(newunit=unit_num, file=trim(temp_file), status='old', action='read', iostat=ios)
+        if (ios /= 0) then
+            call execute_command_line('rm -f "' // trim(temp_file) // '"')
+            diff_content = ''
+            return
+        end if
+
+        ! First pass: calculate total size needed
+        total_size = 0
+        do
+            read(unit_num, '(A)', iostat=ios) line
+            if (ios /= 0) exit
+            total_size = total_size + len_trim(line) + 1  ! +1 for newline
+        end do
+
+        if (total_size == 0) then
+            ! No changes
+            close(unit_num)
+            call execute_command_line('rm -f "' // trim(temp_file) // '"')
+            diff_content = '(no changes)'
+            success = .true.
+            return
+        end if
+
+        ! Allocate string with exact size needed
+        allocate(character(len=total_size) :: diff_content)
+        current_pos = 1
+
+        ! Second pass: read content into allocated string
+        rewind(unit_num)
+        do
+            read(unit_num, '(A)', iostat=ios) line
+            if (ios /= 0) exit
+
+            ! Append line and newline
+            if (len_trim(line) > 0) then
+                ! Non-empty line
+                if (current_pos + len_trim(line) - 1 <= total_size) then
+                    diff_content(current_pos:current_pos+len_trim(line)-1) = trim(line)
+                    current_pos = current_pos + len_trim(line)
+                end if
+            end if
+
+            ! Add newline after each line (including empty lines)
+            if (current_pos <= total_size) then
+                diff_content(current_pos:current_pos) = new_line('a')
+                current_pos = current_pos + 1
+            end if
+        end do
+
+        close(unit_num)
+        call execute_command_line('rm -f "' // trim(temp_file) // '"')
+        success = .true.
+    end subroutine git_diff_file
 
 end module git_ops_module

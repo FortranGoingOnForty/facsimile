@@ -3707,6 +3707,12 @@ contains
                 call handle_git_tag(editor)
             end if
 
+        case('d')
+            ! Git diff
+            if (allocated(editor%workspace_path)) then
+                call handle_git_diff(editor, buffer)
+            end if
+
         case('enter', 'o')
             ! Open file in editor (only for files, not directories)
             if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
@@ -3947,5 +3953,67 @@ contains
             end if
         end if
     end subroutine handle_git_tag
+
+    subroutine handle_git_diff(editor, buffer)
+        use editor_state_module, only: create_tab
+        use text_buffer_module, only: buffer_insert, copy_buffer
+        use file_tree_module, only: get_selected_item_path
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: selected_path, diff_content, tab_name
+        character(len=256) :: branch_name
+        logical :: success
+
+        ! Get selected file from tree
+        if (tree_state%selected_index < 1 .or. tree_state%selected_index > tree_state%n_selectable) return
+        if (tree_state%selectable_files(tree_state%selected_index)%is_directory) return
+
+        selected_path = get_selected_item_path(tree_state)
+        if (len_trim(selected_path) == 0) return
+
+        ! Get diff content
+        call git_diff_file(editor%workspace_path, selected_path, diff_content, branch_name, success)
+
+        if (.not. success) then
+            call terminal_move_cursor(editor%screen_rows, 1)
+            call terminal_write(repeat(' ', 200))
+            call terminal_move_cursor(editor%screen_rows, 1)
+            call terminal_write(char(27) // '[31m✗ Failed to get diff' // char(27) // '[0m')
+            call execute_command_line('sleep 1')
+            return
+        end if
+
+        ! Create tab name: diff:<filename>:<branch>
+        if (len_trim(branch_name) > 0) then
+            tab_name = 'diff:' // trim(selected_path) // ':' // trim(branch_name)
+        else
+            tab_name = 'diff:' // trim(selected_path)
+        end if
+
+        ! Create new tab
+        call create_tab(editor, tab_name)
+
+        ! Load diff content into the tab's buffer
+        if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+            ! Insert diff content at the beginning of the buffer
+            call buffer_insert(editor%tabs(editor%active_tab_index)%buffer, 1, diff_content)
+
+            ! Copy tab's buffer to main buffer so it's displayed
+            call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+
+            ! Update editor state with the new tab's info
+            if (allocated(editor%filename)) deallocate(editor%filename)
+            allocate(character(len=len_trim(tab_name)) :: editor%filename)
+            editor%filename = tab_name
+
+            ! Reset cursor to top of file
+            editor%cursors(editor%active_cursor)%line = 1
+            editor%cursors(editor%active_cursor)%column = 1
+            editor%cursors(editor%active_cursor)%desired_column = 1
+
+            ! Exit fuss mode and show diff
+            editor%fuss_mode_active = .false.
+        end if
+    end subroutine handle_git_diff
 
 end module command_handler_module
