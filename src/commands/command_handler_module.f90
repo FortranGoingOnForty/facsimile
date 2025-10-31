@@ -16,7 +16,7 @@ module command_handler_module
     use bracket_matching_module, only: find_matching_bracket
     use file_tree_module
     use git_ops_module
-    use text_prompt_module, only: show_text_prompt
+    use text_prompt_module, only: show_text_prompt, show_yes_no_prompt
     implicit none
     private
 
@@ -3939,7 +3939,7 @@ contains
         character(len=256) :: tag_name, tag_message
         character(len=256), allocatable :: existing_tags(:)
         integer :: n_tags
-        logical :: cancelled, success
+        logical :: cancelled, success, push_tag
 
         ! Fetch and display existing tags (keeps them visible during prompts)
         call git_list_tags(editor%workspace_path, existing_tags, n_tags)
@@ -3967,10 +3967,10 @@ contains
                     ! Brief pause
                     call execute_command_line('sleep 1')
 
-                    ! Ask if user wants to push the tag to origin
-                    call show_text_prompt('Push tag to origin? (y/n, ESC to skip): ', tag_message, cancelled, editor%screen_rows)
+                    ! Ask if user wants to push the tag to origin (auto-submit on y/n)
+                    call show_yes_no_prompt('Push tag to origin? (y/n, ESC to skip): ', push_tag, cancelled, editor%screen_rows)
 
-                    if (.not. cancelled .and. (tag_message(1:1) == 'y' .or. tag_message(1:1) == 'Y')) then
+                    if (.not. cancelled .and. push_tag) then
                         call git_push_tag(editor%workspace_path, tag_name, success)
 
                         ! Show push result

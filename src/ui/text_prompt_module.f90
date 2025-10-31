@@ -4,7 +4,7 @@ module text_prompt_module
     implicit none
     private
 
-    public :: show_text_prompt
+    public :: show_text_prompt, show_yes_no_prompt
 
 contains
 
@@ -66,5 +66,49 @@ contains
 
         call terminal_hide_cursor()
     end subroutine show_text_prompt
+
+    subroutine show_yes_no_prompt(prompt_text, answer, cancelled, screen_rows)
+        character(len=*), intent(in) :: prompt_text
+        logical, intent(out) :: answer
+        logical, intent(out) :: cancelled
+        integer(int32), intent(in) :: screen_rows
+        integer :: ch
+
+        ! Initialize
+        cancelled = .false.
+        answer = .false.
+
+        ! Display prompt at bottom of screen
+        call terminal_move_cursor(screen_rows, 1)
+        call terminal_write(achar(27) // '[2K')  ! Clear entire line
+        call terminal_move_cursor(screen_rows, 1)
+        call terminal_write(trim(prompt_text))
+        call terminal_show_cursor()
+
+        ! Input loop - wait for single y/n/esc keypress
+        do
+            ch = terminal_read_char()
+
+            if (ch == -1) then
+                ! No input, continue
+                cycle
+            else if (ch == 27) then  ! ESC
+                ! Cancel
+                cancelled = .true.
+                exit
+            else if (ch == 121 .or. ch == 89) then  ! 'y' or 'Y'
+                ! Yes
+                answer = .true.
+                exit
+            else if (ch == 110 .or. ch == 78) then  ! 'n' or 'N'
+                ! No
+                answer = .false.
+                exit
+            end if
+            ! Ignore other characters, keep waiting for y/n/esc
+        end do
+
+        call terminal_hide_cursor()
+    end subroutine show_yes_no_prompt
 
 end module text_prompt_module
