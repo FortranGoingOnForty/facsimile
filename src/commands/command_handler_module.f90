@@ -581,6 +581,9 @@ contains
             call create_tab(editor, '[Untitled]')
             ! Switch to the new tab (it's already active after create_tab)
             if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                ! Copy the new tab's buffer to display
+                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+
                 ! Update editor state with the new tab
                 if (allocated(editor%filename)) deallocate(editor%filename)
                 allocate(character(len=10) :: editor%filename)
@@ -592,6 +595,7 @@ contains
                 editor%cursors(editor%active_cursor)%desired_column = 1
                 editor%viewport_line = 1
                 editor%viewport_column = 1
+                editor%modified = .false.
             end if
 
         case('ctrl-j')
