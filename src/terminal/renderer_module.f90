@@ -380,13 +380,11 @@ contains
 
         ! Prepare status bar content
         if (allocated(editor%filename)) then
-            write(status_left, '(a,a,a,a)') ' ', trim(editor%filename), &
-                   merge(' [modified]', '           ', buffer%modified), &
-                   '  ctrl-b:fuss'
+            write(status_left, '(a,a,a,a)') ' ctrl-b:fuss | ', trim(editor%filename), &
+                   merge(' [modified]', '           ', buffer%modified), ' '
         else
-            write(status_left, '(a,a,a)') ' [No Name]', &
-                   merge(' [modified]', '           ', buffer%modified), &
-                   '  ctrl-b:fuss'
+            write(status_left, '(a,a,a)') ' ctrl-b:fuss | [No Name]', &
+                   merge(' [modified]', '           ', buffer%modified), ' '
         end if
 
         if (size(editor%cursors) > 1) then
