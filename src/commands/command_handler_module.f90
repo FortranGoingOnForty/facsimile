@@ -3814,7 +3814,7 @@ contains
         logical :: cancelled, success
 
         ! Show prompt for commit message
-        call show_text_prompt('Commit message: ', commit_message, cancelled, editor%screen_rows)
+        call show_text_prompt('Commit message (ESC to cancel): ', commit_message, cancelled, editor%screen_rows)
 
         if (.not. cancelled .and. len_trim(commit_message) > 0) then
             call git_commit(editor%workspace_path, commit_message, success)
@@ -3947,7 +3947,7 @@ contains
 
         if (.not. cancelled .and. len_trim(tag_name) > 0) then
             ! Show prompt for tag message (optional)
-            call show_text_prompt('Tag message (optional): ', tag_message, cancelled, editor%screen_rows)
+            call show_text_prompt('Tag message (optional, ESC to skip): ', tag_message, cancelled, editor%screen_rows)
 
             if (.not. cancelled) then
                 call git_tag(editor%workspace_path, tag_name, tag_message, success)
