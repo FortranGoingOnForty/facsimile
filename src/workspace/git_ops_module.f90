@@ -4,7 +4,7 @@ module git_ops_module
     private
 
     public :: git_commit, git_push, git_fetch, git_pull, git_tag
-    public :: git_check_upstream, git_diff_file
+    public :: git_check_upstream, git_diff_file, git_list_tags
 
 contains
 
@@ -226,5 +226,70 @@ contains
         call execute_command_line('rm -f "' // trim(temp_file) // '"')
         success = .true.
     end subroutine git_diff_file
+
+    subroutine git_list_tags(workspace_path, tags, n_tags)
+        character(len=*), intent(in) :: workspace_path
+        character(len=256), allocatable, intent(out) :: tags(:)
+        integer, intent(out) :: n_tags
+        character(len=1024) :: command, temp_file
+        character(len=256) :: line
+        integer :: status, unit_num, ios, i, max_tags
+        character(len=256), allocatable :: temp_tags(:)
+
+        n_tags = 0
+        max_tags = 100  ! Initial allocation
+
+        ! Get tags sorted by creation date (newest first)
+        temp_file = '/tmp/fac_tags.tmp'
+        write(command, '(A,A,A,A,A)') 'cd "', trim(workspace_path), &
+            '" && git tag --sort=-creatordate > "', trim(temp_file), '" 2>&1'
+        call execute_command_line(trim(command), exitstat=status)
+
+        if (status /= 0) then
+            ! No tags or error
+            allocate(tags(0))
+            call execute_command_line('rm -f "' // trim(temp_file) // '"')
+            return
+        end if
+
+        ! Count tags
+        open(newunit=unit_num, file=trim(temp_file), status='old', action='read', iostat=ios)
+        if (ios /= 0) then
+            allocate(tags(0))
+            call execute_command_line('rm -f "' // trim(temp_file) // '"')
+            return
+        end if
+
+        ! Read tags into temporary array
+        allocate(temp_tags(max_tags))
+        do
+            read(unit_num, '(A)', iostat=ios) line
+            if (ios /= 0) exit
+            if (len_trim(line) > 0) then
+                n_tags = n_tags + 1
+                if (n_tags > max_tags) then
+                    ! Reallocate if needed
+                    max_tags = max_tags * 2
+                    deallocate(temp_tags)
+                    allocate(temp_tags(max_tags))
+                end if
+                temp_tags(n_tags) = trim(line)
+            end if
+        end do
+        close(unit_num)
+
+        ! Copy to output array
+        if (n_tags > 0) then
+            allocate(tags(n_tags))
+            do i = 1, n_tags
+                tags(i) = temp_tags(i)
+            end do
+        else
+            allocate(tags(0))
+        end if
+
+        deallocate(temp_tags)
+        call execute_command_line('rm -f "' // trim(temp_file) // '"')
+    end subroutine git_list_tags
 
 end module git_ops_module

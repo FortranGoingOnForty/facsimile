@@ -3929,12 +3929,21 @@ contains
 
     ! Handle git tag
     subroutine handle_git_tag(editor)
+        use help_display_module, only: display_tags_header
         type(editor_state_t), intent(inout) :: editor
         character(len=256) :: tag_name, tag_message
+        character(len=256), allocatable :: existing_tags(:)
+        integer :: n_tags
         logical :: cancelled, success
 
-        ! Show prompt for tag name
-        call show_text_prompt('Tag name: ', tag_name, cancelled, editor%screen_rows)
+        ! Fetch and display existing tags (keeps them visible during prompts)
+        call git_list_tags(editor%workspace_path, existing_tags, n_tags)
+        call display_tags_header(editor, existing_tags, n_tags)
+
+        ! Show prompt for tag name (tags remain visible above)
+        call show_text_prompt('Tag name (ESC to cancel): ', tag_name, cancelled, editor%screen_rows)
+
+        if (allocated(existing_tags)) deallocate(existing_tags)
 
         if (.not. cancelled .and. len_trim(tag_name) > 0) then
             ! Show prompt for tag message (optional)

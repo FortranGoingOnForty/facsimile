@@ -7,7 +7,7 @@ module help_display_module
     implicit none
     private
 
-    public :: show_help
+    public :: show_help, show_tags_modal, display_tags_header
 
 contains
 
@@ -174,5 +174,118 @@ contains
 
         row = row + 1  ! Extra space between sections
     end subroutine display_section
+
+    subroutine show_tags_modal(editor, tags, n_tags)
+        type(editor_state_t), intent(in) :: editor
+        character(len=256), intent(in) :: tags(:)
+        integer, intent(in) :: n_tags
+        integer :: row, i, max_display
+        character(len=32) :: key_input
+        integer :: status
+
+        ! Clear screen and hide cursor
+        call terminal_clear_screen()
+        call terminal_hide_cursor()
+
+        ! Title
+        row = 1
+        call terminal_move_cursor(row, 1)
+        call terminal_write("EXISTING GIT TAGS - Press any key to continue")
+        row = row + 1
+        call terminal_move_cursor(row, 1)
+        call terminal_write(repeat("=", 60))
+        row = row + 2
+
+        ! Display tags
+        if (n_tags == 0) then
+            call terminal_move_cursor(row, 1)
+            call terminal_write("  (no tags found)")
+            row = row + 2
+        else
+            ! Show up to screen_rows - 6 tags (leave room for header/footer)
+            max_display = min(n_tags, editor%screen_rows - 6)
+            do i = 1, max_display
+                call terminal_move_cursor(row, 3)
+                call terminal_write(trim(tags(i)))
+                row = row + 1
+            end do
+
+            if (n_tags > max_display) then
+                row = row + 1
+                call terminal_move_cursor(row, 3)
+                call terminal_write("... and " // trim(int_to_str(n_tags - max_display)) // " more")
+                row = row + 1
+            end if
+            row = row + 1
+        end if
+
+        ! Footer
+        if (row < editor%screen_rows - 1) then
+            row = editor%screen_rows - 1
+            call terminal_move_cursor(row, 1)
+            call terminal_write(repeat("=", 60))
+        end if
+
+        ! Show cursor at bottom
+        call terminal_move_cursor(editor%screen_rows, 1)
+        call terminal_show_cursor()
+
+        ! Wait for any key press
+        do
+            call get_key_input(key_input, status)
+            if (status == 0) exit  ! Got a valid key, exit loop
+        end do
+    end subroutine show_tags_modal
+
+    ! Helper function to convert integer to string
+    function int_to_str(val) result(str)
+        integer, intent(in) :: val
+        character(len=20) :: str
+        write(str, '(I0)') val
+    end function int_to_str
+
+    ! Display tags header without waiting for input (for split view with prompt)
+    subroutine display_tags_header(editor, tags, n_tags)
+        type(editor_state_t), intent(in) :: editor
+        character(len=256), intent(in) :: tags(:)
+        integer, intent(in) :: n_tags
+        integer :: row, i, max_display
+
+        ! Clear screen
+        call terminal_clear_screen()
+        call terminal_hide_cursor()
+
+        ! Title
+        row = 1
+        call terminal_move_cursor(row, 1)
+        call terminal_write("EXISTING GIT TAGS")
+        row = row + 1
+        call terminal_move_cursor(row, 1)
+        call terminal_write(repeat("=", 50))
+        row = row + 1
+
+        ! Display tags (reserve bottom 2 lines for prompt)
+        if (n_tags == 0) then
+            call terminal_move_cursor(row, 1)
+            call terminal_write("  (no tags found)")
+        else
+            ! Show up to screen_rows - 4 tags (leave room for header + prompt area)
+            max_display = min(n_tags, editor%screen_rows - 4)
+            do i = 1, max_display
+                call terminal_move_cursor(row, 3)
+                call terminal_write(trim(tags(i)))
+                row = row + 1
+            end do
+
+            if (n_tags > max_display) then
+                call terminal_move_cursor(row, 3)
+                call terminal_write("... and " // trim(int_to_str(n_tags - max_display)) // " more")
+            end if
+        end if
+
+        ! Separator line before prompt area
+        call terminal_move_cursor(editor%screen_rows - 1, 1)
+        call terminal_write(repeat("-", 50))
+    end subroutine display_tags_header
 
 end module help_display_module

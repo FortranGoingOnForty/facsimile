@@ -23,7 +23,8 @@ contains
 
         ! Display prompt at bottom of screen
         call terminal_move_cursor(screen_rows, 1)
-        call terminal_write(repeat(' ', 200))  ! Clear line
+        ! Use ANSI escape sequence to clear line (more reliable than spaces)
+        call terminal_write(achar(27) // '[2K')  ! Clear entire line
         call terminal_move_cursor(screen_rows, 1)
         call terminal_write(trim(prompt_text))
         call terminal_show_cursor()
@@ -49,7 +50,7 @@ contains
                     input_pos = input_pos - 1
                     ! Redraw line
                     call terminal_move_cursor(screen_rows, 1)
-                    call terminal_write(repeat(' ', 200))
+                    call terminal_write(achar(27) // '[2K')  ! Clear entire line
                     call terminal_move_cursor(screen_rows, 1)
                     call terminal_write(trim(prompt_text) // input_buffer(1:input_pos))
                 end if
