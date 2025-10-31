@@ -63,9 +63,8 @@ contains
              "ctrl-k              kill line forward           ", &
              "ctrl-u              kill line backward          ", &
              "ctrl-y              yank from stack             ", &
-             "ctrl-w/alt-bksp     delete word backward        ", &
+             "alt-bksp            delete word backward        ", &
              "alt-d               delete word forward         ", &
-             "ctrl-t              transpose characters        ", &
              "ctrl-j              join lines                  ", &
              "auto-close          brackets/quotes             "])
 
@@ -102,6 +101,15 @@ contains
              "ctrl-z              undo                        ", &
              "ctrl-shift-z        redo                        ", &
              "ctrl-l              clear/redraw screen         "])
+
+        ! Tabs
+        call display_section(row, max_rows, "TABS", &
+            ["ctrl-t              new empty tab               ", &
+             "ctrl-w              close current tab           ", &
+             "alt-1 to alt-9      jump to tab 1-9             ", &
+             "ctrl-alt-left       previous tab                ", &
+             "ctrl-alt-right      next tab                    ", &
+             "ctrl-b              toggle file tree (fuss)     "])
 
         ! File
         call display_section(row, max_rows, "FILE", &

@@ -1,7 +1,7 @@
 module command_handler_module
     use iso_fortran_env, only: int32, error_unit
     use iso_c_binding, only: c_int
-    use editor_state_module, only: editor_state_t, cursor_t
+    use editor_state_module, only: editor_state_t, cursor_t, switch_to_tab_with_buffer, close_tab, create_tab
     use text_buffer_module
     use renderer_module, only: update_viewport, render_screen, tree_state
     use yank_stack_module
@@ -241,11 +241,25 @@ contains
             call update_viewport(editor)
 
         case('home', 'ctrl-a')
-            call move_cursor_smart_home(editor%cursors(editor%active_cursor), buffer)
+            if (size(editor%cursors) > 1) then
+                ! Move all cursors
+                do i = 1, size(editor%cursors)
+                    call move_cursor_smart_home(editor%cursors(i), buffer)
+                end do
+            else
+                call move_cursor_smart_home(editor%cursors(editor%active_cursor), buffer)
+            end if
             call update_viewport(editor)
 
         case('end', 'ctrl-e')
-            call move_cursor_end(editor%cursors(editor%active_cursor), buffer)
+            if (size(editor%cursors) > 1) then
+                ! Move all cursors
+                do i = 1, size(editor%cursors)
+                    call move_cursor_end(editor%cursors(i), buffer)
+                end do
+            else
+                call move_cursor_end(editor%cursors(editor%active_cursor), buffer)
+            end if
             call update_viewport(editor)
 
         case('shift-home', 'ctrl-shift-a')
@@ -257,11 +271,25 @@ contains
             call update_viewport(editor)
 
         case('pageup')
-            call move_cursor_page_up(editor%cursors(editor%active_cursor), editor, line_count)
+            if (size(editor%cursors) > 1) then
+                ! Move all cursors
+                do i = 1, size(editor%cursors)
+                    call move_cursor_page_up(editor%cursors(i), editor, line_count)
+                end do
+            else
+                call move_cursor_page_up(editor%cursors(editor%active_cursor), editor, line_count)
+            end if
             call update_viewport(editor)
 
         case('pagedown')
-            call move_cursor_page_down(editor%cursors(editor%active_cursor), editor, line_count)
+            if (size(editor%cursors) > 1) then
+                ! Move all cursors
+                do i = 1, size(editor%cursors)
+                    call move_cursor_page_down(editor%cursors(i), editor, line_count)
+                end do
+            else
+                call move_cursor_page_down(editor%cursors(editor%active_cursor), editor, line_count)
+            end if
             call update_viewport(editor)
 
         case('mouse-scroll-up')
@@ -297,11 +325,25 @@ contains
             call update_viewport(editor)
 
         case('alt-left')
-            call move_cursor_word_left(editor%cursors(editor%active_cursor), buffer)
+            if (size(editor%cursors) > 1) then
+                ! Move all cursors
+                do i = 1, size(editor%cursors)
+                    call move_cursor_word_left(editor%cursors(i), buffer)
+                end do
+            else
+                call move_cursor_word_left(editor%cursors(editor%active_cursor), buffer)
+            end if
             call update_viewport(editor)
 
         case('alt-right')
-            call move_cursor_word_right(editor%cursors(editor%active_cursor), buffer)
+            if (size(editor%cursors) > 1) then
+                ! Move all cursors
+                do i = 1, size(editor%cursors)
+                    call move_cursor_word_right(editor%cursors(i), buffer)
+                end do
+            else
+                call move_cursor_word_right(editor%cursors(editor%active_cursor), buffer)
+            end if
             call update_viewport(editor)
 
         case('alt-shift-left')
@@ -335,6 +377,46 @@ contains
             call duplicate_line_down(editor%cursors(editor%active_cursor), buffer)
             call update_viewport(editor)
             is_edit_action = .true.
+
+        ! Tab navigation
+        case('alt-1')
+            if (size(editor%tabs) >= 1) call switch_to_tab_with_buffer(editor, 1, buffer)
+        case('alt-2')
+            if (size(editor%tabs) >= 2) call switch_to_tab_with_buffer(editor, 2, buffer)
+        case('alt-3')
+            if (size(editor%tabs) >= 3) call switch_to_tab_with_buffer(editor, 3, buffer)
+        case('alt-4')
+            if (size(editor%tabs) >= 4) call switch_to_tab_with_buffer(editor, 4, buffer)
+        case('alt-5')
+            if (size(editor%tabs) >= 5) call switch_to_tab_with_buffer(editor, 5, buffer)
+        case('alt-6')
+            if (size(editor%tabs) >= 6) call switch_to_tab_with_buffer(editor, 6, buffer)
+        case('alt-7')
+            if (size(editor%tabs) >= 7) call switch_to_tab_with_buffer(editor, 7, buffer)
+        case('alt-8')
+            if (size(editor%tabs) >= 8) call switch_to_tab_with_buffer(editor, 8, buffer)
+        case('alt-9')
+            if (size(editor%tabs) >= 9) call switch_to_tab_with_buffer(editor, 9, buffer)
+
+        case('ctrl-alt-left')
+            ! Previous tab
+            if (size(editor%tabs) > 0) then
+                if (editor%active_tab_index > 1) then
+                    call switch_to_tab_with_buffer(editor, editor%active_tab_index - 1, buffer)
+                else
+                    call switch_to_tab_with_buffer(editor, size(editor%tabs), buffer)  ! Wrap to last tab
+                end if
+            end if
+
+        case('ctrl-alt-right')
+            ! Next tab
+            if (size(editor%tabs) > 0) then
+                if (editor%active_tab_index < size(editor%tabs)) then
+                    call switch_to_tab_with_buffer(editor, editor%active_tab_index + 1, buffer)
+                else
+                    call switch_to_tab_with_buffer(editor, 1, buffer)  ! Wrap to first tab
+                end if
+            end if
 
         ! Text modification
         case('backspace')
@@ -449,16 +531,18 @@ contains
             is_edit_action = .true.
 
         case('ctrl-w')
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-            if (size(editor%cursors) > 1) then
-                ! Apply to all cursors
-                do i = 1, size(editor%cursors)
-                    call delete_word_backward(editor%cursors(i), buffer)
-                end do
-            else
-                call delete_word_backward(editor%cursors(editor%active_cursor), buffer)
+            ! Close current tab
+            if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
+                call close_tab(editor, editor%active_tab_index)
+
+                ! If no tabs left, open fuss mode
+                if (size(editor%tabs) == 0) then
+                    editor%fuss_mode_active = .true.
+                    if (allocated(editor%workspace_path)) then
+                        call init_tree_state(tree_state, editor%workspace_path)
+                    end if
+                end if
             end if
-            is_edit_action = .true.
 
         case('alt-d', 'alt-delete')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
@@ -485,16 +569,22 @@ contains
             is_edit_action = .true.
 
         case('ctrl-t')
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-            if (size(editor%cursors) > 1) then
-                ! Apply to all cursors
-                do i = 1, size(editor%cursors)
-                    call transpose_characters(editor%cursors(i), buffer)
-                end do
-            else
-                call transpose_characters(editor%cursors(editor%active_cursor), buffer)
+            ! Create new empty tab
+            call create_tab(editor, '[Untitled]')
+            ! Switch to the new tab (it's already active after create_tab)
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                ! Update editor state with the new tab
+                if (allocated(editor%filename)) deallocate(editor%filename)
+                allocate(character(len=10) :: editor%filename)
+                editor%filename = '[Untitled]'
+
+                ! Reset cursor to top
+                editor%cursors(editor%active_cursor)%line = 1
+                editor%cursors(editor%active_cursor)%column = 1
+                editor%cursors(editor%active_cursor)%desired_column = 1
+                editor%viewport_line = 1
+                editor%viewport_column = 1
             end if
-            is_edit_action = .true.
 
         case('ctrl-j')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
@@ -1993,6 +2083,13 @@ contains
 
         if (.not. allocated(editor%filename)) return
 
+        ! Check if this is an untitled file
+        if (trim(editor%filename) == '[Untitled]') then
+            call terminal_move_cursor(editor%screen_rows, 1)
+            call terminal_write('Cannot save: Please use Save As or provide a filename (file is untitled)')
+            return
+        end if
+
         ! First try normal save
         call buffer_save_file(buffer, editor%filename, ios)
 
@@ -2342,11 +2439,23 @@ contains
         type(editor_state_t), intent(in) :: editor
         type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: screen_row, screen_col
-        integer :: target_line, target_col, col_offset
+        integer :: target_line, target_col, col_offset, row_offset
         character(len=:), allocatable :: line
         integer :: line_count
 
         line_count = buffer_get_line_count(buffer)
+
+        ! Account for tab bar offset - when tabs exist, row 1 is tab bar, content starts at row 2
+        if (size(editor%tabs) > 0) then
+            row_offset = 2  ! Tab bar takes row 1
+        else
+            row_offset = 1  ! No tab bar
+        end if
+
+        ! Ignore clicks on the tab bar
+        if (size(editor%tabs) > 0 .and. screen_row < row_offset) then
+            return  ! Don't move cursor if clicking on tab bar
+        end if
 
         ! Account for line number display offset
         if (show_line_numbers) then
@@ -2356,16 +2465,18 @@ contains
         end if
 
         ! Convert screen position to buffer position
-        target_line = editor%viewport_line + screen_row - 1
+        ! When tab bar exists: screen_row 2 = viewport_line, screen_row 3 = viewport_line + 1, etc.
+        target_line = editor%viewport_line + screen_row - row_offset
         target_col = editor%viewport_column + max(1, screen_col - col_offset)
 
         ! Clamp to valid range
         if (target_line < 1) target_line = 1
         if (target_line > line_count) target_line = line_count
 
-        ! Get line and adjust column
+        ! Get line and adjust column to valid positions only
         line = buffer_get_line(buffer, target_line)
         if (target_col < 1) target_col = 1
+        ! Clamp column to actual line length + 1 (position after last char)
         if (target_col > len(line) + 1) target_col = len(line) + 1
 
         ! Set cursor position
@@ -2381,9 +2492,16 @@ contains
         type(editor_state_t), intent(in) :: editor
         integer, intent(in) :: screen_row, screen_col
         logical :: at_pos
-        integer :: cursor_screen_row, cursor_screen_col
+        integer :: cursor_screen_row, cursor_screen_col, row_offset
 
-        cursor_screen_row = cursor%line - editor%viewport_line + 1
+        ! Account for tab bar - when tabs exist, content starts at row 2
+        if (size(editor%tabs) > 0) then
+            row_offset = 2
+        else
+            row_offset = 1
+        end if
+
+        cursor_screen_row = cursor%line - editor%viewport_line + row_offset
         cursor_screen_col = cursor%column - editor%viewport_column + 1
         at_pos = (cursor_screen_row == screen_row .and. cursor_screen_col == screen_col)
     end function is_cursor_at_screen_pos
@@ -3576,6 +3694,8 @@ contains
 
     ! Open a file in the editor
     subroutine open_file_in_editor(file_path, editor, buffer)
+        use editor_state_module, only: create_tab
+        use text_buffer_module, only: copy_buffer
         character(len=*), intent(in) :: file_path
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
@@ -3589,20 +3709,35 @@ contains
             full_path = trim(file_path)
         end if
 
-        ! Load file into buffer
-        call buffer_load_file(buffer, full_path, status)
-        if (status == 0) then
-            ! Update editor filename
-            if (allocated(editor%filename)) deallocate(editor%filename)
-            allocate(character(len=len_trim(full_path)) :: editor%filename)
-            editor%filename = full_path
+        ! Create a new tab for this file
+        call create_tab(editor, full_path)
 
-            ! Reset cursor to top of file
-            editor%cursors(editor%active_cursor)%line = 1
-            editor%cursors(editor%active_cursor)%column = 1
-            editor%cursors(editor%active_cursor)%desired_column = 1
-            editor%viewport_line = 1
-            editor%viewport_column = 1
+        ! Load file into the new tab's buffer
+        if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+            call buffer_load_file(editor%tabs(editor%active_tab_index)%buffer, full_path, status)
+            if (status == 0) then
+                ! Copy tab's buffer to main buffer so it's displayed
+                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+
+                ! Update editor state with the new tab's info
+                if (allocated(editor%filename)) deallocate(editor%filename)
+                allocate(character(len=len_trim(full_path)) :: editor%filename)
+                editor%filename = full_path
+
+                ! Reset cursor to top of file
+                editor%cursors(editor%active_cursor)%line = 1
+                editor%cursors(editor%active_cursor)%column = 1
+                editor%cursors(editor%active_cursor)%desired_column = 1
+                editor%viewport_line = 1
+                editor%viewport_column = 1
+
+                ! Also update tab state
+                editor%tabs(editor%active_tab_index)%cursors(1)%line = 1
+                editor%tabs(editor%active_tab_index)%cursors(1)%column = 1
+                editor%tabs(editor%active_tab_index)%cursors(1)%desired_column = 1
+                editor%tabs(editor%active_tab_index)%viewport_line = 1
+                editor%tabs(editor%active_tab_index)%viewport_column = 1
+            end if
         end if
         ! Note: fuss mode stays active - user must press ctrl-b to exit
     end subroutine open_file_in_editor

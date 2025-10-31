@@ -48,7 +48,18 @@ program facsimile
 
     ! Initialize buffer and load file if specified
     if (len_trim(filename) > 0) then
-        call buffer_load_file(buffer, trim(filename), status)
+        ! Create a tab for the initial file
+        call create_tab(editor, trim(filename))
+
+        ! Load file into tab's buffer
+        if (editor%active_tab_index > 0) then
+            call buffer_load_file(editor%tabs(editor%active_tab_index)%buffer, trim(filename), status)
+            ! Copy tab's buffer to main buffer
+            call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+        else
+            call buffer_load_file(buffer, trim(filename), status)
+        end if
+
         if (status == 0) then
             allocate(character(len=len_trim(filename)) :: editor%filename)
             editor%filename = trim(filename)

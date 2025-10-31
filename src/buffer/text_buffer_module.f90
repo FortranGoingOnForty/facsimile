@@ -3,7 +3,7 @@ module text_buffer_module
     implicit none
     private
 
-    public :: buffer_t, init_buffer, cleanup_buffer
+    public :: buffer_t, init_buffer, cleanup_buffer, copy_buffer
     public :: buffer_insert, buffer_delete, buffer_get_char
     public :: buffer_get_line, buffer_get_line_count
     public :: buffer_load_file, buffer_save_file
@@ -320,5 +320,24 @@ contains
             status = 0
         end if
     end subroutine buffer_save_file
+
+    ! Copy buffer contents from source to destination
+    subroutine copy_buffer(dest, src)
+        type(buffer_t), intent(inout) :: dest
+        type(buffer_t), intent(in) :: src
+
+        ! Cleanup destination first
+        if (allocated(dest%data)) deallocate(dest%data)
+
+        ! Allocate same size as source
+        allocate(character(len=src%size) :: dest%data)
+
+        ! Copy all fields
+        dest%data = src%data
+        dest%gap_start = src%gap_start
+        dest%gap_end = src%gap_end
+        dest%size = src%size
+        dest%modified = src%modified
+    end subroutine copy_buffer
 
 end module text_buffer_module

@@ -67,11 +67,15 @@ contains
         character(len=1) :: ch, cursor_char
         integer :: col, buffer_pos, line_start_pos
         integer :: content_width
+        integer :: start_row, row_offset_val
         character(len=16) :: line_num_str
         logical :: found_match
         type(cursor_t) :: cursor
 
         call terminal_hide_cursor()
+
+        ! Render tab bar if there are any tabs
+        call render_tab_bar(editor)
 
         ! Check if cursor is on a bracket and find its match
         cursor = editor%cursors(editor%active_cursor)
@@ -111,9 +115,18 @@ contains
             content_width = editor%screen_cols
         end if
 
+        ! Determine starting row based on whether tabs exist
+        if (size(editor%tabs) > 0) then
+            start_row = 2  ! Tab bar at row 1
+            row_offset_val = 2
+        else
+            start_row = 1  ! No tab bar
+            row_offset_val = 1
+        end if
+
         ! Clear and render each visible line
-        do screen_row = 1, editor%screen_rows - 1  ! Leave last row for status bar
-            buffer_line = editor%viewport_line + screen_row - 1
+        do screen_row = start_row, editor%screen_rows - 1  ! Last row for status bar
+            buffer_line = editor%viewport_line + screen_row - row_offset_val
 
             call terminal_move_cursor(screen_row, 1)
 
@@ -400,13 +413,22 @@ contains
         type(cursor_t) :: cursor
         integer :: screen_row, screen_col
         integer :: i
-        integer :: col_offset
+        integer :: col_offset, row_offset, min_row
 
         ! Calculate column offset for line numbers
         if (show_line_numbers) then
             col_offset = LINE_NUMBER_WIDTH + 1  ! +1 for separator space
         else
             col_offset = 0
+        end if
+
+        ! Account for tab bar offset - when tabs exist, row 1 is tab bar, content starts at row 2
+        if (size(editor%tabs) > 0) then
+            row_offset = 2  ! Tab bar takes row 1
+            min_row = 2     ! Cursor cannot be in row 1 (tab bar)
+        else
+            row_offset = 1  ! No tab bar
+            min_row = 1     ! Cursor can be in row 1
         end if
 
         ! For multiple cursors, show them all with block cursor for inactive ones
@@ -417,11 +439,11 @@ contains
                     cursor = editor%cursors(i)
 
                     ! Calculate screen position from buffer position
-                    screen_row = cursor%line - editor%viewport_line + 1
+                    screen_row = cursor%line - editor%viewport_line + row_offset
                     screen_col = cursor%column - editor%viewport_column + 1 + col_offset
 
-                    ! Ensure cursor is within screen bounds
-                    if (screen_row >= 1 .and. screen_row < editor%screen_rows .and. &
+                    ! Ensure cursor is within screen bounds and not in tab bar
+                    if (screen_row >= min_row .and. screen_row < editor%screen_rows .and. &
                         screen_col >= 1 .and. screen_col <= editor%screen_cols) then
                         ! Inactive cursor - draw with reverse video block
                         call terminal_move_cursor(screen_row, screen_col)
@@ -433,10 +455,10 @@ contains
 
             ! Then position terminal cursor at active cursor location
             cursor = editor%cursors(editor%active_cursor)
-            screen_row = cursor%line - editor%viewport_line + 1
+            screen_row = cursor%line - editor%viewport_line + row_offset
             screen_col = cursor%column - editor%viewport_column + 1 + col_offset
 
-            if (screen_row >= 1 .and. screen_row < editor%screen_rows .and. &
+            if (screen_row >= min_row .and. screen_row < editor%screen_rows .and. &
                 screen_col >= 1 .and. screen_col <= editor%screen_cols) then
                 call terminal_move_cursor(screen_row, screen_col)
                 call terminal_show_cursor()
@@ -446,11 +468,11 @@ contains
             cursor = editor%cursors(editor%active_cursor)
 
             ! Calculate screen position from buffer position
-            screen_row = cursor%line - editor%viewport_line + 1
+            screen_row = cursor%line - editor%viewport_line + row_offset
             screen_col = cursor%column - editor%viewport_column + 1 + col_offset
 
-            ! Ensure cursor is within screen bounds
-            if (screen_row >= 1 .and. screen_row < editor%screen_rows .and. &
+            ! Ensure cursor is within screen bounds and not in tab bar
+            if (screen_row >= min_row .and. screen_row < editor%screen_rows .and. &
                 screen_col >= 1 .and. screen_col <= editor%screen_cols) then
                 call terminal_move_cursor(screen_row, screen_col)
                 call terminal_show_cursor()
@@ -491,6 +513,9 @@ contains
 
         call terminal_hide_cursor()
 
+        ! Render tab bar if there are any tabs
+        call render_tab_bar(editor)
+
         ! Clear screen first to avoid artifacts
         do row = 1, editor%screen_rows
             call terminal_move_cursor(row, 1)
@@ -503,11 +528,11 @@ contains
         editor_start_col = tree_width + 2
         editor_width = editor%screen_cols - editor_start_col + 1
 
-        ! Render file tree in left pane (start at column 2 to avoid edge cutoff)
-        call render_file_tree(tree_state, 1, editor%screen_rows - 1, 2, tree_width - 2)
+        ! Render file tree in left pane (start at row 2 for tab bar)
+        call render_file_tree(tree_state, 2, editor%screen_rows - 1, 2, tree_width - 2)
 
-        ! Render vertical separator
-        call render_vertical_separator(separator_col, editor%screen_rows - 1)
+        ! Render vertical separator (start at row 2 for tab bar)
+        call render_vertical_separator(separator_col, 2, editor%screen_rows - 1)
 
         ! Render editor in right pane
         call render_editor_pane(buffer, editor, editor_start_col, editor_width)
@@ -521,11 +546,11 @@ contains
         call terminal_show_cursor()
     end subroutine render_screen_with_tree
 
-    subroutine render_vertical_separator(col, height)
-        integer, intent(in) :: col, height
+    subroutine render_vertical_separator(col, start_row, end_row)
+        integer, intent(in) :: col, start_row, end_row
         integer :: row
 
-        do row = 1, height
+        do row = start_row, end_row
             call terminal_move_cursor(row, col)
             call terminal_write(char(27) // '[90m│' // char(27) // '[0m')  ! Gray vertical line
         end do
@@ -537,6 +562,7 @@ contains
         integer, intent(in) :: start_col, width
         integer :: screen_row, buffer_line, line_count
         integer :: adjusted_width, line_num_width
+        integer :: start_row
         character(len=16) :: line_num_str
         character(len=:), allocatable :: padding
 
@@ -551,9 +577,16 @@ contains
             adjusted_width = width
         end if
 
+        ! Determine starting row (account for tab bar)
+        if (size(editor%tabs) > 0) then
+            start_row = 2  ! Tab bar at row 1
+        else
+            start_row = 1  ! No tab bar
+        end if
+
         ! Render each visible line in the editor pane
-        do screen_row = 1, editor%screen_rows - 1
-            buffer_line = editor%viewport_line + screen_row - 1
+        do screen_row = start_row, editor%screen_rows - 1
+            buffer_line = editor%viewport_line + screen_row - start_row
 
             ! Position cursor at start of this line in the pane
             call terminal_move_cursor(screen_row, start_col)
@@ -590,7 +623,7 @@ contains
         type(editor_state_t), intent(in) :: editor
         integer, intent(in) :: pane_start_col, pane_width
         type(cursor_t) :: cursor
-        integer :: screen_row, screen_col, col_offset
+        integer :: screen_row, screen_col, col_offset, row_offset, min_row
 
         ! Calculate column offset for line numbers
         if (show_line_numbers) then
@@ -599,18 +632,91 @@ contains
             col_offset = 0
         end if
 
+        ! Account for tab bar offset - when tabs exist, row 1 is tab bar, content starts at row 2
+        if (size(editor%tabs) > 0) then
+            row_offset = 2  ! Tab bar takes row 1
+            min_row = 2     ! Cursor cannot be in row 1 (tab bar)
+        else
+            row_offset = 1  ! No tab bar
+            min_row = 1     ! Cursor can be in row 1
+        end if
+
         cursor = editor%cursors(editor%active_cursor)
 
         ! Calculate screen position within the editor pane
-        screen_row = cursor%line - editor%viewport_line + 1
+        screen_row = cursor%line - editor%viewport_line + row_offset
         screen_col = pane_start_col + col_offset + cursor%column - editor%viewport_column
 
-        ! Ensure cursor is within pane bounds
-        if (screen_row >= 1 .and. screen_row < editor%screen_rows .and. &
+        ! Ensure cursor is within pane bounds and not in tab bar
+        if (screen_row >= min_row .and. screen_row < editor%screen_rows .and. &
             screen_col >= pane_start_col .and. screen_col <= pane_start_col + pane_width) then
             call terminal_move_cursor(screen_row, screen_col)
             call terminal_show_cursor()
         end if
     end subroutine render_cursor_in_pane
+
+    ! Render tab bar at top of screen
+    subroutine render_tab_bar(editor)
+        type(editor_state_t), intent(in) :: editor
+        integer :: i, col, tab_count
+        character(len=:), allocatable :: tab_label, filename_only
+        character(len=256) :: temp_label
+        integer :: slash_pos, last_slash
+        character(len=1) :: modified_marker
+
+        tab_count = size(editor%tabs)
+        if (tab_count == 0) return  ! No tabs to display
+
+        ! Move to top row and clear it
+        call terminal_move_cursor(1, 1)
+        call terminal_write(repeat(' ', editor%screen_cols))
+
+        ! Render each tab
+        col = 1
+        do i = 1, tab_count
+            ! Extract filename from full path
+            filename_only = editor%tabs(i)%filename
+            last_slash = 0
+            do slash_pos = len(editor%tabs(i)%filename), 1, -1
+                if (editor%tabs(i)%filename(slash_pos:slash_pos) == '/') then
+                    last_slash = slash_pos
+                    exit
+                end if
+            end do
+            if (last_slash > 0 .and. last_slash < len(editor%tabs(i)%filename)) then
+                filename_only = editor%tabs(i)%filename(last_slash+1:)
+            end if
+
+            ! Add modified marker
+            if (editor%tabs(i)%modified) then
+                modified_marker = '*'
+            else
+                modified_marker = ' '
+            end if
+
+            ! Build tab label: [1: file.txt*]
+            write(temp_label, '(A,I0,A,A,A,A)') '[', i, ': ', trim(filename_only), modified_marker, ']'
+            tab_label = trim(temp_label)
+
+            ! Check if we have room for this tab
+            if (col + len(tab_label) > editor%screen_cols) exit
+
+            ! Position cursor
+            call terminal_move_cursor(1, col)
+
+            ! Highlight active tab
+            if (i == editor%active_tab_index) then
+                call terminal_write(char(27) // '[7m')  ! Reverse video
+            end if
+
+            call terminal_write(tab_label)
+
+            if (i == editor%active_tab_index) then
+                call terminal_write(char(27) // '[0m')  ! Reset
+            end if
+
+            col = col + len(tab_label) + 1  ! +1 for space between tabs
+        end do
+    end subroutine render_tab_bar
 
 end module renderer_module
