@@ -519,13 +519,22 @@ contains
         ! Replace panes array
         call move_alloc(temp_panes, editor%tabs(tab_idx)%panes)
 
-        ! Adjust active pane index
-        if (editor%tabs(tab_idx)%active_pane_index > n_panes - 1) then
-            editor%tabs(tab_idx)%active_pane_index = n_panes - 1
-        else if (editor%tabs(tab_idx)%active_pane_index >= pane_idx .and. &
-                 editor%tabs(tab_idx)%active_pane_index > 1) then
-            editor%tabs(tab_idx)%active_pane_index = editor%tabs(tab_idx)%active_pane_index - 1
+        ! Determine new active pane index
+        if (pane_idx > size(editor%tabs(tab_idx)%panes)) then
+            ! Was the last pane, activate the new last pane
+            editor%tabs(tab_idx)%active_pane_index = size(editor%tabs(tab_idx)%panes)
+        else if (pane_idx > 1) then
+            ! Activate the previous pane
+            editor%tabs(tab_idx)%active_pane_index = pane_idx - 1
+        else
+            ! Was the first pane, activate what is now the first pane
+            editor%tabs(tab_idx)%active_pane_index = 1
         end if
+
+        ! Clear all is_active flags first
+        do i = 1, size(editor%tabs(tab_idx)%panes)
+            editor%tabs(tab_idx)%panes(i)%is_active = .false.
+        end do
 
         ! Set new active pane
         editor%tabs(tab_idx)%panes(editor%tabs(tab_idx)%active_pane_index)%is_active = .true.

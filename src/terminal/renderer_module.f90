@@ -176,8 +176,13 @@ contains
         ! Render status bar
         call render_status_bar(editor, buffer)
 
-        ! Position cursor
-        call render_cursor(editor)
+        ! Position cursor for panes or regular view
+        if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0 .and. &
+            allocated(editor%tabs(editor%active_tab_index)%panes)) then
+            call render_cursor_for_panes(editor)
+        else
+            call render_cursor(editor)
+        end if
 
         call terminal_show_cursor()
     end subroutine render_screen
@@ -488,10 +493,58 @@ contains
     end subroutine render_cursor
 
     subroutine update_viewport(editor)
+        use editor_state_module, only: pane_t
         type(editor_state_t), intent(inout) :: editor
         type(cursor_t) :: cursor
         integer :: margin = 3  ! Lines to keep visible above/below cursor
+        integer :: tab_idx, pane_idx
+        integer :: pane_height, pane_width
+        integer :: screen_width, screen_height
 
+        ! If we have panes, update the active pane's viewport
+        if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
+            tab_idx = editor%active_tab_index
+            if (allocated(editor%tabs(tab_idx)%panes)) then
+                pane_idx = editor%tabs(tab_idx)%active_pane_index
+                if (pane_idx > 0 .and. pane_idx <= size(editor%tabs(tab_idx)%panes)) then
+
+                    if (allocated(editor%tabs(tab_idx)%panes(pane_idx)%cursors) .and. &
+                        editor%tabs(tab_idx)%panes(pane_idx)%active_cursor > 0) then
+                        cursor = editor%tabs(tab_idx)%panes(pane_idx)%cursors(&
+                                 editor%tabs(tab_idx)%panes(pane_idx)%active_cursor)
+
+                        ! Calculate pane dimensions
+                        screen_width = editor%screen_cols
+                        screen_height = editor%screen_rows - 3
+                        pane_height = int((editor%tabs(tab_idx)%panes(pane_idx)%y_end - &
+                                          editor%tabs(tab_idx)%panes(pane_idx)%y_start) * real(screen_height))
+                        pane_width = int((editor%tabs(tab_idx)%panes(pane_idx)%x_end - &
+                                         editor%tabs(tab_idx)%panes(pane_idx)%x_start) * real(screen_width))
+
+                        ! Vertical scrolling for pane
+                        if (cursor%line < editor%tabs(tab_idx)%panes(pane_idx)%viewport_line + margin) then
+                            editor%tabs(tab_idx)%panes(pane_idx)%viewport_line = max(1, cursor%line - margin)
+                        else if (cursor%line > editor%tabs(tab_idx)%panes(pane_idx)%viewport_line + pane_height - margin - 1) then
+                            editor%tabs(tab_idx)%panes(pane_idx)%viewport_line = cursor%line - pane_height + margin + 1
+                        end if
+
+                        ! Horizontal scrolling for pane
+                        if (cursor%column < editor%tabs(tab_idx)%panes(pane_idx)%viewport_column + margin) then
+                            editor%tabs(tab_idx)%panes(pane_idx)%viewport_column = max(1, cursor%column - margin)
+                        else if (cursor%column > editor%tabs(tab_idx)%panes(pane_idx)%viewport_column + pane_width - margin) then
+                            editor%tabs(tab_idx)%panes(pane_idx)%viewport_column = cursor%column - pane_width + margin
+                        end if
+
+                        ! Also update legacy editor viewport for compatibility
+                        editor%viewport_line = editor%tabs(tab_idx)%panes(pane_idx)%viewport_line
+                        editor%viewport_column = editor%tabs(tab_idx)%panes(pane_idx)%viewport_column
+                    end if
+                    return
+                end if
+            end if
+        end if
+
+        ! Fallback to original behavior if no panes
         cursor = editor%cursors(editor%active_cursor)
 
         ! Vertical scrolling
@@ -722,6 +775,17 @@ contains
             if (buffer_line > 0 .and. buffer_line <= buffer_get_line_count(buffer)) then
                 call render_buffer_line_in_pane(buffer, editor, pane_idx, buffer_line, &
                                                screen_row, col, width)
+            else
+                ! Render empty line indicator for lines beyond file
+                call terminal_move_cursor(screen_row, col)
+                if (.not. pane%is_active) then
+                    call terminal_write(char(27) // '[48;5;234m')  ! Dark gray for inactive
+                end if
+                call terminal_write('~')
+                if (width > 1) then
+                    call terminal_write(repeat(' ', width - 1))
+                end if
+                call terminal_write(char(27) // '[0m')
             end if
         end do
     end subroutine render_single_pane
@@ -799,21 +863,55 @@ contains
         end do
     end subroutine render_pane_separator
 
-    subroutine render_pane_frame(col, row, width, height, is_active)
-        integer, intent(in) :: col, row, width, height
-        logical, intent(in) :: is_active
+    subroutine render_cursor_for_panes(editor)
+        use editor_state_module, only: pane_t
+        type(editor_state_t), intent(in) :: editor
+        type(pane_t) :: pane
+        type(cursor_t) :: cursor
+        integer :: tab_idx, pane_idx
+        integer :: pane_col, pane_row, pane_width, pane_height
+        integer :: screen_row, screen_col
+        integer :: screen_width, screen_height
 
-        if (.not. is_active) return  ! Only draw frame for active pane
+        tab_idx = editor%active_tab_index
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
 
-        ! Draw a colored bar at the top of active pane as indicator
-        call terminal_move_cursor(row, col)
-        call terminal_write(char(27) // '[46m')  ! Cyan background
-        call terminal_write(' ACTIVE ')
-        if (width > 8) then
-            call terminal_write(repeat(' ', width - 8))
+        pane_idx = editor%tabs(tab_idx)%active_pane_index
+        if (pane_idx < 1 .or. pane_idx > size(editor%tabs(tab_idx)%panes)) return
+
+        pane = editor%tabs(tab_idx)%panes(pane_idx)
+        if (.not. allocated(pane%cursors)) return
+        if (pane%active_cursor < 1 .or. pane%active_cursor > size(pane%cursors)) return
+
+        cursor = pane%cursors(pane%active_cursor)
+
+        ! Calculate pane screen coordinates
+        screen_width = editor%screen_cols
+        screen_height = editor%screen_rows - 3  ! Account for tab bar, status bar
+
+        pane_col = 1 + int(pane%x_start * real(screen_width))
+        pane_width = int((pane%x_end - pane%x_start) * real(screen_width))
+        if (pane_idx < size(editor%tabs(tab_idx)%panes)) then
+            pane_width = pane_width - 1  ! Reserve space for separator
         end if
-        call terminal_write(char(27) // '[0m')
-    end subroutine render_pane_frame
+        pane_row = 2 + int(pane%y_start * real(screen_height))
+        pane_height = int((pane%y_end - pane%y_start) * real(screen_height))
+
+        ! Calculate cursor position within the pane
+        screen_row = pane_row + (cursor%line - pane%viewport_line)
+        screen_col = pane_col + (cursor%column - pane%viewport_column)
+
+        ! Ensure cursor is within pane boundaries
+        if (screen_row >= pane_row .and. screen_row < pane_row + pane_height .and. &
+            screen_col >= pane_col .and. screen_col < pane_col + pane_width) then
+            call terminal_move_cursor(screen_row, screen_col)
+            call terminal_show_cursor()
+        else
+            ! Cursor is out of view, hide it
+            call terminal_hide_cursor()
+        end if
+    end subroutine render_cursor_for_panes
 
     subroutine render_cursor_in_pane(editor, pane_start_col, pane_width)
         type(editor_state_t), intent(in) :: editor
