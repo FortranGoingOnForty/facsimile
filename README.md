@@ -66,10 +66,10 @@ fpm build
 - `esc` - exit multi-cursor mode (keep active cursor only)
 
 ### Search
-- `/` - search forward
+- `ctrl-f` - search forward
 - `n` - next match (only after search)
 - `N` - previous match (only after search)
-- `ctrl-r` - find and replace (deprecated - use `/` for search)
+- `ctrl-r` - find and replace
 
 ### Special
 - `alt-'` - cycle quotes: " → ' → ` → "
@@ -81,6 +81,28 @@ fpm build
 ### File
 - `ctrl-s` - save
 - `ctrl-q` - quit
+- `ctrl-b` - toggle file tree (fuss mode)
+
+### File Tree (Fuss Mode)
+When in fuss mode (ctrl-b), you get a split view with a git-aware file tree on the left (30%) and editor on the right (70%).
+
+**Navigation:**
+- `j` / `↓` - move down in tree
+- `k` / `↑` - move up in tree
+
+**Git Operations:**
+- `a` - stage file (git add)
+- `u` - unstage file (git restore --staged)
+- `enter` - open file in editor
+
+**Status Indicators:**
+- Green `↑` - staged changes
+- Red `✗` - modified tracked files
+- Gray `✗` - untracked files
+
+**Exit:**
+- `esc` - exit fuss mode back to editor
+- `ctrl-b` - toggle fuss mode off
 
 ### Help
 - `ctrl-?` - show keybindings
