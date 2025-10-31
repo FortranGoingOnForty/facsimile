@@ -236,6 +236,9 @@ contains
         else if (ch1 >= 'A' .and. ch1 <= 'Z') then
             ! Alt+Shift+letter
             write(key_str, '(a,a)') 'alt-shift-', achar(iachar(ch1) - iachar('A') + iachar('a'))
+        else if (ch1 >= '0' .and. ch1 <= '9') then
+            ! Alt+number (for tab switching)
+            write(key_str, '(a,a)') 'alt-', ch1
         else if (ch1 == "'") then
             ! Alt+apostrophe for cycle quotes
             key_str = "alt-'"

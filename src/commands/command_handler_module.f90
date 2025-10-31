@@ -397,6 +397,8 @@ contains
             if (size(editor%tabs) >= 8) call switch_to_tab_with_buffer(editor, 8, buffer)
         case('alt-9')
             if (size(editor%tabs) >= 9) call switch_to_tab_with_buffer(editor, 9, buffer)
+        case('alt-0')
+            if (size(editor%tabs) >= 10) call switch_to_tab_with_buffer(editor, 10, buffer)
 
         case('ctrl-alt-left')
             ! Previous tab

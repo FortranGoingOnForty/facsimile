@@ -513,14 +513,14 @@ contains
 
         call terminal_hide_cursor()
 
-        ! Render tab bar if there are any tabs
-        call render_tab_bar(editor)
-
         ! Clear screen first to avoid artifacts
         do row = 1, editor%screen_rows
             call terminal_move_cursor(row, 1)
             call terminal_write(repeat(' ', editor%screen_cols))
         end do
+
+        ! Render tab bar if there are any tabs (after clearing screen)
+        call render_tab_bar(editor)
 
         ! Calculate split: 30% for tree, 70% for editor
         tree_width = editor%screen_cols * 30 / 100
