@@ -4,9 +4,10 @@ module editor_state_module
     implicit none
     private
 
-    public :: editor_state_t, cursor_t, tab_t
+    public :: editor_state_t, cursor_t, pane_t, tab_t
     public :: init_editor, cleanup_editor
     public :: create_tab, switch_to_tab, switch_to_tab_with_buffer, get_active_tab_index, close_tab
+    public :: split_pane_vertical, split_pane_horizontal, close_pane, get_active_pane_indices
 
     ! Cursor position and selection
     type :: cursor_t
@@ -18,14 +19,39 @@ module editor_state_module
         integer(int32) :: selection_start_col = 1
     end type cursor_t
 
-    ! Tab - represents a single file buffer
+    ! Pane - represents a view within a tab
+    type :: pane_t
+        ! Position within tab (0.0 to 1.0 normalized coordinates)
+        real :: x_start = 0.0
+        real :: y_start = 0.0
+        real :: x_end = 1.0
+        real :: y_end = 1.0
+
+        ! Actual screen coordinates (calculated during render)
+        integer :: screen_col = 1
+        integer :: screen_row = 1
+        integer :: screen_width = 80
+        integer :: screen_height = 24
+
+        ! Independent view state
+        integer(int32) :: viewport_line = 1
+        integer(int32) :: viewport_column = 1
+        type(cursor_t), allocatable :: cursors(:)
+        integer(int32) :: active_cursor = 1
+
+        ! State
+        logical :: is_active = .false.
+    end type pane_t
+
+    ! Tab - represents a single file buffer with one or more panes
     type :: tab_t
         character(len=:), allocatable :: filename
         type(buffer_t) :: buffer
-        type(cursor_t), allocatable :: cursors(:)
-        integer(int32) :: active_cursor = 1
-        integer(int32) :: viewport_line = 1
-        integer(int32) :: viewport_column = 1
+
+        ! Panes within this tab
+        type(pane_t), allocatable :: panes(:)
+        integer(int32) :: active_pane_index = 1
+
         logical :: modified = .false.
     end type tab_t
 
@@ -96,9 +122,18 @@ contains
     subroutine cleanup_tab(tab)
         use text_buffer_module, only: cleanup_buffer
         type(tab_t), intent(inout) :: tab
+        integer :: i
 
         if (allocated(tab%filename)) deallocate(tab%filename)
-        if (allocated(tab%cursors)) deallocate(tab%cursors)
+
+        ! Cleanup panes
+        if (allocated(tab%panes)) then
+            do i = 1, size(tab%panes)
+                if (allocated(tab%panes(i)%cursors)) deallocate(tab%panes(i)%cursors)
+            end do
+            deallocate(tab%panes)
+        end if
+
         call cleanup_buffer(tab%buffer)
     end subroutine cleanup_tab
 
@@ -130,14 +165,24 @@ contains
         temp_tabs(new_index)%filename = trim(filename)
         call init_buffer(temp_tabs(new_index)%buffer)
 
-        ! Initialize cursor
-        allocate(temp_tabs(new_index)%cursors(1))
-        temp_tabs(new_index)%cursors(1)%line = 1
-        temp_tabs(new_index)%cursors(1)%column = 1
-        temp_tabs(new_index)%cursors(1)%desired_column = 1
-        temp_tabs(new_index)%active_cursor = 1
-        temp_tabs(new_index)%viewport_line = 1
-        temp_tabs(new_index)%viewport_column = 1
+        ! Create default pane (full screen)
+        allocate(temp_tabs(new_index)%panes(1))
+        temp_tabs(new_index)%panes(1)%x_start = 0.0
+        temp_tabs(new_index)%panes(1)%y_start = 0.0
+        temp_tabs(new_index)%panes(1)%x_end = 1.0
+        temp_tabs(new_index)%panes(1)%y_end = 1.0
+        temp_tabs(new_index)%panes(1)%viewport_line = 1
+        temp_tabs(new_index)%panes(1)%viewport_column = 1
+        temp_tabs(new_index)%panes(1)%is_active = .true.
+
+        ! Initialize cursor in the default pane
+        allocate(temp_tabs(new_index)%panes(1)%cursors(1))
+        temp_tabs(new_index)%panes(1)%cursors(1)%line = 1
+        temp_tabs(new_index)%panes(1)%cursors(1)%column = 1
+        temp_tabs(new_index)%panes(1)%cursors(1)%desired_column = 1
+        temp_tabs(new_index)%panes(1)%active_cursor = 1
+
+        temp_tabs(new_index)%active_pane_index = 1
         temp_tabs(new_index)%modified = .false.
 
         ! Replace tabs array
@@ -149,26 +194,40 @@ contains
     subroutine switch_to_tab(editor, tab_index)
         type(editor_state_t), intent(inout) :: editor
         integer(int32), intent(in) :: tab_index
+        integer :: pane_idx
 
         if (tab_index < 1 .or. tab_index > size(editor%tabs)) return
 
         ! Save current tab state (if any)
         if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-            editor%tabs(editor%active_tab_index)%cursors = editor%cursors
-            editor%tabs(editor%active_tab_index)%active_cursor = editor%active_cursor
-            editor%tabs(editor%active_tab_index)%viewport_line = editor%viewport_line
-            editor%tabs(editor%active_tab_index)%viewport_column = editor%viewport_column
+            ! Save to active pane of current tab
+            pane_idx = editor%tabs(editor%active_tab_index)%active_pane_index
+            if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
+                pane_idx > 0 .and. pane_idx <= size(editor%tabs(editor%active_tab_index)%panes)) then
+                editor%tabs(editor%active_tab_index)%panes(pane_idx)%cursors = editor%cursors
+                editor%tabs(editor%active_tab_index)%panes(pane_idx)%active_cursor = editor%active_cursor
+                editor%tabs(editor%active_tab_index)%panes(pane_idx)%viewport_line = editor%viewport_line
+                editor%tabs(editor%active_tab_index)%panes(pane_idx)%viewport_column = editor%viewport_column
+            end if
             editor%tabs(editor%active_tab_index)%modified = editor%modified
         end if
 
         ! Load new tab state
         editor%active_tab_index = tab_index
-        if (allocated(editor%cursors)) deallocate(editor%cursors)
-        allocate(editor%cursors(size(editor%tabs(tab_index)%cursors)))
-        editor%cursors = editor%tabs(tab_index)%cursors
-        editor%active_cursor = editor%tabs(tab_index)%active_cursor
-        editor%viewport_line = editor%tabs(tab_index)%viewport_line
-        editor%viewport_column = editor%tabs(tab_index)%viewport_column
+
+        ! Load from active pane of new tab
+        pane_idx = editor%tabs(tab_index)%active_pane_index
+        if (allocated(editor%tabs(tab_index)%panes) .and. &
+            pane_idx > 0 .and. pane_idx <= size(editor%tabs(tab_index)%panes)) then
+
+            if (allocated(editor%cursors)) deallocate(editor%cursors)
+            allocate(editor%cursors(size(editor%tabs(tab_index)%panes(pane_idx)%cursors)))
+            editor%cursors = editor%tabs(tab_index)%panes(pane_idx)%cursors
+            editor%active_cursor = editor%tabs(tab_index)%panes(pane_idx)%active_cursor
+            editor%viewport_line = editor%tabs(tab_index)%panes(pane_idx)%viewport_line
+            editor%viewport_column = editor%tabs(tab_index)%panes(pane_idx)%viewport_column
+        end if
+
         if (allocated(editor%filename)) deallocate(editor%filename)
         allocate(character(len=len(editor%tabs(tab_index)%filename)) :: editor%filename)
         editor%filename = editor%tabs(tab_index)%filename
@@ -181,16 +240,23 @@ contains
         type(editor_state_t), intent(inout) :: editor
         integer(int32), intent(in) :: tab_index
         type(buffer_t), intent(inout) :: buffer
+        integer :: pane_idx
 
         if (tab_index < 1 .or. tab_index > size(editor%tabs)) return
 
         ! Save current buffer to current tab (if any)
         if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
             call copy_buffer(editor%tabs(editor%active_tab_index)%buffer, buffer)
-            editor%tabs(editor%active_tab_index)%cursors = editor%cursors
-            editor%tabs(editor%active_tab_index)%active_cursor = editor%active_cursor
-            editor%tabs(editor%active_tab_index)%viewport_line = editor%viewport_line
-            editor%tabs(editor%active_tab_index)%viewport_column = editor%viewport_column
+
+            ! Save to active pane of current tab
+            pane_idx = editor%tabs(editor%active_tab_index)%active_pane_index
+            if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
+                pane_idx > 0 .and. pane_idx <= size(editor%tabs(editor%active_tab_index)%panes)) then
+                editor%tabs(editor%active_tab_index)%panes(pane_idx)%cursors = editor%cursors
+                editor%tabs(editor%active_tab_index)%panes(pane_idx)%active_cursor = editor%active_cursor
+                editor%tabs(editor%active_tab_index)%panes(pane_idx)%viewport_line = editor%viewport_line
+                editor%tabs(editor%active_tab_index)%panes(pane_idx)%viewport_column = editor%viewport_column
+            end if
             editor%tabs(editor%active_tab_index)%modified = editor%modified
         end if
 
@@ -200,13 +266,19 @@ contains
         ! Load new tab's buffer
         call copy_buffer(buffer, editor%tabs(tab_index)%buffer)
 
-        ! Load new tab's state
-        if (allocated(editor%cursors)) deallocate(editor%cursors)
-        allocate(editor%cursors(size(editor%tabs(tab_index)%cursors)))
-        editor%cursors = editor%tabs(tab_index)%cursors
-        editor%active_cursor = editor%tabs(tab_index)%active_cursor
-        editor%viewport_line = editor%tabs(tab_index)%viewport_line
-        editor%viewport_column = editor%tabs(tab_index)%viewport_column
+        ! Load from active pane of new tab
+        pane_idx = editor%tabs(tab_index)%active_pane_index
+        if (allocated(editor%tabs(tab_index)%panes) .and. &
+            pane_idx > 0 .and. pane_idx <= size(editor%tabs(tab_index)%panes)) then
+
+            if (allocated(editor%cursors)) deallocate(editor%cursors)
+            allocate(editor%cursors(size(editor%tabs(tab_index)%panes(pane_idx)%cursors)))
+            editor%cursors = editor%tabs(tab_index)%panes(pane_idx)%cursors
+            editor%active_cursor = editor%tabs(tab_index)%panes(pane_idx)%active_cursor
+            editor%viewport_line = editor%tabs(tab_index)%panes(pane_idx)%viewport_line
+            editor%viewport_column = editor%tabs(tab_index)%panes(pane_idx)%viewport_column
+        end if
+
         if (allocated(editor%filename)) deallocate(editor%filename)
         allocate(character(len=len(editor%tabs(tab_index)%filename)) :: editor%filename)
         editor%filename = editor%tabs(tab_index)%filename
@@ -266,5 +338,238 @@ contains
             call switch_to_tab(editor, editor%active_tab_index)
         end if
     end subroutine close_tab
+
+    ! Split the active pane vertically
+    subroutine split_pane_vertical(editor)
+        type(editor_state_t), intent(inout) :: editor
+        type(pane_t), allocatable :: temp_panes(:)
+        integer :: tab_idx, pane_idx, n_panes, new_idx
+        real :: mid_x
+
+        ! Get active tab
+        tab_idx = editor%active_tab_index
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+
+        ! Get active pane
+        pane_idx = editor%tabs(tab_idx)%active_pane_index
+        n_panes = size(editor%tabs(tab_idx)%panes)
+        if (pane_idx < 1 .or. pane_idx > n_panes) return
+
+        ! Calculate split point
+        associate(active_pane => editor%tabs(tab_idx)%panes(pane_idx))
+            mid_x = (active_pane%x_start + active_pane%x_end) / 2.0
+
+            ! Check minimum size (20 columns minimum)
+            ! Assuming screen is ~80 cols, 20 cols = 0.25 of width
+            if ((mid_x - active_pane%x_start) < 0.25 .or. &
+                (active_pane%x_end - mid_x) < 0.25) then
+                ! Too small to split
+                return
+            end if
+
+            ! Resize array
+            allocate(temp_panes(n_panes + 1))
+            temp_panes(1:n_panes) = editor%tabs(tab_idx)%panes(1:n_panes)
+
+            ! Setup new pane (right half)
+            new_idx = n_panes + 1
+            temp_panes(new_idx)%x_start = mid_x
+            temp_panes(new_idx)%x_end = active_pane%x_end
+            temp_panes(new_idx)%y_start = active_pane%y_start
+            temp_panes(new_idx)%y_end = active_pane%y_end
+
+            ! Copy viewport and cursor state
+            temp_panes(new_idx)%viewport_line = active_pane%viewport_line
+            temp_panes(new_idx)%viewport_column = active_pane%viewport_column
+            if (allocated(active_pane%cursors)) then
+                allocate(temp_panes(new_idx)%cursors(size(active_pane%cursors)))
+                temp_panes(new_idx)%cursors = active_pane%cursors
+            end if
+            temp_panes(new_idx)%active_cursor = active_pane%active_cursor
+            temp_panes(new_idx)%is_active = .false.
+
+            ! Update active pane (left half)
+            temp_panes(pane_idx)%x_end = mid_x
+
+            ! Replace panes array
+            call move_alloc(temp_panes, editor%tabs(tab_idx)%panes)
+
+            ! Set new pane as active
+            editor%tabs(tab_idx)%panes(pane_idx)%is_active = .false.
+            editor%tabs(tab_idx)%panes(new_idx)%is_active = .true.
+            editor%tabs(tab_idx)%active_pane_index = new_idx
+
+            ! Sync new pane to editor state
+            call sync_pane_to_editor(editor, tab_idx, new_idx)
+        end associate
+    end subroutine split_pane_vertical
+
+    ! Split the active pane horizontally
+    subroutine split_pane_horizontal(editor)
+        type(editor_state_t), intent(inout) :: editor
+        type(pane_t), allocatable :: temp_panes(:)
+        integer :: tab_idx, pane_idx, n_panes, new_idx
+        real :: mid_y
+
+        ! Get active tab
+        tab_idx = editor%active_tab_index
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+
+        ! Get active pane
+        pane_idx = editor%tabs(tab_idx)%active_pane_index
+        n_panes = size(editor%tabs(tab_idx)%panes)
+        if (pane_idx < 1 .or. pane_idx > n_panes) return
+
+        ! Calculate split point
+        associate(active_pane => editor%tabs(tab_idx)%panes(pane_idx))
+            mid_y = (active_pane%y_start + active_pane%y_end) / 2.0
+
+            ! Check minimum size (5 rows minimum)
+            ! Assuming screen is ~24 rows, 5 rows = 0.21 of height
+            if ((mid_y - active_pane%y_start) < 0.21 .or. &
+                (active_pane%y_end - mid_y) < 0.21) then
+                ! Too small to split
+                return
+            end if
+
+            ! Resize array
+            allocate(temp_panes(n_panes + 1))
+            temp_panes(1:n_panes) = editor%tabs(tab_idx)%panes(1:n_panes)
+
+            ! Setup new pane (bottom half)
+            new_idx = n_panes + 1
+            temp_panes(new_idx)%x_start = active_pane%x_start
+            temp_panes(new_idx)%x_end = active_pane%x_end
+            temp_panes(new_idx)%y_start = mid_y
+            temp_panes(new_idx)%y_end = active_pane%y_end
+
+            ! Copy viewport and cursor state
+            temp_panes(new_idx)%viewport_line = active_pane%viewport_line
+            temp_panes(new_idx)%viewport_column = active_pane%viewport_column
+            if (allocated(active_pane%cursors)) then
+                allocate(temp_panes(new_idx)%cursors(size(active_pane%cursors)))
+                temp_panes(new_idx)%cursors = active_pane%cursors
+            end if
+            temp_panes(new_idx)%active_cursor = active_pane%active_cursor
+            temp_panes(new_idx)%is_active = .false.
+
+            ! Update active pane (top half)
+            temp_panes(pane_idx)%y_end = mid_y
+
+            ! Replace panes array
+            call move_alloc(temp_panes, editor%tabs(tab_idx)%panes)
+
+            ! Set new pane as active
+            editor%tabs(tab_idx)%panes(pane_idx)%is_active = .false.
+            editor%tabs(tab_idx)%panes(new_idx)%is_active = .true.
+            editor%tabs(tab_idx)%active_pane_index = new_idx
+
+            ! Sync new pane to editor state
+            call sync_pane_to_editor(editor, tab_idx, new_idx)
+        end associate
+    end subroutine split_pane_horizontal
+
+    ! Close the active pane
+    subroutine close_pane(editor)
+        type(editor_state_t), intent(inout) :: editor
+        type(pane_t), allocatable :: temp_panes(:)
+        integer :: tab_idx, pane_idx, n_panes, i, j
+
+        ! Get active tab
+        tab_idx = editor%active_tab_index
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+
+        ! Get active pane
+        pane_idx = editor%tabs(tab_idx)%active_pane_index
+        n_panes = size(editor%tabs(tab_idx)%panes)
+        if (pane_idx < 1 .or. pane_idx > n_panes) return
+
+        ! If only one pane, close the whole tab
+        if (n_panes == 1) then
+            call close_tab(editor, tab_idx)
+            return
+        end if
+
+        ! Remove the pane
+        allocate(temp_panes(n_panes - 1))
+        j = 1
+        do i = 1, n_panes
+            if (i /= pane_idx) then
+                temp_panes(j) = editor%tabs(tab_idx)%panes(i)
+                j = j + 1
+            else
+                ! Clean up the pane being removed
+                if (allocated(editor%tabs(tab_idx)%panes(i)%cursors)) then
+                    deallocate(editor%tabs(tab_idx)%panes(i)%cursors)
+                end if
+            end if
+        end do
+
+        ! Replace panes array
+        call move_alloc(temp_panes, editor%tabs(tab_idx)%panes)
+
+        ! Adjust active pane index
+        if (editor%tabs(tab_idx)%active_pane_index > n_panes - 1) then
+            editor%tabs(tab_idx)%active_pane_index = n_panes - 1
+        else if (editor%tabs(tab_idx)%active_pane_index >= pane_idx .and. &
+                 editor%tabs(tab_idx)%active_pane_index > 1) then
+            editor%tabs(tab_idx)%active_pane_index = editor%tabs(tab_idx)%active_pane_index - 1
+        end if
+
+        ! Set new active pane
+        editor%tabs(tab_idx)%panes(editor%tabs(tab_idx)%active_pane_index)%is_active = .true.
+
+        ! Sync to editor state
+        call sync_pane_to_editor(editor, tab_idx, editor%tabs(tab_idx)%active_pane_index)
+    end subroutine close_pane
+
+    ! Get the active pane indices
+    subroutine get_active_pane_indices(editor, tab_idx, pane_idx)
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(out) :: tab_idx, pane_idx
+
+        tab_idx = editor%active_tab_index
+        pane_idx = -1
+
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) then
+            tab_idx = -1
+            return
+        end if
+
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) then
+            tab_idx = -1
+            return
+        end if
+
+        pane_idx = editor%tabs(tab_idx)%active_pane_index
+        if (pane_idx < 1 .or. pane_idx > size(editor%tabs(tab_idx)%panes)) then
+            pane_idx = -1
+        end if
+    end subroutine get_active_pane_indices
+
+    ! Helper to sync pane state to editor
+    subroutine sync_pane_to_editor(editor, tab_idx, pane_idx)
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: tab_idx, pane_idx
+
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+        if (pane_idx < 1 .or. pane_idx > size(editor%tabs(tab_idx)%panes)) return
+
+        associate(pane => editor%tabs(tab_idx)%panes(pane_idx))
+            ! Copy pane state to editor
+            if (allocated(editor%cursors)) deallocate(editor%cursors)
+            if (allocated(pane%cursors)) then
+                allocate(editor%cursors(size(pane%cursors)))
+                editor%cursors = pane%cursors
+                editor%active_cursor = pane%active_cursor
+            end if
+            editor%viewport_line = pane%viewport_line
+            editor%viewport_column = pane%viewport_column
+        end associate
+    end subroutine sync_pane_to_editor
 
 end module editor_state_module

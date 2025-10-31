@@ -1,7 +1,8 @@
 module command_handler_module
     use iso_fortran_env, only: int32, error_unit
     use iso_c_binding, only: c_int
-    use editor_state_module, only: editor_state_t, cursor_t, switch_to_tab_with_buffer, close_tab, create_tab
+    use editor_state_module, only: editor_state_t, cursor_t, switch_to_tab_with_buffer, &
+                                   close_tab, create_tab, close_pane, split_pane_vertical, split_pane_horizontal
     use text_buffer_module
     use renderer_module, only: update_viewport, render_screen, tree_state
     use yank_stack_module
@@ -534,10 +535,22 @@ contains
             end if
             is_edit_action = .true.
 
-        case('ctrl-w')
-            ! Close current tab
+        case('alt-v')
+            ! Split pane vertically
             if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
-                call close_tab(editor, editor%active_tab_index)
+                call split_pane_vertical(editor)
+            end if
+
+        case('alt-s')
+            ! Split pane horizontally
+            if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
+                call split_pane_horizontal(editor)
+            end if
+
+        case('alt-q')
+            ! Close current pane (or tab if only one pane)
+            if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
+                call close_pane(editor)
 
                 ! If tabs remain, copy the new active tab's buffer to display
                 if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
@@ -545,6 +558,24 @@ contains
                     editor%modified = editor%tabs(editor%active_tab_index)%modified
                 ! If no tabs left, open fuss mode
                 else
+                    editor%fuss_mode_active = .true.
+                    if (allocated(editor%workspace_path)) then
+                        call init_tree_state(tree_state, editor%workspace_path)
+                    end if
+                end if
+            end if
+
+        case('ctrl-w')
+            ! Close current tab (original behavior for backward compatibility)
+            if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
+                call close_tab(editor, editor%active_tab_index)
+
+                ! If tabs remain, copy the new active tab's buffer to display
+                if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
+                    call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+                    editor%modified = editor%tabs(editor%active_tab_index)%modified
+                else
+                    ! No tabs left - reset to empty state or open fuss
                     editor%fuss_mode_active = .true.
                     if (allocated(editor%workspace_path)) then
                         call init_tree_state(tree_state, editor%workspace_path)
@@ -3784,12 +3815,19 @@ contains
                 editor%viewport_line = 1
                 editor%viewport_column = 1
 
-                ! Also update tab state
-                editor%tabs(editor%active_tab_index)%cursors(1)%line = 1
-                editor%tabs(editor%active_tab_index)%cursors(1)%column = 1
-                editor%tabs(editor%active_tab_index)%cursors(1)%desired_column = 1
-                editor%tabs(editor%active_tab_index)%viewport_line = 1
-                editor%tabs(editor%active_tab_index)%viewport_column = 1
+                ! Also update tab's active pane state
+                if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
+                    editor%tabs(editor%active_tab_index)%active_pane_index > 0) then
+                    associate (pane => editor%tabs(editor%active_tab_index)%panes(editor%tabs(editor%active_tab_index)%active_pane_index))
+                        if (allocated(pane%cursors) .and. size(pane%cursors) > 0) then
+                            pane%cursors(1)%line = 1
+                            pane%cursors(1)%column = 1
+                            pane%cursors(1)%desired_column = 1
+                        end if
+                        pane%viewport_line = 1
+                        pane%viewport_column = 1
+                    end associate
+                end if
             end if
         end if
         ! Note: fuss mode stays active - user must press ctrl-b to exit

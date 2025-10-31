@@ -124,47 +124,54 @@ contains
             row_offset_val = 1
         end if
 
-        ! Clear and render each visible line
-        do screen_row = start_row, editor%screen_rows - 1  ! Last row for status bar
-            buffer_line = editor%viewport_line + screen_row - row_offset_val
+        ! Render all panes for the active tab
+        if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0 .and. &
+            allocated(editor%tabs(editor%active_tab_index)%panes)) then
+            call render_all_panes(buffer, editor)
+        else
+            ! Fallback to simple rendering if no tabs/panes
+            ! Clear and render each visible line
+            do screen_row = start_row, editor%screen_rows - 1  ! Last row for status bar
+                buffer_line = editor%viewport_line + screen_row - row_offset_val
 
-            call terminal_move_cursor(screen_row, 1)
+                call terminal_move_cursor(screen_row, 1)
 
-            ! Render line number if enabled
-            if (show_line_numbers) then
-                if (buffer_line <= line_count) then
-                    ! Format line number, right-aligned
-                    write(line_num_str, '(i5)') buffer_line
+                ! Render line number if enabled
+                if (show_line_numbers) then
+                    if (buffer_line <= line_count) then
+                        ! Format line number, right-aligned
+                        write(line_num_str, '(i5)') buffer_line
 
-                    ! Highlight current line number
-                    if (buffer_line == editor%cursors(editor%active_cursor)%line) then
-                        call terminal_write(char(27) // '[1;33m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
-                                          // char(27) // '[0m ')
+                        ! Highlight current line number
+                        if (buffer_line == editor%cursors(editor%active_cursor)%line) then
+                            call terminal_write(char(27) // '[1;33m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
+                                              // char(27) // '[0m ')
+                        else
+                            call terminal_write(char(27) // '[90m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
+                                              // char(27) // '[0m ')
+                        end if
                     else
-                        call terminal_write(char(27) // '[90m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
-                                          // char(27) // '[0m ')
+                        ! Empty line number area for lines beyond file
+                        call terminal_write(repeat(' ', LINE_NUMBER_WIDTH + 1))
                     end if
-                else
-                    ! Empty line number area for lines beyond file
-                    call terminal_write(repeat(' ', LINE_NUMBER_WIDTH + 1))
                 end if
-            end if
 
-            if (buffer_line <= line_count) then
-                ! Render actual line content with selections
-                call render_line_with_selections(buffer, editor, buffer_line, &
-                                                editor%viewport_column, content_width)
-            else
-                ! Render empty line indicator
-                if (buffer_line == line_count + 1 .and. line_count == 0) then
-                    ! Empty file
-                    call terminal_write('~' // repeat(' ', content_width - 1))
+                if (buffer_line <= line_count) then
+                    ! Render actual line content with selections
+                    call render_line_with_selections(buffer, editor, buffer_line, &
+                                                    editor%viewport_column, content_width)
                 else
-                    ! Beyond file content
-                    call terminal_write('~' // repeat(' ', content_width - 1))
+                    ! Render empty line indicator
+                    if (buffer_line == line_count + 1 .and. line_count == 0) then
+                        ! Empty file
+                        call terminal_write('~' // repeat(' ', content_width - 1))
+                    else
+                        ! Beyond file content
+                        call terminal_write('~' // repeat(' ', content_width - 1))
+                    end if
                 end if
-            end if
-        end do
+            end do
+        end if
 
         ! Render status bar
         call render_status_bar(editor, buffer)
@@ -618,6 +625,157 @@ contains
             end if
         end do
     end subroutine render_editor_pane
+
+    subroutine render_all_panes(buffer, editor)
+        use editor_state_module, only: pane_t
+        type(buffer_t), intent(in) :: buffer
+        type(editor_state_t), intent(in) :: editor
+        type(pane_t) :: pane
+        integer :: i, tab_idx, n_panes
+        integer :: pane_col, pane_row, pane_width, pane_height
+        integer :: screen_width, screen_height
+
+        ! Get active tab
+        tab_idx = editor%active_tab_index
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+
+        n_panes = size(editor%tabs(tab_idx)%panes)
+        if (n_panes == 0) return
+
+        ! Get screen dimensions
+        screen_width = editor%screen_cols
+        screen_height = editor%screen_rows - 3  ! Account for tab bar, status bar
+
+        ! If only one pane, render full screen
+        if (n_panes == 1) then
+            call render_editor_pane(buffer, editor, 1, screen_width)
+            return
+        end if
+
+        ! Render each pane
+        do i = 1, n_panes
+            pane = editor%tabs(tab_idx)%panes(i)
+
+            ! Calculate actual screen coordinates
+            pane_col = 1 + int(pane%x_start * real(screen_width))
+            pane_width = int((pane%x_end - pane%x_start) * real(screen_width))
+            pane_row = 2 + int(pane%y_start * real(screen_height))
+            pane_height = int((pane%y_end - pane%y_start) * real(screen_height))
+
+            ! Render the pane content
+            call render_single_pane(buffer, editor, i, pane_col, pane_row, pane_width, pane_height)
+
+            ! Draw pane borders (vertical lines between panes)
+            if (i < n_panes .and. abs(pane%x_end - 1.0) > 0.01) then
+                call render_pane_border(pane_col + pane_width, pane_row, pane_height, pane%is_active)
+            end if
+        end do
+    end subroutine render_all_panes
+
+    subroutine render_single_pane(buffer, editor, pane_idx, col, row, width, height)
+        use editor_state_module, only: pane_t
+        type(buffer_t), intent(in) :: buffer
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(in) :: pane_idx, col, row, width, height
+        type(pane_t) :: pane
+        integer :: screen_row, buffer_line
+        integer :: tab_idx
+
+        tab_idx = editor%active_tab_index
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (pane_idx < 1 .or. pane_idx > size(editor%tabs(tab_idx)%panes)) return
+
+        pane = editor%tabs(tab_idx)%panes(pane_idx)
+
+        ! Clear the pane area first
+        do screen_row = row, row + height - 1
+            call terminal_move_cursor(screen_row, col)
+            call terminal_write(repeat(' ', width))
+        end do
+
+        ! Render buffer content with pane's viewport
+        do screen_row = row, row + height - 1
+            buffer_line = pane%viewport_line + (screen_row - row)
+            if (buffer_line > 0 .and. buffer_line <= buffer_get_line_count(buffer)) then
+                call render_buffer_line_in_pane(buffer, editor, pane_idx, buffer_line, &
+                                               screen_row, col, width)
+            end if
+        end do
+    end subroutine render_single_pane
+
+    subroutine render_buffer_line_in_pane(buffer, editor, pane_idx, line_num, screen_row, col, width)
+        use editor_state_module, only: pane_t
+        type(buffer_t), intent(in) :: buffer
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(in) :: pane_idx, line_num, screen_row, col, width
+        character(len=:), allocatable :: line
+        type(pane_t) :: pane
+        integer :: tab_idx, start_col, end_col, i
+
+        tab_idx = editor%active_tab_index
+        pane = editor%tabs(tab_idx)%panes(pane_idx)
+
+        ! Get the line content
+        line = buffer_get_line(buffer, line_num)
+        if (.not. allocated(line)) return
+
+        ! Calculate visible portion based on horizontal scroll
+        start_col = pane%viewport_column
+        end_col = min(start_col + width - 1, len(line))
+
+        ! Move to position and render line
+        call terminal_move_cursor(screen_row, col)
+
+        ! Highlight if active pane
+        if (pane%is_active) then
+            ! Check if any cursor is on this line
+            if (allocated(pane%cursors)) then
+                do i = 1, size(pane%cursors)
+                    if (pane%cursors(i)%line == line_num) then
+                        ! Highlight current line in active pane
+                        call terminal_write(char(27) // '[48;5;236m')
+                        exit
+                    end if
+                end do
+            end if
+        end if
+
+        ! Render the visible portion of the line
+        if (start_col <= len(line)) then
+            call terminal_write(line(start_col:min(end_col, len(line))))
+        end if
+
+        ! Reset attributes
+        call terminal_write(char(27) // '[0m')
+
+        ! Fill remaining width
+        if (end_col - start_col + 1 < width) then
+            call terminal_write(repeat(' ', width - (end_col - start_col + 1)))
+        end if
+    end subroutine render_buffer_line_in_pane
+
+    subroutine render_pane_border(col, start_row, height, is_active)
+        integer, intent(in) :: col, start_row, height
+        logical, intent(in) :: is_active
+        integer :: row
+
+        ! Set border color based on active state
+        if (is_active) then
+            call terminal_write(char(27) // '[36m')  ! Cyan for active
+        else
+            call terminal_write(char(27) // '[90m')  ! Dark gray for inactive
+        end if
+
+        ! Draw vertical line
+        do row = start_row, start_row + height - 1
+            call terminal_move_cursor(row, col)
+            call terminal_write('|')  ! Use ASCII vertical bar
+        end do
+
+        ! Reset color
+        call terminal_write(char(27) // '[0m')
+    end subroutine render_pane_border
 
     subroutine render_cursor_in_pane(editor, pane_start_col, pane_width)
         type(editor_state_t), intent(in) :: editor
