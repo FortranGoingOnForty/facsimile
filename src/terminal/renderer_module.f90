@@ -519,6 +519,11 @@ contains
                         pane_width = int((editor%tabs(tab_idx)%panes(pane_idx)%x_end - &
                                          editor%tabs(tab_idx)%panes(pane_idx)%x_start) * real(screen_width))
 
+                        ! Account for line numbers in pane width
+                        if (show_line_numbers) then
+                            pane_width = pane_width - LINE_NUMBER_WIDTH - 1
+                        end if
+
                         ! Vertical scrolling for pane
                         if (cursor%line < editor%tabs(tab_idx)%panes(pane_idx)%viewport_line + margin) then
                             editor%tabs(tab_idx)%panes(pane_idx)%viewport_line = max(1, cursor%line - margin)
@@ -776,12 +781,30 @@ contains
             else
                 ! Render empty line indicator for lines beyond file
                 call terminal_move_cursor(screen_row, col)
+
+                ! Render empty line number area if line numbers are enabled
+                if (show_line_numbers) then
+                    if (.not. pane%is_active) then
+                        call terminal_write(char(27) // '[48;5;234m')  ! Dark gray for inactive
+                    end if
+                    call terminal_write(repeat(' ', LINE_NUMBER_WIDTH + 1))
+                end if
+
+                ! Render the ~ indicator
                 if (.not. pane%is_active) then
                     call terminal_write(char(27) // '[48;5;234m')  ! Dark gray for inactive
                 end if
                 call terminal_write('~')
-                if (width > 1) then
-                    call terminal_write(repeat(' ', width - 1))
+
+                ! Calculate remaining width accounting for line numbers
+                if (show_line_numbers) then
+                    if (width > LINE_NUMBER_WIDTH + 2) then
+                        call terminal_write(repeat(' ', width - LINE_NUMBER_WIDTH - 2))
+                    end if
+                else
+                    if (width > 1) then
+                        call terminal_write(repeat(' ', width - 1))
+                    end if
                 end if
                 call terminal_write(char(27) // '[0m')
             end if
@@ -796,10 +819,54 @@ contains
         character(len=:), allocatable :: line
         type(pane_t) :: pane
         integer :: tab_idx, start_col, end_col, i
+        integer :: content_width, content_col
+        character(len=5) :: line_num_str
         logical :: is_current_line
 
         tab_idx = editor%active_tab_index
         pane = editor%tabs(tab_idx)%panes(pane_idx)
+
+        ! Move to position
+        call terminal_move_cursor(screen_row, col)
+
+        ! Render line number if enabled
+        if (show_line_numbers) then
+            write(line_num_str, '(i5)') line_num
+            ! Check if this line has any cursor
+            is_current_line = .false.
+            if (allocated(pane%cursors)) then
+                do i = 1, size(pane%cursors)
+                    if (pane%cursors(i)%line == line_num) then
+                        is_current_line = .true.
+                        exit
+                    end if
+                end do
+            end if
+
+            ! Apply pane background for inactive panes
+            if (.not. pane%is_active) then
+                call terminal_write(char(27) // '[48;5;234m')  ! Dark gray background
+            end if
+
+            if (is_current_line .and. pane%is_active) then
+                call terminal_write(char(27) // '[1;33m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
+                                  // char(27) // '[0m ')
+            else
+                call terminal_write(char(27) // '[90m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
+                                  // char(27) // '[0m ')
+            end if
+
+            ! Continue with pane background for content
+            if (.not. pane%is_active) then
+                call terminal_write(char(27) // '[48;5;234m')  ! Dark gray background
+            end if
+
+            content_width = width - LINE_NUMBER_WIDTH - 1
+            content_col = col + LINE_NUMBER_WIDTH + 1
+        else
+            content_width = width
+            content_col = col
+        end if
 
         ! Get the line content
         line = buffer_get_line(buffer, line_num)
@@ -807,10 +874,7 @@ contains
 
         ! Calculate visible portion based on horizontal scroll
         start_col = pane%viewport_column
-        end_col = min(start_col + width - 1, len(line))
-
-        ! Move to position
-        call terminal_move_cursor(screen_row, col)
+        end_col = min(start_col + content_width - 1, len(line))
 
         ! Check if this is the current line with a cursor
         is_current_line = .false.
@@ -840,8 +904,8 @@ contains
         end if
 
         ! Fill remaining width with the same background
-        if (end_col - start_col + 1 < width) then
-            call terminal_write(repeat(' ', width - (end_col - start_col + 1)))
+        if (end_col - start_col + 1 < content_width) then
+            call terminal_write(repeat(' ', content_width - (end_col - start_col + 1)))
         end if
 
         ! Reset attributes
@@ -870,6 +934,7 @@ contains
         integer :: pane_col, pane_row, pane_width, pane_height
         integer :: screen_row, screen_col
         integer :: screen_width, screen_height
+        integer :: col_offset
 
         tab_idx = editor%active_tab_index
         if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
@@ -884,6 +949,13 @@ contains
 
         cursor = pane%cursors(pane%active_cursor)
 
+        ! Calculate column offset for line numbers
+        if (show_line_numbers) then
+            col_offset = LINE_NUMBER_WIDTH + 1  ! +1 for separator space
+        else
+            col_offset = 0
+        end if
+
         ! Calculate pane screen coordinates
         screen_width = editor%screen_cols
         screen_height = editor%screen_rows - 3  ! Account for tab bar, status bar
@@ -896,17 +968,17 @@ contains
         pane_row = 2 + int(pane%y_start * real(screen_height))
         pane_height = int((pane%y_end - pane%y_start) * real(screen_height))
 
-        ! Calculate cursor position within the pane
+        ! Calculate cursor position within the pane, accounting for line numbers
         screen_row = pane_row + (cursor%line - pane%viewport_line)
-        screen_col = pane_col + (cursor%column - pane%viewport_column)
+        screen_col = pane_col + col_offset + (cursor%column - pane%viewport_column)
 
         ! Ensure cursor is within pane boundaries
         if (screen_row >= pane_row .and. screen_row < pane_row + pane_height .and. &
-            screen_col >= pane_col .and. screen_col < pane_col + pane_width) then
+            screen_col >= pane_col + col_offset .and. screen_col < pane_col + pane_width) then
             call terminal_move_cursor(screen_row, screen_col)
         else
-            ! Cursor is out of view, position at top-left of pane
-            call terminal_move_cursor(pane_row, pane_col)
+            ! Cursor is out of view, position at top-left of pane content area
+            call terminal_move_cursor(pane_row, pane_col + col_offset)
         end if
 
         ! Always show cursor
