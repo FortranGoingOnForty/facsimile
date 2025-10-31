@@ -8,6 +8,8 @@ module editor_state_module
     public :: init_editor, cleanup_editor
     public :: create_tab, switch_to_tab, switch_to_tab_with_buffer, get_active_tab_index, close_tab
     public :: split_pane_vertical, split_pane_horizontal, close_pane, get_active_pane_indices
+    public :: navigate_to_pane_left, navigate_to_pane_right, navigate_to_pane_up, navigate_to_pane_down
+    public :: sync_editor_to_pane
 
     ! Cursor position and selection
     type :: cursor_t
@@ -588,5 +590,203 @@ contains
             editor%viewport_column = pane%viewport_column
         end associate
     end subroutine sync_pane_to_editor
+
+    ! Helper to sync editor state back to the active pane
+    subroutine sync_editor_to_pane(editor)
+        type(editor_state_t), intent(inout) :: editor
+        integer :: tab_idx, pane_idx
+
+        tab_idx = editor%active_tab_index
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+
+        pane_idx = editor%tabs(tab_idx)%active_pane_index
+        if (pane_idx < 1 .or. pane_idx > size(editor%tabs(tab_idx)%panes)) return
+
+        associate(pane => editor%tabs(tab_idx)%panes(pane_idx))
+            ! Copy editor state back to pane
+            if (allocated(pane%cursors)) deallocate(pane%cursors)
+            allocate(pane%cursors(size(editor%cursors)))
+            pane%cursors = editor%cursors
+            pane%active_cursor = editor%active_cursor
+            pane%viewport_line = editor%viewport_line
+            pane%viewport_column = editor%viewport_column
+        end associate
+    end subroutine sync_editor_to_pane
+
+    ! Navigate to pane on the left
+    subroutine navigate_to_pane_left(editor)
+        type(editor_state_t), intent(inout) :: editor
+        integer :: tab_idx, current_idx, i
+        real :: current_x, best_x
+        integer :: best_idx
+
+        tab_idx = editor%active_tab_index
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+
+        current_idx = editor%tabs(tab_idx)%active_pane_index
+        if (current_idx < 1 .or. current_idx > size(editor%tabs(tab_idx)%panes)) return
+
+        current_x = (editor%tabs(tab_idx)%panes(current_idx)%x_start + &
+                     editor%tabs(tab_idx)%panes(current_idx)%x_end) / 2.0
+
+        best_idx = -1
+        best_x = -1.0
+
+        ! Find the nearest pane to the left
+        do i = 1, size(editor%tabs(tab_idx)%panes)
+            if (i /= current_idx) then
+                ! Check if pane is to the left
+                if (editor%tabs(tab_idx)%panes(i)%x_end <= current_x) then
+                    if (best_idx == -1 .or. editor%tabs(tab_idx)%panes(i)%x_end > best_x) then
+                        best_idx = i
+                        best_x = editor%tabs(tab_idx)%panes(i)%x_end
+                    end if
+                end if
+            end if
+        end do
+
+        if (best_idx > 0) then
+            call switch_to_pane(editor, tab_idx, best_idx)
+        end if
+    end subroutine navigate_to_pane_left
+
+    ! Navigate to pane on the right
+    subroutine navigate_to_pane_right(editor)
+        type(editor_state_t), intent(inout) :: editor
+        integer :: tab_idx, current_idx, i
+        real :: current_x, best_x
+        integer :: best_idx
+
+        tab_idx = editor%active_tab_index
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+
+        current_idx = editor%tabs(tab_idx)%active_pane_index
+        if (current_idx < 1 .or. current_idx > size(editor%tabs(tab_idx)%panes)) return
+
+        current_x = (editor%tabs(tab_idx)%panes(current_idx)%x_start + &
+                     editor%tabs(tab_idx)%panes(current_idx)%x_end) / 2.0
+
+        best_idx = -1
+        best_x = 2.0  ! Start with value beyond max
+
+        ! Find the nearest pane to the right
+        do i = 1, size(editor%tabs(tab_idx)%panes)
+            if (i /= current_idx) then
+                ! Check if pane is to the right
+                if (editor%tabs(tab_idx)%panes(i)%x_start >= current_x) then
+                    if (best_idx == -1 .or. editor%tabs(tab_idx)%panes(i)%x_start < best_x) then
+                        best_idx = i
+                        best_x = editor%tabs(tab_idx)%panes(i)%x_start
+                    end if
+                end if
+            end if
+        end do
+
+        if (best_idx > 0) then
+            call switch_to_pane(editor, tab_idx, best_idx)
+        end if
+    end subroutine navigate_to_pane_right
+
+    ! Navigate to pane above
+    subroutine navigate_to_pane_up(editor)
+        type(editor_state_t), intent(inout) :: editor
+        integer :: tab_idx, current_idx, i
+        real :: current_y, best_y
+        integer :: best_idx
+
+        tab_idx = editor%active_tab_index
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+
+        current_idx = editor%tabs(tab_idx)%active_pane_index
+        if (current_idx < 1 .or. current_idx > size(editor%tabs(tab_idx)%panes)) return
+
+        current_y = (editor%tabs(tab_idx)%panes(current_idx)%y_start + &
+                     editor%tabs(tab_idx)%panes(current_idx)%y_end) / 2.0
+
+        best_idx = -1
+        best_y = -1.0
+
+        ! Find the nearest pane above
+        do i = 1, size(editor%tabs(tab_idx)%panes)
+            if (i /= current_idx) then
+                ! Check if pane is above
+                if (editor%tabs(tab_idx)%panes(i)%y_end <= current_y) then
+                    if (best_idx == -1 .or. editor%tabs(tab_idx)%panes(i)%y_end > best_y) then
+                        best_idx = i
+                        best_y = editor%tabs(tab_idx)%panes(i)%y_end
+                    end if
+                end if
+            end if
+        end do
+
+        if (best_idx > 0) then
+            call switch_to_pane(editor, tab_idx, best_idx)
+        end if
+    end subroutine navigate_to_pane_up
+
+    ! Navigate to pane below
+    subroutine navigate_to_pane_down(editor)
+        type(editor_state_t), intent(inout) :: editor
+        integer :: tab_idx, current_idx, i
+        real :: current_y, best_y
+        integer :: best_idx
+
+        tab_idx = editor%active_tab_index
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+
+        current_idx = editor%tabs(tab_idx)%active_pane_index
+        if (current_idx < 1 .or. current_idx > size(editor%tabs(tab_idx)%panes)) return
+
+        current_y = (editor%tabs(tab_idx)%panes(current_idx)%y_start + &
+                     editor%tabs(tab_idx)%panes(current_idx)%y_end) / 2.0
+
+        best_idx = -1
+        best_y = 2.0  ! Start with value beyond max
+
+        ! Find the nearest pane below
+        do i = 1, size(editor%tabs(tab_idx)%panes)
+            if (i /= current_idx) then
+                ! Check if pane is below
+                if (editor%tabs(tab_idx)%panes(i)%y_start >= current_y) then
+                    if (best_idx == -1 .or. editor%tabs(tab_idx)%panes(i)%y_start < best_y) then
+                        best_idx = i
+                        best_y = editor%tabs(tab_idx)%panes(i)%y_start
+                    end if
+                end if
+            end if
+        end do
+
+        if (best_idx > 0) then
+            call switch_to_pane(editor, tab_idx, best_idx)
+        end if
+    end subroutine navigate_to_pane_down
+
+    ! Helper to switch to a specific pane
+    subroutine switch_to_pane(editor, tab_idx, pane_idx)
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: tab_idx, pane_idx
+        integer :: i
+
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+        if (pane_idx < 1 .or. pane_idx > size(editor%tabs(tab_idx)%panes)) return
+
+        ! Clear all is_active flags
+        do i = 1, size(editor%tabs(tab_idx)%panes)
+            editor%tabs(tab_idx)%panes(i)%is_active = .false.
+        end do
+
+        ! Set new active pane
+        editor%tabs(tab_idx)%panes(pane_idx)%is_active = .true.
+        editor%tabs(tab_idx)%active_pane_index = pane_idx
+
+        ! Sync to editor state
+        call sync_pane_to_editor(editor, tab_idx, pane_idx)
+    end subroutine switch_to_pane
 
 end module editor_state_module

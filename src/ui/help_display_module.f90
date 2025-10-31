@@ -111,6 +111,15 @@ contains
              "ctrl-alt-right      next tab                    ", &
              "ctrl-b              toggle file tree (fuss)     "])
 
+        ! Panes
+        call display_section(row, max_rows, "PANES", &
+            ["alt-v                   split pane vertically           ", &
+             "alt-s                   split pane horizontally         ", &
+             "alt-q                   close current pane only         ", &
+             "ctrl-w                  close pane (then tab if last)   ", &
+             "ctrl-shift-arrows       navigate between panes          ", &
+             "alt-h/l/k/j             navigate left/right/up/down     "])
+
         ! Git (in fuss mode)
         call display_section(row, max_rows, "GIT (in fuss mode)", &
             ["a                   stage file/add                           ", &

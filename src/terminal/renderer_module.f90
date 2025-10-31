@@ -183,8 +183,6 @@ contains
         else
             call render_cursor(editor)
         end if
-
-        call terminal_show_cursor()
     end subroutine render_screen
 
     subroutine render_line(buffer, line_num, start_col, width)
@@ -906,11 +904,13 @@ contains
         if (screen_row >= pane_row .and. screen_row < pane_row + pane_height .and. &
             screen_col >= pane_col .and. screen_col < pane_col + pane_width) then
             call terminal_move_cursor(screen_row, screen_col)
-            call terminal_show_cursor()
         else
-            ! Cursor is out of view, hide it
-            call terminal_hide_cursor()
+            ! Cursor is out of view, position at top-left of pane
+            call terminal_move_cursor(pane_row, pane_col)
         end if
+
+        ! Always show cursor
+        call terminal_show_cursor()
     end subroutine render_cursor_for_panes
 
     subroutine render_cursor_in_pane(editor, pane_start_col, pane_width)

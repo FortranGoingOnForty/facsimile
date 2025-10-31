@@ -2,7 +2,9 @@ module command_handler_module
     use iso_fortran_env, only: int32, error_unit
     use iso_c_binding, only: c_int
     use editor_state_module, only: editor_state_t, cursor_t, switch_to_tab_with_buffer, &
-                                   close_tab, create_tab, close_pane, split_pane_vertical, split_pane_horizontal
+                                   close_tab, create_tab, close_pane, split_pane_vertical, split_pane_horizontal, &
+                                   navigate_to_pane_left, navigate_to_pane_right, navigate_to_pane_up, navigate_to_pane_down, &
+                                   sync_editor_to_pane
     use text_buffer_module
     use renderer_module, only: update_viewport, render_screen, tree_state
     use yank_stack_module
@@ -185,6 +187,7 @@ contains
             else
                 call move_cursor_up(editor%cursors(editor%active_cursor), buffer, line_count)
             end if
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('down')
@@ -198,6 +201,7 @@ contains
             else
                 call move_cursor_down(editor%cursors(editor%active_cursor), buffer, line_count)
             end if
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('left')
@@ -211,6 +215,7 @@ contains
             else
                 call move_cursor_left(editor%cursors(editor%active_cursor), buffer)
             end if
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('right')
@@ -224,6 +229,7 @@ contains
             else
                 call move_cursor_right(editor%cursors(editor%active_cursor), buffer)
             end if
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         ! Selection with shift+motion
@@ -252,6 +258,7 @@ contains
             else
                 call move_cursor_smart_home(editor%cursors(editor%active_cursor), buffer)
             end if
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('end', 'ctrl-e')
@@ -263,6 +270,7 @@ contains
             else
                 call move_cursor_end(editor%cursors(editor%active_cursor), buffer)
             end if
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('shift-home', 'ctrl-shift-a')
@@ -282,6 +290,7 @@ contains
             else
                 call move_cursor_page_up(editor%cursors(editor%active_cursor), editor, line_count)
             end if
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('pagedown')
@@ -293,6 +302,7 @@ contains
             else
                 call move_cursor_page_down(editor%cursors(editor%active_cursor), editor, line_count)
             end if
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('mouse-scroll-up')
@@ -310,6 +320,7 @@ contains
             editor%cursors(editor%active_cursor)%column = 1
             editor%cursors(editor%active_cursor)%desired_column = 1
             editor%cursors(editor%active_cursor)%has_selection = .false.
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('ctrl-end')
@@ -317,6 +328,7 @@ contains
             line_count = buffer_get_line_count(buffer)
             editor%cursors(editor%active_cursor)%line = line_count
             call move_cursor_end(editor%cursors(editor%active_cursor), buffer)
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('shift-pageup')
@@ -336,6 +348,7 @@ contains
             else
                 call move_cursor_word_left(editor%cursors(editor%active_cursor), buffer)
             end if
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('alt-right')
@@ -347,6 +360,7 @@ contains
             else
                 call move_cursor_word_right(editor%cursors(editor%active_cursor), buffer)
             end if
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('alt-shift-left')
@@ -434,6 +448,7 @@ contains
             else
                 call handle_backspace(editor%cursors(editor%active_cursor), buffer)
             end if
+            call sync_editor_to_pane(editor)
             is_edit_action = .true.
 
         case('delete')
@@ -446,6 +461,7 @@ contains
             else
                 call handle_delete(editor%cursors(editor%active_cursor), buffer)
             end if
+            call sync_editor_to_pane(editor)
             is_edit_action = .true.
 
         case('enter')
@@ -479,6 +495,7 @@ contains
             else
                 call handle_enter(editor%cursors(editor%active_cursor), buffer)
             end if
+            call sync_editor_to_pane(editor)
             is_edit_action = .true.
 
         case('tab')
@@ -581,6 +598,30 @@ contains
                         call init_tree_state(tree_state, editor%workspace_path)
                     end if
                 end if
+            end if
+
+        case('ctrl-shift-left', 'alt-h')
+            ! Navigate to pane on the left
+            if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
+                call navigate_to_pane_left(editor)
+            end if
+
+        case('ctrl-shift-right', 'alt-l')
+            ! Navigate to pane on the right
+            if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
+                call navigate_to_pane_right(editor)
+            end if
+
+        case('ctrl-shift-up', 'alt-k')
+            ! Navigate to pane above
+            if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
+                call navigate_to_pane_up(editor)
+            end if
+
+        case('ctrl-shift-down', 'alt-j')
+            ! Navigate to pane below
+            if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
+                call navigate_to_pane_down(editor)
             end if
 
         case('alt-d', 'alt-delete')
@@ -757,6 +798,7 @@ contains
             ! Check for mouse events
             if (index(key_str, 'mouse-') == 1) then
                 call handle_mouse_event_action(key_str, editor, buffer)
+                call sync_editor_to_pane(editor)
             ! Regular character input (including space)
             ! Check for single char: either len_trim=1, or it's a space (trim removes it)
             else if (len_trim(key_str) == 1 .or. (len_trim(key_str) == 0 .and. key_str(1:1) == ' ')) then
@@ -767,6 +809,7 @@ contains
                 else
                     call insert_char(editor%cursors(editor%active_cursor), buffer, key_str(1:1))
                 end if
+                call sync_editor_to_pane(editor)
                 is_edit_action = .true.
             end if
         end select
