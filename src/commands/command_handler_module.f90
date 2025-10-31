@@ -3555,7 +3555,7 @@ contains
                 call tree_unstage_file(tree_state, editor%workspace_path)
             end if
 
-        case('enter')
+        case('enter', 'o')
             ! Open file in editor (only for files, not directories)
             if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
                 if (.not. tree_state%selectable_files(tree_state%selected_index)%is_directory) then
@@ -3603,11 +3603,8 @@ contains
             editor%cursors(editor%active_cursor)%desired_column = 1
             editor%viewport_line = 1
             editor%viewport_column = 1
-
-            ! Exit fuss mode
-            editor%fuss_mode_active = .false.
-            call cleanup_tree_state(tree_state)
         end if
+        ! Note: fuss mode stays active - user must press ctrl-b to exit
     end subroutine open_file_in_editor
 
     ! Toggle fuss mode (file tree)
