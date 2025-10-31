@@ -7,7 +7,7 @@ module help_display_module
     implicit none
     private
 
-    public :: show_help, show_tags_modal, display_tags_header
+    public :: show_help, show_tags_modal, display_tags_header, show_fuss_hints
 
 contains
 
@@ -127,7 +127,7 @@ contains
         call display_section(row, max_rows, "FILE", &
             ["ctrl-s          save                            ", &
              "ctrl-q          quit                            ", &
-             "ctrl-?          show this help                  "])
+             "ctrl-/          show this help                  "])
 
         ! Footer
         if (row < max_rows - 1) then
@@ -243,6 +243,98 @@ contains
         character(len=20) :: str
         write(str, '(I0)') val
     end function int_to_str
+
+    ! Display fuss mode hints (compact help for ctrl-b mode)
+    subroutine show_fuss_hints(editor)
+        type(editor_state_t), intent(in) :: editor
+        integer :: row
+        character(len=32) :: key_input
+        integer :: status
+
+        ! Clear screen and hide cursor
+        call terminal_clear_screen()
+        call terminal_hide_cursor()
+
+        ! Title
+        row = 1
+        call terminal_move_cursor(row, 1)
+        call terminal_write("FUSS MODE HINTS - Press any key to close")
+        row = row + 1
+        call terminal_move_cursor(row, 1)
+        call terminal_write(repeat("=", 60))
+        row = row + 2
+
+        ! Navigation
+        call terminal_move_cursor(row, 1)
+        call terminal_write("NAVIGATION")
+        row = row + 1
+        call terminal_move_cursor(row, 3)
+        call terminal_write("j/k                 move to previous/next sibling")
+        row = row + 1
+        call terminal_move_cursor(row, 3)
+        call terminal_write("→/←                 expand/collapse or enter/exit directory")
+        row = row + 1
+        call terminal_move_cursor(row, 3)
+        call terminal_write("o/enter             open file in editor")
+        row = row + 1
+        call terminal_move_cursor(row, 3)
+        call terminal_write("space               toggle directory expand/collapse")
+        row = row + 2
+
+        ! Git Operations
+        call terminal_move_cursor(row, 1)
+        call terminal_write("GIT OPERATIONS")
+        row = row + 1
+        call terminal_move_cursor(row, 3)
+        call terminal_write("a                   stage file")
+        row = row + 1
+        call terminal_move_cursor(row, 3)
+        call terminal_write("u                   unstage file")
+        row = row + 1
+        call terminal_move_cursor(row, 3)
+        call terminal_write("d                   diff file in new tab")
+        row = row + 1
+        call terminal_move_cursor(row, 3)
+        call terminal_write("m                   commit with message")
+        row = row + 1
+        call terminal_move_cursor(row, 3)
+        call terminal_write("p                   push to remote")
+        row = row + 1
+        call terminal_move_cursor(row, 3)
+        call terminal_write("f                   fetch from remote")
+        row = row + 1
+        call terminal_move_cursor(row, 3)
+        call terminal_write("l                   pull from remote")
+        row = row + 1
+        call terminal_move_cursor(row, 3)
+        call terminal_write("t                   create and push tag")
+        row = row + 2
+
+        ! Exit
+        call terminal_move_cursor(row, 1)
+        call terminal_write("EXIT")
+        row = row + 1
+        call terminal_move_cursor(row, 3)
+        call terminal_write("esc/ctrl-b          close fuss mode")
+        row = row + 1
+
+        ! Footer
+        if (row < editor%screen_rows - 1) then
+            row = editor%screen_rows - 1
+            call terminal_move_cursor(row, 1)
+            call terminal_write(repeat("=", 60))
+        end if
+
+        ! Show cursor at bottom
+        call terminal_move_cursor(editor%screen_rows, 1)
+        call terminal_show_cursor()
+
+        ! Wait for any key press
+        do
+            call get_key_input(key_input, status)
+            if (status == 0) exit  ! Got a valid key, exit loop
+        end do
+    end subroutine show_fuss_hints
 
     ! Display tags header without waiting for input (for split view with prompt)
     subroutine display_tags_header(editor, tags, n_tags)

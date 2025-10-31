@@ -42,6 +42,7 @@ module editor_state_module
         character(len=:), allocatable :: workspace_path  ! Current working directory
         logical :: modified = .false.
         logical :: fuss_mode_active = .false.  ! Toggle for file tree mode
+        logical :: fuss_hints_expanded = .false.  ! Toggle for expanded fuss legend
 
         ! Tab management
         type(tab_t), allocatable :: tabs(:)

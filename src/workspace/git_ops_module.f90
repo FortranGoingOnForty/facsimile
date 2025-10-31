@@ -4,7 +4,7 @@ module git_ops_module
     private
 
     public :: git_commit, git_push, git_fetch, git_pull, git_tag
-    public :: git_check_upstream, git_diff_file, git_list_tags
+    public :: git_check_upstream, git_diff_file, git_list_tags, git_push_tag
 
 contains
 
@@ -116,6 +116,28 @@ contains
             success = .true.
         end if
     end subroutine git_tag
+
+    subroutine git_push_tag(workspace_path, tag_name, success)
+        character(len=*), intent(in) :: workspace_path
+        character(len=*), intent(in) :: tag_name
+        logical, intent(out) :: success
+        character(len=1024) :: command
+        integer :: status
+
+        success = .false.
+
+        if (len_trim(tag_name) == 0) then
+            write(error_unit, '(A)') 'Error: Empty tag name'
+            return
+        end if
+
+        ! Push the specific tag to origin
+        write(command, '(A,A,A,A,A)') 'cd "', trim(workspace_path), &
+            '" && git push origin "', trim(tag_name), '" 2>&1'
+        call execute_command_line(trim(command), exitstat=status)
+
+        success = (status == 0)
+    end subroutine git_push_tag
 
     subroutine git_check_upstream(workspace_path, has_upstream)
         character(len=*), intent(in) :: workspace_path

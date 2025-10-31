@@ -15,9 +15,10 @@ module file_tree_renderer_module
 
 contains
 
-    subroutine render_file_tree(state, start_row, end_row, start_col, width)
+    subroutine render_file_tree(state, start_row, end_row, start_col, width, hints_expanded)
         type(tree_state_t), intent(in) :: state
         integer, intent(in) :: start_row, end_row, start_col, width
+        logical, intent(in) :: hints_expanded
         integer :: current_row, item_idx, visible_items, row
         character(len=512) :: status_line
         character(len=:), allocatable :: padding
@@ -49,38 +50,54 @@ contains
             current_row = current_row + 1
         end if
 
-        ! Display tree (leave 4 rows at bottom for legend)
+        ! Display tree (leave space for legend - 1 or 4 rows)
         if (associated(state%root)) then
             item_idx = 0
-            call render_tree_node(state%root, '', .true., .true., &
-                                state, item_idx, current_row, end_row - 4, start_col, width)
+            if (hints_expanded) then
+                call render_tree_node(state%root, '', .true., .true., &
+                                    state, item_idx, current_row, end_row - 4, start_col, width)
+            else
+                call render_tree_node(state%root, '', .true., .true., &
+                                    state, item_idx, current_row, end_row - 1, start_col, width)
+            end if
         end if
 
-        ! Display legend at bottom (four rows)
-        if (end_row >= start_row + 4) then
-            ! First row: navigation
-            call terminal_move_cursor(end_row - 3, start_col)
-            call terminal_write(ESC // '[90m') ! Gray
-            call terminal_write('j/k:siblings →:into ←:up o:open spc:toggle')
-            call terminal_write(ESC // '[0m')
+        ! Display legend at bottom (either minimal or expanded)
+        if (hints_expanded) then
+            ! Expanded legend (four rows)
+            if (end_row >= start_row + 4) then
+                ! First row: navigation
+                call terminal_move_cursor(end_row - 3, start_col)
+                call terminal_write(ESC // '[90m') ! Gray
+                call terminal_write('j/k:siblings →:into ←:up o:open spc:toggle')
+                call terminal_write(ESC // '[0m')
 
-            ! Second row: git operations (staging/basic)
-            call terminal_move_cursor(end_row - 2, start_col)
-            call terminal_write(ESC // '[90m') ! Gray
-            call terminal_write('a:stage u:unstage d:diff m:commit')
-            call terminal_write(ESC // '[0m')
+                ! Second row: git operations (staging/basic)
+                call terminal_move_cursor(end_row - 2, start_col)
+                call terminal_write(ESC // '[90m') ! Gray
+                call terminal_write('a:stage u:unstage d:diff m:commit')
+                call terminal_write(ESC // '[0m')
 
-            ! Third row: git operations (remote)
-            call terminal_move_cursor(end_row - 1, start_col)
-            call terminal_write(ESC // '[90m') ! Gray
-            call terminal_write('p:push f:fetch l:pull t:tag')
-            call terminal_write(ESC // '[0m')
+                ! Third row: git operations (remote)
+                call terminal_move_cursor(end_row - 1, start_col)
+                call terminal_write(ESC // '[90m') ! Gray
+                call terminal_write('p:push f:fetch l:pull t:tag')
+                call terminal_write(ESC // '[0m')
 
-            ! Fourth row: exit
-            call terminal_move_cursor(end_row, start_col)
-            call terminal_write(ESC // '[90m') ! Gray
-            call terminal_write('esc/ctrl-b:close ctrl-?:help')
-            call terminal_write(ESC // '[0m')
+                ! Fourth row: exit
+                call terminal_move_cursor(end_row, start_col)
+                call terminal_write(ESC // '[90m') ! Gray
+                call terminal_write('ctrl-/:collapse esc/ctrl-b:close')
+                call terminal_write(ESC // '[0m')
+            end if
+        else
+            ! Minimal legend (one row)
+            if (end_row >= start_row + 1) then
+                call terminal_move_cursor(end_row, start_col)
+                call terminal_write(ESC // '[90m') ! Gray
+                call terminal_write('ctrl-/:hints  esc/ctrl-b:close')
+                call terminal_write(ESC // '[0m')
+            end if
         end if
     end subroutine render_file_tree
 

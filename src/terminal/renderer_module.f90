@@ -380,11 +380,13 @@ contains
 
         ! Prepare status bar content
         if (allocated(editor%filename)) then
-            write(status_left, '(a,a,a)') ' ', trim(editor%filename), &
-                   merge(' [modified]', '           ', buffer%modified)
+            write(status_left, '(a,a,a,a)') ' ', trim(editor%filename), &
+                   merge(' [modified]', '           ', buffer%modified), &
+                   '  ctrl-b:fuss'
         else
-            write(status_left, '(a,a)') ' [No Name]', &
-                   merge(' [modified]', '           ', buffer%modified)
+            write(status_left, '(a,a,a)') ' [No Name]', &
+                   merge(' [modified]', '           ', buffer%modified), &
+                   '  ctrl-b:fuss'
         end if
 
         if (size(editor%cursors) > 1) then
@@ -529,7 +531,7 @@ contains
         call render_tab_bar(editor, editor_start_col, editor_width)
 
         ! Render file tree in left pane (start at row 2 for tab bar)
-        call render_file_tree(tree_state, 2, editor%screen_rows - 1, 2, tree_width - 2)
+        call render_file_tree(tree_state, 2, editor%screen_rows - 1, 2, tree_width - 2, editor%fuss_hints_expanded)
 
         ! Render vertical separator (start at row 2 for tab bar)
         call render_vertical_separator(separator_col, 2, editor%screen_rows - 1)

@@ -109,8 +109,8 @@ contains
 
         case('ctrl-?', 'ctrl-/')
             ! Show help menu
-            ! ctrl-?: Standard (Ctrl+Shift+/)
-            ! ctrl-/: Alternative (Ctrl+/)
+            ! Both ctrl-? and ctrl-/ supported for compatibility
+            ! ctrl-/ is more reliable across terminals
             call show_help(editor)
             ! Screen will be redrawn automatically by main loop
 
@@ -3732,9 +3732,14 @@ contains
                 end if
             end if
 
+        case('ctrl-/')
+            ! Toggle fuss mode hints expansion
+            editor%fuss_hints_expanded = .not. editor%fuss_hints_expanded
+
         case('esc')
             ! Exit fuss mode
             editor%fuss_mode_active = .false.
+            editor%fuss_hints_expanded = .false.  ! Reset to collapsed
             call cleanup_tree_state(tree_state)
 
         end select
@@ -3958,12 +3963,32 @@ contains
                 call terminal_move_cursor(editor%screen_rows, 1)
                 if (success) then
                     call terminal_write(char(27) // '[32m✓ Tag created: ' // trim(tag_name) // char(27) // '[0m')
+
+                    ! Brief pause
+                    call execute_command_line('sleep 1')
+
+                    ! Ask if user wants to push the tag to origin
+                    call show_text_prompt('Push tag to origin? (y/n, ESC to skip): ', tag_message, cancelled, editor%screen_rows)
+
+                    if (.not. cancelled .and. (tag_message(1:1) == 'y' .or. tag_message(1:1) == 'Y')) then
+                        call git_push_tag(editor%workspace_path, tag_name, success)
+
+                        ! Show push result
+                        call terminal_move_cursor(editor%screen_rows, 1)
+                        call terminal_write(repeat(' ', 200))
+                        call terminal_move_cursor(editor%screen_rows, 1)
+                        if (success) then
+                            call terminal_write(char(27) // '[32m✓ Tag pushed to origin' // char(27) // '[0m')
+                        else
+                            call terminal_write(char(27) // '[31m✗ Failed to push tag (check remote)' // char(27) // '[0m')
+                        end if
+
+                        call execute_command_line('sleep 1')
+                    end if
                 else
                     call terminal_write(char(27) // '[31m✗ Failed to create tag' // char(27) // '[0m')
+                    call execute_command_line('sleep 1')
                 end if
-
-                ! Brief pause
-                call execute_command_line('sleep 1')
 
                 ! Refresh tree
                 call refresh_tree_state(tree_state, editor%workspace_path)
