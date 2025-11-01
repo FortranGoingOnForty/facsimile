@@ -109,6 +109,7 @@ contains
                 ! Single cursor - just clear selection
                 editor%cursors(editor%active_cursor)%has_selection = .false.
             end if
+            call sync_editor_to_pane(editor)
 
         case('ctrl-?', 'ctrl-/')
             ! Show help menu
@@ -120,6 +121,7 @@ contains
         case('ctrl-g')
             ! Go to line:column
             call show_goto_prompt(editor, buffer)
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('ctrl-l')
@@ -132,6 +134,8 @@ contains
             ! Undo
             if (can_undo(undo_stack)) then
                 call perform_undo(undo_stack, buffer, editor%cursors(editor%active_cursor))
+                ! Sync even for single cursor case since undo changes cursor position
+                call sync_editor_to_pane(editor)
                 ! If we have multiple cursors, reset to single cursor mode
                 ! (Undo only tracks one cursor's state)
                 if (size(editor%cursors) > 1) then
@@ -148,6 +152,7 @@ contains
                     editor%cursors = new_cursors
                     editor%active_cursor = 1
                 end if
+                call sync_editor_to_pane(editor)
                 call update_viewport(editor)
             end if
 
@@ -157,6 +162,8 @@ contains
             ! ctrl-]: Alternative redo binding
             if (can_redo(undo_stack)) then
                 call perform_redo(undo_stack, buffer, editor%cursors(editor%active_cursor))
+                ! Sync even for single cursor case since redo changes cursor position
+                call sync_editor_to_pane(editor)
                 ! If we have multiple cursors, reset to single cursor mode
                 ! (Undo only tracks one cursor's state)
                 if (size(editor%cursors) > 1) then
@@ -166,6 +173,7 @@ contains
                     editor%cursors = new_cursors
                     editor%active_cursor = 1
                 end if
+                call sync_editor_to_pane(editor)
                 call update_viewport(editor)
             end if
 
@@ -173,6 +181,7 @@ contains
             ! Yank (paste from yank stack)
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             call yank_text(editor%cursors(editor%active_cursor), buffer)
+            call sync_editor_to_pane(editor)
             is_edit_action = .true.
 
         ! Navigation
@@ -235,18 +244,22 @@ contains
         ! Selection with shift+motion
         case('shift-up')
             call extend_selection_up(editor%cursors(editor%active_cursor), buffer, line_count)
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('shift-down')
             call extend_selection_down(editor%cursors(editor%active_cursor), buffer, line_count)
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('shift-left')
             call extend_selection_left(editor%cursors(editor%active_cursor), buffer)
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('shift-right')
             call extend_selection_right(editor%cursors(editor%active_cursor), buffer)
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('home', 'ctrl-a')
@@ -275,10 +288,12 @@ contains
 
         case('shift-home', 'ctrl-shift-a')
             call extend_selection_home(editor%cursors(editor%active_cursor))
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('shift-end', 'ctrl-shift-e')
             call extend_selection_end(editor%cursors(editor%active_cursor), buffer)
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('pageup')
@@ -333,10 +348,12 @@ contains
 
         case('shift-pageup')
             call extend_selection_page_up(editor%cursors(editor%active_cursor), editor, line_count)
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('shift-pagedown')
             call extend_selection_page_down(editor%cursors(editor%active_cursor), editor, line_count)
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('alt-left')
@@ -365,10 +382,12 @@ contains
 
         case('alt-shift-left')
             call extend_selection_word_left(editor%cursors(editor%active_cursor), buffer)
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('alt-shift-right')
             call extend_selection_word_right(editor%cursors(editor%active_cursor), buffer)
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('alt-up')
