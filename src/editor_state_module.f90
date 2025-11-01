@@ -575,6 +575,9 @@ contains
         ! Replace panes array
         call move_alloc(temp_panes, editor%tabs(tab_idx)%panes)
 
+        ! Recalculate layout for remaining panes
+        call recalculate_pane_layout(editor%tabs(tab_idx)%panes)
+
         ! Determine new active pane index
         if (pane_idx > size(editor%tabs(tab_idx)%panes)) then
             ! Was the last pane, activate the new last pane
@@ -904,5 +907,112 @@ contains
         ! Load the new pane's state to editor
         call sync_pane_to_editor(editor, tab_idx, pane_idx)
     end subroutine switch_to_pane
+
+    ! Recalculate pane layout after closing a pane
+    subroutine recalculate_pane_layout(panes)
+        type(pane_t), intent(inout) :: panes(:)
+        integer :: n_panes, i
+        real :: x_min, x_max, y_min, y_max
+        logical :: is_vertical_split, is_horizontal_split
+        real :: pane_width, pane_height
+
+        n_panes = size(panes)
+
+        ! If only one pane, make it full screen
+        if (n_panes == 1) then
+            panes(1)%x_start = 0.0
+            panes(1)%x_end = 1.0
+            panes(1)%y_start = 0.0
+            panes(1)%y_end = 1.0
+            return
+        end if
+
+        ! Determine the layout type by checking if panes share x or y coordinates
+        is_vertical_split = .false.
+        is_horizontal_split = .false.
+
+        ! Check if all panes share same y coordinates (vertical split - side by side)
+        y_min = panes(1)%y_start
+        y_max = panes(1)%y_end
+        is_vertical_split = .true.
+        do i = 2, n_panes
+            if (abs(panes(i)%y_start - y_min) > 0.01 .or. abs(panes(i)%y_end - y_max) > 0.01) then
+                is_vertical_split = .false.
+                exit
+            end if
+        end do
+
+        ! Check if all panes share same x coordinates (horizontal split - top/bottom)
+        if (.not. is_vertical_split) then
+            x_min = panes(1)%x_start
+            x_max = panes(1)%x_end
+            is_horizontal_split = .true.
+            do i = 2, n_panes
+                if (abs(panes(i)%x_start - x_min) > 0.01 .or. abs(panes(i)%x_end - x_max) > 0.01) then
+                    is_horizontal_split = .false.
+                    exit
+                end if
+            end do
+        end if
+
+        ! Recalculate based on layout type
+        if (is_vertical_split) then
+            ! Panes are side by side - redistribute horizontally
+            pane_width = 1.0 / real(n_panes)
+            do i = 1, n_panes
+                panes(i)%x_start = real(i - 1) * pane_width
+                panes(i)%x_end = real(i) * pane_width
+                panes(i)%y_start = 0.0
+                panes(i)%y_end = 1.0
+            end do
+        else if (is_horizontal_split) then
+            ! Panes are top/bottom - redistribute vertically
+            pane_height = 1.0 / real(n_panes)
+            do i = 1, n_panes
+                panes(i)%x_start = 0.0
+                panes(i)%x_end = 1.0
+                panes(i)%y_start = real(i - 1) * pane_height
+                panes(i)%y_end = real(i) * pane_height
+            end do
+        else
+            ! Mixed layout - try to expand panes to fill gaps
+            ! For now, just ensure at least the first pane is properly sized
+            ! This is a simplified approach - a more sophisticated algorithm
+            ! would detect and fill gaps properly
+
+            ! Find the overall bounds
+            x_min = 1.0
+            x_max = 0.0
+            y_min = 1.0
+            y_max = 0.0
+            do i = 1, n_panes
+                x_min = min(x_min, panes(i)%x_start)
+                x_max = max(x_max, panes(i)%x_end)
+                y_min = min(y_min, panes(i)%y_start)
+                y_max = max(y_max, panes(i)%y_end)
+            end do
+
+            ! If we have exactly 2 panes, try to expand them smartly
+            if (n_panes == 2) then
+                ! Check if they're adjacent horizontally
+                if (abs(panes(1)%x_end - panes(2)%x_start) < 0.01 .or. &
+                    abs(panes(2)%x_end - panes(1)%x_start) < 0.01) then
+                    ! Expand vertically
+                    panes(1)%y_start = 0.0
+                    panes(1)%y_end = 1.0
+                    panes(2)%y_start = 0.0
+                    panes(2)%y_end = 1.0
+                ! Check if they're adjacent vertically
+                else if (abs(panes(1)%y_end - panes(2)%y_start) < 0.01 .or. &
+                         abs(panes(2)%y_end - panes(1)%y_start) < 0.01) then
+                    ! Expand horizontally
+                    panes(1)%x_start = 0.0
+                    panes(1)%x_end = 1.0
+                    panes(2)%x_start = 0.0
+                    panes(2)%x_end = 1.0
+                end if
+            end if
+        end if
+    end subroutine recalculate_pane_layout
 
 end module editor_state_module
