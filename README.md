@@ -83,6 +83,34 @@ fpm build
 - `ctrl-q` - quit
 - `ctrl-b` - toggle file tree (fuss mode)
 
+### Tab Management
+- `ctrl-t` - create new tab
+- `tab` / `shift-tab` - switch between tabs
+
+### Pane Management
+Split your view into multiple panes for side-by-side editing of the same file.
+
+**Creating Panes:**
+- `alt-v` - split pane vertically (creates pane to the right)
+- `alt-s` - split pane horizontally (creates pane below)
+
+**Navigating Panes:**
+- `alt-h` / `ctrl-shift-left` - move to left pane
+- `alt-l` / `ctrl-shift-right` - move to right pane
+- `alt-k` / `ctrl-shift-up` - move to pane above
+- `alt-j` / `ctrl-shift-down` - move to pane below
+
+**Managing Panes:**
+- `alt-q` - close current pane only
+- `ctrl-w` - close current pane (closes tab when last pane)
+
+**Features:**
+- Each pane has independent viewport and cursor
+- Line numbers display in all panes
+- Active pane shows with visible cursor
+- Inactive panes have subtle dark background
+- Minimum pane size enforced (20 columns)
+
 ### File Tree (Fuss Mode)
 When in fuss mode (ctrl-b), you get a split view with a git-aware file tree on the left (30%) and editor on the right (70%).
 
@@ -105,7 +133,7 @@ When in fuss mode (ctrl-b), you get a split view with a git-aware file tree on t
 - `ctrl-b` - toggle fuss mode off
 
 ### Help
-- `ctrl-?` - show keybindings
+- `ctrl-/` or `ctrl-?` - show keybindings (ctrl-/ is more reliable)
 
 ## Terminal Compatibility Notes
 
