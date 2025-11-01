@@ -323,11 +323,13 @@ contains
         case('mouse-scroll-up')
             ! Scroll viewport up by 3 lines (don't move cursor)
             editor%viewport_line = max(1, editor%viewport_line - 3)
+            call sync_editor_to_pane(editor)
 
         case('mouse-scroll-down')
             ! Scroll viewport down by 3 lines (don't move cursor)
             editor%viewport_line = min(max(1, line_count - editor%screen_rows + 2), &
                                       editor%viewport_line + 3)
+            call sync_editor_to_pane(editor)
 
         case('ctrl-home')
             ! Jump to beginning of file
@@ -2486,11 +2488,13 @@ contains
         case('mouse-scroll-up')
             ! Scroll up by 3 lines
             editor%viewport_line = max(1, editor%viewport_line - 3)
+            call sync_editor_to_pane(editor)
 
         case('mouse-scroll-down')
             ! Scroll down by 3 lines
             editor%viewport_line = min(buffer_get_line_count(buffer) - editor%screen_rows + 2, &
                                       editor%viewport_line + 3)
+            call sync_editor_to_pane(editor)
 
         case('mouse-alt')
             ! Alt+click - add or remove cursor
@@ -2540,15 +2544,20 @@ contains
 
     subroutine position_cursor_at_screen(cursor, editor, buffer, screen_row, screen_col)
         use renderer_module, only: show_line_numbers, LINE_NUMBER_WIDTH
+        use editor_state_module, only: get_active_pane_indices, switch_to_pane, sync_editor_to_pane
         type(cursor_t), intent(inout) :: cursor
-        type(editor_state_t), intent(in) :: editor
+        type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: screen_row, screen_col
         integer :: target_line, target_col, col_offset, row_offset
         character(len=:), allocatable :: line
         integer :: line_count
+        integer :: tab_idx, pane_idx, i
+        integer :: pane_row, pane_col
+        logical :: in_pane
 
         line_count = buffer_get_line_count(buffer)
+        in_pane = .false.
 
         ! Account for tab bar offset - when tabs exist, row 1 is tab bar, content starts at row 2
         if (size(editor%tabs) > 0) then
@@ -2569,10 +2578,52 @@ contains
             col_offset = 0
         end if
 
-        ! Convert screen position to buffer position
-        ! When tab bar exists: screen_row 2 = viewport_line, screen_row 3 = viewport_line + 1, etc.
-        target_line = editor%viewport_line + screen_row - row_offset
-        target_col = editor%viewport_column + max(1, screen_col - col_offset)
+        ! Check if we're in a pane system
+        call get_active_pane_indices(editor, tab_idx, pane_idx)
+        if (tab_idx > 0 .and. pane_idx > 0 .and. allocated(editor%tabs(tab_idx)%panes)) then
+            ! Find which pane was clicked
+            do i = 1, size(editor%tabs(tab_idx)%panes)
+                ! Check if click is within this pane's boundaries
+                if (screen_row >= editor%tabs(tab_idx)%panes(i)%screen_row .and. &
+                    screen_row < editor%tabs(tab_idx)%panes(i)%screen_row + &
+                                  editor%tabs(tab_idx)%panes(i)%screen_height .and. &
+                    screen_col >= editor%tabs(tab_idx)%panes(i)%screen_col .and. &
+                    screen_col < editor%tabs(tab_idx)%panes(i)%screen_col + &
+                                 editor%tabs(tab_idx)%panes(i)%screen_width) then
+
+                    ! If clicking on a different pane, switch to it first
+                    if (i /= pane_idx) then
+                        call switch_to_pane(editor, tab_idx, i)
+                        pane_idx = i
+                        ! Update cursor reference after switching
+                        cursor = editor%cursors(editor%active_cursor)
+                    end if
+
+                    ! Now use the active pane's data
+                    associate(pane => editor%tabs(tab_idx)%panes(pane_idx))
+                        ! Calculate position relative to pane
+                        ! Note: screen_row is where the click occurred, pane%screen_row is top of pane
+                        ! We want 0-based offset into the pane
+                        pane_row = screen_row - pane%screen_row
+                        pane_col = screen_col - pane%screen_col + 1
+
+                        ! Convert pane position to buffer position using pane's viewport
+                        target_line = pane%viewport_line + pane_row
+                        target_col = pane%viewport_column + max(1, pane_col - col_offset)
+                        in_pane = .true.
+                    end associate
+                    exit
+                end if
+            end do
+
+            if (.not. in_pane) then
+                return  ! Click outside of any pane
+            end if
+        else
+            ! No panes, use editor viewport
+            target_line = editor%viewport_line + screen_row - row_offset
+            target_col = editor%viewport_column + max(1, screen_col - col_offset)
+        end if
 
         ! Clamp to valid range
         if (target_line < 1) target_line = 1
@@ -2590,6 +2641,9 @@ contains
         cursor%desired_column = target_col
 
         if (allocated(line)) deallocate(line)
+
+        ! Sync the updated cursor position back to the active pane
+        call sync_editor_to_pane(editor)
     end subroutine position_cursor_at_screen
 
     function is_cursor_at_screen_pos(cursor, editor, screen_row, screen_col) result(at_pos)

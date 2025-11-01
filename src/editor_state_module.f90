@@ -9,7 +9,7 @@ module editor_state_module
     public :: create_tab, switch_to_tab, switch_to_tab_with_buffer, get_active_tab_index, close_tab
     public :: split_pane_vertical, split_pane_horizontal, close_pane, get_active_pane_indices
     public :: navigate_to_pane_left, navigate_to_pane_right, navigate_to_pane_up, navigate_to_pane_down
-    public :: sync_editor_to_pane
+    public :: sync_editor_to_pane, switch_to_pane
 
     ! Cursor position and selection
     type :: cursor_t
@@ -176,6 +176,13 @@ contains
         temp_tabs(new_index)%panes(1)%viewport_line = 1
         temp_tabs(new_index)%panes(1)%viewport_column = 1
         temp_tabs(new_index)%panes(1)%is_active = .true.
+
+        ! Initialize screen coordinates for the default pane
+        ! These will be updated during rendering, but set reasonable defaults
+        temp_tabs(new_index)%panes(1)%screen_col = 1
+        temp_tabs(new_index)%panes(1)%screen_row = 2  ! After tab bar
+        temp_tabs(new_index)%panes(1)%screen_width = 80  ! Default width
+        temp_tabs(new_index)%panes(1)%screen_height = 22  ! Default height (24 - 2)
 
         ! Initialize cursor in the default pane
         allocate(temp_tabs(new_index)%panes(1)%cursors(1))
@@ -618,8 +625,11 @@ contains
 
     ! Helper to sync pane state to editor
     subroutine sync_pane_to_editor(editor, tab_idx, pane_idx)
+        use text_buffer_module, only: buffer_get_line, buffer_get_line_count
         type(editor_state_t), intent(inout) :: editor
         integer, intent(in) :: tab_idx, pane_idx
+        integer :: i, line_count
+        character(len=:), allocatable :: line
 
         if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
         if (.not. allocated(editor%tabs(tab_idx)%panes)) return
@@ -632,6 +642,32 @@ contains
                 allocate(editor%cursors(size(pane%cursors)))
                 editor%cursors = pane%cursors
                 editor%active_cursor = pane%active_cursor
+
+                ! Validate cursor positions are within buffer bounds
+                line_count = buffer_get_line_count(editor%tabs(tab_idx)%buffer)
+                if (line_count > 0) then
+                    do i = 1, size(editor%cursors)
+                        ! Clamp line to valid range
+                        if (editor%cursors(i)%line > line_count) then
+                            editor%cursors(i)%line = line_count
+                        end if
+                        if (editor%cursors(i)%line < 1) then
+                            editor%cursors(i)%line = 1
+                        end if
+
+                        ! Clamp column to valid range for the line
+                        line = buffer_get_line(editor%tabs(tab_idx)%buffer, editor%cursors(i)%line)
+                        if (editor%cursors(i)%column > len(line) + 1) then
+                            editor%cursors(i)%column = len(line) + 1
+                        end if
+                        if (editor%cursors(i)%column < 1) then
+                            editor%cursors(i)%column = 1
+                        end if
+                        editor%cursors(i)%desired_column = editor%cursors(i)%column
+
+                        if (allocated(line)) deallocate(line)
+                    end do
+                end if
             end if
             editor%viewport_line = pane%viewport_line
             editor%viewport_column = pane%viewport_column

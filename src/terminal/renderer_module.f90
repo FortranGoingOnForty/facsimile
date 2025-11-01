@@ -61,7 +61,7 @@ contains
 
     subroutine render_screen(buffer, editor)
         type(buffer_t), intent(in) :: buffer
-        type(editor_state_t), intent(in) :: editor
+        type(editor_state_t), intent(inout) :: editor
         integer :: screen_row, buffer_line, line_count
         character(len=:), allocatable :: line_content
         character(len=1) :: ch, cursor_char
@@ -526,7 +526,7 @@ contains
 
                         ! Calculate pane dimensions
                         screen_width = editor%screen_cols
-                        screen_height = editor%screen_rows - 3
+                        screen_height = editor%screen_rows - 2
                         pane_height = int((editor%tabs(tab_idx)%panes(pane_idx)%y_end - &
                                           editor%tabs(tab_idx)%panes(pane_idx)%y_start) * real(screen_height))
                         pane_width = int((editor%tabs(tab_idx)%panes(pane_idx)%x_end - &
@@ -582,7 +582,7 @@ contains
     ! Render screen with split panes (tree on left, editor on right)
     subroutine render_screen_with_tree(buffer, editor)
         type(buffer_t), intent(in) :: buffer
-        type(editor_state_t), intent(in) :: editor
+        type(editor_state_t), intent(inout) :: editor
         integer :: tree_width, editor_start_col, editor_width
         integer :: separator_col
         integer :: row
@@ -698,7 +698,7 @@ contains
     subroutine render_all_panes(buffer, editor)
         use editor_state_module, only: pane_t
         type(buffer_t), intent(in) :: buffer
-        type(editor_state_t), intent(in) :: editor
+        type(editor_state_t), intent(inout) :: editor
         type(pane_t) :: pane
         integer :: i, tab_idx, n_panes
         integer :: pane_col, pane_row, pane_width, pane_height
@@ -714,10 +714,16 @@ contains
 
         ! Get screen dimensions
         screen_width = editor%screen_cols
-        screen_height = editor%screen_rows - 3  ! Account for tab bar, status bar
+        screen_height = editor%screen_rows - 2  ! Account for tab bar (row 1) and status bar (last row)
 
         ! If only one pane, render full screen
         if (n_panes == 1) then
+            ! Set screen coordinates for the single pane
+            editor%tabs(tab_idx)%panes(1)%screen_col = 1
+            editor%tabs(tab_idx)%panes(1)%screen_row = 2  ! After tab bar
+            editor%tabs(tab_idx)%panes(1)%screen_width = screen_width
+            editor%tabs(tab_idx)%panes(1)%screen_height = screen_height
+
             call render_editor_pane(buffer, editor, 1, screen_width)
             return
         end if
@@ -744,6 +750,12 @@ contains
             end if
             pane_row = 2 + int(pane%y_start * real(screen_height))
             pane_height = int((pane%y_end - pane%y_start) * real(screen_height))
+
+            ! Store the calculated screen coordinates in the pane
+            editor%tabs(tab_idx)%panes(i)%screen_col = pane_col
+            editor%tabs(tab_idx)%panes(i)%screen_row = pane_row
+            editor%tabs(tab_idx)%panes(i)%screen_width = pane_width
+            editor%tabs(tab_idx)%panes(i)%screen_height = pane_height
 
             ! Render the pane content
             call render_single_pane(buffer, editor, i, pane_col, pane_row, pane_width, pane_height)
@@ -971,7 +983,7 @@ contains
 
         ! Calculate pane screen coordinates
         screen_width = editor%screen_cols
-        screen_height = editor%screen_rows - 3  ! Account for tab bar, status bar
+        screen_height = editor%screen_rows - 2  ! Account for tab bar (row 1) and status bar (last row)
 
         pane_col = 1 + int(pane%x_start * real(screen_width))
         pane_width = int((pane%x_end - pane%x_start) * real(screen_width))
