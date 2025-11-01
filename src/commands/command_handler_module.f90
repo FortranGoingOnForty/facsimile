@@ -3880,7 +3880,9 @@ contains
                 ! Also update tab's active pane state
                 if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
                     editor%tabs(editor%active_tab_index)%active_pane_index > 0) then
-                    associate (pane => editor%tabs(editor%active_tab_index)%panes(editor%tabs(editor%active_tab_index)%active_pane_index))
+                    associate (pane => &
+                        editor%tabs(editor%active_tab_index)%panes( &
+                        editor%tabs(editor%active_tab_index)%active_pane_index))
                         if (allocated(pane%cursors) .and. size(pane%cursors) > 0) then
                             pane%cursors(1)%line = 1
                             pane%cursors(1)%column = 1
