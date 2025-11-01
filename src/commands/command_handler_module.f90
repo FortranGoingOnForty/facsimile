@@ -2410,6 +2410,7 @@ contains
     end subroutine init_cursor
 
     subroutine handle_mouse_event_action(key_str, editor, buffer)
+        use editor_state_module, only: get_active_pane_indices
         character(len=*), intent(in) :: key_str
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(in) :: buffer
@@ -2420,6 +2421,10 @@ contains
         logical :: is_alt_click
         type(cursor_t), allocatable :: new_cursors(:)
         integer :: i, cursor_exists
+        ! Variables for mouse drag handling
+        logical :: had_selection, in_active_pane
+        integer :: selection_start_line, selection_start_col
+        integer :: tab_idx, pane_idx
 
         line_count = buffer_get_line_count(buffer)
 
@@ -2449,37 +2454,73 @@ contains
         case('mouse-click')
             ! Regular click - move cursor to position
             if (button == 0) then  ! Left click
-                call position_cursor_at_screen(editor%cursors(editor%active_cursor), &
-                                              editor, buffer, row, col)
-                ! Clear other cursors (single cursor mode)
+                ! Clear other cursors first (single cursor mode)
                 if (allocated(editor%cursors)) then
                     if (size(editor%cursors) > 1) then
                         deallocate(editor%cursors)
                         allocate(editor%cursors(1))
                         call init_cursor(editor%cursors(1))
-                        call position_cursor_at_screen(editor%cursors(1), &
-                                                      editor, buffer, row, col)
                         editor%active_cursor = 1
                     end if
                 end if
-                ! Clear selection
-                editor%cursors(editor%active_cursor)%has_selection = .false.
+
+                ! Now position cursor (this might switch panes and update cursors)
+                call position_cursor_at_screen(editor%active_cursor, &
+                                              editor, buffer, row, col)
+
+                ! Clear selection after positioning (cursor array is now stable)
+                if (allocated(editor%cursors) .and. editor%active_cursor > 0 .and. &
+                    editor%active_cursor <= size(editor%cursors)) then
+                    editor%cursors(editor%active_cursor)%has_selection = .false.
+                end if
             end if
 
         case('mouse-drag')
-            ! Mouse drag - extend selection
-            if (.not. editor%cursors(editor%active_cursor)%has_selection) then
-                ! Start selection from current position
-                editor%cursors(editor%active_cursor)%has_selection = .true.
-                editor%cursors(editor%active_cursor)%selection_start_line = &
-                    editor%cursors(editor%active_cursor)%line
-                editor%cursors(editor%active_cursor)%selection_start_col = &
-                    editor%cursors(editor%active_cursor)%column
+            ! Mouse drag - extend selection within current pane only
+            ! We shouldn't switch panes while dragging, only move cursor within current pane
+
+            ! Check if we're in the current active pane - don't switch panes during drag
+            call get_active_pane_indices(editor, tab_idx, pane_idx)
+            in_active_pane = .false.
+
+            if (tab_idx > 0 .and. pane_idx > 0 .and. allocated(editor%tabs(tab_idx)%panes)) then
+                associate(pane => editor%tabs(tab_idx)%panes(pane_idx))
+                    ! Check if mouse is still in the active pane
+                    if (row >= pane%screen_row .and. &
+                        row < pane%screen_row + pane%screen_height .and. &
+                        col >= pane%screen_col .and. &
+                        col < pane%screen_col + pane%screen_width) then
+                        in_active_pane = .true.
+                    end if
+                end associate
             end if
-            ! Move cursor to drag position (extends selection)
-            call position_cursor_at_screen(editor%cursors(editor%active_cursor), &
-                                          editor, buffer, row, col)
-            call update_viewport(editor)
+
+            ! Only process drag if within active pane
+            if (in_active_pane) then
+                had_selection = editor%cursors(editor%active_cursor)%has_selection
+                if (.not. had_selection) then
+                    ! Start selection from current position
+                    selection_start_line = editor%cursors(editor%active_cursor)%line
+                    selection_start_col = editor%cursors(editor%active_cursor)%column
+                else
+                    selection_start_line = editor%cursors(editor%active_cursor)%selection_start_line
+                    selection_start_col = editor%cursors(editor%active_cursor)%selection_start_col
+                end if
+
+                ! Move cursor to drag position (won't switch panes since we're in active pane)
+                call position_cursor_at_screen(editor%active_cursor, &
+                                              editor, buffer, row, col)
+
+                ! Restore/set selection state after positioning
+                if (allocated(editor%cursors) .and. editor%active_cursor > 0 .and. &
+                    editor%active_cursor <= size(editor%cursors)) then
+                    editor%cursors(editor%active_cursor)%has_selection = .true.
+                    editor%cursors(editor%active_cursor)%selection_start_line = selection_start_line
+                    editor%cursors(editor%active_cursor)%selection_start_col = selection_start_col
+                end if
+
+                call update_viewport(editor)
+            end if
 
         case('mouse-release')
             ! Mouse button released - nothing special to do
@@ -2531,21 +2572,23 @@ contains
                         new_cursors(i) = editor%cursors(i)
                     end do
                     call init_cursor(new_cursors(size(new_cursors)))
-                    call position_cursor_at_screen(new_cursors(size(new_cursors)), &
-                                                  editor, buffer, row, col)
+                    ! First move the new cursors to editor
                     deallocate(editor%cursors)
                     editor%cursors = new_cursors
                     editor%active_cursor = size(editor%cursors)
+                    ! Then position the new cursor using its index
+                    call position_cursor_at_screen(editor%active_cursor, &
+                                                  editor, buffer, row, col)
                 end if
             end if
 
         end select
     end subroutine handle_mouse_event_action
 
-    subroutine position_cursor_at_screen(cursor, editor, buffer, screen_row, screen_col)
+    subroutine position_cursor_at_screen(cursor_idx, editor, buffer, screen_row, screen_col)
         use renderer_module, only: show_line_numbers, LINE_NUMBER_WIDTH
         use editor_state_module, only: get_active_pane_indices, switch_to_pane, sync_editor_to_pane
-        type(cursor_t), intent(inout) :: cursor
+        integer, intent(inout) :: cursor_idx  ! Use index instead of reference
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: screen_row, screen_col
@@ -2595,8 +2638,8 @@ contains
                     if (i /= pane_idx) then
                         call switch_to_pane(editor, tab_idx, i)
                         pane_idx = i
-                        ! Update cursor reference after switching
-                        cursor = editor%cursors(editor%active_cursor)
+                        ! Update cursor index after switching (might have changed)
+                        cursor_idx = editor%active_cursor
                     end if
 
                     ! Now use the active pane's data
@@ -2635,10 +2678,12 @@ contains
         ! Clamp column to actual line length + 1 (position after last char)
         if (target_col > len(line) + 1) target_col = len(line) + 1
 
-        ! Set cursor position
-        cursor%line = target_line
-        cursor%column = target_col
-        cursor%desired_column = target_col
+        ! Set cursor position (ensure cursor_idx is valid)
+        if (allocated(editor%cursors) .and. cursor_idx > 0 .and. cursor_idx <= size(editor%cursors)) then
+            editor%cursors(cursor_idx)%line = target_line
+            editor%cursors(cursor_idx)%column = target_col
+            editor%cursors(cursor_idx)%desired_column = target_col
+        end if
 
         if (allocated(line)) deallocate(line)
 
@@ -2704,11 +2749,13 @@ contains
                 new_cursors(i) = editor%cursors(i)
             end do
             call init_cursor(new_cursors(size(new_cursors)))
-            call position_cursor_at_screen(new_cursors(size(new_cursors)), &
-                                          editor, buffer, row, col)
+            ! First move the new cursors to editor
             deallocate(editor%cursors)
             editor%cursors = new_cursors
             editor%active_cursor = size(editor%cursors)
+            ! Then position the new cursor using its index
+            call position_cursor_at_screen(editor%active_cursor, &
+                                          editor, buffer, row, col)
         end if
     end subroutine toggle_cursor_at_position
 
@@ -2716,6 +2763,7 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: row, col
+        integer :: cursor_idx
 
         ! Clear multiple cursors
         if (allocated(editor%cursors)) then
@@ -2728,7 +2776,8 @@ contains
         end if
 
         ! Move cursor to click position
-        call position_cursor_at_screen(editor%cursors(1), editor, buffer, row, col)
+        cursor_idx = 1
+        call position_cursor_at_screen(cursor_idx, editor, buffer, row, col)
         call update_viewport(editor)
     end subroutine handle_mouse_click
 

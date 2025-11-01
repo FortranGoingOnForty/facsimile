@@ -638,36 +638,47 @@ contains
         associate(pane => editor%tabs(tab_idx)%panes(pane_idx))
             ! Copy pane state to editor
             if (allocated(editor%cursors)) deallocate(editor%cursors)
-            if (allocated(pane%cursors)) then
+            if (allocated(pane%cursors) .and. size(pane%cursors) > 0) then
                 allocate(editor%cursors(size(pane%cursors)))
                 editor%cursors = pane%cursors
-                editor%active_cursor = pane%active_cursor
+                editor%active_cursor = min(pane%active_cursor, size(pane%cursors))
+                if (editor%active_cursor < 1) editor%active_cursor = 1
+            else
+                ! Initialize with single cursor if pane has no cursors
+                allocate(editor%cursors(1))
+                editor%cursors(1)%line = 1
+                editor%cursors(1)%column = 1
+                editor%cursors(1)%desired_column = 1
+                editor%cursors(1)%has_selection = .false.
+                editor%cursors(1)%selection_start_line = 1
+                editor%cursors(1)%selection_start_col = 1
+                editor%active_cursor = 1
+            end if
 
-                ! Validate cursor positions are within buffer bounds
-                line_count = buffer_get_line_count(editor%tabs(tab_idx)%buffer)
-                if (line_count > 0) then
-                    do i = 1, size(editor%cursors)
-                        ! Clamp line to valid range
-                        if (editor%cursors(i)%line > line_count) then
-                            editor%cursors(i)%line = line_count
-                        end if
-                        if (editor%cursors(i)%line < 1) then
-                            editor%cursors(i)%line = 1
-                        end if
+            ! Validate cursor positions are within buffer bounds
+            line_count = buffer_get_line_count(editor%tabs(tab_idx)%buffer)
+            if (line_count > 0 .and. allocated(editor%cursors)) then
+                do i = 1, size(editor%cursors)
+                    ! Clamp line to valid range
+                    if (editor%cursors(i)%line > line_count) then
+                        editor%cursors(i)%line = line_count
+                    end if
+                    if (editor%cursors(i)%line < 1) then
+                        editor%cursors(i)%line = 1
+                    end if
 
-                        ! Clamp column to valid range for the line
-                        line = buffer_get_line(editor%tabs(tab_idx)%buffer, editor%cursors(i)%line)
-                        if (editor%cursors(i)%column > len(line) + 1) then
-                            editor%cursors(i)%column = len(line) + 1
-                        end if
-                        if (editor%cursors(i)%column < 1) then
-                            editor%cursors(i)%column = 1
-                        end if
-                        editor%cursors(i)%desired_column = editor%cursors(i)%column
+                    ! Clamp column to valid range for the line
+                    line = buffer_get_line(editor%tabs(tab_idx)%buffer, editor%cursors(i)%line)
+                    if (editor%cursors(i)%column > len(line) + 1) then
+                        editor%cursors(i)%column = len(line) + 1
+                    end if
+                    if (editor%cursors(i)%column < 1) then
+                        editor%cursors(i)%column = 1
+                    end if
+                    editor%cursors(i)%desired_column = editor%cursors(i)%column
 
-                        if (allocated(line)) deallocate(line)
-                    end do
-                end if
+                    if (allocated(line)) deallocate(line)
+                end do
             end if
             editor%viewport_line = pane%viewport_line
             editor%viewport_column = pane%viewport_column
@@ -689,9 +700,22 @@ contains
         associate(pane => editor%tabs(tab_idx)%panes(pane_idx))
             ! Copy editor state back to pane
             if (allocated(pane%cursors)) deallocate(pane%cursors)
-            allocate(pane%cursors(size(editor%cursors)))
-            pane%cursors = editor%cursors
-            pane%active_cursor = editor%active_cursor
+            if (allocated(editor%cursors) .and. size(editor%cursors) > 0) then
+                allocate(pane%cursors(size(editor%cursors)))
+                pane%cursors = editor%cursors
+                pane%active_cursor = min(editor%active_cursor, size(editor%cursors))
+                if (pane%active_cursor < 1) pane%active_cursor = 1
+            else
+                ! Should not happen, but ensure we have at least one cursor
+                allocate(pane%cursors(1))
+                pane%cursors(1)%line = 1
+                pane%cursors(1)%column = 1
+                pane%cursors(1)%desired_column = 1
+                pane%cursors(1)%has_selection = .false.
+                pane%cursors(1)%selection_start_line = 1
+                pane%cursors(1)%selection_start_col = 1
+                pane%active_cursor = 1
+            end if
             pane%viewport_line = editor%viewport_line
             pane%viewport_column = editor%viewport_column
         end associate
@@ -853,11 +877,20 @@ contains
     subroutine switch_to_pane(editor, tab_idx, pane_idx)
         type(editor_state_t), intent(inout) :: editor
         integer, intent(in) :: tab_idx, pane_idx
-        integer :: i
+        integer :: i, old_pane_idx
 
         if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
         if (.not. allocated(editor%tabs(tab_idx)%panes)) return
         if (pane_idx < 1 .or. pane_idx > size(editor%tabs(tab_idx)%panes)) return
+
+        ! Don't do anything if we're already in this pane
+        if (pane_idx == editor%tabs(tab_idx)%active_pane_index) return
+
+        ! Save current editor state to the old pane before switching
+        old_pane_idx = editor%tabs(tab_idx)%active_pane_index
+        if (old_pane_idx > 0 .and. old_pane_idx <= size(editor%tabs(tab_idx)%panes)) then
+            call sync_editor_to_pane(editor)
+        end if
 
         ! Clear all is_active flags
         do i = 1, size(editor%tabs(tab_idx)%panes)
@@ -868,7 +901,7 @@ contains
         editor%tabs(tab_idx)%panes(pane_idx)%is_active = .true.
         editor%tabs(tab_idx)%active_pane_index = pane_idx
 
-        ! Sync to editor state
+        ! Load the new pane's state to editor
         call sync_pane_to_editor(editor, tab_idx, pane_idx)
     end subroutine switch_to_pane
 
