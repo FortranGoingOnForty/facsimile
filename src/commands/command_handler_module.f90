@@ -395,24 +395,28 @@ contains
         case('alt-up')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             call move_line_up(editor%cursors(editor%active_cursor), buffer)
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
             is_edit_action = .true.
 
         case('alt-down')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             call move_line_down(editor%cursors(editor%active_cursor), buffer)
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
             is_edit_action = .true.
 
         case('alt-shift-up')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             call duplicate_line_up(editor%cursors(editor%active_cursor), buffer)
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
             is_edit_action = .true.
 
         case('alt-shift-down')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             call duplicate_line_down(editor%cursors(editor%active_cursor), buffer)
+            call sync_editor_to_pane(editor)
             call update_viewport(editor)
             is_edit_action = .true.
 
@@ -1966,6 +1970,8 @@ contains
         end if
 
         ! Restore cursor position on moved line
+        ! Current line is now at cursor%line (which is original_line + 1)
+        ! So cursor is already on the moved line, just need to fix column
         cursor%column = min(saved_column, len(current_line) + 1)
         cursor%desired_column = cursor%column
 

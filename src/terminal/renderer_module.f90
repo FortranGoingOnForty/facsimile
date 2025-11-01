@@ -126,12 +126,20 @@ contains
 
         ! Render all panes for the active tab
         if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0 .and. &
-            allocated(editor%tabs(editor%active_tab_index)%panes)) then
-            call render_all_panes(buffer, editor)
-        else
-            ! Fallback to simple rendering if no tabs/panes
-            ! Clear and render each visible line
-            do screen_row = start_row, editor%screen_rows - 1  ! Last row for status bar
+            editor%active_tab_index <= size(editor%tabs)) then
+            if (allocated(editor%tabs(editor%active_tab_index)%panes)) then
+                call render_all_panes(buffer, editor)
+                ! Render status bar after panes
+                call render_status_bar(editor, buffer)
+                ! Position cursor for panes
+                call render_cursor_for_panes(editor)
+                return  ! Exit after rendering panes
+            end if
+        end if
+
+        ! Fallback to simple rendering if no tabs/panes
+        ! Clear and render each visible line
+        do screen_row = start_row, editor%screen_rows - 1  ! Last row for status bar
                 buffer_line = editor%viewport_line + screen_row - row_offset_val
 
                 call terminal_move_cursor(screen_row, 1)
@@ -171,15 +179,18 @@ contains
                     end if
                 end if
             end do
-        end if
 
         ! Render status bar
         call render_status_bar(editor, buffer)
 
         ! Position cursor for panes or regular view
         if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0 .and. &
-            allocated(editor%tabs(editor%active_tab_index)%panes)) then
-            call render_cursor_for_panes(editor)
+            editor%active_tab_index <= size(editor%tabs)) then
+            if (allocated(editor%tabs(editor%active_tab_index)%panes)) then
+                call render_cursor_for_panes(editor)
+            else
+                call render_cursor(editor)
+            end if
         else
             call render_cursor(editor)
         end if
