@@ -843,10 +843,12 @@ contains
         integer, intent(in) :: pane_idx, line_num, screen_row, col, width
         character(len=:), allocatable :: line
         type(pane_t) :: pane
-        integer :: tab_idx, start_col, end_col, i
+        integer :: tab_idx, start_col, end_col, i, char_col
         integer :: content_width, content_col
         character(len=5) :: line_num_str
-        logical :: is_current_line
+        logical :: is_current_line, in_selection
+        integer :: sel_start_line, sel_start_col, sel_end_line, sel_end_col
+        character(len=1) :: ch
 
         tab_idx = editor%active_tab_index
         pane = editor%tabs(tab_idx)%panes(pane_idx)
@@ -912,26 +914,81 @@ contains
             end do
         end if
 
-        ! Set background based on pane state
-        if (pane%is_active) then
-            if (is_current_line) then
-                ! Highlight current line in active pane
-                call terminal_write(char(27) // '[48;5;237m')  ! Slightly brighter gray
+        ! Render the line character by character with selection highlighting
+        do char_col = start_col, start_col + content_width - 1
+            in_selection = .false.
+
+            ! Check if this position is in any cursor's selection (use pane's cursors)
+            if (allocated(pane%cursors)) then
+                do i = 1, size(pane%cursors)
+                    if (pane%cursors(i)%has_selection) then
+                        ! Determine selection bounds (handle both directions)
+                        if (pane%cursors(i)%line < pane%cursors(i)%selection_start_line .or. &
+                            (pane%cursors(i)%line == pane%cursors(i)%selection_start_line .and. &
+                             pane%cursors(i)%column < pane%cursors(i)%selection_start_col)) then
+                            ! Cursor is before selection start (selecting upward)
+                            sel_start_line = pane%cursors(i)%line
+                            sel_start_col = pane%cursors(i)%column
+                            sel_end_line = pane%cursors(i)%selection_start_line
+                            sel_end_col = pane%cursors(i)%selection_start_col
+                        else
+                            ! Cursor is after selection start (selecting downward)
+                            sel_start_line = pane%cursors(i)%selection_start_line
+                            sel_start_col = pane%cursors(i)%selection_start_col
+                            sel_end_line = pane%cursors(i)%line
+                            sel_end_col = pane%cursors(i)%column
+                        end if
+
+                        ! Check if this position is selected
+                        if (line_num > sel_start_line .and. line_num < sel_end_line) then
+                            ! Fully selected line (between start and end)
+                            in_selection = .true.
+                            exit
+                        else if (line_num == sel_start_line .and. line_num == sel_end_line) then
+                            ! Single-line selection
+                            if (char_col >= sel_start_col .and. char_col < sel_end_col) then
+                                in_selection = .true.
+                                exit
+                            end if
+                        else if (line_num == sel_start_line .and. line_num < sel_end_line) then
+                            ! First line of multi-line selection
+                            if (char_col >= sel_start_col) then
+                                in_selection = .true.
+                                exit
+                            end if
+                        else if (line_num == sel_end_line .and. line_num > sel_start_line) then
+                            ! Last line of multi-line selection
+                            if (char_col < sel_end_col) then
+                                in_selection = .true.
+                                exit
+                            end if
+                        end if
+                    end if
+                end do
             end if
-        else
-            ! Inactive pane gets subtle dark background
-            call terminal_write(char(27) // '[48;5;234m')  ! Very dark gray
-        end if
 
-        ! Render the visible portion of the line
-        if (start_col <= len(line)) then
-            call terminal_write(line(start_col:min(end_col, len(line))))
-        end if
+            ! Get the character at this position
+            if (char_col <= len(line)) then
+                ch = line(char_col:char_col)
+            else
+                ch = ' '
+            end if
 
-        ! Fill remaining width with the same background
-        if (end_col - start_col + 1 < content_width) then
-            call terminal_write(repeat(' ', content_width - (end_col - start_col + 1)))
-        end if
+            ! Render the character with appropriate highlighting
+            if (in_selection) then
+                ! Highlight selected text with reverse video
+                call terminal_write(char(27) // '[7m' // ch // char(27) // '[0m')
+            else if (pane%is_active .and. is_current_line) then
+                ! Subtle background for current line in active pane
+                call terminal_write(char(27) // '[48;5;237m' // ch // char(27) // '[0m')
+            else if (.not. pane%is_active) then
+                ! Inactive pane background
+                call terminal_write(char(27) // '[48;5;234m' // ch // char(27) // '[0m')
+            else
+                ! Normal text
+                call terminal_write(ch)
+            end if
+        end do
 
         ! Reset attributes
         call terminal_write(char(27) // '[0m')
