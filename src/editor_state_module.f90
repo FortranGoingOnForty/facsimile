@@ -182,6 +182,7 @@ contains
         temp_tabs(new_index)%panes(1)%cursors(1)%line = 1
         temp_tabs(new_index)%panes(1)%cursors(1)%column = 1
         temp_tabs(new_index)%panes(1)%cursors(1)%desired_column = 1
+        temp_tabs(new_index)%panes(1)%cursors(1)%has_selection = .false.
         temp_tabs(new_index)%panes(1)%active_cursor = 1
 
         temp_tabs(new_index)%active_pane_index = 1
@@ -358,6 +359,13 @@ contains
         n_panes = size(editor%tabs(tab_idx)%panes)
         if (pane_idx < 1 .or. pane_idx > n_panes) return
 
+        ! Ensure active pane has cursors from editor state
+        if (.not. allocated(editor%tabs(tab_idx)%panes(pane_idx)%cursors)) then
+            allocate(editor%tabs(tab_idx)%panes(pane_idx)%cursors(size(editor%cursors)))
+            editor%tabs(tab_idx)%panes(pane_idx)%cursors = editor%cursors
+            editor%tabs(tab_idx)%panes(pane_idx)%active_cursor = editor%active_cursor
+        end if
+
         ! Calculate split point
         associate(active_pane => editor%tabs(tab_idx)%panes(pane_idx))
             mid_x = (active_pane%x_start + active_pane%x_end) / 2.0
@@ -386,9 +394,25 @@ contains
             temp_panes(new_idx)%viewport_column = active_pane%viewport_column
             if (allocated(active_pane%cursors)) then
                 allocate(temp_panes(new_idx)%cursors(size(active_pane%cursors)))
-                temp_panes(new_idx)%cursors = active_pane%cursors
+                ! Deep copy each cursor to ensure all fields are copied
+                do i = 1, size(active_pane%cursors)
+                    temp_panes(new_idx)%cursors(i)%line = active_pane%cursors(i)%line
+                    temp_panes(new_idx)%cursors(i)%column = active_pane%cursors(i)%column
+                    temp_panes(new_idx)%cursors(i)%desired_column = active_pane%cursors(i)%desired_column
+                    temp_panes(new_idx)%cursors(i)%has_selection = active_pane%cursors(i)%has_selection
+                    temp_panes(new_idx)%cursors(i)%selection_start_line = active_pane%cursors(i)%selection_start_line
+                    temp_panes(new_idx)%cursors(i)%selection_start_col = active_pane%cursors(i)%selection_start_col
+                end do
+                temp_panes(new_idx)%active_cursor = active_pane%active_cursor
+            else
+                ! Initialize cursor if not already allocated
+                allocate(temp_panes(new_idx)%cursors(1))
+                temp_panes(new_idx)%cursors(1)%line = 1
+                temp_panes(new_idx)%cursors(1)%column = 1
+                temp_panes(new_idx)%cursors(1)%desired_column = 1
+                temp_panes(new_idx)%cursors(1)%has_selection = .false.
+                temp_panes(new_idx)%active_cursor = 1
             end if
-            temp_panes(new_idx)%active_cursor = active_pane%active_cursor
             temp_panes(new_idx)%is_active = .false.
 
             ! Update active pane (left half)
@@ -428,6 +452,13 @@ contains
         n_panes = size(editor%tabs(tab_idx)%panes)
         if (pane_idx < 1 .or. pane_idx > n_panes) return
 
+        ! Ensure active pane has cursors from editor state
+        if (.not. allocated(editor%tabs(tab_idx)%panes(pane_idx)%cursors)) then
+            allocate(editor%tabs(tab_idx)%panes(pane_idx)%cursors(size(editor%cursors)))
+            editor%tabs(tab_idx)%panes(pane_idx)%cursors = editor%cursors
+            editor%tabs(tab_idx)%panes(pane_idx)%active_cursor = editor%active_cursor
+        end if
+
         ! Calculate split point
         associate(active_pane => editor%tabs(tab_idx)%panes(pane_idx))
             mid_y = (active_pane%y_start + active_pane%y_end) / 2.0
@@ -456,9 +487,25 @@ contains
             temp_panes(new_idx)%viewport_column = active_pane%viewport_column
             if (allocated(active_pane%cursors)) then
                 allocate(temp_panes(new_idx)%cursors(size(active_pane%cursors)))
-                temp_panes(new_idx)%cursors = active_pane%cursors
+                ! Deep copy each cursor to ensure all fields are copied
+                do i = 1, size(active_pane%cursors)
+                    temp_panes(new_idx)%cursors(i)%line = active_pane%cursors(i)%line
+                    temp_panes(new_idx)%cursors(i)%column = active_pane%cursors(i)%column
+                    temp_panes(new_idx)%cursors(i)%desired_column = active_pane%cursors(i)%desired_column
+                    temp_panes(new_idx)%cursors(i)%has_selection = active_pane%cursors(i)%has_selection
+                    temp_panes(new_idx)%cursors(i)%selection_start_line = active_pane%cursors(i)%selection_start_line
+                    temp_panes(new_idx)%cursors(i)%selection_start_col = active_pane%cursors(i)%selection_start_col
+                end do
+                temp_panes(new_idx)%active_cursor = active_pane%active_cursor
+            else
+                ! Initialize cursor if not already allocated
+                allocate(temp_panes(new_idx)%cursors(1))
+                temp_panes(new_idx)%cursors(1)%line = 1
+                temp_panes(new_idx)%cursors(1)%column = 1
+                temp_panes(new_idx)%cursors(1)%desired_column = 1
+                temp_panes(new_idx)%cursors(1)%has_selection = .false.
+                temp_panes(new_idx)%active_cursor = 1
             end if
-            temp_panes(new_idx)%active_cursor = active_pane%active_cursor
             temp_panes(new_idx)%is_active = .false.
 
             ! Update active pane (top half)

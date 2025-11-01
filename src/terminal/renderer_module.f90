@@ -379,8 +379,8 @@ contains
     subroutine render_status_bar(editor, buffer)
         type(editor_state_t), intent(in) :: editor
         type(buffer_t), intent(in) :: buffer
-        character(len=256) :: status_left, status_right, status_bar
-        integer :: padding_len
+        character(len=256) :: status_left, status_center, status_right, status_bar
+        integer :: padding_len, left_pad, right_pad
         type(cursor_t) :: cursor
 
         cursor = editor%cursors(editor%active_cursor)
@@ -397,6 +397,9 @@ contains
                    merge(' [modified]', '           ', buffer%modified), ' '
         end if
 
+        ! Add help hint in center
+        status_center = 'ctrl-/:help'
+
         if (size(editor%cursors) > 1) then
             write(status_right, '(a,i0,a,a,i0,a,i0,a)') '[', size(editor%cursors), ' cursors] ', &
                    'Ln ', cursor%line, ', Col ', cursor%column, ' '
@@ -404,12 +407,22 @@ contains
             write(status_right, '(a,i0,a,i0,a)') 'Ln ', cursor%line, ', Col ', cursor%column, ' '
         end if
 
-        ! Create full status bar with padding
-        padding_len = editor%screen_cols - len_trim(status_left) - len_trim(status_right)
+        ! Create full status bar with center text
+        padding_len = editor%screen_cols - len_trim(status_left) - len_trim(status_center) - len_trim(status_right)
         if (padding_len > 0) then
-            status_bar = trim(status_left) // repeat(' ', padding_len) // trim(status_right)
+            ! Distribute padding around center text
+            left_pad = padding_len / 2
+            right_pad = padding_len - left_pad
+            status_bar = trim(status_left) // repeat(' ', left_pad) // &
+                        trim(status_center) // repeat(' ', right_pad) // trim(status_right)
         else
-            status_bar = status_left(1:editor%screen_cols)
+            ! Not enough space, just show left and right
+            padding_len = editor%screen_cols - len_trim(status_left) - len_trim(status_right)
+            if (padding_len > 0) then
+                status_bar = trim(status_left) // repeat(' ', padding_len) // trim(status_right)
+            else
+                status_bar = status_left(1:editor%screen_cols)
+            end if
         end if
 
         ! Render with inverse video

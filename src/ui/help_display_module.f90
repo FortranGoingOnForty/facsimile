@@ -13,151 +13,248 @@ contains
 
     subroutine show_help(editor)
         type(editor_state_t), intent(in) :: editor
-        integer :: row, col, max_rows
-        character(len=100) :: line
+        character(len=100), allocatable :: help_lines(:)
+        integer :: n_lines, viewport_start, viewport_size
+        integer :: row, max_rows
         character(len=32) :: key_input
         integer :: status
+        logical :: done
 
         max_rows = editor%screen_rows
 
-        ! Clear screen and hide cursor
-        call terminal_clear_screen()
-        call terminal_hide_cursor()
+        ! Build help content array
+        call build_help_content(help_lines, n_lines)
 
-        ! Title
-        row = 1
-        call terminal_move_cursor(row, 1)
-        call terminal_write("FACSIMILE HELP - Press any key to close")
-        row = row + 1
-        call terminal_move_cursor(row, 1)
-        call terminal_write(repeat("=", 60))
-        row = row + 2
+        ! Initialize viewport
+        viewport_start = 1
+        viewport_size = max_rows - 4  ! Leave room for header and footer
 
-        ! Navigation
-        call display_section(row, max_rows, "NAVIGATION", &
-            ["arrows          move cursor                     ", &
-             "ctrl-a/home     smart home (toggle)             ", &
-             "ctrl-e/end      end of line                     ", &
-             "ctrl-home/end   file start/end                  ", &
-             "alt-left/right  word jump                       ", &
-             "alt-[/alt-]     jump to matching bracket        ", &
-             "pageup/down     page scroll                     ", &
-             "ctrl-g          go to line:column               ", &
-             "click           position cursor                 ", &
-             "alt-click       add/remove cursor               "])
+        done = .false.
+        do while (.not. done)
+            ! Clear screen and hide cursor
+            call terminal_clear_screen()
+            call terminal_hide_cursor()
 
-        ! Selection
-        call display_section(row, max_rows, "SELECTION", &
-            ["shift-arrows        character selection         ", &
-             "shift-alt-l/r       word selection              ", &
-             "shift-ctrl-a/e      select to line start/end    ", &
-             "shift-home/end      select to line boundaries   ", &
-             "shift-pageup/down   page selection              "])
+            ! Header
+            call terminal_move_cursor(1, 1)
+            call terminal_write("FACSIMILE HELP - Navigate: ↑↓/jk/PgUp/PgDn, Quit: q/ESC")
+            call terminal_move_cursor(2, 1)
+            call terminal_write(repeat("=", 70))
 
-        ! Editing
-        call display_section(row, max_rows, "EDITING", &
-            ["backspace/ctrl-h    delete backward             ", &
-             "delete              delete forward              ", &
-             "tab                 insert 4 spaces/indent      ", &
-             "shift-tab           dedent selection/line       ", &
-             "ctrl-k              kill line forward           ", &
-             "ctrl-u              kill line backward          ", &
-             "ctrl-y              yank from stack             ", &
-             "alt-bksp            delete word backward        ", &
-             "alt-d               delete word forward         ", &
-             "ctrl-j              join lines                  ", &
-             "auto-close          brackets/quotes             "])
+            ! Display visible portion of help
+            call display_help_viewport(help_lines, n_lines, viewport_start, viewport_size, 3)
 
-        ! Clipboard
-        call display_section(row, max_rows, "CLIPBOARD", &
-            ["ctrl-x          cut line/selection              ", &
-             "ctrl-c          copy line/selection             ", &
-             "ctrl-v          paste                           "])
-
-        ! Lines
-        call display_section(row, max_rows, "LINES", &
-            ["alt-up/down         move line                   ", &
-             "alt-shift-up/down   duplicate line              "])
-
-        ! Search & Replace
-        call display_section(row, max_rows, "SEARCH & REPLACE", &
-            ["ctrl-f              search forward              ", &
-             "ctrl-r              find and replace            ", &
-             "n                   next match                  ", &
-             "N                   previous match              ", &
-             "ctrl-d              select next match           ", &
-             "alt-c (in search)   toggle case sensitive       ", &
-             "alt-w (in search)   toggle whole word match     "])
-
-        ! Multiple Cursors
-        call display_section(row, max_rows, "MULTIPLE CURSORS", &
-            ["alt-click           add/remove cursor           ", &
-             "opt-meta-up/down    cursor above/below          "])
-
-        ! Special
-        call display_section(row, max_rows, "SPECIAL", &
-            ["ctrl-'              cycle quotes                ", &
-             "ctrl-opt-backspace  remove brackets             ", &
-             "ctrl-z              undo                        ", &
-             "ctrl-shift-z        redo                        ", &
-             "ctrl-l              clear/redraw screen         "])
-
-        ! Tabs
-        call display_section(row, max_rows, "TABS", &
-            ["ctrl-t              new empty tab               ", &
-             "ctrl-w              close current tab           ", &
-             "alt-1 to alt-9      jump to tab 1-9             ", &
-             "ctrl-alt-left       previous tab                ", &
-             "ctrl-alt-right      next tab                    ", &
-             "ctrl-b              toggle file tree (fuss)     "])
-
-        ! Panes
-        call display_section(row, max_rows, "PANES", &
-            ["alt-v                   split pane vertically           ", &
-             "alt-s                   split pane horizontally         ", &
-             "alt-q                   close current pane only         ", &
-             "ctrl-w                  close pane (then tab if last)   ", &
-             "ctrl-shift-arrows       navigate between panes          ", &
-             "alt-h/l/k/j             navigate left/right/up/down     "])
-
-        ! Git (in fuss mode)
-        call display_section(row, max_rows, "GIT (in fuss mode)", &
-            ["a                   stage file/add                           ", &
-             "u                   unstage file                             ", &
-             "m                   commit with message                      ", &
-             "p                   push to remote                           ", &
-             "f                   fetch from remote                        ", &
-             "l                   pull from remote                         ", &
-             "t                   create tag                               ", &
-             "d                   diff file in new tab                     ", &
-             "Markers: staged, modified, untracked, incoming               "])
-
-        ! File
-        call display_section(row, max_rows, "FILE", &
-            ["ctrl-s          save                            ", &
-             "ctrl-q          quit                            ", &
-             "ctrl-/          show this help                  "])
-
-        ! Footer
-        if (row < max_rows - 1) then
+            ! Footer with scroll indicator
             row = max_rows - 1
             call terminal_move_cursor(row, 1)
-            call terminal_write(repeat("=", 60))
-        end if
+            call terminal_write(repeat("=", 70))
+            row = max_rows
+            call terminal_move_cursor(row, 1)
+            if (n_lines > viewport_size) then
+                write(key_input, '(a,i0,a,i0,a,i0,a,i0,a)') "Lines ", viewport_start, "-", &
+                      min(viewport_start + viewport_size - 1, n_lines), " of ", n_lines, &
+                      " (", int(real(viewport_start) * 100.0 / real(max(1, n_lines - viewport_size + 1))), "%)"
+                call terminal_write(trim(key_input))
+            else
+                call terminal_write("All content visible")
+            end if
 
-        ! Show cursor at bottom
-        call terminal_move_cursor(max_rows, 1)
-        call terminal_show_cursor()
+            ! Show cursor
+            call terminal_move_cursor(max_rows, 1)
+            call terminal_show_cursor()
 
-        ! Wait for any key press (use get_key_input to properly consume escape sequences)
-        ! Keep reading until we get a valid key (not timeout)
-        do
+            ! Handle navigation
             call get_key_input(key_input, status)
-            if (status == 0) exit  ! Got a valid key, exit loop
+            if (status == 0) then
+                select case(trim(key_input))
+                case('q', 'Q', 'esc')
+                    done = .true.
+                case('up', 'k')
+                    if (viewport_start > 1) viewport_start = viewport_start - 1
+                case('down', 'j')
+                    if (viewport_start + viewport_size - 1 < n_lines) viewport_start = viewport_start + 1
+                case('pageup')
+                    viewport_start = max(1, viewport_start - viewport_size)
+                case('pagedown')
+                    if (viewport_start + viewport_size - 1 < n_lines) then
+                        viewport_start = min(n_lines - viewport_size + 1, viewport_start + viewport_size)
+                    end if
+                case('home')
+                    viewport_start = 1
+                case('end')
+                    if (n_lines > viewport_size) then
+                        viewport_start = n_lines - viewport_size + 1
+                    end if
+                end select
+            end if
         end do
+
+        ! Cleanup
+        if (allocated(help_lines)) deallocate(help_lines)
 
         ! Redraw will happen after returning
     end subroutine show_help
+
+    subroutine build_help_content(lines, n_lines)
+        character(len=100), allocatable, intent(out) :: lines(:)
+        integer, intent(out) :: n_lines
+        integer :: i, section_start
+
+        ! Count total lines needed (sections + items + spacing)
+        n_lines = 0
+        n_lines = n_lines + 11 + 2  ! NAVIGATION
+        n_lines = n_lines + 6 + 2   ! SELECTION
+        n_lines = n_lines + 11 + 2  ! EDITING
+        n_lines = n_lines + 4 + 2   ! CLIPBOARD
+        n_lines = n_lines + 3 + 2   ! LINES
+        n_lines = n_lines + 8 + 2   ! SEARCH & REPLACE
+        n_lines = n_lines + 4 + 2   ! MULTIPLE CURSORS
+        n_lines = n_lines + 6 + 2   ! SPECIAL
+        n_lines = n_lines + 8 + 2   ! TABS
+        n_lines = n_lines + 7 + 2   ! PANES
+        n_lines = n_lines + 10 + 2  ! GIT
+        n_lines = n_lines + 4 + 2   ! FILE
+
+        allocate(lines(n_lines))
+        i = 1
+
+        ! NAVIGATION
+        lines(i) = "NAVIGATION"; i = i + 1
+        lines(i) = "  arrows              move cursor"; i = i + 1
+        lines(i) = "  ctrl-a/home         smart home (toggle)"; i = i + 1
+        lines(i) = "  ctrl-e/end          end of line"; i = i + 1
+        lines(i) = "  ctrl-home/end       file start/end"; i = i + 1
+        lines(i) = "  alt-left/right      word jump"; i = i + 1
+        lines(i) = "  alt-[/alt-]         jump to matching bracket"; i = i + 1
+        lines(i) = "  pageup/down         page scroll"; i = i + 1
+        lines(i) = "  ctrl-g              go to line:column"; i = i + 1
+        lines(i) = "  click               position cursor"; i = i + 1
+        lines(i) = "  alt-click           add/remove cursor"; i = i + 1
+        lines(i) = ""; i = i + 1
+
+        ! SELECTION
+        lines(i) = "SELECTION"; i = i + 1
+        lines(i) = "  shift-arrows        character selection"; i = i + 1
+        lines(i) = "  shift-alt-l/r       word selection"; i = i + 1
+        lines(i) = "  shift-ctrl-a/e      select to line start/end"; i = i + 1
+        lines(i) = "  shift-home/end      select to line boundaries"; i = i + 1
+        lines(i) = "  shift-pageup/down   page selection"; i = i + 1
+        lines(i) = "  esc                 clear selection"; i = i + 1
+        lines(i) = ""; i = i + 1
+
+        ! EDITING
+        lines(i) = "EDITING"; i = i + 1
+        lines(i) = "  backspace/ctrl-h    delete backward"; i = i + 1
+        lines(i) = "  delete              delete forward"; i = i + 1
+        lines(i) = "  tab                 insert 4 spaces/indent"; i = i + 1
+        lines(i) = "  shift-tab           dedent selection/line"; i = i + 1
+        lines(i) = "  ctrl-k              kill line forward"; i = i + 1
+        lines(i) = "  ctrl-u              kill line backward"; i = i + 1
+        lines(i) = "  ctrl-y              yank from stack"; i = i + 1
+        lines(i) = "  alt-bksp            delete word backward"; i = i + 1
+        lines(i) = "  alt-d               delete word forward"; i = i + 1
+        lines(i) = "  ctrl-j              join lines"; i = i + 1
+        lines(i) = "  ctrl-t              transpose characters"; i = i + 1
+        lines(i) = ""; i = i + 1
+
+        ! CLIPBOARD
+        lines(i) = "CLIPBOARD"; i = i + 1
+        lines(i) = "  ctrl-x              cut line/selection"; i = i + 1
+        lines(i) = "  ctrl-c              copy line/selection"; i = i + 1
+        lines(i) = "  ctrl-v              paste"; i = i + 1
+        lines(i) = ""; i = i + 1
+
+        ! LINES
+        lines(i) = "LINES"; i = i + 1
+        lines(i) = "  alt-up/down         move line"; i = i + 1
+        lines(i) = "  alt-shift-up/down   duplicate line"; i = i + 1
+        lines(i) = ""; i = i + 1
+
+        ! SEARCH & REPLACE
+        lines(i) = "SEARCH & REPLACE"; i = i + 1
+        lines(i) = "  ctrl-f              search forward"; i = i + 1
+        lines(i) = "  ctrl-r              find and replace"; i = i + 1
+        lines(i) = "  n                   next match"; i = i + 1
+        lines(i) = "  N                   previous match"; i = i + 1
+        lines(i) = "  ctrl-d              select next match"; i = i + 1
+        lines(i) = "  alt-c (in search)   toggle case sensitive"; i = i + 1
+        lines(i) = "  alt-w (in search)   toggle whole word match"; i = i + 1
+        lines(i) = ""; i = i + 1
+
+        ! MULTIPLE CURSORS
+        lines(i) = "MULTIPLE CURSORS"; i = i + 1
+        lines(i) = "  ctrl-d              select next match"; i = i + 1
+        lines(i) = "  alt-click           add/remove cursor"; i = i + 1
+        lines(i) = "  ctrl-alt-up/down    cursor above/below"; i = i + 1
+        lines(i) = ""; i = i + 1
+
+        ! SPECIAL
+        lines(i) = "SPECIAL"; i = i + 1
+        lines(i) = "  alt-'               cycle quotes"; i = i + 1
+        lines(i) = "  alt-shift-'         remove brackets/quotes"; i = i + 1
+        lines(i) = "  ctrl-z              undo"; i = i + 1
+        lines(i) = "  ctrl-]/ctrl-shift-z redo"; i = i + 1
+        lines(i) = "  ctrl-l              clear/redraw screen"; i = i + 1
+        lines(i) = ""; i = i + 1
+
+        ! TABS
+        lines(i) = "TABS"; i = i + 1
+        lines(i) = "  ctrl-t              new empty tab"; i = i + 1
+        lines(i) = "  tab/shift-tab       next/previous tab"; i = i + 1
+        lines(i) = "  ctrl-w              close current tab"; i = i + 1
+        lines(i) = "  alt-1 to alt-9      jump to tab 1-9"; i = i + 1
+        lines(i) = "  alt-0               jump to tab 10"; i = i + 1
+        lines(i) = "  ctrl-alt-left       previous tab"; i = i + 1
+        lines(i) = "  ctrl-alt-right      next tab"; i = i + 1
+        lines(i) = ""; i = i + 1
+
+        ! PANES
+        lines(i) = "PANES"; i = i + 1
+        lines(i) = "  alt-v               split pane vertically"; i = i + 1
+        lines(i) = "  alt-s               split pane horizontally"; i = i + 1
+        lines(i) = "  alt-q               close current pane only"; i = i + 1
+        lines(i) = "  ctrl-w              close pane (then tab if last)"; i = i + 1
+        lines(i) = "  ctrl-shift-arrows   navigate between panes"; i = i + 1
+        lines(i) = "  alt-h/l/k/j         navigate left/right/up/down"; i = i + 1
+        lines(i) = ""; i = i + 1
+
+        ! GIT (in fuss mode)
+        lines(i) = "GIT (in fuss mode - ctrl-b)"; i = i + 1
+        lines(i) = "  a                   stage file/add"; i = i + 1
+        lines(i) = "  u                   unstage file"; i = i + 1
+        lines(i) = "  m                   commit with message"; i = i + 1
+        lines(i) = "  p                   push to remote"; i = i + 1
+        lines(i) = "  f                   fetch from remote"; i = i + 1
+        lines(i) = "  l                   pull from remote"; i = i + 1
+        lines(i) = "  t                   create tag"; i = i + 1
+        lines(i) = "  d                   diff file in new tab"; i = i + 1
+        lines(i) = "  enter               open file in editor"; i = i + 1
+        lines(i) = ""; i = i + 1
+
+        ! FILE
+        lines(i) = "FILE"; i = i + 1
+        lines(i) = "  ctrl-s              save"; i = i + 1
+        lines(i) = "  ctrl-q              quit"; i = i + 1
+        lines(i) = "  ctrl-/              show this help"; i = i + 1
+        lines(i) = ""; i = i + 1
+
+        n_lines = i - 1
+    end subroutine build_help_content
+
+    subroutine display_help_viewport(lines, n_lines, start_line, viewport_size, start_row)
+        character(len=*), intent(in) :: lines(:)
+        integer, intent(in) :: n_lines, start_line, viewport_size, start_row
+        integer :: i, row, end_line
+
+        row = start_row
+        end_line = min(start_line + viewport_size - 1, n_lines)
+
+        do i = start_line, end_line
+            call terminal_move_cursor(row, 1)
+            call terminal_write(lines(i))
+            row = row + 1
+        end do
+    end subroutine display_help_viewport
 
     subroutine display_section(row, max_rows, title, items)
         integer, intent(inout) :: row
