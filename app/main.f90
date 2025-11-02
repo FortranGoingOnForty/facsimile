@@ -85,8 +85,27 @@ program facsimile
         call get_key_input(key_input, status)
 
         if (status == 0) then
+            ! Sync buffer before and after input when using panes
+            ! Before: copy active pane's buffer -> global buffer
+            ! After: copy global buffer -> active pane's buffer
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
+                    size(editor%tabs(editor%active_tab_index)%panes) > 0) then
+                    ! We don't have per-pane buffers yet - use tab buffer
+                    call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+                end if
+            end if
+
             ! Process input
             call handle_key_command(key_input, editor, buffer, should_quit)
+
+            ! Sync back
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
+                    size(editor%tabs(editor%active_tab_index)%panes) > 0) then
+                    call copy_buffer(editor%tabs(editor%active_tab_index)%buffer, buffer)
+                end if
+            end if
 
             if (should_quit) then
                 running = .false.
