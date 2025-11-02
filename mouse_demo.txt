@@ -1,0 +1,50 @@
+==================================================
+    FACSIMILE MOUSE SUPPORT DEMONSTRATION
+==================================================
+
+🖱️ MOUSE FEATURES NOW WORK!
+
+BASIC MOUSE CLICK:
+Click anywhere in this text to move your cursor instantly!
+Try clicking at different positions in this line.
+The cursor follows your mouse clicks precisely.
+
+MULTIPLE CURSORS WITH ALT+CLICK:
+Hold Alt and click to add multiple cursors!
+You can have cursors here
+And also here
+And even here - all at the same time!
+Type and all cursors will insert text simultaneously.
+
+Try this:
+1. Click to position your first cursor
+2. Hold Alt and click elsewhere to add another cursor
+3. Add as many cursors as you want with Alt+click
+4. Type something - it appears at all cursor positions!
+5. Alt+click on an existing cursor to remove it
+
+MULTIPLE CURSOR EDITING EXAMPLE:
+function test1() {
+    console.log("Change me!");
+}
+
+function test2() {
+    console.log("Change me!");
+}
+
+function test3() {
+    console.log("Change me!");
+}
+
+Place cursors on each "Change me!" with Alt+click,
+then type to change them all at once!
+
+STATUS BAR:
+Look at the bottom - it shows "[N cursors]" when you have
+multiple cursors active!
+
+==================================================
+Mouse support makes editing so much faster!
+Combined with all the keybinds, Facsimile is now
+a powerful modern editor written in Fortran!
+==================================================

@@ -551,10 +551,18 @@ contains
         n_panes = size(editor%tabs(tab_idx)%panes)
         if (pane_idx < 1 .or. pane_idx > n_panes) return
 
-        ! If only one pane, close the whole tab
+        ! If only one pane, check if it's the last tab
         if (n_panes == 1) then
-            call close_tab(editor, tab_idx)
-            return
+            ! If this is the last tab, create an UNTITLED.txt tab instead of closing
+            if (size(editor%tabs) == 1) then
+                ! Create a new untitled tab
+                call create_untitled_tab(editor)
+                return
+            else
+                ! Multiple tabs exist, close this tab normally
+                call close_tab(editor, tab_idx)
+                return
+            end if
         end if
 
         ! Remove the pane
@@ -907,6 +915,59 @@ contains
         ! Load the new pane's state to editor
         call sync_pane_to_editor(editor, tab_idx, pane_idx)
     end subroutine switch_to_pane
+
+    ! Create an untitled tab (replaces current tab)
+    subroutine create_untitled_tab(editor)
+        use text_buffer_module, only: init_buffer, cleanup_buffer
+        type(editor_state_t), intent(inout) :: editor
+        integer :: tab_idx
+
+        tab_idx = editor%active_tab_index
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+
+        ! Clean up the old tab's buffer
+        call cleanup_buffer(editor%tabs(tab_idx)%buffer)
+
+        ! Reinitialize as untitled
+        if (allocated(editor%tabs(tab_idx)%filename)) deallocate(editor%tabs(tab_idx)%filename)
+        allocate(character(len=12) :: editor%tabs(tab_idx)%filename)
+        editor%tabs(tab_idx)%filename = "UNTITLED.txt"
+        editor%tabs(tab_idx)%modified = .false.
+
+        ! Initialize empty buffer
+        call init_buffer(editor%tabs(tab_idx)%buffer)
+
+        ! Reset panes
+        if (allocated(editor%tabs(tab_idx)%panes)) then
+            deallocate(editor%tabs(tab_idx)%panes)
+        end if
+        allocate(editor%tabs(tab_idx)%panes(1))
+        editor%tabs(tab_idx)%panes(1)%x_start = 0.0
+        editor%tabs(tab_idx)%panes(1)%y_start = 0.0
+        editor%tabs(tab_idx)%panes(1)%x_end = 1.0
+        editor%tabs(tab_idx)%panes(1)%y_end = 1.0
+        editor%tabs(tab_idx)%panes(1)%is_active = .true.
+        editor%tabs(tab_idx)%panes(1)%viewport_line = 1
+        editor%tabs(tab_idx)%panes(1)%viewport_column = 1
+
+        ! Initialize cursor
+        allocate(editor%tabs(tab_idx)%panes(1)%cursors(1))
+        editor%tabs(tab_idx)%panes(1)%cursors(1)%line = 1
+        editor%tabs(tab_idx)%panes(1)%cursors(1)%column = 1
+        editor%tabs(tab_idx)%panes(1)%cursors(1)%desired_column = 1
+        editor%tabs(tab_idx)%panes(1)%cursors(1)%has_selection = .false.
+        editor%tabs(tab_idx)%panes(1)%active_cursor = 1
+        editor%tabs(tab_idx)%active_pane_index = 1
+
+        ! Initialize screen coordinates for the pane
+        editor%tabs(tab_idx)%panes(1)%screen_col = 1
+        editor%tabs(tab_idx)%panes(1)%screen_row = 2  ! After tab bar
+        editor%tabs(tab_idx)%panes(1)%screen_width = 80  ! Default width
+        editor%tabs(tab_idx)%panes(1)%screen_height = 22  ! Default height
+
+        ! Sync to editor
+        call sync_pane_to_editor(editor, tab_idx, 1)
+    end subroutine create_untitled_tab
 
     ! Recalculate pane layout after closing a pane
     subroutine recalculate_pane_layout(panes)

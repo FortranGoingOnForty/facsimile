@@ -590,15 +590,18 @@ contains
             end if
 
         case('alt-q')
-            ! Close current pane (or tab if only one pane)
+            ! Close current pane (creates UNTITLED.txt if last pane of last tab)
             if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
                 call close_pane(editor)
 
-                ! If tabs remain, copy the new active tab's buffer to display
+                ! Always copy the buffer (either new tab or UNTITLED.txt)
                 if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
                     call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
                     editor%modified = editor%tabs(editor%active_tab_index)%modified
-                ! If no tabs left, open fuss mode
+                    if (allocated(editor%filename)) deallocate(editor%filename)
+                    allocate(character(len=len(editor%tabs(editor%active_tab_index)%filename)) :: editor%filename)
+                    editor%filename = editor%tabs(editor%active_tab_index)%filename
+                ! Should not happen with new logic
                 else
                     editor%fuss_mode_active = .true.
                     if (allocated(editor%workspace_path)) then
@@ -608,21 +611,40 @@ contains
             end if
 
         case('ctrl-w')
-            ! Close current pane, then tab if only one pane remains
+            ! Close current tab (wipes editor if last tab)
             if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
-                call close_pane(editor)
+                ! Local variable for tab index
+                block
+                    integer :: tab_idx
+                    tab_idx = editor%active_tab_index
 
-                ! If tabs remain, copy the new active tab's buffer to display
-                if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
-                    call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
-                    editor%modified = editor%tabs(editor%active_tab_index)%modified
-                else
-                    ! No tabs left - open fuss mode
+                ! If this is the last tab, close it and clear editor
+                if (size(editor%tabs) == 1) then
+                    call close_tab(editor, tab_idx)
+
+                    ! Clear the buffer and open fuss mode
+                    call cleanup_buffer(buffer)
+                    call init_buffer(buffer)
                     editor%fuss_mode_active = .true.
+                    if (allocated(editor%filename)) deallocate(editor%filename)
+                    editor%modified = .false.
                     if (allocated(editor%workspace_path)) then
                         call init_tree_state(tree_state, editor%workspace_path)
                     end if
+                else
+                    ! Multiple tabs - close current tab normally
+                    call close_tab(editor, tab_idx)
+
+                    ! Copy new active tab's buffer
+                    if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
+                        call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+                        editor%modified = editor%tabs(editor%active_tab_index)%modified
+                        if (allocated(editor%filename)) deallocate(editor%filename)
+                        allocate(character(len=len(editor%tabs(editor%active_tab_index)%filename)) :: editor%filename)
+                        editor%filename = editor%tabs(editor%active_tab_index)%filename
+                    end if
                 end if
+                end block
             end if
 
         case('ctrl-shift-left', 'alt-h')
@@ -659,6 +681,8 @@ contains
             else
                 call delete_word_forward(editor%cursors(editor%active_cursor), buffer)
             end if
+            call sync_editor_to_pane(editor)
+            call update_viewport(editor)
             is_edit_action = .true.
 
         case('alt-backspace')
@@ -671,6 +695,8 @@ contains
             else
                 call delete_word_backward(editor%cursors(editor%active_cursor), buffer)
             end if
+            call sync_editor_to_pane(editor)
+            call update_viewport(editor)
             is_edit_action = .true.
 
         case('ctrl-t')
