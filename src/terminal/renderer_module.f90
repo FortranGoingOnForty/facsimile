@@ -711,9 +711,13 @@ contains
         type(buffer_t), intent(in) :: buffer
         type(editor_state_t), intent(inout) :: editor
         type(pane_t) :: pane
-        integer :: i, tab_idx, n_panes
+        integer :: i, tab_idx, n_panes, active_pane_idx
         integer :: pane_col, pane_row, pane_width, pane_height
         integer :: screen_width, screen_height
+        character(len=:), allocatable :: line_content
+        character(len=1) :: cursor_char
+        logical :: found_match
+        type(cursor_t) :: active_cursor
 
         ! Get active tab
         tab_idx = editor%active_tab_index
@@ -722,6 +726,36 @@ contains
 
         n_panes = size(editor%tabs(tab_idx)%panes)
         if (n_panes == 0) return
+
+        active_pane_idx = editor%tabs(tab_idx)%active_pane_index
+
+        ! Calculate bracket matching for the active pane's cursor
+        bracket_line = 0
+        bracket_col = 0
+        matching_bracket_line = 0
+        matching_bracket_col = 0
+
+        if (active_pane_idx > 0 .and. active_pane_idx <= n_panes) then
+            pane = editor%tabs(tab_idx)%panes(active_pane_idx)
+            if (allocated(pane%cursors) .and. size(pane%cursors) > 0) then
+                active_cursor = pane%cursors(1)  ! Use first cursor for bracket matching
+                line_content = buffer_get_line(buffer, active_cursor%line)
+                if (active_cursor%column >= 1 .and. active_cursor%column <= len(line_content)) then
+                    cursor_char = line_content(active_cursor%column:active_cursor%column)
+                    if (is_opening_bracket(cursor_char) .or. is_closing_bracket(cursor_char)) then
+                        bracket_line = active_cursor%line
+                        bracket_col = active_cursor%column
+                        call find_matching_bracket(buffer, bracket_line, bracket_col, &
+                                                 found_match, matching_bracket_line, matching_bracket_col)
+                        if (.not. found_match) then
+                            matching_bracket_line = 0
+                            matching_bracket_col = 0
+                        end if
+                    end if
+                end if
+                if (allocated(line_content)) deallocate(line_content)
+            end if
+        end if
 
         ! Get screen dimensions
         screen_width = editor%screen_cols
@@ -857,7 +891,7 @@ contains
         integer :: tab_idx, start_col, end_col, i, char_col
         integer :: content_width, content_col
         character(len=5) :: line_num_str
-        logical :: is_current_line, in_selection
+        logical :: is_current_line, in_selection, is_bracket_match
         integer :: sel_start_line, sel_start_col, sel_end_line, sel_end_col
         character(len=1) :: ch
 
@@ -978,6 +1012,15 @@ contains
                 end do
             end if
 
+            ! Check if this position is a bracket or its match (only for active pane)
+            is_bracket_match = .false.
+            if (pane%is_active) then
+                if ((line_num == bracket_line .and. char_col == bracket_col) .or. &
+                    (line_num == matching_bracket_line .and. char_col == matching_bracket_col)) then
+                    is_bracket_match = .true.
+                end if
+            end if
+
             ! Get the character at this position
             if (char_col <= len(line)) then
                 ch = line(char_col:char_col)
@@ -989,6 +1032,9 @@ contains
             if (in_selection) then
                 ! Highlight selected text with reverse video
                 call terminal_write(char(27) // '[7m' // ch // char(27) // '[0m')
+            else if (is_bracket_match) then
+                ! Highlight matching brackets with cyan background
+                call terminal_write(char(27) // '[46m' // ch // char(27) // '[0m')
             else if (pane%is_active .and. is_current_line) then
                 ! Subtle background for current line in active pane
                 call terminal_write(char(27) // '[48;5;237m' // ch // char(27) // '[0m')

@@ -762,6 +762,8 @@ contains
             is_edit_action = .true.
 
         case('ctrl-s')
+            ! Save the active pane/tab's buffer
+            ! (All panes in a tab share the same buffer, so saving saves the entire tab)
             call save_file(editor, buffer)
 
         case("ctrl-'", "ctrl-apostrophe", "alt-'")
@@ -3960,6 +3962,18 @@ contains
                 end if
             end if
 
+        case('v', 's')
+            ! Open file in new tab (v and s do the same thing for now)
+            ! Note: Splits are for viewing same file side-by-side; different files need different tabs
+            if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
+                if (.not. tree_state%selectable_files(tree_state%selected_index)%is_directory) then
+                    selected_path = get_selected_item_path(tree_state)
+                    if (len_trim(selected_path) > 0) then
+                        call open_file_in_editor(selected_path, editor, buffer)
+                    end if
+                end if
+            end if
+
         case('ctrl-/')
             ! Toggle fuss mode hints expansion
             editor%fuss_hints_expanded = .not. editor%fuss_hints_expanded
@@ -4031,6 +4045,146 @@ contains
         end if
         ! Note: fuss mode stays active - user must press ctrl-b to exit
     end subroutine open_file_in_editor
+
+    ! Open a file in a vertical split
+    subroutine open_file_in_vertical_split(file_path, editor, buffer)
+        use editor_state_module, only: split_pane_vertical, sync_editor_to_pane
+        use text_buffer_module, only: copy_buffer
+        character(len=*), intent(in) :: file_path
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: full_path
+        integer :: status, tab_idx, pane_idx
+
+        ! Build full path
+        if (allocated(editor%workspace_path)) then
+            full_path = trim(editor%workspace_path) // '/' // trim(file_path)
+        else
+            full_path = trim(file_path)
+        end if
+
+        ! Exit fuss mode
+        editor%fuss_mode_active = .false.
+        editor%fuss_hints_expanded = .false.
+        call cleanup_tree_state(tree_state)
+
+        ! If no tabs exist, create one first
+        if (size(editor%tabs) == 0 .or. editor%active_tab_index == 0) then
+            call open_file_in_editor(file_path, editor, buffer)
+            return
+        end if
+
+        ! Split the current pane vertically
+        call split_pane_vertical(editor)
+
+        ! Get the new pane index (it becomes the active pane)
+        tab_idx = editor%active_tab_index
+        if (tab_idx > 0 .and. tab_idx <= size(editor%tabs)) then
+            pane_idx = editor%tabs(tab_idx)%active_pane_index
+
+            ! Load the file into the new pane's buffer
+            call buffer_load_file(editor%tabs(tab_idx)%buffer, full_path, status)
+            if (status == 0) then
+                ! Update filename for the tab
+                editor%tabs(tab_idx)%filename = full_path
+                editor%tabs(tab_idx)%modified = .false.
+
+                ! Copy to main buffer
+                call copy_buffer(buffer, editor%tabs(tab_idx)%buffer)
+
+                ! Update editor filename
+                if (allocated(editor%filename)) deallocate(editor%filename)
+                allocate(character(len=len_trim(full_path)) :: editor%filename)
+                editor%filename = full_path
+
+                ! Reset cursor in the new pane
+                if (allocated(editor%tabs(tab_idx)%panes) .and. pane_idx > 0) then
+                    associate (pane => editor%tabs(tab_idx)%panes(pane_idx))
+                        if (allocated(pane%cursors) .and. size(pane%cursors) > 0) then
+                            pane%cursors(1)%line = 1
+                            pane%cursors(1)%column = 1
+                            pane%cursors(1)%desired_column = 1
+                        end if
+                        pane%viewport_line = 1
+                        pane%viewport_column = 1
+                    end associate
+                end if
+
+                ! Sync editor state with the new pane
+                call sync_editor_to_pane(editor)
+            end if
+        end if
+    end subroutine open_file_in_vertical_split
+
+    ! Open a file in a horizontal split
+    subroutine open_file_in_horizontal_split(file_path, editor, buffer)
+        use editor_state_module, only: split_pane_horizontal, sync_editor_to_pane
+        use text_buffer_module, only: copy_buffer
+        character(len=*), intent(in) :: file_path
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: full_path
+        integer :: status, tab_idx, pane_idx
+
+        ! Build full path
+        if (allocated(editor%workspace_path)) then
+            full_path = trim(editor%workspace_path) // '/' // trim(file_path)
+        else
+            full_path = trim(file_path)
+        end if
+
+        ! Exit fuss mode
+        editor%fuss_mode_active = .false.
+        editor%fuss_hints_expanded = .false.
+        call cleanup_tree_state(tree_state)
+
+        ! If no tabs exist, create one first
+        if (size(editor%tabs) == 0 .or. editor%active_tab_index == 0) then
+            call open_file_in_editor(file_path, editor, buffer)
+            return
+        end if
+
+        ! Split the current pane horizontally
+        call split_pane_horizontal(editor)
+
+        ! Get the new pane index (it becomes the active pane)
+        tab_idx = editor%active_tab_index
+        if (tab_idx > 0 .and. tab_idx <= size(editor%tabs)) then
+            pane_idx = editor%tabs(tab_idx)%active_pane_index
+
+            ! Load the file into the new pane's buffer
+            call buffer_load_file(editor%tabs(tab_idx)%buffer, full_path, status)
+            if (status == 0) then
+                ! Update filename for the tab
+                editor%tabs(tab_idx)%filename = full_path
+                editor%tabs(tab_idx)%modified = .false.
+
+                ! Copy to main buffer
+                call copy_buffer(buffer, editor%tabs(tab_idx)%buffer)
+
+                ! Update editor filename
+                if (allocated(editor%filename)) deallocate(editor%filename)
+                allocate(character(len=len_trim(full_path)) :: editor%filename)
+                editor%filename = full_path
+
+                ! Reset cursor in the new pane
+                if (allocated(editor%tabs(tab_idx)%panes) .and. pane_idx > 0) then
+                    associate (pane => editor%tabs(tab_idx)%panes(pane_idx))
+                        if (allocated(pane%cursors) .and. size(pane%cursors) > 0) then
+                            pane%cursors(1)%line = 1
+                            pane%cursors(1)%column = 1
+                            pane%cursors(1)%desired_column = 1
+                        end if
+                        pane%viewport_line = 1
+                        pane%viewport_column = 1
+                    end associate
+                end if
+
+                ! Sync editor state with the new pane
+                call sync_editor_to_pane(editor)
+            end if
+        end if
+    end subroutine open_file_in_horizontal_split
 
     ! Toggle fuss mode (file tree)
     subroutine toggle_fuss_mode(editor)
