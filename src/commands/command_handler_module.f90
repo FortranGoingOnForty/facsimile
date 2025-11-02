@@ -3962,18 +3962,6 @@ contains
                 end if
             end if
 
-        case('v', 's')
-            ! Open file in new tab (v and s do the same thing for now)
-            ! Note: Splits are for viewing same file side-by-side; different files need different tabs
-            if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
-                if (.not. tree_state%selectable_files(tree_state%selected_index)%is_directory) then
-                    selected_path = get_selected_item_path(tree_state)
-                    if (len_trim(selected_path) > 0) then
-                        call open_file_in_editor(selected_path, editor, buffer)
-                    end if
-                end if
-            end if
-
         case('ctrl-/')
             ! Toggle fuss mode hints expansion
             editor%fuss_hints_expanded = .not. editor%fuss_hints_expanded
