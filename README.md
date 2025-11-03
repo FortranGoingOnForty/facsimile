@@ -118,10 +118,12 @@ When in fuss mode (ctrl-b), you get a split view with a git-aware file tree on t
 - `j` / `↓` - move down in tree
 - `k` / `↑` - move up in tree
 
+**Opening Files:**
+- `enter` or `o` - open file in new tab
+
 **Git Operations:**
 - `a` - stage file (git add)
 - `u` - unstage file (git restore --staged)
-- `enter` - open file in editor
 
 **Status Indicators:**
 - Green `↑` - staged changes
