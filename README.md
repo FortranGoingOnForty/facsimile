@@ -129,6 +129,12 @@ When in fuss mode (ctrl-b), you get a split view with a git-aware file tree on t
 **Opening Files:**
 - `enter` or `o` - open file in new tab
 
+**Display Options:**
+- `.` - toggle hiding dotfiles and gitignored files
+  - When enabled, both dotfiles and gitignored files are hidden from view
+  - Directories containing only hidden files are greyed out but remain visible
+  - Uses `git check-ignore` to detect gitignored files
+
 **Git Operations:**
 - `a` - stage file (git add)
 - `u` - unstage file (git restore --staged)
