@@ -581,34 +581,58 @@ contains
         type(tree_state_t), intent(inout) :: state
         character(len=*), intent(in) :: workspace_path
         character(len=1024) :: cmd
-        integer :: status
+        character(len=:), allocatable :: selected_path
+        integer :: status, i
 
         if (state%selected_index < 1 .or. state%selected_index > state%n_selectable) return
 
+        ! Save the path of the currently selected file
+        selected_path = trim(state%selectable_files(state%selected_index)%path)
+
         ! Stage the file
         write(cmd, '(A,A,A,A,A)') 'cd "', trim(workspace_path), '" && git add "', &
-                                  trim(state%selectable_files(state%selected_index)%path), '" 2>/dev/null'
+                                  trim(selected_path), '" 2>/dev/null'
         call execute_command_line(trim(cmd), exitstat=status)
 
         ! Refresh tree
         call refresh_tree_state(state, workspace_path)
+
+        ! Restore selection to the same file
+        do i = 1, state%n_selectable
+            if (trim(state%selectable_files(i)%path) == selected_path) then
+                state%selected_index = i
+                exit
+            end if
+        end do
     end subroutine tree_stage_file
 
     subroutine tree_unstage_file(state, workspace_path)
         type(tree_state_t), intent(inout) :: state
         character(len=*), intent(in) :: workspace_path
         character(len=1024) :: cmd
-        integer :: status
+        character(len=:), allocatable :: selected_path
+        integer :: status, i
 
         if (state%selected_index < 1 .or. state%selected_index > state%n_selectable) return
 
+        ! Save the path of the currently selected file
+        selected_path = trim(state%selectable_files(state%selected_index)%path)
+
         ! Unstage the file
         write(cmd, '(A,A,A,A,A)') 'cd "', trim(workspace_path), '" && git restore --staged "', &
-                                  trim(state%selectable_files(state%selected_index)%path), '" 2>/dev/null'
+                                  trim(selected_path), '" 2>/dev/null'
         call execute_command_line(trim(cmd), exitstat=status)
 
         ! Refresh tree
         call refresh_tree_state(state, workspace_path)
+
+        ! Restore selection to the same file
+        do i = 1, state%n_selectable
+            if (trim(state%selectable_files(i)%path) == selected_path) then
+                state%selected_index = i
+                exit
+            end if
+        end do
     end subroutine tree_unstage_file
 
     subroutine tree_toggle_expand(state)
