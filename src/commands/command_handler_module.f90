@@ -3966,6 +3966,10 @@ contains
                 end if
             end if
 
+        case('.')
+            ! Toggle hiding dotfiles/gitignored files
+            tree_state%hide_dotfiles = .not. tree_state%hide_dotfiles
+
         case('ctrl-/')
             ! Toggle fuss mode hints expansion
             editor%fuss_hints_expanded = .not. editor%fuss_hints_expanded

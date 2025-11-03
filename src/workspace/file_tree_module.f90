@@ -20,6 +20,9 @@ module file_tree_module
         logical :: is_untracked = .false.
         logical :: has_incoming = .false.
         logical :: expanded = .true.  ! For directories: true=expanded, false=collapsed
+        logical :: is_dotfile = .false.  ! Is this a dotfile (starts with .)
+        logical :: is_gitignored = .false.  ! Is this file gitignored
+        logical :: all_children_hidden = .false.  ! For directories: all children are hidden
         type(tree_node_t), pointer :: parent => null()  ! Parent node for sibling navigation
         type(tree_node_t), pointer :: first_child => null()
         type(tree_node_t), pointer :: next_sibling => null()
@@ -55,6 +58,7 @@ module file_tree_module
         type(tree_node_t), pointer :: root => null()
         character(len=256) :: repo_name = ''
         character(len=256) :: branch_name = ''
+        logical :: hide_dotfiles = .false.
     end type tree_state_t
 
 contains
@@ -103,6 +107,8 @@ contains
         ! Build tree from files
         if (state%n_files > 0) then
             call build_tree(state%files, state%n_files, state%root)
+            ! Mark gitignored files
+            call mark_gitignored_files(state%root, workspace_path)
             ! Build selectable files list in tree traversal order
             call build_selectable_list(state%root, state%selectable_files, state%n_selectable)
         else
@@ -222,6 +228,12 @@ contains
         ! Sort tree
         call sort_tree(root)
 
+        ! Mark directories that only contain hidden files
+        i = 0  ! Dummy variable
+        if (mark_empty_directories(root)) then
+            i = 1  ! Dummy assignment to use function result
+        end if
+
         ! DEBUG: Write tree structure to file (unconditional)
         open(newunit=debug_unit, file='/tmp/fac_tree_debug.txt', status='replace', action='write')
         write(debug_unit, '(A)') '=== FINAL TREE STRUCTURE ==='
@@ -234,6 +246,70 @@ contains
         call debug_print_tree(root, '', 10)
         close(10)
     end subroutine build_tree
+
+    ! Recursively mark directories that only contain hidden files
+    recursive function mark_empty_directories(node) result(all_hidden)
+        type(tree_node_t), pointer, intent(inout) :: node
+        logical :: all_hidden
+        type(tree_node_t), pointer :: child
+        logical :: child_hidden
+        integer :: visible_count
+
+        if (.not. associated(node)) then
+            all_hidden = .true.
+            return
+        end if
+
+        ! Files are hidden if they're dotfiles or gitignored
+        if (node%is_file) then
+            all_hidden = node%is_dotfile .or. node%is_gitignored
+            return
+        end if
+
+        ! For directories, check if all children are hidden
+        visible_count = 0
+        child => node%first_child
+        do while (associated(child))
+            child_hidden = mark_empty_directories(child)
+            if (.not. child_hidden) then
+                visible_count = visible_count + 1
+            end if
+            child => child%next_sibling
+        end do
+
+        ! Directory is "all hidden" if it has no visible children
+        all_hidden = (visible_count == 0 .and. associated(node%first_child))
+        node%all_children_hidden = all_hidden
+
+    end function mark_empty_directories
+
+    ! Mark files that are gitignored
+    recursive subroutine mark_gitignored_files(node, workspace_path)
+        type(tree_node_t), pointer, intent(inout) :: node
+        character(len=*), intent(in) :: workspace_path
+        type(tree_node_t), pointer :: child
+        character(len=1024) :: cmd
+        integer :: status
+
+        if (.not. associated(node)) return
+
+        ! Only check files, not directories (directories won't be gitignored)
+        if (node%is_file .and. len_trim(node%full_path) > 0) then
+            ! Use git check-ignore to see if this file is ignored
+            write(cmd, '(A,A,A,A,A)') 'cd "', trim(workspace_path), &
+                '" && git check-ignore -q "', trim(node%full_path), '" 2>/dev/null'
+            call execute_command_line(trim(cmd), exitstat=status)
+            ! If exit status is 0, file is gitignored
+            node%is_gitignored = (status == 0)
+        end if
+
+        ! Recurse to children
+        child => node%first_child
+        do while (associated(child))
+            call mark_gitignored_files(child, workspace_path)
+            child => child%next_sibling
+        end do
+    end subroutine mark_gitignored_files
 
     recursive subroutine debug_print_tree(node, prefix, unit)
         type(tree_node_t), pointer, intent(in) :: node
@@ -290,6 +366,8 @@ contains
                 new_node%parent => current  ! Set parent pointer
                 new_node%first_child => null()
                 new_node%next_sibling => current%first_child
+                ! Mark as dotfile if name starts with '.'
+                new_node%is_dotfile = (len_trim(component) > 0 .and. component(1:1) == '.')
                 current%first_child => new_node
                 child => new_node
             end if

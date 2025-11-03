@@ -69,7 +69,7 @@ contains
                 ! First row: navigation
                 call terminal_move_cursor(end_row - 3, start_col)
                 call terminal_write(ESC // '[90m') ! Gray
-                call terminal_write('j/k:siblings →:into ←:up o:open spc:toggle')
+                call terminal_write('j/k:nav →:in ←:up o:open .:hide spc:toggle')
                 call terminal_write(ESC // '[0m')
 
                 ! Second row: git operations (staging/basic)
@@ -95,7 +95,7 @@ contains
             if (end_row >= start_row + 1) then
                 call terminal_move_cursor(end_row, start_col)
                 call terminal_write(ESC // '[90m') ! Gray
-                call terminal_write('ctrl-/:hints  esc/ctrl-b:close')
+                call terminal_write('.:hide  ctrl-/:hints  esc/ctrl-b:close')
                 call terminal_write(ESC // '[0m')
             end if
         end if
@@ -117,6 +117,11 @@ contains
 
         ! Don't print root node
         if (.not. is_root) then
+            ! Skip hidden files when hide_dotfiles is enabled (dotfiles or gitignored)
+            if (state%hide_dotfiles .and. node%is_file .and. (node%is_dotfile .or. node%is_gitignored)) then
+                return
+            end if
+
             ! Increment item_idx for both files and directories (all selectable items)
             item_idx = item_idx + 1
             is_selected = (item_idx == state%selected_index)
@@ -165,7 +170,12 @@ contains
                     ! Selection highlight (reverse video)
                     call terminal_write(ESC // '[7m' // line // ESC // '[0m')
                 else
-                    call terminal_write(line)
+                    ! Grey out directories that only contain hidden files
+                    if (.not. node%is_file .and. node%all_children_hidden) then
+                        call terminal_write(ESC // '[90m' // line // ESC // '[0m')  ! Grey
+                    else
+                        call terminal_write(line)
+                    end if
                 end if
 
                 current_row = current_row + 1
