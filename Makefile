@@ -11,13 +11,19 @@ CC = gcc
 ifeq ($(UNAME_S),Darwin)
     # macOS
     ifeq ($(UNAME_M),arm64)
-        # Apple Silicon
-        # Homebrew on Apple Silicon uses /opt/homebrew
+        # Apple Silicon - use flang-new for better arm64 support
         BREW_PREFIX = /opt/homebrew
-        ifneq ($(wildcard $(BREW_PREFIX)/bin/gfortran-*),)
-            FC = $(shell ls $(BREW_PREFIX)/bin/gfortran-* | head -n1)
+        ifneq ($(wildcard $(BREW_PREFIX)/bin/flang-new),)
+            FC = $(BREW_PREFIX)/bin/flang-new
+            # flang-new flags (no -ffree-line-length-none or -Wall needed)
+            FFLAGS = -O2
+        else
+            # Fallback to gfortran if flang-new not available
+            ifneq ($(wildcard $(BREW_PREFIX)/bin/gfortran-*),)
+                FC = $(shell ls $(BREW_PREFIX)/bin/gfortran-* | head -n1)
+            endif
+            FFLAGS = -O2 -Wall -ffree-line-length-none
         endif
-        FFLAGS = -O2 -Wall -ffree-line-length-none
         CFLAGS = -O2 -Wall
     else
         # Intel Mac

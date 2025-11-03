@@ -5,14 +5,22 @@ Terminal text editor written in Fortran. VSCode-style keybindings.
 
 ## Build
 
+### Using Make (Recommended)
+The Makefile provides optimized, platform-specific builds:
+- **macOS arm64**: Uses flang-new for better apple silicon support
+- **macOS Intel/Linux**: Uses gfortran with standard optimization flags
+
 ```bash
-fpm build
+make
+./fac [filename]
 ```
 
-## Usage
-
+### Using fpm (Development)
 ```bash
+fpm build
 ./build/gfortran_*/app/fac [filename]
+or 
+fpm run -- [filename]
 ```
 
 ## Keybindings
