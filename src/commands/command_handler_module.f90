@@ -563,6 +563,7 @@ contains
             else
                 call kill_line_forward(editor%cursors(editor%active_cursor), buffer)
             end if
+            call sync_editor_to_pane(editor)
             is_edit_action = .true.
 
         case('ctrl-u')
@@ -575,6 +576,7 @@ contains
             else
                 call kill_line_backward(editor%cursors(editor%active_cursor), buffer)
             end if
+            call sync_editor_to_pane(editor)
             is_edit_action = .true.
 
         case('alt-v')
