@@ -8,6 +8,7 @@ copyright = "2025 mfw"
 [build]
 auto-executables = true
 auto-tests = true
+compiler = "flang-new"
 
 [install]
 library = false
