@@ -289,7 +289,7 @@ contains
         character(len=*), intent(in) :: workspace_path
         type(tree_node_t), pointer :: child
         character(len=1024) :: cmd
-        integer :: status
+        integer :: status, cmdstat
 
         if (.not. associated(node)) return
 
@@ -298,9 +298,10 @@ contains
             ! Use git check-ignore to see if this file is ignored
             write(cmd, '(A,A,A,A,A)') 'cd "', trim(workspace_path), &
                 '" && git check-ignore -q "', trim(node%full_path), '" 2>/dev/null'
-            call execute_command_line(trim(cmd), exitstat=status)
-            ! If exit status is 0, file is gitignored
-            node%is_gitignored = (status == 0)
+            call execute_command_line(trim(cmd), wait=.true., exitstat=status, cmdstat=cmdstat)
+            ! If exit status is 0, file is gitignored (cmdstat=0 means command executed successfully)
+            ! exit status 1 means file is not ignored (which is normal, not an error)
+            node%is_gitignored = (cmdstat == 0 .and. status == 0)
         end if
 
         ! Recurse to children
