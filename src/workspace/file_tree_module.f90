@@ -93,6 +93,8 @@ contains
     subroutine refresh_tree_state(state, workspace_path)
         type(tree_state_t), intent(inout) :: state
         character(len=*), intent(in) :: workspace_path
+        type(file_entry_t), allocatable :: all_files(:), dirty_files(:)
+        integer :: n_all_files, n_dirty_files
 
         ! Free existing tree if present
         if (associated(state%root)) then
@@ -101,12 +103,24 @@ contains
         end if
         if (allocated(state%selectable_files)) deallocate(state%selectable_files)
 
-        ! Get dirty files from git
-        call get_dirty_files(workspace_path, state%files, state%n_files)
+        ! First: Get ALL files from filesystem
+        call get_all_files(workspace_path, all_files, n_all_files)
 
-        ! Build tree from files
-        if (state%n_files > 0) then
-            call build_tree(state%files, state%n_files, state%root)
+        ! Build tree from ALL files (not just dirty ones)
+        if (n_all_files > 0) then
+            call build_tree(all_files, n_all_files, state%root)
+
+            ! Second: Get dirty files from git status and overlay markers
+            call get_dirty_files(workspace_path, dirty_files, n_dirty_files)
+            if (n_dirty_files > 0) then
+                call overlay_git_status(state%root, dirty_files, n_dirty_files)
+                state%files = dirty_files
+                state%n_files = n_dirty_files
+            else
+                allocate(state%files(0))
+                state%n_files = 0
+            end if
+
             ! Mark gitignored files
             call mark_gitignored_files(state%root, workspace_path)
             ! Build selectable files list in tree traversal order
@@ -114,6 +128,8 @@ contains
         else
             state%n_selectable = 0
         end if
+
+        if (allocated(all_files)) deallocate(all_files)
 
         ! Clamp selected index
         if (state%selected_index > state%n_selectable .and. state%n_selectable > 0) then
@@ -190,6 +206,111 @@ contains
         if (n_files > 0) files(1:n_files) = temp_files(1:n_files)
         deallocate(temp_files)
     end subroutine get_dirty_files
+
+    subroutine get_all_files(workspace_path, files, n_files)
+        character(len=*), intent(in) :: workspace_path
+        type(file_entry_t), allocatable, intent(out) :: files(:)
+        integer, intent(out) :: n_files
+        integer :: iostat, unit_num, status_code
+        character(len=1024) :: line, cmd
+        character(len=512) :: file_path
+        integer :: max_files
+        type(file_entry_t), allocatable :: temp_files(:)
+
+        max_files = 5000
+        allocate(temp_files(max_files))
+        n_files = 0
+
+        ! Use git ls-files for MUCH faster listing of tracked files
+        ! This is WAY faster than find because it uses git's index
+        write(cmd, '(A,A,A)') 'cd "', trim(workspace_path), &
+            '" && git ls-files > /tmp/fac_all_files.txt 2>/dev/null'
+        call execute_command_line(trim(cmd), exitstat=status_code)
+
+        if (status_code /= 0) then
+            allocate(files(0))
+            return
+        end if
+
+        ! Read file list
+        open(newunit=unit_num, file='/tmp/fac_all_files.txt', status='old', action='read', iostat=iostat)
+
+        if (iostat /= 0) then
+            allocate(files(0))
+            return
+        end if
+
+        do
+            read(unit_num, '(A)', iostat=iostat) line
+            if (iostat /= 0) exit
+
+            file_path = adjustl(line)
+
+            ! Skip if path is empty
+            if (len_trim(file_path) == 0) cycle
+
+            n_files = n_files + 1
+            if (n_files > max_files) then
+                max_files = max_files * 2
+                call resize_file_array(temp_files, max_files)
+            end if
+
+            temp_files(n_files)%path = trim(file_path)
+            temp_files(n_files)%status = '  '  ! No git status yet
+            temp_files(n_files)%is_staged = .false.
+            temp_files(n_files)%is_unstaged = .false.
+            temp_files(n_files)%is_untracked = .false.
+            temp_files(n_files)%has_incoming = .false.
+        end do
+
+        close(unit_num, status='delete')
+
+        ! Copy to output array
+        allocate(files(n_files))
+        if (n_files > 0) files(1:n_files) = temp_files(1:n_files)
+        deallocate(temp_files)
+    end subroutine get_all_files
+
+    subroutine overlay_git_status(root, dirty_files, n_dirty_files)
+        type(tree_node_t), pointer, intent(inout) :: root
+        type(file_entry_t), intent(in) :: dirty_files(:)
+        integer, intent(in) :: n_dirty_files
+        integer :: i
+
+        ! For each dirty file, find it in the tree and update its status
+        do i = 1, n_dirty_files
+            call update_node_status(root, dirty_files(i)%path, &
+                                  dirty_files(i)%is_staged, &
+                                  dirty_files(i)%is_unstaged, &
+                                  dirty_files(i)%is_untracked, &
+                                  dirty_files(i)%has_incoming)
+        end do
+    end subroutine overlay_git_status
+
+    recursive subroutine update_node_status(node, path, is_staged, is_unstaged, is_untracked, has_incoming)
+        type(tree_node_t), pointer, intent(inout) :: node
+        character(len=*), intent(in) :: path
+        logical, intent(in) :: is_staged, is_unstaged, is_untracked, has_incoming
+        type(tree_node_t), pointer :: child
+
+        if (.not. associated(node)) return
+
+        ! Check if this node matches the path
+        if (node%is_file .and. trim(node%full_path) == trim(path)) then
+            node%is_staged = is_staged
+            node%is_unstaged = is_unstaged
+            node%is_untracked = is_untracked
+            node%has_incoming = has_incoming
+            return
+        end if
+
+        ! Recurse to children
+        child => node%first_child
+        do while (associated(child))
+            call update_node_status(child, path, is_staged, is_unstaged, is_untracked, has_incoming)
+            child => child%next_sibling
+        end do
+    end subroutine update_node_status
 
     subroutine resize_file_array(arr, new_size)
         type(file_entry_t), allocatable, intent(inout) :: arr(:)
@@ -364,6 +485,7 @@ contains
                 allocate(new_node)
                 new_node%name = trim(component)
                 new_node%is_file = (len_trim(remaining_path) == 0)
+                new_node%expanded = .true.  ! Explicitly set expanded for directories
                 new_node%parent => current  ! Set parent pointer
                 new_node%first_child => null()
                 new_node%next_sibling => current%first_child

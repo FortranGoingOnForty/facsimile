@@ -183,9 +183,10 @@ contains
         end if
 
         ! Render children (only if directory is expanded or root)
-        if ((node%is_file .or. node%expanded .or. is_root)) then
+        ! Files don't have children, so skip if is_file. For directories, check if expanded or root.
+        if ((.not. node%is_file .and. node%expanded) .or. is_root) then
             child => node%first_child
-            do while (associated(child) .and. current_row <= end_row)
+            do while (associated(child))
             ! Determine if this is the last sibling
             is_last_child = .not. associated(child%next_sibling)
 
