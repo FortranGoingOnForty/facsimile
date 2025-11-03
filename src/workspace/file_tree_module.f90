@@ -121,8 +121,12 @@ contains
                 state%n_files = 0
             end if
 
-            ! Mark gitignored files
+            ! Mark gitignored files (batch mode - single git command)
             call mark_gitignored_files(state%root, workspace_path)
+
+            ! Collapse tree smartly - only expand dirs with dirty files
+            call collapse_tree_smart(state%root)
+
             ! Build selectable files list in tree traversal order
             call build_selectable_list(state%root, state%selectable_files, state%n_selectable)
         else
@@ -406,33 +410,108 @@ contains
     end function mark_empty_directories
 
     ! Mark files that are gitignored
-    recursive subroutine mark_gitignored_files(node, workspace_path)
-        type(tree_node_t), pointer, intent(inout) :: node
+    subroutine mark_gitignored_files(root, workspace_path)
+        type(tree_node_t), pointer, intent(inout) :: root
         character(len=*), intent(in) :: workspace_path
-        type(tree_node_t), pointer :: child
         character(len=1024) :: cmd
-        integer :: status, cmdstat
+        integer :: status, iostat, unit_num
+        character(len=512) :: line
+
+        ! Run git check-ignore ONCE with all files (MUCH faster than per-file)
+        ! Create temp file with all file paths, then batch check
+        write(cmd, '(A,A,A)') 'cd "', trim(workspace_path), &
+            '" && git ls-files --others --exclude .git | git check-ignore --stdin > /tmp/fac_ignored_files.txt 2>/dev/null'
+        call execute_command_line(trim(cmd), exitstat=status)
+
+        if (status /= 0) then
+            ! No ignored files or command failed - nothing to mark
+            return
+        end if
+
+        ! Read the list of ignored files
+        open(newunit=unit_num, file='/tmp/fac_ignored_files.txt', status='old', action='read', iostat=iostat)
+        if (iostat /= 0) return
+
+        ! Mark each ignored file in the tree
+        do
+            read(unit_num, '(A)', iostat=iostat) line
+            if (iostat /= 0) exit
+            if (len_trim(line) > 0) then
+                call mark_file_as_ignored(root, trim(line))
+            end if
+        end do
+
+        close(unit_num, status='delete')
+    end subroutine mark_gitignored_files
+
+    ! Collapse tree intelligently - only expand directories with dirty files
+    subroutine collapse_tree_smart(root)
+        type(tree_node_t), pointer, intent(inout) :: root
+        logical :: dummy
+
+        if (.not. associated(root)) return
+
+        ! Recursively determine which directories should be expanded
+        dummy = has_dirty_files(root)
+    end subroutine collapse_tree_smart
+
+    ! Recursive function: returns true if node or descendants have dirty files
+    ! Side effect: sets node%expanded based on whether it should be shown expanded
+    recursive function has_dirty_files(node) result(has_dirty)
+        type(tree_node_t), pointer, intent(inout) :: node
+        logical :: has_dirty
+        type(tree_node_t), pointer :: child
+        logical :: child_has_dirty
+
+        if (.not. associated(node)) then
+            has_dirty = .false.
+            return
+        end if
+
+        ! Files are dirty if they have any git status
+        if (node%is_file) then
+            has_dirty = node%is_staged .or. node%is_unstaged .or. node%is_untracked
+            return
+        end if
+
+        ! For directories, check all children
+        has_dirty = .false.
+        child => node%first_child
+        do while (associated(child))
+            child_has_dirty = has_dirty_files(child)
+            if (child_has_dirty) has_dirty = .true.
+            child => child%next_sibling
+        end do
+
+        ! Collapse this directory if it has no dirty descendants
+        ! Keep root always expanded
+        if (trim(node%name) == '.') then
+            node%expanded = .true.  ! Root always expanded
+        else
+            node%expanded = has_dirty  ! Only expand if has dirty files
+        end if
+    end function has_dirty_files
+
+    recursive subroutine mark_file_as_ignored(node, path)
+        type(tree_node_t), pointer, intent(inout) :: node
+        character(len=*), intent(in) :: path
+        type(tree_node_t), pointer :: child
 
         if (.not. associated(node)) return
 
-        ! Only check files, not directories (directories won't be gitignored)
-        if (node%is_file .and. len_trim(node%full_path) > 0) then
-            ! Use git check-ignore to see if this file is ignored
-            write(cmd, '(A,A,A,A,A)') 'cd "', trim(workspace_path), &
-                '" && git check-ignore -q "', trim(node%full_path), '" 2>/dev/null'
-            call execute_command_line(trim(cmd), wait=.true., exitstat=status, cmdstat=cmdstat)
-            ! If exit status is 0, file is gitignored (cmdstat=0 means command executed successfully)
-            ! exit status 1 means file is not ignored (which is normal, not an error)
-            node%is_gitignored = (cmdstat == 0 .and. status == 0)
+        ! Check if this node matches the path
+        if (node%is_file .and. trim(node%full_path) == trim(path)) then
+            node%is_gitignored = .true.
+            return
         end if
 
         ! Recurse to children
         child => node%first_child
         do while (associated(child))
-            call mark_gitignored_files(child, workspace_path)
+            call mark_file_as_ignored(child, path)
             child => child%next_sibling
         end do
-    end subroutine mark_gitignored_files
+    end subroutine mark_file_as_ignored
 
     recursive subroutine debug_print_tree(node, prefix, unit)
         type(tree_node_t), pointer, intent(in) :: node
