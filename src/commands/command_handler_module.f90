@@ -1826,6 +1826,8 @@ contains
         character(len=:), allocatable :: killed_text
         integer :: i
 
+        cursor%has_selection = .false.  ! Clear selection
+
         line = buffer_get_line(buffer, cursor%line)
 
         if (cursor%column <= len(line)) then
@@ -1856,6 +1858,8 @@ contains
         character(len=:), allocatable :: line
         character(len=:), allocatable :: killed_text
         integer :: i, start_col
+
+        cursor%has_selection = .false.  ! Clear selection
 
         line = buffer_get_line(buffer, cursor%line)
         start_col = cursor%column
