@@ -121,7 +121,8 @@ contains
             item_idx = item_idx + 1
             is_selected = (item_idx == state%selected_index)
 
-            if (current_row <= end_row) then
+            ! Only render if within viewport and current_row fits
+            if (item_idx >= state%viewport_offset .and. current_row <= end_row) then
                 ! Build line with tree structure
                 if (is_last) then
                     branch = BRANCH_LAST

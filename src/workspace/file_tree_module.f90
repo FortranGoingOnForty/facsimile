@@ -8,6 +8,7 @@ module file_tree_module
     public :: tree_move_up, tree_move_down, get_selected_item_path
     public :: tree_stage_file, tree_unstage_file, tree_toggle_expand
     public :: build_selectable_list
+    public :: update_tree_viewport
 
     ! Tree node using linked list structure (first-child, next-sibling)
     type :: tree_node_t
@@ -644,5 +645,33 @@ contains
             end if
         end if
     end subroutine tree_toggle_expand
+
+    ! Update viewport to keep selected item visible
+    subroutine update_tree_viewport(state, visible_height)
+        type(tree_state_t), intent(inout) :: state
+        integer, intent(in) :: visible_height
+
+        ! Ensure selected index is valid
+        if (state%selected_index < 1) state%selected_index = 1
+        if (state%selected_index > state%n_selectable .and. state%n_selectable > 0) then
+            state%selected_index = state%n_selectable
+        end if
+
+        ! Scroll up if selected item is above viewport
+        if (state%selected_index < state%viewport_offset) then
+            state%viewport_offset = state%selected_index
+        end if
+
+        ! Scroll down if selected item is below viewport
+        if (state%selected_index >= state%viewport_offset + visible_height) then
+            state%viewport_offset = state%selected_index - visible_height + 1
+        end if
+
+        ! Clamp viewport_offset to valid range
+        if (state%viewport_offset < 1) state%viewport_offset = 1
+        if (state%n_selectable > 0 .and. state%viewport_offset > state%n_selectable) then
+            state%viewport_offset = max(1, state%n_selectable - visible_height + 1)
+        end if
+    end subroutine update_tree_viewport
 
 end module file_tree_module
