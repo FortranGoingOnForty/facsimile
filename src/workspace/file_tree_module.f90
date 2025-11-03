@@ -221,10 +221,11 @@ contains
         allocate(temp_files(max_files))
         n_files = 0
 
-        ! Use git ls-files for MUCH faster listing of tracked files
-        ! This is WAY faster than find because it uses git's index
+        ! Use git ls-files for tracked files, then add ALL untracked files (except .git)
+        ! This is fast because it uses git's index for most files
+        ! We don't use --exclude-standard so gitignored files are included (can be hidden with ".")
         write(cmd, '(A,A,A)') 'cd "', trim(workspace_path), &
-            '" && git ls-files > /tmp/fac_all_files.txt 2>/dev/null'
+            '" && { git ls-files; git ls-files --others --exclude .git; } | sort -u > /tmp/fac_all_files.txt 2>/dev/null'
         call execute_command_line(trim(cmd), exitstat=status_code)
 
         if (status_code /= 0) then
