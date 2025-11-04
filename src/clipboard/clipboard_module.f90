@@ -15,10 +15,10 @@ contains
         ! Use pbcopy on macOS, xclip on Linux
         ! For now, implementing macOS version
         open(newunit=unit, file='/tmp/facsimile_clipboard.tmp', &
-             status='replace', action='write', iostat=ios)
+             status='replace', action='write', access='stream', iostat=ios)
 
         if (ios == 0) then
-            write(unit, '(a)', iostat=ios) text
+            write(unit, iostat=ios) text
             close(unit)
 
             ! Send to system clipboard

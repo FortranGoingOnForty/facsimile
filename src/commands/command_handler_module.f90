@@ -745,13 +745,14 @@ contains
         case('ctrl-x')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (size(editor%cursors) > 1) then
-                ! Apply to all cursors
-                do i = 1, size(editor%cursors)
+                ! Apply to all cursors in reverse order (bottom to top)
+                do i = size(editor%cursors), 1, -1
                     call cut_selection_or_line(editor%cursors(i), buffer)
                 end do
             else
                 call cut_selection_or_line(editor%cursors(editor%active_cursor), buffer)
             end if
+            call sync_editor_to_pane(editor)
             is_edit_action = .true.
 
         case('ctrl-c')
@@ -761,13 +762,15 @@ contains
         case('ctrl-v')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (size(editor%cursors) > 1) then
-                ! Apply to all cursors
-                do i = 1, size(editor%cursors)
+                ! Apply to all cursors in reverse order (bottom to top)
+                ! This prevents position shifts as we insert text
+                do i = size(editor%cursors), 1, -1
                     call paste_clipboard(editor%cursors(i), buffer)
                 end do
             else
                 call paste_clipboard(editor%cursors(editor%active_cursor), buffer)
             end if
+            call sync_editor_to_pane(editor)
             is_edit_action = .true.
 
         case('ctrl-s')
@@ -2192,10 +2195,10 @@ contains
         character(len=:), allocatable :: text
 
         if (cursor%has_selection) then
-            ! Get selected text
+            ! Get selected text (only what's selected, no automatic newlines)
             text = get_selection_text(cursor, buffer)
         else
-            ! Get current line
+            ! Get current line - don't add newline, user can select it if they want it
             text = buffer_get_line(buffer, cursor%line)
         end if
 
