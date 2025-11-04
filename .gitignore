@@ -1,0 +1,8 @@
+# Build artifacts
+*.o
+*.mod
+fac
+fac_debug.txt
+
+# Temporary files
+/tmp/
