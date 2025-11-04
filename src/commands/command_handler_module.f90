@@ -180,7 +180,14 @@ contains
         case('ctrl-y')
             ! Yank (paste from yank stack)
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-            call yank_text(editor%cursors(editor%active_cursor), buffer)
+            if (size(editor%cursors) > 1) then
+                ! Apply yank to all cursors
+                do i = 1, size(editor%cursors)
+                    call yank_text(editor%cursors(i), buffer)
+                end do
+            else
+                call yank_text(editor%cursors(editor%active_cursor), buffer)
+            end if
             call sync_editor_to_pane(editor)
             is_edit_action = .true.
 
