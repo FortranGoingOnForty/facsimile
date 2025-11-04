@@ -189,10 +189,10 @@ contains
             if (allocated(editor%tabs(editor%active_tab_index)%panes)) then
                 call render_cursor_for_panes(editor)
             else
-                call render_cursor(editor)
+                call render_cursor(editor, buffer)
             end if
         else
-            call render_cursor(editor)
+            call render_cursor(editor, buffer)
         end if
     end subroutine render_screen
 
@@ -442,12 +442,15 @@ contains
         call terminal_write(char(27) // '[0m')  ! Reset attributes
     end subroutine render_status_bar
 
-    subroutine render_cursor(editor)
+    subroutine render_cursor(editor, buffer)
         type(editor_state_t), intent(in) :: editor
+        type(buffer_t), intent(in) :: buffer
         type(cursor_t) :: cursor
         integer :: screen_row, screen_col
         integer :: i
         integer :: col_offset, row_offset, min_row
+        character(len=:), allocatable :: line
+        character :: cursor_char
 
         ! Calculate column offset for line numbers
         if (show_line_numbers) then
@@ -479,9 +482,17 @@ contains
                     ! Ensure cursor is within screen bounds and not in tab bar
                     if (screen_row >= min_row .and. screen_row < editor%screen_rows .and. &
                         screen_col >= 1 .and. screen_col <= editor%screen_cols) then
-                        ! Inactive cursor - draw with reverse video block
+                        ! Get the character at this cursor position
+                        line = buffer_get_line(buffer, cursor%line)
+                        if (cursor%column <= len(line)) then
+                            cursor_char = line(cursor%column:cursor%column)
+                        else
+                            cursor_char = ' '  ! End of line
+                        end if
+
+                        ! Inactive cursor - draw character with reverse video
                         call terminal_move_cursor(screen_row, screen_col)
-                        call terminal_write(char(27) // '[7m ')  ! Inverse video space
+                        call terminal_write(char(27) // '[7m' // cursor_char)  ! Inverse video
                         call terminal_write(char(27) // '[0m')   ! Reset
                     end if
                 end if
@@ -1069,11 +1080,13 @@ contains
         type(editor_state_t), intent(in) :: editor
         type(pane_t) :: pane
         type(cursor_t) :: cursor
-        integer :: tab_idx, pane_idx
+        integer :: tab_idx, pane_idx, i
         integer :: pane_col, pane_row, pane_width, pane_height
         integer :: screen_row, screen_col
         integer :: screen_width, screen_height
         integer :: col_offset
+        character(len=:), allocatable :: line
+        character :: cursor_char
 
         tab_idx = editor%active_tab_index
         if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
@@ -1085,8 +1098,6 @@ contains
         pane = editor%tabs(tab_idx)%panes(pane_idx)
         if (.not. allocated(pane%cursors)) return
         if (pane%active_cursor < 1 .or. pane%active_cursor > size(pane%cursors)) return
-
-        cursor = pane%cursors(pane%active_cursor)
 
         ! Calculate column offset for line numbers
         if (show_line_numbers) then
@@ -1106,6 +1117,39 @@ contains
         end if
         pane_row = 2 + int(pane%y_start * real(screen_height))
         pane_height = int((pane%y_end - pane%y_start) * real(screen_height))
+
+        ! For multiple cursors, render all inactive ones first
+        if (size(pane%cursors) > 1) then
+            do i = 1, size(pane%cursors)
+                if (i /= pane%active_cursor) then
+                    cursor = pane%cursors(i)
+
+                    ! Calculate cursor position within the pane
+                    screen_row = pane_row + (cursor%line - pane%viewport_line)
+                    screen_col = pane_col + col_offset + (cursor%column - pane%viewport_column)
+
+                    ! Ensure cursor is within pane boundaries
+                    if (screen_row >= pane_row .and. screen_row < pane_row + pane_height .and. &
+                        screen_col >= pane_col + col_offset .and. screen_col < pane_col + pane_width) then
+                        ! Get the character at this cursor position
+                        line = buffer_get_line(editor%tabs(tab_idx)%buffer, cursor%line)
+                        if (cursor%column <= len(line)) then
+                            cursor_char = line(cursor%column:cursor%column)
+                        else
+                            cursor_char = ' '  ! End of line
+                        end if
+
+                        ! Inactive cursor - draw character with reverse video
+                        call terminal_move_cursor(screen_row, screen_col)
+                        call terminal_write(char(27) // '[7m' // cursor_char)  ! Inverse video
+                        call terminal_write(char(27) // '[0m')   ! Reset
+                    end if
+                end if
+            end do
+        end if
+
+        ! Now render the active cursor
+        cursor = pane%cursors(pane%active_cursor)
 
         ! Calculate cursor position within the pane, accounting for line numbers
         screen_row = pane_row + (cursor%line - pane%viewport_line)

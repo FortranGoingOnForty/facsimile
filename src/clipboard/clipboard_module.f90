@@ -53,13 +53,13 @@ contains
         if (ios == 0) then
             ! Read the clipboard content
             open(newunit=unit, file='/tmp/facsimile_clipboard.tmp', &
-                 status='old', action='read', iostat=ios)
+                 status='old', action='read', access='stream', iostat=ios)
 
             if (ios == 0) then
                 ! Get file size
                 inquire(unit=unit, size=file_size)
                 if (file_size > 0 .and. file_size < 1000000) then
-                    read(unit, '(a)', iostat=ios) buffer(1:file_size)
+                    read(unit, iostat=ios) buffer(1:file_size)
                     if (ios == 0) then
                         allocate(character(len=file_size) :: text)
                         text = buffer(1:file_size)

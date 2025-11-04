@@ -797,12 +797,16 @@ contains
             ! opt-meta-up: Doesn't work (terminals don't send Cmd)
             ! ctrl-alt-up: Alternative binding that works
             call add_cursor_above(editor, buffer)
+            call sync_editor_to_pane(editor)
+            call update_viewport(editor)
 
         case('opt-meta-down', 'ctrl-alt-down', 'alt-ctrl-down')
             ! Add cursor on line below
             ! opt-meta-down: Doesn't work (terminals don't send Cmd)
             ! ctrl-alt-down: Alternative binding that works
             call add_cursor_below(editor, buffer)
+            call sync_editor_to_pane(editor)
+            call update_viewport(editor)
 
         ! Search commands
         case('ctrl-f')
@@ -830,6 +834,7 @@ contains
                 else
                     call insert_char(editor%cursors(editor%active_cursor), buffer, 'n')
                 end if
+                call sync_editor_to_pane(editor)
                 is_edit_action = .true.
             end if
 
@@ -846,6 +851,7 @@ contains
                 else
                     call insert_char(editor%cursors(editor%active_cursor), buffer, 'N')
                 end if
+                call sync_editor_to_pane(editor)
                 is_edit_action = .true.
             end if
 
