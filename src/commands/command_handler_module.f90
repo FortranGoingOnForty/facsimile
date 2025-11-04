@@ -80,6 +80,12 @@ contains
             return
         end if
 
+        ! Reset search_pattern for any key except ctrl-d
+        ! This ensures ctrl-d always starts fresh when not in an active match sequence
+        if (trim(key_str) /= 'ctrl-d' .and. allocated(search_pattern)) then
+            deallocate(search_pattern)
+        end if
+
         ! Route input when in fuss mode (except ctrl-b and ctrl-q which work in both modes)
         if (editor%fuss_mode_active .and. trim(key_str) /= 'ctrl-b' .and. trim(key_str) /= 'ctrl-q') then
             call handle_fuss_input(key_str, editor, buffer)
@@ -110,6 +116,7 @@ contains
                 editor%cursors(editor%active_cursor)%has_selection = .false.
             end if
             call sync_editor_to_pane(editor)
+            call update_viewport(editor)
 
         case('ctrl-?', 'ctrl-/')
             ! Show help menu
@@ -797,6 +804,8 @@ contains
 
         case('ctrl-d')
             call select_next_match(editor, buffer)
+            call sync_editor_to_pane(editor)
+            call update_viewport(editor)
 
         case('alt-[', 'alt-]')
             ! Jump to matching bracket
@@ -1761,10 +1770,15 @@ contains
     subroutine deduplicate_cursors(editor)
         type(editor_state_t), intent(inout) :: editor
         type(cursor_t), allocatable :: unique_cursors(:)
-        integer :: i, j, unique_count
+        integer :: i, j, unique_count, duplicate_of
         logical :: is_duplicate
+        integer, allocatable :: old_to_new_map(:)
 
         if (size(editor%cursors) <= 1) return
+
+        ! Allocate mapping from old cursor indices to new indices
+        allocate(old_to_new_map(size(editor%cursors)))
+        old_to_new_map = 0
 
         ! Count unique cursors
         unique_count = 0
@@ -1788,24 +1802,38 @@ contains
             unique_count = 0
             do i = 1, size(editor%cursors)
                 is_duplicate = .false.
+                duplicate_of = 0
                 do j = 1, i-1
                     if (editor%cursors(i)%line == editor%cursors(j)%line .and. &
                         editor%cursors(i)%column == editor%cursors(j)%column) then
                         is_duplicate = .true.
+                        duplicate_of = j
                         exit
                     end if
                 end do
                 if (.not. is_duplicate) then
                     unique_count = unique_count + 1
                     unique_cursors(unique_count) = editor%cursors(i)
-                    ! Adjust active cursor index
-                    if (i == editor%active_cursor) then
-                        editor%active_cursor = unique_count
-                    end if
+                    old_to_new_map(i) = unique_count
+                else
+                    ! This cursor is a duplicate of an earlier one
+                    ! Map it to the same new index as the earlier cursor
+                    old_to_new_map(i) = old_to_new_map(duplicate_of)
                 end if
             end do
+
+            ! Update active cursor using the mapping
+            if (editor%active_cursor > 0 .and. editor%active_cursor <= size(old_to_new_map)) then
+                editor%active_cursor = old_to_new_map(editor%active_cursor)
+            end if
+            ! Ensure active_cursor is valid
+            if (editor%active_cursor < 1 .or. editor%active_cursor > unique_count) then
+                editor%active_cursor = 1
+            end if
+
             deallocate(editor%cursors)
             editor%cursors = unique_cursors
+            deallocate(old_to_new_map)
         end if
     end subroutine deduplicate_cursors
 
