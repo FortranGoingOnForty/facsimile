@@ -15,26 +15,43 @@ ifeq ($(UNAME_S),Darwin)
         BREW_PREFIX = /opt/homebrew
         ifneq ($(wildcard $(BREW_PREFIX)/bin/flang-new),)
             FC = $(BREW_PREFIX)/bin/flang-new
-            # flang-new flags (no -ffree-line-length-none or -Wall needed)
+            # flang-new flags
             FFLAGS = -O2
+            # Development flags (flang-new has very limited warning support)
+            # For comprehensive warnings, use gfortran instead
+            FFLAGS_DEV = -O0 -g -pedantic
+            # Debug flags with debug symbols
+            FFLAGS_DEBUG = -O0 -g
         else
             # Fallback to gfortran if flang-new not available
             ifneq ($(wildcard $(BREW_PREFIX)/bin/gfortran-*),)
                 FC = $(shell ls $(BREW_PREFIX)/bin/gfortran-* | head -n1)
             endif
             FFLAGS = -O2 -Wall -ffree-line-length-none
+            FFLAGS_DEV = -O0 -g -Wall -Wextra -pedantic -Wunused-variable -Wuninitialized \
+                         -Wimplicit-interface -fcheck=all -fbacktrace -ffree-line-length-none
+            FFLAGS_DEBUG = -O0 -g -fcheck=all -fbacktrace -ffree-line-length-none
         endif
         CFLAGS = -O2 -Wall
+        CFLAGS_DEV = -O0 -g -Wall -Wextra -pedantic -Wconversion
     else
         # Intel Mac
         BREW_PREFIX = /usr/local
         FFLAGS = -O2 -Wall -ffree-line-length-none
+        FFLAGS_DEV = -O0 -g -Wall -Wextra -pedantic -Wunused-variable -Wuninitialized \
+                     -fcheck=all -fbacktrace -ffree-line-length-none
+        FFLAGS_DEBUG = -O0 -g -fcheck=all -fbacktrace -ffree-line-length-none
         CFLAGS = -O2 -Wall
+        CFLAGS_DEV = -O0 -g -Wall -Wextra -pedantic -Wconversion
     endif
 else
     # Linux
     FFLAGS = -O2 -Wall
+    FFLAGS_DEV = -O0 -g -Wall -Wextra -pedantic -Wunused-variable -Wuninitialized \
+                 -fcheck=all -fbacktrace
+    FFLAGS_DEBUG = -O0 -g -fcheck=all -fbacktrace
     CFLAGS = -O2 -Wall
+    CFLAGS_DEV = -O0 -g -Wall -Wextra -pedantic -Wconversion
 endif
 
 TARGET = fac
@@ -83,4 +100,30 @@ $(TARGET): $(OBJECTS) $(C_OBJECTS)
 clean:
 	rm -f $(OBJECTS) $(C_OBJECTS) $(TARGET) *.mod src/*/*.mod src/workspace/*.o src/utils/*.o
 
-.PHONY: all clean
+# Development build with comprehensive warnings
+dev: clean
+	@echo "Building with development flags (warnings + checks)..."
+	@echo "Fortran flags: $(FFLAGS_DEV)"
+	@echo "C flags: $(CFLAGS_DEV)"
+	@echo ""
+	@$(MAKE) all FFLAGS="$(FFLAGS_DEV)" CFLAGS="$(CFLAGS_DEV)"
+
+# Debug build with runtime checks and symbols
+debug: clean
+	@echo "Building with debug flags (runtime checks + symbols)..."
+	@echo "Fortran flags: $(FFLAGS_DEBUG)"
+	@echo ""
+	@$(MAKE) all FFLAGS="$(FFLAGS_DEBUG)"
+
+# Show current compiler and flags
+info:
+	@echo "Compiler: $(FC)"
+	@echo "Default FFLAGS: $(FFLAGS)"
+	@echo "Dev FFLAGS: $(FFLAGS_DEV)"
+	@echo "Debug FFLAGS: $(FFLAGS_DEBUG)"
+	@echo ""
+	@echo "C Compiler: $(CC)"
+	@echo "Default CFLAGS: $(CFLAGS)"
+	@echo "Dev CFLAGS: $(CFLAGS_DEV)"
+
+.PHONY: all clean dev debug info
