@@ -3,6 +3,7 @@
 
 module workspace_module
     use editor_state_module, only: editor_state_t, create_tab
+    use text_buffer_module, only: buffer_t
     use recents_module, only: recents_add_or_update
     implicit none
     private
@@ -10,6 +11,7 @@ module workspace_module
     public :: workspace_exists, workspace_init, workspace_load, workspace_save
     public :: workspace_get_path, workspace_detect_from_file, workspace_is_file_in_workspace
     public :: workspace_save_state, workspace_restore_state
+    public :: workspace_switch
 
     integer, parameter :: MAX_PATH_LEN = 512
 
@@ -387,6 +389,7 @@ contains
     !> Full multi-pane restoration will be added when needed
     subroutine workspace_restore_state(editor, dir_path, success)
         use text_buffer_module, only: buffer_load_file
+        use terminal_io_module, only: terminal_write
         type(editor_state_t), intent(inout) :: editor
         character(len=*), intent(in) :: dir_path
         logical, intent(out) :: success
@@ -395,15 +398,26 @@ contains
         integer :: cursor_line, cursor_col, viewport_line, viewport_col
         real :: x_start, y_start, x_end, y_end
         logical :: in_tabs_array, is_orphan, reading_tab, in_panes_array, reading_pane
-        integer :: load_status, tab_idx, pane_count
+        logical :: file_exists
+        integer :: load_status, tab_idx, pane_count, file_unit
         character(len=20) :: value_str
+        character(len=512) :: warning_msg
 
         success = .false.
         workspace_file = trim(dir_path) // "/.fac/workspace.json"
 
         ! Open workspace file
         open(newunit=unit, file=workspace_file, status='old', iostat=ios)
-        if (ios /= 0) return
+        if (ios /= 0) then
+            ! Workspace file doesn't exist or can't be read (Phase 7: error handling)
+            warning_msg = "Warning: Could not open workspace.json - using empty workspace"
+            call terminal_write(trim(warning_msg))
+            ! Brief pause so user can see the warning
+            call execute_command_line("sleep 1.0", wait=.true.)
+            ! Initialize a new workspace instead
+            call workspace_init(dir_path, success)
+            return
+        end if
 
         ! Parse JSON line by line (simple parser for our specific format)
         in_tabs_array = .false.
@@ -480,6 +494,25 @@ contains
                         full_path = pane_filename
                     else
                         full_path = trim(dir_path) // '/' // trim(pane_filename)
+                    end if
+
+                    ! Check if file exists before creating tab (Phase 7: missing file handling)
+                    file_exists = .false.
+                    open(newunit=file_unit, file=trim(full_path), status='old', iostat=ios)
+                    if (ios == 0) then
+                        file_exists = .true.
+                        close(file_unit)
+                    end if
+
+                    if (.not. file_exists) then
+                        ! File doesn't exist - show warning and skip this tab
+                        warning_msg = "Warning: File not found (skipping): " // trim(full_path)
+                        call terminal_write(trim(warning_msg))
+                        ! Brief pause so user can see the warning
+                        call execute_command_line("sleep 0.8", wait=.true.)
+                        ! Continue to next tab without creating this one
+                        reading_pane = .false.
+                        cycle
                     end if
 
                     ! Create tab
@@ -676,5 +709,45 @@ contains
         call recents_add_or_update(dir_path, trim(label), recents_success)
         ! Silently ignore recents failures
     end subroutine track_workspace_in_recents
+
+    !> Switch to a different workspace
+    subroutine workspace_switch(editor, new_workspace_path, success)
+        type(editor_state_t), intent(inout) :: editor
+        character(len=*), intent(in) :: new_workspace_path
+        logical, intent(out) :: success
+        character(len=MAX_PATH_LEN) :: old_workspace_path
+        logical :: save_success
+
+        success = .false.
+
+        ! Save current workspace state
+        if (allocated(editor%workspace_path)) then
+            old_workspace_path = editor%workspace_path
+            call workspace_save_state(editor, old_workspace_path, save_success)
+            ! Continue even if save fails - best effort
+        end if
+
+        ! Update workspace path
+        editor%workspace_path = trim(new_workspace_path)
+
+        ! Check if new workspace exists
+        if (.not. workspace_exists(new_workspace_path)) then
+            ! Create new workspace
+            call workspace_init(new_workspace_path, success)
+            if (.not. success) then
+                ! Restore old workspace path on failure
+                if (len_trim(old_workspace_path) > 0) then
+                    editor%workspace_path = old_workspace_path
+                end if
+                return
+            end if
+        end if
+
+        ! Load/restore new workspace state
+        call workspace_restore_state(editor, new_workspace_path, success)
+
+        ! Track in recents
+        call track_workspace_in_recents(new_workspace_path)
+    end subroutine workspace_switch
 
 end module workspace_module

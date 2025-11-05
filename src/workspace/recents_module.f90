@@ -8,7 +8,7 @@ module recents_module
     private
 
     public :: recent_t, recents_load, recents_save, recents_add_or_update
-    public :: recents_exists, recents_get_path
+    public :: recents_exists, recents_get_path, recents_remove
 
     integer, parameter :: MAX_PATH_LEN = 512
     integer, parameter :: MAX_LABEL_LEN = 128
@@ -323,5 +323,34 @@ contains
             values(1), '-', values(2), '-', values(3), 'T', &
             values(5), ':', values(6), ':', values(7), 'Z'
     end subroutine get_current_timestamp
+
+    !> Remove a recent workspace by index (Phase 7: handle deleted workspaces)
+    subroutine recents_remove(index, success)
+        integer, intent(in) :: index
+        logical, intent(out) :: success
+        type(recent_t), allocatable :: recents(:)
+        integer :: count, max_recents, i
+
+        success = .false.
+
+        ! Load existing recents
+        call recents_load(recents, count, max_recents, success)
+        if (.not. success) return
+
+        ! Check bounds
+        if (index < 1 .or. index > count) then
+            success = .false.
+            return
+        end if
+
+        ! Shift entries after the removed one
+        do i = index, count - 1
+            recents(i) = recents(i + 1)
+        end do
+        count = count - 1
+
+        ! Save updated list
+        call recents_save(recents, count, max_recents, success)
+    end subroutine recents_remove
 
 end module recents_module

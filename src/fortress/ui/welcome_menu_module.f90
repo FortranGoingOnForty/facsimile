@@ -5,8 +5,8 @@ module welcome_menu_module
     use iso_fortran_env, only: int32
     use terminal_io_module, only: terminal_write, terminal_move_cursor, terminal_clear_screen
     use input_handler_module, only: get_key_input
-    use favorites_module, only: favorite_t, favorites_load
-    use recents_module, only: recent_t, recents_load
+    use favorites_module, only: favorite_t, favorites_load, favorites_remove
+    use recents_module, only: recent_t, recents_load, recents_remove
     implicit none
     private
 
@@ -75,18 +75,44 @@ contains
                     end if
 
                 case ('ENTER', 'RIGHT')
-                    ! Select current item
+                    ! Select current item (Phase 7: check if directory exists)
                     if (showing_favorites .and. fav_count > 0) then
                         if (selected_index >= 1 .and. selected_index <= fav_count) then
-                            selected_path = trim(favorites(selected_index)%path)
-                            cancelled = .false.
-                            exit
+                            ! Check if directory exists
+                            if (directory_exists(trim(favorites(selected_index)%path))) then
+                                selected_path = trim(favorites(selected_index)%path)
+                                cancelled = .false.
+                                exit
+                            else
+                                ! Directory doesn't exist - show warning and remove
+                                call handle_deleted_workspace(trim(favorites(selected_index)%path), &
+                                    showing_favorites, selected_index)
+                                ! Reload favorites and recents
+                                call favorites_load(favorites, fav_count, success)
+                                if (.not. success) fav_count = 0
+                                ! Adjust selection if needed
+                                if (selected_index > fav_count) selected_index = fav_count
+                                if (selected_index < 1 .and. fav_count > 0) selected_index = 1
+                            end if
                         end if
                     else if (.not. showing_favorites .and. rec_count > 0) then
                         if (selected_index >= 1 .and. selected_index <= rec_count) then
-                            selected_path = trim(recents(selected_index)%path)
-                            cancelled = .false.
-                            exit
+                            ! Check if directory exists
+                            if (directory_exists(trim(recents(selected_index)%path))) then
+                                selected_path = trim(recents(selected_index)%path)
+                                cancelled = .false.
+                                exit
+                            else
+                                ! Directory doesn't exist - show warning and remove
+                                call handle_deleted_workspace(trim(recents(selected_index)%path), &
+                                    showing_favorites, selected_index)
+                                ! Reload recents
+                                call recents_load(recents, rec_count, max_recents, success)
+                                if (.not. success) rec_count = 0
+                                ! Adjust selection if needed
+                                if (selected_index > rec_count) selected_index = rec_count
+                                if (selected_index < 1 .and. rec_count > 0) selected_index = 1
+                            end if
                         end if
                     end if
 
@@ -231,5 +257,42 @@ contains
         cols = 80
         ! TODO: Query actual terminal size if available
     end subroutine terminal_get_size
+
+    !> Check if a directory exists (Phase 7: deleted workspace detection)
+    function directory_exists(path) result(exists)
+        character(len=*), intent(in) :: path
+        logical :: exists
+        integer :: unit, ios
+
+        ! Try to open directory (will fail if doesn't exist)
+        call execute_command_line('test -d "' // trim(path) // '"', wait=.true., exitstat=ios)
+        exists = (ios == 0)
+    end function directory_exists
+
+    !> Handle deleted workspace (Phase 7: show warning and remove from list)
+    subroutine handle_deleted_workspace(path, is_favorite, index)
+        character(len=*), intent(in) :: path
+        logical, intent(in) :: is_favorite
+        integer, intent(in) :: index
+        character(len=512) :: warning_msg
+        logical :: remove_success
+
+        ! Show warning message
+        call terminal_move_cursor(1, 1)
+        warning_msg = "Warning: Workspace no longer exists: " // trim(path)
+        call terminal_write(trim(warning_msg))
+        call terminal_move_cursor(2, 1)
+        call terminal_write("Removing from list...")
+
+        ! Remove from appropriate list
+        if (is_favorite) then
+            call favorites_remove(index, remove_success)
+        else
+            call recents_remove(index, remove_success)
+        end if
+
+        ! Brief pause so user can see the message
+        call execute_command_line("sleep 1.0", wait=.true.)
+    end subroutine handle_deleted_workspace
 
 end module welcome_menu_module

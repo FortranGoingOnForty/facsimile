@@ -4449,12 +4449,16 @@ contains
     end subroutine handle_git_diff
 
     subroutine handle_fortress_navigator(editor, buffer)
-        use workspace_module, only: workspace_is_file_in_workspace
+        use workspace_module, only: workspace_is_file_in_workspace, workspace_switch
+        use save_prompt_module, only: save_prompt, save_prompt_result_t
+        use input_handler_module, only: get_key_input
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: selected_path
-        logical :: is_directory, cancelled, is_in_workspace
-        integer :: load_status, tab_idx
+        character(len=32) :: key_input
+        logical :: is_directory, cancelled, is_in_workspace, switch_success
+        logical :: should_switch
+        integer :: load_status, tab_idx, status
 
         ! Call fortress navigator (start in workspace if available)
         if (allocated(editor%workspace_path)) then
@@ -4508,9 +4512,32 @@ contains
                         editor%cursors(editor%active_cursor)%desired_column = 1
                     end if
                 else
-                    ! Selected a directory
-                    ! TODO: Phase 6 - switch to workspace mode
-                    ! For now, just ignore directories
+                    ! Selected a directory - switch workspace (Phase 6)
+                    should_switch = .true.
+
+                    ! Check for dirty buffers and prompt to save
+                    if (allocated(editor%tabs)) then
+                        call handle_dirty_buffers_before_switch(editor, buffer, should_switch)
+                    end if
+
+                    ! If user didn't cancel, perform the switch
+                    if (should_switch) then
+                        call workspace_switch(editor, selected_path, switch_success)
+
+                        if (.not. switch_success) then
+                            ! Show error message
+                            call terminal_move_cursor(1, 1)
+                            call terminal_write("Error: Could not switch to workspace: " // trim(selected_path))
+                            call terminal_write("Press any key to continue...")
+                            ! Wait for keypress (simple implementation)
+                            call get_key_input(key_input, status)
+                        else
+                            ! Phase 7: Update file tree if it's active after successful workspace switch
+                            if (editor%fuss_mode_active .and. allocated(editor%workspace_path)) then
+                                call refresh_tree_state(tree_state, editor%workspace_path)
+                            end if
+                        end if
+                    end if
                 end if
             end if
         end if
@@ -4518,5 +4545,50 @@ contains
         ! Re-render after returning from fortress
         call terminal_clear_screen()
     end subroutine handle_fortress_navigator
+
+    !> Handle dirty buffers before workspace switch
+    subroutine handle_dirty_buffers_before_switch(editor, buffer, should_continue)
+        use save_prompt_module, only: save_prompt, save_prompt_result_t
+        use text_buffer_module, only: buffer_save_file
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        logical, intent(inout) :: should_continue
+        type(save_prompt_result_t) :: prompt_result
+        integer :: i, save_status
+
+        should_continue = .true.
+
+        ! Check each tab for modified buffers
+        do i = 1, size(editor%tabs)
+            if (editor%tabs(i)%modified .and. allocated(editor%tabs(i)%filename)) then
+                ! Prompt user for this file
+                call save_prompt(editor%tabs(i)%filename, prompt_result)
+
+                select case (prompt_result%action)
+                    case ('y')
+                        ! Save the file
+                        if (allocated(editor%tabs(i)%panes) .and. size(editor%tabs(i)%panes) > 0) then
+                            call buffer_save_file(editor%tabs(i)%panes(1)%buffer, &
+                                                  editor%tabs(i)%filename, save_status)
+                        else
+                            call buffer_save_file(editor%tabs(i)%buffer, &
+                                                  editor%tabs(i)%filename, save_status)
+                        end if
+
+                        if (save_status == 0) then
+                            editor%tabs(i)%modified = .false.
+                        end if
+
+                    case ('n')
+                        ! Skip saving - continue
+
+                    case ('c')
+                        ! Cancel the workspace switch
+                        should_continue = .false.
+                        return
+                end select
+            end if
+        end do
+    end subroutine handle_dirty_buffers_before_switch
 
 end module command_handler_module
