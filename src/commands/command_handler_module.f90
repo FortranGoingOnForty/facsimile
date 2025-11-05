@@ -257,7 +257,7 @@ contains
 
         ! Selection with shift+motion
         case('shift-up')
-            call extend_selection_up(editor%cursors(editor%active_cursor), buffer, line_count)
+            call extend_selection_up(editor%cursors(editor%active_cursor), buffer)
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
@@ -314,10 +314,10 @@ contains
             if (size(editor%cursors) > 1) then
                 ! Move all cursors
                 do i = 1, size(editor%cursors)
-                    call move_cursor_page_up(editor%cursors(i), editor, line_count)
+                    call move_cursor_page_up(editor%cursors(i), editor)
                 end do
             else
-                call move_cursor_page_up(editor%cursors(editor%active_cursor), editor, line_count)
+                call move_cursor_page_up(editor%cursors(editor%active_cursor), editor)
             end if
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
@@ -363,7 +363,7 @@ contains
             call update_viewport(editor)
 
         case('shift-pageup')
-            call extend_selection_page_up(editor%cursors(editor%active_cursor), editor, line_count)
+            call extend_selection_page_up(editor%cursors(editor%active_cursor), editor)
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
@@ -841,7 +841,7 @@ contains
             ! Add cursor on line above
             ! opt-meta-up: Doesn't work (terminals don't send Cmd)
             ! ctrl-alt-up: Alternative binding that works
-            call add_cursor_above(editor, buffer)
+            call add_cursor_above(editor)
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
@@ -1101,10 +1101,9 @@ contains
         if (allocated(line)) deallocate(line)
     end subroutine move_cursor_end
 
-    subroutine move_cursor_page_up(cursor, editor, line_count)
+    subroutine move_cursor_page_up(cursor, editor)
         type(cursor_t), intent(inout) :: cursor
         type(editor_state_t), intent(in) :: editor
-        integer, intent(in) :: line_count
         integer :: page_size
 
         cursor%has_selection = .false.  ! Clear selection
@@ -1130,7 +1129,6 @@ contains
         type(buffer_t), intent(in) :: buffer
         character(len=:), allocatable :: line
         integer :: pos, line_len
-        logical :: in_word
 
         cursor%has_selection = .false.  ! Clear selection
         line = buffer_get_line(buffer, cursor%line)
@@ -1201,7 +1199,6 @@ contains
         type(buffer_t), intent(in) :: buffer
         character(len=:), allocatable :: line
         integer :: pos, line_count, line_len
-        logical :: in_word
 
         cursor%has_selection = .false.  ! Clear selection
         line = buffer_get_line(buffer, cursor%line)
@@ -1574,7 +1571,6 @@ contains
         character, intent(in) :: ch
         integer :: i
         integer :: offset_adjust
-        integer :: cursors_before
 
         ! Sort cursors by position to handle offset adjustments
         call sort_cursors_by_position(editor)
@@ -2161,39 +2157,6 @@ contains
         end do
     end subroutine insert_line_text
 
-    subroutine get_line_positions(buffer, line_num, start_pos, end_pos)
-        type(buffer_t), intent(in) :: buffer
-        integer, intent(in) :: line_num
-        integer, intent(out) :: start_pos, end_pos
-        integer :: current_line, i
-
-        current_line = 1
-        start_pos = 1
-
-        ! Find start of requested line
-        do i = 1, buffer%size
-            if (current_line == line_num) then
-                start_pos = i
-                exit
-            end if
-            if (i < buffer%gap_start .or. i >= buffer%gap_end) then
-                if (buffer_get_char_at(buffer, i) == char(10)) then
-                    current_line = current_line + 1
-                end if
-            end if
-        end do
-
-        ! Find end of line
-        end_pos = start_pos
-        do i = start_pos, buffer%size
-            if (buffer_get_char_at(buffer, i) == char(10)) then
-                end_pos = i
-                exit
-            end if
-            end_pos = i
-        end do
-    end subroutine get_line_positions
-
     function buffer_get_char_at(buffer, pos) result(ch)
         type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: pos
@@ -2289,10 +2252,9 @@ contains
     subroutine save_file(editor, buffer)
         type(editor_state_t), intent(in) :: editor
         type(buffer_t), intent(inout) :: buffer
-        integer :: ios, temp_unit
+        integer :: ios
         character(len=256) :: temp_filename, command
-        character(len=1024) :: error_msg
-        logical :: file_exists, has_write_permission
+        logical :: file_exists
 
         if (.not. allocated(editor%filename)) return
 
@@ -2315,7 +2277,7 @@ contains
         inquire(file=editor%filename, exist=file_exists)
 
         ! If save failed, try sudo save
-        write(temp_filename, '(a,i0)') '/tmp/facsimile_sudo_', getpid()
+        write(temp_filename, '(a,i0)') '/tmp/facsimile_sudo_', get_process_id()
 
         ! Save to temporary file
         call buffer_save_file(buffer, temp_filename, ios)
@@ -2349,7 +2311,7 @@ contains
         end if
     end subroutine save_file
 
-    function getpid() result(pid)
+    function get_process_id() result(pid)
         integer :: pid
         interface
             function c_getpid() bind(C, name="getpid")
@@ -2358,7 +2320,7 @@ contains
             end function
         end interface
         pid = c_getpid()
-    end function getpid
+    end function get_process_id
 
     subroutine cycle_quotes(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
@@ -2524,7 +2486,6 @@ contains
         integer :: colon1, colon2, colon3
         character(len=100) :: event_type
         integer :: ios, line_count
-        logical :: is_alt_click
         type(cursor_t), allocatable :: new_cursors(:)
         integer :: i, cursor_exists
         ! Variables for mouse drag handling
@@ -2815,77 +2776,6 @@ contains
         cursor_screen_col = cursor%column - editor%viewport_column + 1
         at_pos = (cursor_screen_row == screen_row .and. cursor_screen_col == screen_col)
     end function is_cursor_at_screen_pos
-
-    subroutine toggle_cursor_at_position(editor, buffer, row, col)
-        type(editor_state_t), intent(inout) :: editor
-        type(buffer_t), intent(in) :: buffer
-        integer, intent(in) :: row, col
-        integer :: i, cursor_exists
-        type(cursor_t), allocatable :: new_cursors(:)
-
-        ! Check if cursor already exists at this position
-        cursor_exists = 0
-        do i = 1, size(editor%cursors)
-            if (is_cursor_at_screen_pos(editor%cursors(i), editor, row, col)) then
-                cursor_exists = i
-                exit
-            end if
-        end do
-
-        if (cursor_exists > 0) then
-            ! Remove the cursor
-            if (size(editor%cursors) > 1) then
-                allocate(new_cursors(size(editor%cursors) - 1))
-                do i = 1, cursor_exists - 1
-                    new_cursors(i) = editor%cursors(i)
-                end do
-                do i = cursor_exists + 1, size(editor%cursors)
-                    new_cursors(i-1) = editor%cursors(i)
-                end do
-                deallocate(editor%cursors)
-                editor%cursors = new_cursors
-                if (editor%active_cursor >= cursor_exists) then
-                    editor%active_cursor = max(1, editor%active_cursor - 1)
-                end if
-            end if
-        else
-            ! Add a new cursor
-            allocate(new_cursors(size(editor%cursors) + 1))
-            do i = 1, size(editor%cursors)
-                new_cursors(i) = editor%cursors(i)
-            end do
-            call init_cursor(new_cursors(size(new_cursors)))
-            ! First move the new cursors to editor
-            deallocate(editor%cursors)
-            editor%cursors = new_cursors
-            editor%active_cursor = size(editor%cursors)
-            ! Then position the new cursor using its index
-            call position_cursor_at_screen(editor%active_cursor, &
-                                          editor, buffer, row, col)
-        end if
-    end subroutine toggle_cursor_at_position
-
-    subroutine handle_mouse_click(editor, buffer, row, col)
-        type(editor_state_t), intent(inout) :: editor
-        type(buffer_t), intent(in) :: buffer
-        integer, intent(in) :: row, col
-        integer :: cursor_idx
-
-        ! Clear multiple cursors
-        if (allocated(editor%cursors)) then
-            if (size(editor%cursors) > 1) then
-                deallocate(editor%cursors)
-                allocate(editor%cursors(1))
-                call init_cursor(editor%cursors(1))
-                editor%active_cursor = 1
-            end if
-        end if
-
-        ! Move cursor to click position
-        cursor_idx = 1
-        call position_cursor_at_screen(cursor_idx, editor, buffer, row, col)
-        call update_viewport(editor)
-    end subroutine handle_mouse_click
 
     subroutine select_next_match(editor, buffer)
         type(editor_state_t), intent(inout) :: editor
@@ -3196,9 +3086,8 @@ contains
     ! Multiple Cursor Addition Above/Below
     ! ========================================================================
 
-    subroutine add_cursor_above(editor, buffer)
+    subroutine add_cursor_above(editor)
         type(editor_state_t), intent(inout) :: editor
-        type(buffer_t), intent(in) :: buffer
         type(cursor_t), allocatable :: new_cursors(:)
         type(cursor_t) :: active_cursor
         integer :: i, new_line
@@ -3292,10 +3181,9 @@ contains
     ! Selection Extension Subroutines
     ! ========================================================================
 
-    subroutine extend_selection_up(cursor, buffer, line_count)
+    subroutine extend_selection_up(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
-        integer, intent(in) :: line_count
         character(len=:), allocatable :: current_line, target_line
 
         ! Initialize selection if not already started
@@ -3450,10 +3338,9 @@ contains
         if (allocated(line)) deallocate(line)
     end subroutine extend_selection_end
 
-    subroutine extend_selection_page_up(cursor, editor, line_count)
+    subroutine extend_selection_page_up(cursor, editor)
         type(cursor_t), intent(inout) :: cursor
         type(editor_state_t), intent(in) :: editor
-        integer, intent(in) :: line_count
         integer :: page_size
 
         ! Initialize selection if not already started
@@ -3491,7 +3378,6 @@ contains
         type(buffer_t), intent(in) :: buffer
         character(len=:), allocatable :: line
         integer :: pos, line_len
-        logical :: in_word
 
         ! Initialize selection if not already started
         if (.not. cursor%has_selection) then
@@ -3565,7 +3451,6 @@ contains
         type(buffer_t), intent(in) :: buffer
         character(len=:), allocatable :: line
         integer :: pos, line_count, line_len
-        logical :: in_word
 
         ! Initialize selection if not already started
         if (.not. cursor%has_selection) then
@@ -3747,49 +3632,6 @@ contains
     ! Character Transpose Subroutine
     ! ========================================================================
 
-    subroutine transpose_characters(cursor, buffer)
-        type(cursor_t), intent(inout) :: cursor
-        type(buffer_t), intent(inout) :: buffer
-        character(len=:), allocatable :: line
-        character :: temp_char
-        integer :: pos1, pos2
-
-        line = buffer_get_line(buffer, cursor%line)
-
-        if (cursor%column > 1 .and. cursor%column <= len(line) + 1) then
-            if (cursor%column == len(line) + 1) then
-                ! At end of line, swap last two characters
-                pos1 = cursor%column - 2
-                pos2 = cursor%column - 1
-            else
-                ! In middle of line, swap character before cursor with character at cursor
-                pos1 = cursor%column - 1
-                pos2 = cursor%column
-            end if
-
-            if (pos1 >= 1 .and. pos2 <= len(line)) then
-                ! Get the two characters
-                temp_char = line(pos1:pos1)
-
-                ! Delete the first character
-                call delete_range(buffer, cursor%line, pos1, cursor%line, pos1)
-
-                ! Insert it after the second position
-                call insert_char_at(buffer, cursor%line, pos2, temp_char)
-
-                ! Move cursor forward if not at end of line
-                if (cursor%column < len(line) + 1) then
-                    cursor%column = cursor%column + 1
-                    cursor%desired_column = cursor%column
-                end if
-
-                buffer%modified = .true.
-            end if
-        end if
-
-        if (allocated(line)) deallocate(line)
-    end subroutine transpose_characters
-
     subroutine join_lines(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
@@ -3903,7 +3745,7 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: selected_path
-        integer :: status, i
+        integer :: i
 
         select case(trim(key_str))
         case('j', 'down')

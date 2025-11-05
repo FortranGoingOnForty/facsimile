@@ -218,7 +218,7 @@ contains
         integer, intent(out) :: n_files
         integer :: iostat, unit_num, status_code
         character(len=1024) :: line, cmd
-        character(len=512) :: file_path
+        character(len=1024) :: file_path
         integer :: max_files
         type(file_entry_t), allocatable :: temp_files(:)
 
@@ -522,7 +522,7 @@ contains
 
         if (.not. associated(node)) return
 
-        write(unit, '(A,A,A,L,A,L)') trim(prefix), trim(node%name), &
+        write(unit, '(A,A,A,L1,A,L1)') trim(prefix), trim(node%name), &
             ' is_file=', node%is_file, ' has_next_sib=', associated(node%next_sibling)
 
         child => node%first_child

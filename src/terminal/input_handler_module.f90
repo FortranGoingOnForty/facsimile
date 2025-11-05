@@ -213,7 +213,7 @@ contains
                             end if
                         case('1', '2', '4', '7', '8')
                             ! ESC ESC [ 1 ; modifier format (Alt+Shift+arrow, etc)
-                            call handle_alt_modified_key(key_str, ch3)
+                            call handle_alt_modified_key(key_str)
                         end select
                     end if
                 end if
@@ -416,9 +416,8 @@ contains
         end select
     end subroutine handle_alternate_modified_key
 
-    subroutine handle_alt_modified_key(key_str, first_char)
+    subroutine handle_alt_modified_key(key_str)
         character(len=*), intent(out) :: key_str
-        character, intent(in) :: first_char
         character :: ch, terminator
         character(len=10) :: modifier_seq
         integer :: ios, modifier, char_code, read_count

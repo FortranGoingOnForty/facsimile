@@ -258,31 +258,6 @@ contains
         end do
     end subroutine display_help_viewport
 
-    subroutine display_section(row, max_rows, title, items)
-        integer, intent(inout) :: row
-        integer, intent(in) :: max_rows
-        character(len=*), intent(in) :: title
-        character(len=*), dimension(:), intent(in) :: items
-        integer :: i
-
-        if (row >= max_rows - 2) return
-
-        ! Section title
-        call terminal_move_cursor(row, 1)
-        call terminal_write(title)
-        row = row + 1
-
-        ! Section items
-        do i = 1, size(items)
-            if (row >= max_rows - 2) return
-            call terminal_move_cursor(row, 3)
-            call terminal_write(items(i))
-            row = row + 1
-        end do
-
-        row = row + 1  ! Extra space between sections
-    end subroutine display_section
-
     subroutine show_tags_modal(editor, tags, n_tags)
         type(editor_state_t), intent(in) :: editor
         character(len=256), intent(in) :: tags(:)

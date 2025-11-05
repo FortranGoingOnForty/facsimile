@@ -196,52 +196,6 @@ contains
         end if
     end subroutine render_screen
 
-    subroutine render_line(buffer, line_num, start_col, width)
-        type(buffer_t), intent(in) :: buffer
-        integer, intent(in) :: line_num, start_col, width
-        character(len=:), allocatable :: line
-        character(len=:), allocatable :: visible_part
-        integer :: char_count, end_col
-        integer :: start_byte, end_byte, display_width
-
-        ! Get the line content
-        line = buffer_get_line(buffer, line_num)
-        char_count = utf8_char_count(line)
-
-        ! Calculate visible portion (start_col is character position)
-        if (start_col > char_count) then
-            ! Line is scrolled past its end
-            visible_part = repeat(' ', width)
-        else
-            end_col = min(start_col + width - 1, char_count)
-            if (end_col >= start_col) then
-                ! Convert character positions to byte positions
-                start_byte = utf8_char_to_byte_index(line, start_col)
-                end_byte = utf8_char_to_byte_index(line, end_col + 1) - 1
-
-                if (start_byte > 0 .and. end_byte >= start_byte .and. end_byte <= len(line)) then
-                    visible_part = line(start_byte:end_byte)
-                    display_width = utf8_display_width(visible_part)
-
-                    ! Pad with spaces if needed
-                    if (display_width < width) then
-                        visible_part = visible_part // repeat(' ', width - display_width)
-                    end if
-                else
-                    visible_part = repeat(' ', width)
-                end if
-            else
-                visible_part = repeat(' ', width)
-            end if
-        end if
-
-        ! Write the visible part
-        call terminal_write(visible_part)
-
-        if (allocated(line)) deallocate(line)
-        if (allocated(visible_part)) deallocate(visible_part)
-    end subroutine render_line
-
     subroutine render_line_with_selections(buffer, editor, line_num, start_col, width)
         type(buffer_t), intent(in) :: buffer
         type(editor_state_t), intent(in) :: editor
@@ -760,7 +714,7 @@ contains
             editor%tabs(tab_idx)%panes(i)%screen_height = pane_height
 
             ! Render the pane content
-            call render_single_pane(buffer, editor, i, pane_col, pane_row, pane_width, pane_height)
+            call render_single_pane(editor, i, pane_col, pane_row, pane_width, pane_height)
 
             ! Draw vertical separator between panes
             if (i < n_panes) then
@@ -930,7 +884,7 @@ contains
             editor%tabs(tab_idx)%panes(i)%screen_height = pane_height
 
             ! Render the pane content
-            call render_single_pane(buffer, editor, i, pane_col, pane_row, pane_width, pane_height)
+            call render_single_pane(editor, i, pane_col, pane_row, pane_width, pane_height)
 
             ! Draw vertical separator between panes
             if (i < n_panes) then
@@ -939,9 +893,8 @@ contains
         end do
     end subroutine render_all_panes
 
-    subroutine render_single_pane(buffer, editor, pane_idx, col, row, width, height)
+    subroutine render_single_pane(editor, pane_idx, col, row, width, height)
         use editor_state_module, only: pane_t
-        type(buffer_t), intent(in) :: buffer
         type(editor_state_t), intent(in) :: editor
         integer, intent(in) :: pane_idx, col, row, width, height
         type(pane_t) :: pane
