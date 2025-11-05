@@ -3,6 +3,8 @@ module unified_search_module
     use terminal_io_module
     use editor_state_module, only: editor_state_t, cursor_t
     use text_buffer_module
+    use regex_module
+    use renderer_module, only: render_screen
     implicit none
     private
 
@@ -22,6 +24,12 @@ module unified_search_module
     logical :: use_regex = .false.
     integer :: total_matches = 0
     integer :: current_match_index = 0
+
+    ! Compiled regex ID (when regex mode is active)
+    integer :: compiled_regex_id = -1
+
+    ! Length of last match (needed for regex where match length != pattern length)
+    integer :: last_match_length = 0
 
     ! Active search mode - persists after first search
     logical :: search_mode_active = .false.
@@ -300,6 +308,20 @@ contains
         logical :: found
         integer :: found_line, found_col
 
+        ! Compile regex if in regex mode
+        if (use_regex) then
+            ! Free old regex if any
+            if (compiled_regex_id >= 0) then
+                call regex_free(compiled_regex_id)
+            end if
+            ! Compile new pattern
+            compiled_regex_id = regex_compile(pattern, case_sensitive)
+            if (compiled_regex_id < 0) then
+                ! Regex compilation failed - could show error, for now just skip
+                return
+            end if
+        end if
+
         call find_next_match(buffer, pattern, &
                             editor%cursors(editor%active_cursor)%line, &
                             editor%cursors(editor%active_cursor)%column, &
@@ -311,15 +333,22 @@ contains
             editor%cursors(editor%active_cursor)%desired_column = found_col
 
             ! Create selection
+            ! For regex, use the match length from last search
+            ! For normal search, use pattern length
             editor%cursors(editor%active_cursor)%has_selection = .true.
             editor%cursors(editor%active_cursor)%selection_start_line = found_line
             editor%cursors(editor%active_cursor)%selection_start_col = found_col
-            editor%cursors(editor%active_cursor)%column = found_col + len(pattern)
+            if (use_regex .and. last_match_length > 0) then
+                editor%cursors(editor%active_cursor)%column = found_col + last_match_length
+            else
+                editor%cursors(editor%active_cursor)%column = found_col + len(pattern)
+            end if
 
             last_search_line = found_line
             last_search_col = found_col
 
             call center_viewport_on_cursor(editor)
+            call render_screen(buffer, editor)
         end if
     end subroutine perform_search
 
@@ -351,12 +380,19 @@ contains
             editor%cursors(editor%active_cursor)%has_selection = .true.
             editor%cursors(editor%active_cursor)%selection_start_line = found_line
             editor%cursors(editor%active_cursor)%selection_start_col = found_col
-            editor%cursors(editor%active_cursor)%column = found_col + len(current_search_pattern)
+
+            ! Use last_match_length for regex (which was set by find_next_match)
+            if (use_regex .and. last_match_length > 0) then
+                editor%cursors(editor%active_cursor)%column = found_col + last_match_length
+            else
+                editor%cursors(editor%active_cursor)%column = found_col + len(current_search_pattern)
+            end if
 
             last_search_line = found_line
             last_search_col = found_col
 
             call center_viewport_on_cursor(editor)
+            call render_screen(buffer, editor)
         end if
     end subroutine search_forward
 
@@ -370,11 +406,17 @@ contains
         ! If cursor has selection, replace it
         if (editor%cursors(editor%active_cursor)%has_selection) then
             call perform_replacement(buffer, editor%cursors(editor%active_cursor), &
-                                    current_search_pattern, current_replace_text)
-        end if
+                                    current_replace_text, last_match_length)
 
-        ! Find next match
-        call search_forward(editor, buffer)
+            ! Clear selection after replacement
+            editor%cursors(editor%active_cursor)%has_selection = .false.
+
+            ! Re-count matches after replacement
+            call count_all_matches(buffer, current_search_pattern)
+
+            ! Render to show the replacement (without selection)
+            call render_screen(buffer, editor)
+        end if
     end subroutine replace_current_and_advance
 
     subroutine replace_all_matches(editor, buffer)
@@ -407,10 +449,10 @@ contains
             temp_cursor%has_selection = .true.
             temp_cursor%selection_start_line = found_line
             temp_cursor%selection_start_col = found_col
-            temp_cursor%column = found_col + len(current_search_pattern)
+            temp_cursor%column = found_col + last_match_length
 
             ! Replace
-            call perform_replacement(buffer, temp_cursor, current_search_pattern, current_replace_text)
+            call perform_replacement(buffer, temp_cursor, current_replace_text, last_match_length)
 
             replace_count = replace_count + 1
 
@@ -422,10 +464,11 @@ contains
         editor%cursors(editor%active_cursor) = temp_cursor
     end subroutine replace_all_matches
 
-    subroutine perform_replacement(buffer, cursor, find_pattern, replace_text)
+    subroutine perform_replacement(buffer, cursor, replace_text, match_len)
         type(buffer_t), intent(inout) :: buffer
         type(cursor_t), intent(inout) :: cursor
-        character(len=*), intent(in) :: find_pattern, replace_text
+        character(len=*), intent(in) :: replace_text
+        integer, intent(in) :: match_len
         character(len=:), allocatable :: line, new_line
         integer :: col, i
 
@@ -434,7 +477,7 @@ contains
 
         ! Build new line with replacement
         col = cursor%selection_start_col
-        allocate(character(len=len(line) - len(find_pattern) + len(replace_text)) :: new_line)
+        allocate(character(len=len(line) - match_len + len(replace_text)) :: new_line)
 
         ! Copy part before match
         if (col > 1) then
@@ -447,8 +490,8 @@ contains
         end if
 
         ! Copy part after match
-        if (col + len(find_pattern) <= len(line)) then
-            new_line(col+len(replace_text):) = line(col+len(find_pattern):)
+        if (col + match_len <= len(line)) then
+            new_line(col+len(replace_text):) = line(col+match_len:)
         end if
 
         ! Delete old line content
@@ -545,6 +588,13 @@ contains
         search_mode_active = .false.
         last_search_line = 1
         last_search_col = 1
+
+        ! Free compiled regex if any
+        if (compiled_regex_id >= 0) then
+            call regex_free(compiled_regex_id)
+            compiled_regex_id = -1
+        end if
+        last_match_length = 0
     end subroutine clear_search_pattern
 
     ! Search helper functions
@@ -556,11 +606,13 @@ contains
         integer, intent(out) :: found_line, found_col
         character(len=:), allocatable :: line
         integer :: line_count, current_line, pos, search_col
+        integer :: match_len
 
         found = .false.
         found_line = 0
         found_col = 0
         line_count = buffer_get_line_count(buffer)
+        last_match_length = 0
 
         ! Search from current position to end
         do current_line = start_line, line_count
@@ -571,17 +623,23 @@ contains
                 search_col = 1
             end if
             if (search_col <= len(line)) then
-                call find_pattern_in_line(line(search_col:), pattern, pos)
+                if (use_regex) then
+                    call find_regex_in_line(line(search_col:), compiled_regex_id, pos, match_len)
+                else
+                    call find_pattern_in_line(line(search_col:), pattern, pos)
+                    match_len = len(pattern)
+                end if
                 if (pos > 0) then
                     found_col = search_col + pos - 1
                     if (whole_word) then
-                        if (.not. is_whole_word_match(line, found_col, len(pattern))) then
+                        if (.not. is_whole_word_match(line, found_col, match_len)) then
                             if (allocated(line)) deallocate(line)
                             cycle
                         end if
                     end if
                     found = .true.
                     found_line = current_line
+                    last_match_length = match_len
                     if (allocated(line)) deallocate(line)
                     call update_match_index(buffer, pattern, found_line, found_col)
                     return
@@ -595,16 +653,27 @@ contains
             line = buffer_get_line(buffer, current_line)
             if (current_line == start_line) then
                 if (start_col > 1) then
-                    call find_pattern_in_line(line(1:start_col-1), pattern, pos)
+                    if (use_regex) then
+                        call find_regex_in_line(line(1:start_col-1), compiled_regex_id, pos, match_len)
+                    else
+                        call find_pattern_in_line(line(1:start_col-1), pattern, pos)
+                        match_len = len(pattern)
+                    end if
                 else
                     pos = 0
+                    match_len = 0
                 end if
             else
-                call find_pattern_in_line(line, pattern, pos)
+                if (use_regex) then
+                    call find_regex_in_line(line, compiled_regex_id, pos, match_len)
+                else
+                    call find_pattern_in_line(line, pattern, pos)
+                    match_len = len(pattern)
+                end if
             end if
             if (pos > 0) then
                 if (whole_word) then
-                    if (.not. is_whole_word_match(line, pos, len(pattern))) then
+                    if (.not. is_whole_word_match(line, pos, match_len)) then
                         if (allocated(line)) deallocate(line)
                         cycle
                     end if
@@ -612,6 +681,7 @@ contains
                 found = .true.
                 found_line = current_line
                 found_col = pos
+                last_match_length = match_len
                 if (allocated(line)) deallocate(line)
                 call update_match_index(buffer, pattern, found_line, found_col)
                 return
@@ -628,11 +698,13 @@ contains
         integer, intent(out) :: found_line, found_col
         character(len=:), allocatable :: line
         integer :: line_count, current_line, pos, last_pos, check_col
+        integer :: match_len, last_match_len
 
         found = .false.
         found_line = 0
         found_col = 0
         line_count = buffer_get_line_count(buffer)
+        last_match_length = 0
 
         ! Search backward from current position
         do current_line = start_line, 1, -1
@@ -644,16 +716,24 @@ contains
             end if
 
             last_pos = 0
+            last_match_len = 0
             pos = 1
-            do while (pos <= check_col - len(pattern) + 1)
-                call find_pattern_in_line(line(pos:), pattern, found_col)
+            do while (pos <= check_col)
+                if (use_regex) then
+                    call find_regex_in_line(line(pos:), compiled_regex_id, found_col, match_len)
+                else
+                    call find_pattern_in_line(line(pos:), pattern, found_col)
+                    match_len = len(pattern)
+                end if
                 if (found_col > 0 .and. pos + found_col - 1 <= check_col) then
                     if (whole_word) then
-                        if (is_whole_word_match(line, pos + found_col - 1, len(pattern))) then
+                        if (is_whole_word_match(line, pos + found_col - 1, match_len)) then
                             last_pos = pos + found_col - 1
+                            last_match_len = match_len
                         end if
                     else
                         last_pos = pos + found_col - 1
+                        last_match_len = match_len
                     end if
                     pos = pos + found_col
                 else
@@ -665,6 +745,7 @@ contains
                 found = .true.
                 found_line = current_line
                 found_col = last_pos
+                last_match_length = last_match_len
                 if (allocated(line)) deallocate(line)
                 call update_match_index(buffer, pattern, found_line, found_col)
                 return
@@ -709,6 +790,32 @@ contains
         end if
     end subroutine find_pattern_in_line
 
+    ! Find pattern using regex in a line
+    ! Returns position where match starts (1-based), or 0 if not found
+    ! Also returns match_len (length of what was matched)
+    subroutine find_regex_in_line(line, regex_id, pos, match_len)
+        character(len=*), intent(in) :: line
+        integer, intent(in) :: regex_id
+        integer, intent(out) :: pos, match_len
+        logical :: found
+        integer :: start_pos, len_matched
+
+        if (regex_id < 0) then
+            pos = 0
+            match_len = 0
+            return
+        end if
+
+        found = regex_match(regex_id, line, start_pos, len_matched)
+        if (found) then
+            pos = start_pos
+            match_len = len_matched
+        else
+            pos = 0
+            match_len = 0
+        end if
+    end subroutine find_regex_in_line
+
     logical function is_whole_word_match(line, start_pos, pattern_len)
         character(len=*), intent(in) :: line
         integer, intent(in) :: start_pos, pattern_len
@@ -745,6 +852,7 @@ contains
         character(len=*), intent(in) :: pattern
         character(len=:), allocatable :: line
         integer :: line_count, current_line, pos, col, match_count
+        integer :: match_len
 
         match_count = 0
         line_count = buffer_get_line_count(buffer)
@@ -753,11 +861,16 @@ contains
             line = buffer_get_line(buffer, current_line)
             col = 1
             do while (col <= len(line))
-                call find_pattern_in_line(line(col:), pattern, pos)
+                if (use_regex) then
+                    call find_regex_in_line(line(col:), compiled_regex_id, pos, match_len)
+                else
+                    call find_pattern_in_line(line(col:), pattern, pos)
+                    match_len = len(pattern)
+                end if
                 if (pos > 0) then
                     pos = col + pos - 1
                     if (whole_word) then
-                        if (is_whole_word_match(line, pos, len(pattern))) then
+                        if (is_whole_word_match(line, pos, match_len)) then
                             match_count = match_count + 1
                         end if
                     else
@@ -781,6 +894,7 @@ contains
         integer, intent(in) :: match_line, match_col
         character(len=:), allocatable :: line
         integer :: line_count, current_line, pos, col, match_count
+        integer :: match_len
 
         match_count = 0
         line_count = buffer_get_line_count(buffer)
@@ -789,11 +903,16 @@ contains
             line = buffer_get_line(buffer, current_line)
             col = 1
             do while (col <= len(line))
-                call find_pattern_in_line(line(col:), pattern, pos)
+                if (use_regex) then
+                    call find_regex_in_line(line(col:), compiled_regex_id, pos, match_len)
+                else
+                    call find_pattern_in_line(line(col:), pattern, pos)
+                    match_len = len(pattern)
+                end if
                 if (pos > 0) then
                     pos = col + pos - 1
                     if (whole_word) then
-                        if (is_whole_word_match(line, pos, len(pattern))) then
+                        if (is_whole_word_match(line, pos, match_len)) then
                             match_count = match_count + 1
                             if (current_line == match_line .and. pos == match_col) then
                                 current_match_index = match_count
