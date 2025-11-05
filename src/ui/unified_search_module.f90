@@ -19,6 +19,7 @@ module unified_search_module
     ! Search options
     logical :: case_sensitive = .false.
     logical :: whole_word = .false.
+    logical :: use_regex = .false.
     integer :: total_matches = 0
     integer :: current_match_index = 0
 
@@ -75,6 +76,21 @@ contains
                     ! Standalone ESC - exit search mode
                     search_mode_active = .false.
                     exit
+                else if (ch == iachar('[')) then
+                    ! Could be mouse event ESC [ < ... - consume and ignore
+                    ch = terminal_read_char()
+                    if (ch == iachar('<')) then
+                        ! Mouse event - consume until 'M' or 'm'
+                        do
+                            ch = terminal_read_char()
+                            if (ch == iachar('M') .or. ch == iachar('m') .or. ch == -1) exit
+                        end do
+                        in_alt_sequence = .false.
+                        cycle
+                    end if
+                    ! Not a mouse event, fall through
+                    in_alt_sequence = .false.
+                    cycle
                 else if (ch == iachar('c') .or. ch == iachar('C')) then
                     ! Alt+C - toggle case sensitive
                     case_sensitive = .not. case_sensitive
@@ -84,6 +100,12 @@ contains
                 else if (ch == iachar('w') .or. ch == iachar('W')) then
                     ! Alt+W - toggle whole word
                     whole_word = .not. whole_word
+                    call build_unified_prompt(prompt, find_buffer, find_pos, replace_buffer, replace_pos)
+                    call display_prompt(editor, prompt, find_pos, replace_pos)
+                    in_alt_sequence = .false.
+                else if (ch == iachar('r') .or. ch == iachar('R')) then
+                    ! Alt+R - toggle regex mode
+                    use_regex = .not. use_regex
                     call build_unified_prompt(prompt, find_buffer, find_pos, replace_buffer, replace_pos)
                     call display_prompt(editor, prompt, find_pos, replace_pos)
                     in_alt_sequence = .false.
@@ -182,9 +204,13 @@ contains
         character(len=*), intent(out) :: prompt
         character(len=*), intent(in) :: find_text, replace_text
         integer, intent(in) :: find_len, replace_len
-        character(len=32) :: options, count_str
+        character(len=64) :: options, count_str
+        character(len=25) :: find_field, replace_field
+        character(len=1) :: esc = char(27)
+        integer :: i
+        integer, parameter :: FIELD_WIDTH = 20  ! Reduced from 30 for narrower terminals
 
-        ! Build options string
+        ! Build options string with all three toggles
         options = ''
         if (case_sensitive) then
             options = trim(options) // '[Cc]'
@@ -196,24 +222,40 @@ contains
         else
             options = trim(options) // '[ww]'
         end if
+        if (use_regex) then
+            options = trim(options) // '[Rr]'
+        else
+            options = trim(options) // '[rr]'
+        end if
 
         ! Add match count if available
         if (allocated(current_search_pattern) .and. total_matches > 0) then
-            write(count_str, '(A,I0,A,I0,A)') '(', current_match_index, ' of ', total_matches, ')'
+            write(count_str, '(A,I0,A,I0,A)') ' (', current_match_index, '/', total_matches, ')'
             options = trim(options) // trim(count_str)
         end if
 
-        ! Build unified prompt - show which field is active
+        ! Build fixed-width fields with padding (20 chars each for compact display)
+        find_field = find_text(1:min(find_len, FIELD_WIDTH))
+        do i = find_len + 1, FIELD_WIDTH
+            find_field(i:i) = ' '
+        end do
+
+        replace_field = replace_text(1:min(replace_len, FIELD_WIDTH))
+        do i = replace_len + 1, FIELD_WIDTH
+            replace_field(i:i) = ' '
+        end do
+
+        ! Build unified prompt with reverse video highlighting for active field
         if (active_field == 1) then
-            ! Find field active
-            write(prompt, '(A,A,A,A,A,A,A)') &
-                'ctrl-[f]ind:[', find_text(1:find_len), '] /ctrl-[r]eplace:', &
-                replace_text(1:replace_len), ' ', trim(options), ' | ESC:exit'
+            ! Find field active (reverse video)
+            write(prompt, '(9A)') &
+                esc, '[7m[f]:', find_field, esc, '[27m /[r]:', &
+                replace_field, ' ', trim(options), ' ESC:exit'
         else
-            ! Replace field active
-            write(prompt, '(A,A,A,A,A,A,A)') &
-                'ctrl-[f]ind:', find_text(1:find_len), ' /ctrl-[r]eplace:[', &
-                replace_text(1:replace_len), '] ', trim(options), ' | ESC:exit'
+            ! Replace field active (reverse video)
+            write(prompt, '(10A)') &
+                '[f]:', find_field, ' ', esc, '[7m/[r]:', &
+                replace_field, esc, '[27m ', trim(options), ' ESC:exit'
         end if
     end subroutine build_unified_prompt
 
@@ -223,19 +265,30 @@ contains
         integer, intent(in) :: find_len, replace_len
         integer :: cursor_pos
 
-        ! Clear line and display prompt
+        ! Hide cursor during redraw to prevent flicker
+        call terminal_hide_cursor()
+
+        ! Clear the entire status line
         call terminal_move_cursor(editor%screen_rows, 1)
         call terminal_write(repeat(' ', editor%screen_cols))
+
+        ! Move back to start and write prompt
         call terminal_move_cursor(editor%screen_rows, 1)
         call terminal_write(trim(prompt))
 
-        ! Position cursor in active field
+        ! Calculate cursor position within the active field
+        ! Account for escape sequences which don't take screen space
+        ! Compact layout: "[f]: <20 chars> /[r]: <20 chars> ..."
         if (active_field == 1) then
-            cursor_pos = 13 + find_len + 1  ! After "ctrl-[f]ind:["
+            ! Cursor in find field: "[f]:" = 4 visible chars
+            cursor_pos = 4 + find_len + 1
         else
-            cursor_pos = 13 + find_len + 18 + replace_len + 1  ! After "ctrl-[r]eplace:["
+            ! Cursor in replace field
+            ! "[f]:" (4) + field (20) + " /[r]:" (6)
+            cursor_pos = 4 + 20 + 6 + replace_len + 1
         end if
 
+        ! Position cursor and show it
         call terminal_move_cursor(editor%screen_rows, cursor_pos)
         call terminal_show_cursor()
     end subroutine display_prompt
