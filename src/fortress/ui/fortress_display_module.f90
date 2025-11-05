@@ -23,26 +23,38 @@ contains
 
     subroutine draw_fortress_interface(r, c, current_dir, current_files, current_is_dir, current_is_exec, &
                                        current_count, parent_files, parent_is_dir, parent_is_exec, parent_count, &
-                                       selected, parent_selected, scroll_offset, parent_scroll_offset)
+                                       selected, parent_selected, scroll_offset, parent_scroll_offset, first_draw)
         integer, intent(in) :: r, c, current_count, parent_count, selected, parent_selected
         integer, intent(in) :: scroll_offset, parent_scroll_offset
         character(len=*), intent(in) :: current_dir
         character(len=*), dimension(*), intent(in) :: current_files, parent_files
         logical, dimension(*), intent(in) :: current_is_dir, parent_is_dir
         logical, dimension(*), intent(in) :: current_is_exec, parent_is_exec
+        logical, intent(in), optional :: first_draw
         integer :: left_w, i, j, parent_idx, current_idx, vis_h
         character(len=256) :: parent_name, current_name
         character(len=256) :: line
+        logical :: do_clear
 
         ! Calculate layout
         left_w = c * 3 / 10
         vis_h = r - 3
 
-        ! Clear screen and hide cursor
-        write(output_unit, '(a)', advance='no') ESC // "[?25l" // ESC // "[2J" // ESC // "[H"
+        ! Check if we should do full clear (only on first draw)
+        do_clear = .false.
+        if (present(first_draw)) do_clear = first_draw
 
-        ! Header
+        ! Hide cursor and optionally clear screen
+        if (do_clear) then
+            write(output_unit, '(a)', advance='no') ESC // "[?25l" // ESC // "[2J" // ESC // "[H"
+        else
+            write(output_unit, '(a)', advance='no') ESC // "[?25l" // ESC // "[H"
+        end if
+
+        ! Header - clear line then write
+        write(output_unit, '(a)', advance='no') ESC // "[K"
         write(output_unit, '(a)') BOLD // "FORTRESS" // RESET // " - " // trim(current_dir)
+        write(output_unit, '(a)', advance='no') ESC // "[K"
         write(output_unit, '(a)') ""
 
         ! Render each line - write complete lines at once
@@ -50,8 +62,8 @@ contains
             parent_idx = i + parent_scroll_offset
             current_idx = i + scroll_offset
 
-            ! Start with cursor at beginning of line
-            write(output_unit, '(a)', advance='no') ESC // "[1G"
+            ! Start with cursor at beginning of line and clear it
+            write(output_unit, '(a)', advance='no') ESC // "[1G" // ESC // "[K"
 
             ! === Parent pane (left 30%) ===
             if (parent_idx >= 1 .and. parent_idx <= parent_count) then
@@ -110,7 +122,8 @@ contains
             end if
         end do
 
-        ! Footer
+        ! Footer - clear line first
+        write(output_unit, '(a)', advance='no') ESC // "[K"
         write(output_unit, '(a)') DIM // "arrows:nav enter:open esc:quit" // RESET
 
         ! Show cursor again

@@ -30,10 +30,10 @@ contains
         character(len=:), allocatable, intent(out) :: selected_path
         logical, intent(out) :: is_directory, cancelled
         character(len=*), intent(in), optional :: initial_path
-        character(len=MAX_PATH) :: current_dir, parent_dir, temp_dir
+        character(len=MAX_PATH) :: current_dir, parent_dir, temp_dir, last_dir, last_parent
         character(len=1) :: key
         integer :: rows, cols, ios
-        logical :: running
+        logical :: running, dir_changed, first_draw
 
         ! Initialize state
         selected = 1
@@ -42,6 +42,9 @@ contains
         parent_scroll_offset = 0
         running = .true.
         cancelled = .false.
+        last_dir = ""
+        last_parent = ""
+        first_draw = .true.
 
         ! Set initial directory
         if (present(initial_path)) then
@@ -52,10 +55,23 @@ contains
 
         ! Main navigation loop
         do while (running)
-            ! Get directory listings
-            parent_dir = get_parent_path(current_dir)
-            call get_file_list(parent_dir, parent_files, parent_is_dir, parent_is_exec, parent_count)
-            call get_file_list(current_dir, current_files, current_is_dir, current_is_exec, current_count)
+            ! Only refresh directory listings if directory changed
+            dir_changed = (current_dir /= last_dir)
+            if (dir_changed) then
+                parent_dir = get_parent_path(current_dir)
+
+                ! Only refresh parent if it changed too
+                if (parent_dir /= last_parent) then
+                    call get_file_list(parent_dir, parent_files, parent_is_dir, parent_is_exec, parent_count)
+                    last_parent = parent_dir
+                end if
+
+                call get_file_list(current_dir, current_files, current_is_dir, current_is_exec, current_count)
+                last_dir = current_dir
+            else
+                ! Just update parent_dir for consistency
+                parent_dir = get_parent_path(current_dir)
+            end if
 
             ! Find current directory in parent listing
             parent_selected = find_in_parent(current_dir, parent_files, parent_count)
@@ -76,7 +92,10 @@ contains
             call draw_fortress_interface(rows, cols, current_dir, &
                                          current_files, current_is_dir, current_is_exec, current_count, &
                                          parent_files, parent_is_dir, parent_is_exec, parent_count, &
-                                         selected, parent_selected, scroll_offset, parent_scroll_offset)
+                                         selected, parent_selected, scroll_offset, parent_scroll_offset, first_draw)
+
+            ! After first draw, set to false
+            if (first_draw) first_draw = .false.
 
             ! Read key using raw terminal input (blocking mode)
             ! Keep trying until we get input to avoid tight redraw loop
