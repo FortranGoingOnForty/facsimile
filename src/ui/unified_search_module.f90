@@ -181,6 +181,10 @@ contains
                     search_mode_active = .false.
                     exit
                 end if
+            else if (ch == 13 .or. ch == 10) then  ! Enter - accept current match and exit
+                ! Keep the cursor at the current match position
+                ! If there's a selection, keep it (user can clear with ESC or arrow keys)
+                exit
             else if (ch == 127 .or. ch == 8) then  ! Backspace
                 if (active_field == 1 .and. find_pos > 0) then
                     find_pos = find_pos - 1
@@ -258,12 +262,12 @@ contains
             ! Find field active (reverse video)
             write(prompt, '(9A)') &
                 esc, '[7m[f]:', find_field, esc, '[27m /[r]:', &
-                replace_field, ' ', trim(options), ' ESC:exit'
+                replace_field, ' ', trim(options), ' RET:go ESC:exit'
         else
             ! Replace field active (reverse video)
             write(prompt, '(10A)') &
                 '[f]:', find_field, ' ', esc, '[7m/[r]:', &
-                replace_field, esc, '[27m ', trim(options), ' ESC:exit'
+                replace_field, esc, '[27m ', trim(options), ' RET:go ESC:exit'
         end if
     end subroutine build_unified_prompt
 
