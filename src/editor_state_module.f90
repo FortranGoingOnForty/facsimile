@@ -1,6 +1,6 @@
 module editor_state_module
     use iso_fortran_env, only: int32, int64
-    use text_buffer_module, only: buffer_t
+    use text_buffer_module, only: buffer_t, copy_buffer, init_buffer
     implicit none
     private
 
@@ -9,7 +9,8 @@ module editor_state_module
     public :: create_tab, switch_to_tab, switch_to_tab_with_buffer, get_active_tab_index, close_tab
     public :: split_pane_vertical, split_pane_horizontal, close_pane, get_active_pane_indices
     public :: navigate_to_pane_left, navigate_to_pane_right, navigate_to_pane_up, navigate_to_pane_down
-    public :: sync_editor_to_pane, switch_to_pane
+    public :: sync_editor_to_pane, switch_to_pane, switch_to_pane_with_buffer
+    public :: sync_buffer_to_all_instances
 
     ! Cursor position and selection
     ! Cursor type - positions are UTF-8 CHARACTER indices (not byte indices)
@@ -39,6 +40,10 @@ module editor_state_module
         integer :: screen_row = 1
         integer :: screen_width = 80
         integer :: screen_height = 24
+
+        ! Each pane has its own buffer and file
+        type(buffer_t) :: buffer
+        character(len=:), allocatable :: filename
 
         ! Independent view state
         integer(int32) :: viewport_line = 1
@@ -197,6 +202,12 @@ contains
         temp_tabs(new_index)%panes(1)%cursors(1)%has_selection = .false.
         temp_tabs(new_index)%panes(1)%active_cursor = 1
 
+        ! Initialize pane's buffer and filename (copy from tab)
+        call init_buffer(temp_tabs(new_index)%panes(1)%buffer)
+        call copy_buffer(temp_tabs(new_index)%panes(1)%buffer, temp_tabs(new_index)%buffer)
+        allocate(character(len=len_trim(filename)) :: temp_tabs(new_index)%panes(1)%filename)
+        temp_tabs(new_index)%panes(1)%filename = trim(filename)
+
         temp_tabs(new_index)%active_pane_index = 1
         temp_tabs(new_index)%modified = .false.
 
@@ -259,27 +270,44 @@ contains
 
         if (tab_index < 1 .or. tab_index > size(editor%tabs)) return
 
-        ! Save current buffer to current tab (if any)
+        ! Save current buffer to current tab's active pane (if any)
         if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-            call copy_buffer(editor%tabs(editor%active_tab_index)%buffer, buffer)
-
             ! Save to active pane of current tab
             pane_idx = editor%tabs(editor%active_tab_index)%active_pane_index
             if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
                 pane_idx > 0 .and. pane_idx <= size(editor%tabs(editor%active_tab_index)%panes)) then
+                ! Save buffer to pane's buffer
+                call copy_buffer(editor%tabs(editor%active_tab_index)%panes(pane_idx)%buffer, buffer)
+
+                ! Sync buffer to all other instances of this file
+                if (allocated(editor%tabs(editor%active_tab_index)%panes(pane_idx)%filename)) then
+                    call sync_buffer_to_all_instances(editor, &
+                        editor%tabs(editor%active_tab_index)%panes(pane_idx)%filename, buffer)
+                end if
+
+                ! Save cursor and viewport state
                 editor%tabs(editor%active_tab_index)%panes(pane_idx)%cursors = editor%cursors
                 editor%tabs(editor%active_tab_index)%panes(pane_idx)%active_cursor = editor%active_cursor
                 editor%tabs(editor%active_tab_index)%panes(pane_idx)%viewport_line = editor%viewport_line
                 editor%tabs(editor%active_tab_index)%panes(pane_idx)%viewport_column = editor%viewport_column
             end if
+            ! Also save to tab's buffer for backwards compatibility
+            call copy_buffer(editor%tabs(editor%active_tab_index)%buffer, buffer)
             editor%tabs(editor%active_tab_index)%modified = editor%modified
         end if
 
         ! Switch to new tab
         editor%active_tab_index = tab_index
 
-        ! Load new tab's buffer
-        call copy_buffer(buffer, editor%tabs(tab_index)%buffer)
+        ! Load new tab's active pane buffer
+        pane_idx = editor%tabs(tab_index)%active_pane_index
+        if (allocated(editor%tabs(tab_index)%panes) .and. &
+            pane_idx > 0 .and. pane_idx <= size(editor%tabs(tab_index)%panes)) then
+            call copy_buffer(buffer, editor%tabs(tab_index)%panes(pane_idx)%buffer)
+        else
+            ! Fallback to tab buffer if no pane
+            call copy_buffer(buffer, editor%tabs(tab_index)%buffer)
+        end if
 
         ! Load from active pane of new tab
         pane_idx = editor%tabs(tab_index)%active_pane_index
@@ -371,6 +399,9 @@ contains
         n_panes = size(editor%tabs(tab_idx)%panes)
         if (pane_idx < 1 .or. pane_idx > n_panes) return
 
+        ! Check pane limit (maximum 6 panes per tab)
+        if (n_panes >= 6) return
+
         ! Ensure active pane has cursors from editor state
         if (.not. allocated(editor%tabs(tab_idx)%panes(pane_idx)%cursors)) then
             allocate(editor%tabs(tab_idx)%panes(pane_idx)%cursors(size(editor%cursors)))
@@ -425,6 +456,13 @@ contains
                 temp_panes(new_idx)%cursors(1)%has_selection = .false.
                 temp_panes(new_idx)%active_cursor = 1
             end if
+
+            ! Copy buffer and filename from active pane
+            call copy_buffer(temp_panes(new_idx)%buffer, active_pane%buffer)
+            if (allocated(active_pane%filename)) then
+                temp_panes(new_idx)%filename = active_pane%filename
+            end if
+
             temp_panes(new_idx)%is_active = .false.
 
             ! Update active pane (left half)
@@ -463,6 +501,9 @@ contains
         pane_idx = editor%tabs(tab_idx)%active_pane_index
         n_panes = size(editor%tabs(tab_idx)%panes)
         if (pane_idx < 1 .or. pane_idx > n_panes) return
+
+        ! Check pane limit (maximum 6 panes per tab)
+        if (n_panes >= 6) return
 
         ! Ensure active pane has cursors from editor state
         if (.not. allocated(editor%tabs(tab_idx)%panes(pane_idx)%cursors)) then
@@ -518,6 +559,13 @@ contains
                 temp_panes(new_idx)%cursors(1)%has_selection = .false.
                 temp_panes(new_idx)%active_cursor = 1
             end if
+
+            ! Copy buffer and filename from active pane
+            call copy_buffer(temp_panes(new_idx)%buffer, active_pane%buffer)
+            if (allocated(active_pane%filename)) then
+                temp_panes(new_idx)%filename = active_pane%filename
+            end if
+
             temp_panes(new_idx)%is_active = .false.
 
             ! Update active pane (top half)
@@ -920,6 +968,102 @@ contains
         ! Load the new pane's state to editor
         call sync_pane_to_editor(editor, tab_idx, pane_idx)
     end subroutine switch_to_pane
+
+    ! Helper to switch to a specific pane with buffer synchronization
+    subroutine switch_to_pane_with_buffer(editor, tab_idx, pane_idx, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: tab_idx, pane_idx
+        type(buffer_t), intent(inout) :: buffer
+        integer :: i, old_pane_idx
+
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+        if (pane_idx < 1 .or. pane_idx > size(editor%tabs(tab_idx)%panes)) return
+
+        ! Don't do anything if we're already in this pane
+        if (pane_idx == editor%tabs(tab_idx)%active_pane_index) return
+
+        ! Save current buffer and editor state to the old pane before switching
+        old_pane_idx = editor%tabs(tab_idx)%active_pane_index
+        if (old_pane_idx > 0 .and. old_pane_idx <= size(editor%tabs(tab_idx)%panes)) then
+            ! Save buffer to old pane
+            call copy_buffer(editor%tabs(tab_idx)%panes(old_pane_idx)%buffer, buffer)
+
+            ! Sync buffer to all other instances of this file
+            if (allocated(editor%tabs(tab_idx)%panes(old_pane_idx)%filename)) then
+                call sync_buffer_to_all_instances(editor, editor%tabs(tab_idx)%panes(old_pane_idx)%filename, buffer)
+            end if
+
+            ! Save cursor/viewport state
+            call sync_editor_to_pane(editor)
+        end if
+
+        ! Clear all is_active flags
+        do i = 1, size(editor%tabs(tab_idx)%panes)
+            editor%tabs(tab_idx)%panes(i)%is_active = .false.
+        end do
+
+        ! Set new active pane
+        editor%tabs(tab_idx)%panes(pane_idx)%is_active = .true.
+        editor%tabs(tab_idx)%active_pane_index = pane_idx
+
+        ! Load the new pane's buffer
+        call copy_buffer(buffer, editor%tabs(tab_idx)%panes(pane_idx)%buffer)
+
+        ! Load the new pane's cursor/viewport state to editor
+        call sync_pane_to_editor(editor, tab_idx, pane_idx)
+
+        ! Update editor filename if pane has different file
+        if (allocated(editor%tabs(tab_idx)%panes(pane_idx)%filename)) then
+            if (allocated(editor%filename)) deallocate(editor%filename)
+            allocate(character(len=len(editor%tabs(tab_idx)%panes(pane_idx)%filename)) :: editor%filename)
+            editor%filename = editor%tabs(tab_idx)%panes(pane_idx)%filename
+        end if
+    end subroutine switch_to_pane_with_buffer
+
+    ! Sync buffer to all panes/tabs that have the same file open
+    ! This enables live updates when the same file is open in multiple locations
+    subroutine sync_buffer_to_all_instances(editor, filename, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        character(len=*), intent(in) :: filename
+        type(buffer_t), intent(in) :: buffer
+        integer :: tab_idx, pane_idx
+        character(len=:), allocatable :: normalized_filename
+
+        ! Normalize filename for comparison (trim whitespace)
+        normalized_filename = trim(filename)
+        if (len_trim(normalized_filename) == 0) return
+
+        ! Loop through all tabs
+        do tab_idx = 1, size(editor%tabs)
+            ! Update tab's buffer if it matches
+            if (allocated(editor%tabs(tab_idx)%filename)) then
+                if (trim(editor%tabs(tab_idx)%filename) == normalized_filename) then
+                    call copy_buffer(editor%tabs(tab_idx)%buffer, buffer)
+                    editor%tabs(tab_idx)%modified = .true.
+                end if
+            end if
+
+            ! Loop through all panes in this tab
+            if (allocated(editor%tabs(tab_idx)%panes)) then
+                do pane_idx = 1, size(editor%tabs(tab_idx)%panes)
+                    ! Check if this pane has the same file open
+                    if (allocated(editor%tabs(tab_idx)%panes(pane_idx)%filename)) then
+                        if (trim(editor%tabs(tab_idx)%panes(pane_idx)%filename) == normalized_filename) then
+                            ! Skip the currently active pane (already has the latest buffer)
+                            if (tab_idx == editor%active_tab_index .and. &
+                                pane_idx == editor%tabs(tab_idx)%active_pane_index) then
+                                cycle
+                            end if
+
+                            ! Copy buffer to this pane (preserves cursor/viewport)
+                            call copy_buffer(editor%tabs(tab_idx)%panes(pane_idx)%buffer, buffer)
+                        end if
+                    end if
+                end do
+            end if
+        end do
+    end subroutine sync_buffer_to_all_instances
 
     ! Create an untitled tab (replaces current tab)
     subroutine create_untitled_tab(editor)

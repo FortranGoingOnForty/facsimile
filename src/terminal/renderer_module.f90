@@ -877,9 +877,15 @@ contains
 
         pane = editor%tabs(tab_idx)%panes(pane_idx)
 
-        ! No offset needed, use full height
-        content_start_row = row
-        content_height = height
+        ! Draw pane header with filename (if more than one pane exists)
+        if (size(editor%tabs(tab_idx)%panes) > 1) then
+            call render_pane_header(pane, col, row, width)
+            content_start_row = row + 1
+            content_height = height - 1
+        else
+            content_start_row = row
+            content_height = height
+        end if
 
         ! Clear the pane area with subtle background for inactive panes
         do screen_row = content_start_row, content_start_row + content_height - 1
@@ -930,6 +936,64 @@ contains
             end if
         end do
     end subroutine render_single_pane
+
+    subroutine render_pane_header(pane, col, row, width)
+        use editor_state_module, only: pane_t
+        type(pane_t), intent(in) :: pane
+        integer, intent(in) :: col, row, width
+        character(len=:), allocatable :: filename_display, filename_only
+        character(len=256) :: temp_display
+        integer :: slash_pos, display_len, padding_left, padding_right
+
+        ! Move to header position
+        call terminal_move_cursor(row, col)
+
+        ! Extract filename from path
+        if (allocated(pane%filename)) then
+            ! Find last slash to get just the filename
+            slash_pos = index(pane%filename, '/', back=.true.)
+            if (slash_pos > 0) then
+                filename_only = pane%filename(slash_pos+1:)
+            else
+                filename_only = pane%filename
+            end if
+
+            ! Build display string with brackets
+            write(temp_display, '(A,A,A)') ' [', trim(filename_only), '] '
+            filename_display = trim(temp_display)
+        else
+            filename_display = ' [untitled] '
+        end if
+
+        ! Calculate padding
+        display_len = len(filename_display)
+        if (display_len < width) then
+            padding_left = (width - display_len) / 2
+            padding_right = width - display_len - padding_left
+        else
+            ! Truncate if too long
+            filename_display = filename_display(1:width)
+            padding_left = 0
+            padding_right = 0
+        end if
+
+        ! Draw header with reverse video (like tab bar)
+        if (pane%is_active) then
+            ! Active pane: bright reverse video
+            call terminal_write(char(27) // '[7m')  ! Reverse video
+        else
+            ! Inactive pane: dimmed reverse video
+            call terminal_write(char(27) // '[2;7m')  ! Dim + reverse video
+        end if
+
+        ! Draw the header line
+        call terminal_write(repeat('─', padding_left))
+        call terminal_write(filename_display)
+        call terminal_write(repeat('─', padding_right))
+
+        ! Reset attributes
+        call terminal_write(char(27) // '[0m')
+    end subroutine render_pane_header
 
     subroutine render_buffer_line_in_pane(buffer, editor, pane_idx, line_num, screen_row, col, width)
         use editor_state_module, only: pane_t

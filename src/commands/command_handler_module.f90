@@ -4022,6 +4022,28 @@ contains
                 end if
             end if
 
+        case('v')
+            ! Open file in vertical split (only for files, not directories)
+            if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
+                if (.not. tree_state%selectable_files(tree_state%selected_index)%is_directory) then
+                    selected_path = get_selected_item_path(tree_state)
+                    if (len_trim(selected_path) > 0) then
+                        call open_file_in_vertical_split(selected_path, editor, buffer)
+                    end if
+                end if
+            end if
+
+        case('s')
+            ! Open file in horizontal split (only for files, not directories)
+            if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
+                if (.not. tree_state%selectable_files(tree_state%selected_index)%is_directory) then
+                    selected_path = get_selected_item_path(tree_state)
+                    if (len_trim(selected_path) > 0) then
+                        call open_file_in_horizontal_split(selected_path, editor, buffer)
+                    end if
+                end if
+            end if
+
         case('.')
             ! Toggle hiding dotfiles/gitignored files
             tree_state%hide_dotfiles = .not. tree_state%hide_dotfiles
@@ -4135,35 +4157,36 @@ contains
             pane_idx = editor%tabs(tab_idx)%active_pane_index
 
             ! Load the file into the new pane's buffer
-            call buffer_load_file(editor%tabs(tab_idx)%buffer, full_path, status)
-            if (status == 0) then
-                ! Update filename for the tab
-                editor%tabs(tab_idx)%filename = full_path
-                editor%tabs(tab_idx)%modified = .false.
+            if (allocated(editor%tabs(tab_idx)%panes) .and. pane_idx > 0) then
+                call buffer_load_file(editor%tabs(tab_idx)%panes(pane_idx)%buffer, full_path, status)
+                if (status == 0) then
+                    ! Update filename for the pane
+                    if (allocated(editor%tabs(tab_idx)%panes(pane_idx)%filename)) &
+                        deallocate(editor%tabs(tab_idx)%panes(pane_idx)%filename)
+                    allocate(character(len=len_trim(full_path)) :: editor%tabs(tab_idx)%panes(pane_idx)%filename)
+                    editor%tabs(tab_idx)%panes(pane_idx)%filename = full_path
 
-                ! Copy to main buffer
-                call copy_buffer(buffer, editor%tabs(tab_idx)%buffer)
+                    ! Copy to main buffer
+                    call copy_buffer(buffer, editor%tabs(tab_idx)%panes(pane_idx)%buffer)
 
-                ! Update editor filename
-                if (allocated(editor%filename)) deallocate(editor%filename)
-                allocate(character(len=len_trim(full_path)) :: editor%filename)
-                editor%filename = full_path
+                    ! Update editor filename
+                    if (allocated(editor%filename)) deallocate(editor%filename)
+                    allocate(character(len=len_trim(full_path)) :: editor%filename)
+                    editor%filename = full_path
 
-                ! Reset cursor in the new pane
-                if (allocated(editor%tabs(tab_idx)%panes) .and. pane_idx > 0) then
-                    associate (pane => editor%tabs(tab_idx)%panes(pane_idx))
-                        if (allocated(pane%cursors) .and. size(pane%cursors) > 0) then
-                            pane%cursors(1)%line = 1
-                            pane%cursors(1)%column = 1
-                            pane%cursors(1)%desired_column = 1
-                        end if
-                        pane%viewport_line = 1
-                        pane%viewport_column = 1
-                    end associate
+                    ! Reset cursor in the new pane
+                    if (allocated(editor%tabs(tab_idx)%panes(pane_idx)%cursors) .and. &
+                        size(editor%tabs(tab_idx)%panes(pane_idx)%cursors) > 0) then
+                        editor%tabs(tab_idx)%panes(pane_idx)%cursors(1)%line = 1
+                        editor%tabs(tab_idx)%panes(pane_idx)%cursors(1)%column = 1
+                        editor%tabs(tab_idx)%panes(pane_idx)%cursors(1)%desired_column = 1
+                    end if
+                    editor%tabs(tab_idx)%panes(pane_idx)%viewport_line = 1
+                    editor%tabs(tab_idx)%panes(pane_idx)%viewport_column = 1
+
+                    ! Sync editor state with the new pane
+                    call sync_editor_to_pane(editor)
                 end if
-
-                ! Sync editor state with the new pane
-                call sync_editor_to_pane(editor)
             end if
         end if
     end subroutine open_file_in_vertical_split
@@ -4205,35 +4228,36 @@ contains
             pane_idx = editor%tabs(tab_idx)%active_pane_index
 
             ! Load the file into the new pane's buffer
-            call buffer_load_file(editor%tabs(tab_idx)%buffer, full_path, status)
-            if (status == 0) then
-                ! Update filename for the tab
-                editor%tabs(tab_idx)%filename = full_path
-                editor%tabs(tab_idx)%modified = .false.
+            if (allocated(editor%tabs(tab_idx)%panes) .and. pane_idx > 0) then
+                call buffer_load_file(editor%tabs(tab_idx)%panes(pane_idx)%buffer, full_path, status)
+                if (status == 0) then
+                    ! Update filename for the pane
+                    if (allocated(editor%tabs(tab_idx)%panes(pane_idx)%filename)) &
+                        deallocate(editor%tabs(tab_idx)%panes(pane_idx)%filename)
+                    allocate(character(len=len_trim(full_path)) :: editor%tabs(tab_idx)%panes(pane_idx)%filename)
+                    editor%tabs(tab_idx)%panes(pane_idx)%filename = full_path
 
-                ! Copy to main buffer
-                call copy_buffer(buffer, editor%tabs(tab_idx)%buffer)
+                    ! Copy to main buffer
+                    call copy_buffer(buffer, editor%tabs(tab_idx)%panes(pane_idx)%buffer)
 
-                ! Update editor filename
-                if (allocated(editor%filename)) deallocate(editor%filename)
-                allocate(character(len=len_trim(full_path)) :: editor%filename)
-                editor%filename = full_path
+                    ! Update editor filename
+                    if (allocated(editor%filename)) deallocate(editor%filename)
+                    allocate(character(len=len_trim(full_path)) :: editor%filename)
+                    editor%filename = full_path
 
-                ! Reset cursor in the new pane
-                if (allocated(editor%tabs(tab_idx)%panes) .and. pane_idx > 0) then
-                    associate (pane => editor%tabs(tab_idx)%panes(pane_idx))
-                        if (allocated(pane%cursors) .and. size(pane%cursors) > 0) then
-                            pane%cursors(1)%line = 1
-                            pane%cursors(1)%column = 1
-                            pane%cursors(1)%desired_column = 1
-                        end if
-                        pane%viewport_line = 1
-                        pane%viewport_column = 1
-                    end associate
+                    ! Reset cursor in the new pane
+                    if (allocated(editor%tabs(tab_idx)%panes(pane_idx)%cursors) .and. &
+                        size(editor%tabs(tab_idx)%panes(pane_idx)%cursors) > 0) then
+                        editor%tabs(tab_idx)%panes(pane_idx)%cursors(1)%line = 1
+                        editor%tabs(tab_idx)%panes(pane_idx)%cursors(1)%column = 1
+                        editor%tabs(tab_idx)%panes(pane_idx)%cursors(1)%desired_column = 1
+                    end if
+                    editor%tabs(tab_idx)%panes(pane_idx)%viewport_line = 1
+                    editor%tabs(tab_idx)%panes(pane_idx)%viewport_column = 1
+
+                    ! Sync editor state with the new pane
+                    call sync_editor_to_pane(editor)
                 end if
-
-                ! Sync editor state with the new pane
-                call sync_editor_to_pane(editor)
             end if
         end if
     end subroutine open_file_in_horizontal_split
