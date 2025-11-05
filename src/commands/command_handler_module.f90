@@ -435,29 +435,39 @@ contains
             is_edit_action = .true.
 
         ! Tab navigation
-        case('alt-1')
+        case('alt-1', 'ctrl-1')
+            ! Switch to tab 1 (alt-1 or ctrl-1)
             if (size(editor%tabs) >= 1) call switch_to_tab_with_buffer(editor, 1, buffer)
-        case('alt-2')
+        case('alt-2', 'ctrl-2')
+            ! Switch to tab 2
             if (size(editor%tabs) >= 2) call switch_to_tab_with_buffer(editor, 2, buffer)
-        case('alt-3')
+        case('alt-3', 'ctrl-3')
+            ! Switch to tab 3
             if (size(editor%tabs) >= 3) call switch_to_tab_with_buffer(editor, 3, buffer)
-        case('alt-4')
+        case('alt-4', 'ctrl-4')
+            ! Switch to tab 4
             if (size(editor%tabs) >= 4) call switch_to_tab_with_buffer(editor, 4, buffer)
-        case('alt-5')
+        case('alt-5', 'ctrl-5')
+            ! Switch to tab 5
             if (size(editor%tabs) >= 5) call switch_to_tab_with_buffer(editor, 5, buffer)
-        case('alt-6')
+        case('alt-6', 'ctrl-6')
+            ! Switch to tab 6
             if (size(editor%tabs) >= 6) call switch_to_tab_with_buffer(editor, 6, buffer)
-        case('alt-7')
+        case('alt-7', 'ctrl-7')
+            ! Switch to tab 7
             if (size(editor%tabs) >= 7) call switch_to_tab_with_buffer(editor, 7, buffer)
-        case('alt-8')
+        case('alt-8', 'ctrl-8')
+            ! Switch to tab 8
             if (size(editor%tabs) >= 8) call switch_to_tab_with_buffer(editor, 8, buffer)
-        case('alt-9')
+        case('alt-9', 'ctrl-9')
+            ! Switch to tab 9
             if (size(editor%tabs) >= 9) call switch_to_tab_with_buffer(editor, 9, buffer)
-        case('alt-0')
+        case('alt-0', 'ctrl-0')
+            ! Switch to tab 10
             if (size(editor%tabs) >= 10) call switch_to_tab_with_buffer(editor, 10, buffer)
 
-        case('ctrl-alt-left')
-            ! Previous tab
+        case('ctrl-alt-left', 'ctrl-pageup')
+            ! Previous tab (ctrl-alt-left or ctrl-pageup)
             if (size(editor%tabs) > 0) then
                 if (editor%active_tab_index > 1) then
                     call switch_to_tab_with_buffer(editor, editor%active_tab_index - 1, buffer)
@@ -466,8 +476,8 @@ contains
                 end if
             end if
 
-        case('ctrl-alt-right')
-            ! Next tab
+        case('ctrl-alt-right', 'ctrl-pagedown')
+            ! Next tab (ctrl-alt-right or ctrl-pagedown)
             if (size(editor%tabs) > 0) then
                 if (editor%active_tab_index < size(editor%tabs)) then
                     call switch_to_tab_with_buffer(editor, editor%active_tab_index + 1, buffer)
@@ -664,7 +674,7 @@ contains
             end if
 
         case('ctrl-shift-left', 'alt-h')
-            ! Navigate to pane on the left
+            ! Navigate to pane on the left (Vim-style hjkl with alt)
             if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
                 call navigate_to_pane_left(editor)
             end if
