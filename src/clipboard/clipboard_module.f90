@@ -38,7 +38,6 @@ contains
         integer :: unit, ios, file_size
         character(len=256) :: command
         character(len=1000000) :: buffer  ! 1MB buffer for clipboard content
-        integer :: n_read
 
         ! Get clipboard content
         command = 'pbpaste > /tmp/facsimile_clipboard.tmp 2>/dev/null'

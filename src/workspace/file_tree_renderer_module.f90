@@ -19,7 +19,7 @@ contains
         type(tree_state_t), intent(in) :: state
         integer, intent(in) :: start_row, end_row, start_col, width
         logical, intent(in) :: hints_expanded
-        integer :: current_row, item_idx, visible_items, row
+        integer :: current_row, item_idx, row
         character(len=512) :: status_line
         character(len=:), allocatable :: padding
 
@@ -113,7 +113,6 @@ contains
         character(len=:), allocatable :: line, new_prefix, branch
         type(tree_node_t), pointer :: child
         logical :: is_selected, is_last_child
-        integer :: prefix_len, i
 
         ! Don't print root node
         if (.not. is_root) then

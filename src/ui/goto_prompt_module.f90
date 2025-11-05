@@ -15,11 +15,9 @@ contains
         type(buffer_t), intent(inout) :: buffer
         character(len=256) :: input_buffer
         character(len=32) :: prompt
-        integer :: input_pos, ch, ios
+        integer :: input_pos, ch
         integer :: target_line, target_col
-        integer :: colon_pos
         integer :: line_count
-        character(len=:), allocatable :: line_str, col_str
 
         ! Initialize
         input_buffer = ''

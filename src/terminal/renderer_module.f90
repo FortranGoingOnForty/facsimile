@@ -65,8 +65,7 @@ contains
         type(editor_state_t), intent(inout) :: editor
         integer :: screen_row, buffer_line, line_count
         character(len=:), allocatable :: line_content
-        character(len=1) :: ch, cursor_char
-        integer :: col, buffer_pos, line_start_pos
+        character(len=1) :: cursor_char
         integer :: content_width
         integer :: start_row, row_offset_val
         character(len=16) :: line_num_str

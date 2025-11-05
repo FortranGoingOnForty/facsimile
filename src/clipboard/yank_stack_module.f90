@@ -46,7 +46,6 @@ contains
     subroutine push_yank(stack, text)
         type(yank_stack_t), intent(inout) :: stack
         character(len=*), intent(in) :: text
-        type(yank_entry_t), allocatable :: new_entries(:)
         integer :: i
 
         ! Check if we need to grow the stack

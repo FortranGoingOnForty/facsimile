@@ -148,7 +148,7 @@ contains
         character(len=*), intent(in) :: workspace_path
         type(file_entry_t), allocatable, intent(out) :: files(:)
         integer, intent(out) :: n_files
-        integer :: iostat, unit_num, status_code, i
+        integer :: iostat, unit_num, status_code
         character(len=1024) :: line, cmd
         character(len=512) :: file_path
         character(len=2) :: git_status
@@ -608,7 +608,7 @@ contains
 
     subroutine sort_children(parent)
         type(tree_node_t), pointer, intent(inout) :: parent
-        type(tree_node_t), pointer :: sorted, current, next_node, insert_pos, prev
+        type(tree_node_t), pointer :: sorted, current, next_node, insert_pos
         logical :: inserted
 
         if (.not. associated(parent%first_child)) return

@@ -98,7 +98,7 @@ contains
     subroutine build_help_content(lines, n_lines)
         character(len=100), allocatable, intent(out) :: lines(:)
         integer, intent(out) :: n_lines
-        integer :: i, section_start
+        integer :: i
 
         ! Count total lines needed (sections + items + spacing)
         n_lines = 0

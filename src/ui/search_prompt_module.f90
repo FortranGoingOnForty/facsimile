@@ -18,7 +18,6 @@ module search_prompt_module
     ! Search options
     logical :: case_sensitive = .false.
     logical :: whole_word = .false.
-    logical :: use_regex = .false.
     integer :: total_matches = 0
     integer :: current_match_index = 0
 
@@ -28,8 +27,8 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         character(len=256) :: input_buffer
-        character(len=128) :: prompt, options_str
-        integer :: input_pos, ch, ios
+        character(len=128) :: prompt
+        integer :: input_pos, ch
         logical :: found
         integer :: found_line, found_col
         logical :: in_alt_sequence

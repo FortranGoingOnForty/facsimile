@@ -17,10 +17,8 @@ contains
         type(buffer_t), intent(inout) :: buffer
         character(len=256) :: find_buffer, replace_buffer
         character(len=64) :: prompt
-        integer :: input_pos, ch, ios
+        integer :: input_pos, ch
         logical :: entering_find, entering_replace
-        logical :: found
-        integer :: found_line, found_col
         integer :: replace_count
         character(len=:), allocatable :: find_pattern, replace_text
 
@@ -130,7 +128,7 @@ contains
         type(buffer_t), intent(inout) :: buffer
         character(len=*), intent(in) :: find_pattern, replace_text
         integer, intent(out) :: replace_count
-        logical :: found, should_continue
+        logical :: found
         integer :: found_line, found_col
         integer :: start_line, start_col
         character(len=64) :: prompt
