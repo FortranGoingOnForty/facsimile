@@ -457,8 +457,15 @@ contains
                 temp_panes(new_idx)%active_cursor = 1
             end if
 
-            ! Copy buffer and filename from active pane
-            call copy_buffer(temp_panes(new_idx)%buffer, active_pane%buffer)
+            ! Initialize and copy buffer from active pane
+            call init_buffer(temp_panes(new_idx)%buffer)
+            ! Copy from active pane's buffer - make sure it's initialized
+            if (active_pane%buffer%size > 0) then
+                call copy_buffer(temp_panes(new_idx)%buffer, active_pane%buffer)
+            else
+                ! Active pane buffer not initialized, copy from tab buffer
+                call copy_buffer(temp_panes(new_idx)%buffer, editor%tabs(tab_idx)%buffer)
+            end if
             if (allocated(active_pane%filename)) then
                 temp_panes(new_idx)%filename = active_pane%filename
             end if
@@ -560,8 +567,15 @@ contains
                 temp_panes(new_idx)%active_cursor = 1
             end if
 
-            ! Copy buffer and filename from active pane
-            call copy_buffer(temp_panes(new_idx)%buffer, active_pane%buffer)
+            ! Initialize and copy buffer from active pane
+            call init_buffer(temp_panes(new_idx)%buffer)
+            ! Copy from active pane's buffer - make sure it's initialized
+            if (active_pane%buffer%size > 0) then
+                call copy_buffer(temp_panes(new_idx)%buffer, active_pane%buffer)
+            else
+                ! Active pane buffer not initialized, copy from tab buffer
+                call copy_buffer(temp_panes(new_idx)%buffer, editor%tabs(tab_idx)%buffer)
+            end if
             if (allocated(active_pane%filename)) then
                 temp_panes(new_idx)%filename = active_pane%filename
             end if

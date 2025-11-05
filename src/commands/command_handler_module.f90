@@ -65,7 +65,7 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         logical, intent(out) :: should_quit
-        integer :: line_count, i, j, insert_line
+        integer :: line_count, i, j, insert_line, pane_idx
         logical :: is_edit_action
         type(cursor_t), allocatable :: new_cursors(:)
         integer, allocatable :: original_lines(:)
@@ -606,12 +606,28 @@ contains
         case('alt-v')
             ! Split pane vertically
             if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
+                ! Sync current buffer to active pane before splitting
+                call sync_editor_to_pane(editor)
+                if (allocated(editor%tabs(editor%active_tab_index)%panes)) then
+                    pane_idx = editor%tabs(editor%active_tab_index)%active_pane_index
+                    if (pane_idx > 0 .and. pane_idx <= size(editor%tabs(editor%active_tab_index)%panes)) then
+                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(pane_idx)%buffer, buffer)
+                    end if
+                end if
                 call split_pane_vertical(editor)
             end if
 
         case('alt-s')
             ! Split pane horizontally
             if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
+                ! Sync current buffer to active pane before splitting
+                call sync_editor_to_pane(editor)
+                if (allocated(editor%tabs(editor%active_tab_index)%panes)) then
+                    pane_idx = editor%tabs(editor%active_tab_index)%active_pane_index
+                    if (pane_idx > 0 .and. pane_idx <= size(editor%tabs(editor%active_tab_index)%panes)) then
+                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(pane_idx)%buffer, buffer)
+                    end if
+                end if
                 call split_pane_horizontal(editor)
             end if
 

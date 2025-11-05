@@ -865,13 +865,13 @@ contains
             pane = editor%tabs(tab_idx)%panes(active_pane_idx)
             if (allocated(pane%cursors) .and. size(pane%cursors) > 0) then
                 active_cursor = pane%cursors(1)  ! Use first cursor for bracket matching
-                line_content = buffer_get_line(buffer, active_cursor%line)
+                line_content = buffer_get_line(pane%buffer, active_cursor%line)
                 if (active_cursor%column >= 1 .and. active_cursor%column <= len(line_content)) then
                     cursor_char = line_content(active_cursor%column:active_cursor%column)
                     if (is_opening_bracket(cursor_char) .or. is_closing_bracket(cursor_char)) then
                         bracket_line = active_cursor%line
                         bracket_col = active_cursor%column
-                        call find_matching_bracket(buffer, bracket_line, bracket_col, &
+                        call find_matching_bracket(pane%buffer, bracket_line, bracket_col, &
                                                  found_match, matching_bracket_line, matching_bracket_col)
                         if (.not. found_match) then
                             matching_bracket_line = 0
@@ -974,11 +974,11 @@ contains
             call terminal_write(char(27) // '[0m')
         end do
 
-        ! Render buffer content with pane's viewport
+        ! Render buffer content with pane's viewport (use pane's own buffer)
         do screen_row = content_start_row, content_start_row + content_height - 1
             buffer_line = pane%viewport_line + (screen_row - content_start_row)
-            if (buffer_line > 0 .and. buffer_line <= buffer_get_line_count(buffer)) then
-                call render_buffer_line_in_pane(buffer, editor, pane_idx, buffer_line, &
+            if (buffer_line > 0 .and. buffer_line <= buffer_get_line_count(pane%buffer)) then
+                call render_buffer_line_in_pane(pane%buffer, editor, pane_idx, buffer_line, &
                                                screen_row, col, width)
             else
                 ! Render empty line indicator for lines beyond file
@@ -1317,7 +1317,7 @@ contains
                     if (screen_row >= pane_row .and. screen_row < pane_row + pane_height .and. &
                         screen_col >= pane_col + col_offset .and. screen_col < pane_col + pane_width) then
                         ! Get the character at this cursor position
-                        line = buffer_get_line(editor%tabs(tab_idx)%buffer, cursor%line)
+                        line = buffer_get_line(pane%buffer, cursor%line)
                         if (cursor%column <= len(line)) then
                             cursor_char = line(cursor%column:cursor%column)
                         else

@@ -51,11 +51,20 @@ program facsimile
         ! Create a tab for the initial file
         call create_tab(editor, trim(filename))
 
-        ! Load file into tab's buffer
+        ! Load file into tab's buffer and first pane's buffer
         if (editor%active_tab_index > 0) then
             call buffer_load_file(editor%tabs(editor%active_tab_index)%buffer, trim(filename), status)
-            ! Copy tab's buffer to main buffer
-            call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+
+            ! Also load into first pane's buffer
+            if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
+                size(editor%tabs(editor%active_tab_index)%panes) > 0) then
+                call buffer_load_file(editor%tabs(editor%active_tab_index)%panes(1)%buffer, trim(filename), status)
+                ! Copy first pane's buffer to main buffer
+                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%panes(1)%buffer)
+            else
+                ! Copy tab's buffer to main buffer
+                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+            end if
         else
             call buffer_load_file(buffer, trim(filename), status)
         end if
@@ -91,18 +100,36 @@ program facsimile
             if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
                 if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
                     size(editor%tabs(editor%active_tab_index)%panes) > 0) then
-                    ! We don't have per-pane buffers yet - use tab buffer
-                    call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+                    ! Get active pane index
+                    status = editor%tabs(editor%active_tab_index)%active_pane_index
+                    if (status > 0 .and. status <= size(editor%tabs(editor%active_tab_index)%panes)) then
+                        ! Copy active pane's buffer to main buffer
+                        call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%panes(status)%buffer)
+                    end if
                 end if
             end if
 
             ! Process input
             call handle_key_command(key_input, editor, buffer, should_quit)
 
-            ! Sync back
+            ! Sync back to active pane and other instances
             if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
                 if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
                     size(editor%tabs(editor%active_tab_index)%panes) > 0) then
+                    ! Get active pane index
+                    status = editor%tabs(editor%active_tab_index)%active_pane_index
+                    if (status > 0 .and. status <= size(editor%tabs(editor%active_tab_index)%panes)) then
+                        ! Copy main buffer back to active pane's buffer
+                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(status)%buffer, buffer)
+
+                        ! Sync to all instances of this file
+                        if (allocated(editor%tabs(editor%active_tab_index)%panes(status)%filename)) then
+                            call sync_buffer_to_all_instances(editor, &
+                                editor%tabs(editor%active_tab_index)%panes(status)%filename, buffer)
+                        end if
+                    end if
+
+                    ! Also update tab buffer for backwards compatibility
                     call copy_buffer(editor%tabs(editor%active_tab_index)%buffer, buffer)
                 end if
             end if
