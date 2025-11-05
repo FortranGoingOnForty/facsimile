@@ -202,23 +202,34 @@ contains
         integer, intent(in) :: line_num, start_col, width
         character(len=:), allocatable :: line
         character(len=:), allocatable :: visible_part
-        integer :: line_len, end_col
+        integer :: char_count, end_col
+        integer :: start_byte, end_byte, display_width
 
         ! Get the line content
         line = buffer_get_line(buffer, line_num)
-        line_len = len(line)
+        char_count = utf8_char_count(line)
 
-        ! Calculate visible portion
-        if (start_col > line_len) then
+        ! Calculate visible portion (start_col is character position)
+        if (start_col > char_count) then
             ! Line is scrolled past its end
             visible_part = repeat(' ', width)
         else
-            end_col = min(start_col + width - 1, line_len)
+            end_col = min(start_col + width - 1, char_count)
             if (end_col >= start_col) then
-                visible_part = line(start_col:end_col)
-                ! Pad with spaces if needed
-                if (len(visible_part) < width) then
-                    visible_part = visible_part // repeat(' ', width - len(visible_part))
+                ! Convert character positions to byte positions
+                start_byte = utf8_char_to_byte_index(line, start_col)
+                end_byte = utf8_char_to_byte_index(line, end_col + 1) - 1
+
+                if (start_byte > 0 .and. end_byte >= start_byte .and. end_byte <= len(line)) then
+                    visible_part = line(start_byte:end_byte)
+                    display_width = utf8_display_width(visible_part)
+
+                    ! Pad with spaces if needed
+                    if (display_width < width) then
+                        visible_part = visible_part // repeat(' ', width - display_width)
+                    end if
+                else
+                    visible_part = repeat(' ', width)
                 end if
             else
                 visible_part = repeat(' ', width)
@@ -478,15 +489,28 @@ contains
 
                     ! Calculate screen position from buffer position
                     screen_row = cursor%line - editor%viewport_line + row_offset
-                    screen_col = cursor%column - editor%viewport_column + 1 + col_offset
+
+                    ! Calculate screen column based on display width
+                    line = buffer_get_line(buffer, cursor%line)
+                    block
+                        character(len=:), allocatable :: prefix
+                        integer :: byte_pos
+                        byte_pos = utf8_char_to_byte_index(line, cursor%column)
+                        if (byte_pos > 1) then
+                            prefix = line(1:byte_pos-1)
+                            screen_col = utf8_display_width(prefix) - editor%viewport_column + 1 + col_offset
+                        else
+                            screen_col = 1 - editor%viewport_column + col_offset
+                        end if
+                        if (allocated(prefix)) deallocate(prefix)
+                    end block
 
                     ! Ensure cursor is within screen bounds and not in tab bar
                     if (screen_row >= min_row .and. screen_row < editor%screen_rows .and. &
                         screen_col >= 1 .and. screen_col <= editor%screen_cols) then
                         ! Get the character at this cursor position
-                        line = buffer_get_line(buffer, cursor%line)
-                        if (cursor%column <= len(line)) then
-                            cursor_char = line(cursor%column:cursor%column)
+                        if (cursor%column <= utf8_char_count(line)) then
+                            cursor_char = utf8_char_at(line, cursor%column)
                         else
                             cursor_char = ' '  ! End of line
                         end if
@@ -502,7 +526,21 @@ contains
             ! Then position terminal cursor at active cursor location
             cursor = editor%cursors(editor%active_cursor)
             screen_row = cursor%line - editor%viewport_line + row_offset
-            screen_col = cursor%column - editor%viewport_column + 1 + col_offset
+
+            ! Calculate screen column based on display width
+            line = buffer_get_line(buffer, cursor%line)
+            block
+                character(len=:), allocatable :: prefix2
+                integer :: byte_pos2
+                byte_pos2 = utf8_char_to_byte_index(line, cursor%column)
+                if (byte_pos2 > 1) then
+                    prefix2 = line(1:byte_pos2-1)
+                    screen_col = utf8_display_width(prefix2) - editor%viewport_column + 1 + col_offset
+                else
+                    screen_col = 1 - editor%viewport_column + col_offset
+                end if
+                if (allocated(prefix2)) deallocate(prefix2)
+            end block
 
             if (screen_row >= min_row .and. screen_row < editor%screen_rows .and. &
                 screen_col >= 1 .and. screen_col <= editor%screen_cols) then
