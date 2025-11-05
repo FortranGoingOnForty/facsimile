@@ -3,6 +3,7 @@
 *.mod
 fac
 fac_debug.txt
+src/version_module.f90
 
 # Temporary files
 /tmp/

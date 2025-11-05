@@ -1,5 +1,6 @@
 program facsimile
     use iso_fortran_env, only: error_unit, input_unit, output_unit
+    use version_module
     use terminal_io_module
     use input_handler_module, only: get_key_input
     use editor_state_module
@@ -11,7 +12,7 @@ program facsimile
     type(editor_state_t) :: editor
     type(buffer_t) :: buffer
     character(len=32) :: key_input
-    character(len=256) :: filename
+    character(len=256) :: filename, arg
     logical :: running, should_quit
     integer :: status, argc, rows, cols
 
@@ -19,7 +20,22 @@ program facsimile
     ! Get command line arguments
     argc = command_argument_count()
     if (argc > 0) then
-        call get_command_argument(1, filename)
+        call get_command_argument(1, arg)
+
+        ! Handle version flags
+        if (trim(arg) == '--version' .or. trim(arg) == '-v') then
+            write(output_unit, '(A,A)') 'fac version ', VERSION
+            stop
+        end if
+
+        ! Handle help flags
+        if (trim(arg) == '--help' .or. trim(arg) == '-h') then
+            call print_help()
+            stop
+        end if
+
+        ! Otherwise treat as filename
+        filename = arg
     else
         filename = ''
     end if
@@ -180,5 +196,50 @@ contains
         ! Fallback if command fails
         path = '.'
     end subroutine get_workspace_path
+
+    subroutine print_help()
+        write(output_unit, '(A)') 'fac - Fortran text editor'
+        write(output_unit, '(A,A)') 'Version: ', VERSION
+        write(output_unit, '(A)') ''
+        write(output_unit, '(A)') 'Usage:'
+        write(output_unit, '(A)') '  fac [filename]       Open a file for editing'
+        write(output_unit, '(A)') '  fac                  Start with empty buffer'
+        write(output_unit, '(A)') '  fac --version, -v    Show version information'
+        write(output_unit, '(A)') '  fac --help, -h       Show this help message'
+        write(output_unit, '(A)') ''
+        write(output_unit, '(A)') 'Key Bindings:'
+        write(output_unit, '(A)') '  Ctrl-Q               Quit'
+        write(output_unit, '(A)') '  Ctrl-S               Save'
+        write(output_unit, '(A)') '  Ctrl-F               Find/Replace (unified prompt)'
+        write(output_unit, '(A)') '  Ctrl-G               Go to line'
+        write(output_unit, '(A)') '  Ctrl-Z               Undo'
+        write(output_unit, '(A)') '  Ctrl-Y               Redo'
+        write(output_unit, '(A)') '  Ctrl-X               Cut line'
+        write(output_unit, '(A)') '  Ctrl-C               Copy line'
+        write(output_unit, '(A)') '  Ctrl-V               Paste'
+        write(output_unit, '(A)') '  Ctrl-D               Delete line'
+        write(output_unit, '(A)') '  Ctrl-L               Toggle line numbers'
+        write(output_unit, '(A)') '  Ctrl-P               Cycle yank stack backward'
+        write(output_unit, '(A)') '  Ctrl-N               Cycle yank stack forward'
+        write(output_unit, '(A)') '  Ctrl-T               New tab'
+        write(output_unit, '(A)') '  Ctrl-W               Close tab'
+        write(output_unit, '(A)') '  Alt-1 to Alt-9       Switch to tab 1-9'
+        write(output_unit, '(A)') '  Ctrl-B               Toggle file tree (fuss mode)'
+        write(output_unit, '(A)') '  Ctrl-\               Split pane vertically'
+        write(output_unit, '(A)') '  Ctrl-_               Split pane horizontally'
+        write(output_unit, '(A)') '  Ctrl-Arrow           Navigate between panes'
+        write(output_unit, '(A)') '  Alt-X                Close current pane'
+        write(output_unit, '(A)') ''
+        write(output_unit, '(A)') 'Find/Replace Mode (Ctrl-F):'
+        write(output_unit, '(A)') '  Ctrl-F               Find next match'
+        write(output_unit, '(A)') '  Ctrl-R               Replace current match'
+        write(output_unit, '(A)') '  Ctrl-A               Replace all matches'
+        write(output_unit, '(A)') '  Alt-C                Toggle case sensitivity'
+        write(output_unit, '(A)') '  Alt-W                Toggle whole word match'
+        write(output_unit, '(A)') '  Alt-R                Toggle regex mode'
+        write(output_unit, '(A)') '  Tab                  Switch between find/replace fields'
+        write(output_unit, '(A)') '  Enter                Jump to match and exit'
+        write(output_unit, '(A)') '  ESC                  Exit find/replace mode'
+    end subroutine print_help
 
 end program facsimile

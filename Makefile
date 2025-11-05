@@ -55,9 +55,11 @@ else
 endif
 
 TARGET = fac
+VERSION := $(shell cat VERSION 2>/dev/null || echo "unknown")
 
 # Source files (order matters for dependencies)
-SOURCES = src/utils/utf8_module.f90 \
+SOURCES = src/version_module.f90 \
+          src/utils/utf8_module.f90 \
           src/utils/regex_module.f90 \
           src/buffer/text_buffer_module.f90 \
           src/clipboard/yank_stack_module.f90 \
@@ -88,7 +90,15 @@ C_OBJECTS = $(C_SOURCES:.c=.o)
 
 all: $(TARGET)
 
-$(TARGET): $(OBJECTS) $(C_OBJECTS)
+# Generate version module before building
+src/version_module.f90: VERSION
+	@echo "Generating version module..."
+	@echo "module version_module" > $@
+	@echo "    implicit none" >> $@
+	@echo "    character(len=*), parameter :: VERSION = '$(VERSION)'" >> $@
+	@echo "end module version_module" >> $@
+
+$(TARGET): src/version_module.f90 $(OBJECTS) $(C_OBJECTS)
 	$(FC) $(FFLAGS) -o $(TARGET) $(OBJECTS) $(C_OBJECTS)
 
 # Disable parallel builds to ensure correct module compilation order
@@ -101,7 +111,7 @@ $(TARGET): $(OBJECTS) $(C_OBJECTS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(OBJECTS) $(C_OBJECTS) $(TARGET) *.mod src/*/*.mod src/workspace/*.o src/utils/*.o
+	rm -f $(OBJECTS) $(C_OBJECTS) $(TARGET) *.mod src/*/*.mod src/workspace/*.o src/utils/*.o src/version_module.f90
 
 # Development build with comprehensive warnings
 dev: clean
