@@ -1,7 +1,7 @@
 module unified_search_module
     use iso_fortran_env, only: input_unit, output_unit
     use terminal_io_module
-    use editor_state_module, only: editor_state_t, cursor_t
+    use editor_state_module, only: editor_state_t, cursor_t, sync_editor_to_pane
     use text_buffer_module
     use regex_module
     use renderer_module, only: render_screen
@@ -53,6 +53,8 @@ contains
         integer :: find_pos, replace_pos, ch
         logical :: found, in_alt_sequence
         integer :: found_line, found_col
+        logical :: use_pane_buf
+        integer :: tab_i, pane_i
 
         ! Initialize
         find_buffer = ''
@@ -88,6 +90,10 @@ contains
 
                 if (ch == -1 .or. ch == 27) then
                     ! Standalone ESC - exit search mode
+                    ! DEBUG: Log ESC pressed
+                    open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
+                    write(99, '(A)') 'ESC: Exiting search mode, about to return'
+                    close(99)
                     search_mode_active = .false.
                     exit
                 else if (ch == iachar('[')) then
@@ -127,6 +133,11 @@ contains
                     in_alt_sequence = .false.
                 end if
             else if (ch == 9) then  ! Tab - switch fields
+                ! DEBUG: Check selection when Tab is pressed
+                open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
+                write(99, '(A,L1)') 'TAB: has_sel=', editor%cursors(editor%active_cursor)%has_selection
+                close(99)
+
                 if (active_field == 1) then
                     active_field = 2
                 else
@@ -185,9 +196,14 @@ contains
                     current_search_pattern = find_buffer(1:find_pos)
                     current_replace_text = replace_buffer(1:replace_pos)
 
+                    ! Perform replacement
                     call replace_current_and_advance(editor, buffer)
 
-                    ! Update prompt
+                    ! Clear old prompt and re-render everything
+                    call terminal_move_cursor(editor%screen_rows, 1)
+                    call terminal_write(repeat(' ', editor%screen_cols))
+
+                    ! Update prompt with new match count
                     call build_unified_prompt(prompt, find_buffer, find_pos, replace_buffer, replace_pos)
                     call display_prompt(editor, prompt, find_pos, replace_pos)
                 end if
@@ -208,8 +224,19 @@ contains
                     exit
                 end if
             else if (ch == 13 .or. ch == 10) then  ! Enter - accept current match and exit
-                ! Keep the cursor at the current match position
-                ! If there's a selection, keep it (user can clear with ESC or arrow keys)
+                ! Move cursor to START of match (not end)
+                if (editor%cursors(editor%active_cursor)%has_selection) then
+                    editor%cursors(editor%active_cursor)%line = &
+                        editor%cursors(editor%active_cursor)%selection_start_line
+                    editor%cursors(editor%active_cursor)%column = &
+                        editor%cursors(editor%active_cursor)%selection_start_col
+                    editor%cursors(editor%active_cursor)%desired_column = &
+                        editor%cursors(editor%active_cursor)%selection_start_col
+                    ! Clear selection so cursor is at start, not selecting
+                    editor%cursors(editor%active_cursor)%has_selection = .false.
+                    ! Sync cursor back to pane (important for pane system!)
+                    call sync_editor_to_pane(editor)
+                end if
                 exit
             else if (ch == 127 .or. ch == 8) then  ! Backspace
                 if (active_field == 1 .and. find_pos > 0) then
@@ -232,10 +259,10 @@ contains
             end if
         end do
 
-        ! Clean up
-        call terminal_hide_cursor()
+        ! Clean up - clear the prompt line
         call terminal_move_cursor(editor%screen_rows, 1)
         call terminal_write(repeat(' ', editor%screen_cols))
+        ! Don't hide cursor - let the main render loop handle cursor display
     end subroutine show_unified_search_prompt
 
     subroutine build_unified_prompt(prompt, find_text, find_len, replace_text, replace_len)
@@ -337,6 +364,7 @@ contains
         character(len=*), intent(in) :: pattern
         logical :: found
         integer :: found_line, found_col
+        character(len=256) :: debug_msg
 
         ! Compile regex if in regex mode
         if (use_regex) then
@@ -377,8 +405,29 @@ contains
             last_search_line = found_line
             last_search_col = found_col
 
+            ! DEBUG: Write to file
+            open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
+            write(99, '(A,I0,A,I0,A,L1)') 'SEARCH: found at line=', found_line, ' col=', found_col, &
+                ' has_sel=', editor%cursors(editor%active_cursor)%has_selection
+            close(99)
+
+            ! Sync cursor to pane so pane has the updated selection
+            call sync_editor_to_pane(editor)
+
+            ! DEBUG: Check after sync
+            open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
+            write(99, '(A,L1)') 'SEARCH: after sync_editor_to_pane, has_sel=', &
+                editor%cursors(editor%active_cursor)%has_selection
+            close(99)
+
             call center_viewport_on_cursor(editor)
             call render_screen(buffer, editor)
+
+            ! DEBUG: Check after render
+            open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
+            write(99, '(A,L1)') 'SEARCH: after render_screen, has_sel=', &
+                editor%cursors(editor%active_cursor)%has_selection
+            close(99)
         end if
     end subroutine perform_search
 
@@ -421,6 +470,9 @@ contains
             last_search_line = found_line
             last_search_col = found_col
 
+            ! Sync cursor to pane so pane has the updated selection
+            call sync_editor_to_pane(editor)
+
             call center_viewport_on_cursor(editor)
             call render_screen(buffer, editor)
         end if
@@ -429,23 +481,90 @@ contains
     subroutine replace_current_and_advance(editor, buffer)
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
+        integer :: match_len
+        character(len=256) :: debug_msg
+        character(len=:), allocatable :: line
+        integer :: tab_i, pane_i
 
         if (.not. allocated(current_search_pattern)) return
         if (.not. allocated(current_replace_text)) return
 
-        ! If cursor has selection, replace it
+        ! DEBUG: Write to file
+        open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
+        write(99, '(A,I0,A,I0,A,L1)') 'REPLACE: cursor at line=', &
+            editor%cursors(editor%active_cursor)%line, ' col=', &
+            editor%cursors(editor%active_cursor)%column, ' has_sel=', &
+            editor%cursors(editor%active_cursor)%has_selection
+        close(99)
+
+        ! Check if cursor has selection
         if (editor%cursors(editor%active_cursor)%has_selection) then
+            ! DEBUG: Write selection info
+            open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
+            write(99, '(A,I0,A,I0)') 'REPLACE: selection at line=', &
+                editor%cursors(editor%active_cursor)%selection_start_line, ' col=', &
+                editor%cursors(editor%active_cursor)%selection_start_col
+            close(99)
+            ! Calculate match length from selection
+            if (last_match_length > 0) then
+                match_len = last_match_length
+            else
+                match_len = editor%cursors(editor%active_cursor)%column - &
+                           editor%cursors(editor%active_cursor)%selection_start_col
+            end if
+
+            ! DEBUG: About to perform replacement
+            open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
+            write(99, '(A,I0,A,A,A,I0)') 'REPLACE: Calling perform_replacement with match_len=', &
+                match_len, ' replace_text="', trim(current_replace_text), '" at line=', &
+                editor%cursors(editor%active_cursor)%selection_start_line
+            close(99)
+
+            ! Perform replacement on parameter buffer
             call perform_replacement(buffer, editor%cursors(editor%active_cursor), &
-                                    current_replace_text, last_match_length)
+                                    current_replace_text, match_len)
+
+            ! CRITICAL: Also update the pane's buffer if using panes
+            if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
+                tab_i = editor%active_tab_index
+                if (allocated(editor%tabs(tab_i)%panes)) then
+                    pane_i = editor%tabs(tab_i)%active_pane_index
+                    if (pane_i > 0 .and. pane_i <= size(editor%tabs(tab_i)%panes)) then
+                        ! Copy the modified buffer to the pane's buffer
+                        call copy_buffer(editor%tabs(tab_i)%panes(pane_i)%buffer, buffer)
+                    end if
+                end if
+            end if
+
+            ! DEBUG: After replacement
+            open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
+            write(99, '(A)') 'REPLACE: perform_replacement completed and synced to pane'
+            close(99)
 
             ! Clear selection after replacement
             editor%cursors(editor%active_cursor)%has_selection = .false.
 
+            ! Sync cursor to pane (important!)
+            call sync_editor_to_pane(editor)
+
             ! Re-count matches after replacement
             call count_all_matches(buffer, current_search_pattern)
 
+            ! DEBUG: Before final render
+            open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
+            write(99, '(A)') 'REPLACE: About to render'
+            close(99)
+
             ! Render to show the replacement (without selection)
             call render_screen(buffer, editor)
+
+            ! DEBUG: After final render - verify buffer was modified
+            open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
+            write(99, '(A)') 'REPLACE: Rendered'
+            line = buffer_get_line(buffer, 4)
+            write(99, '(A,A)') 'REPLACE: Line 4 after render="', trim(line), '"'
+            if (allocated(line)) deallocate(line)
+            close(99)
         end if
     end subroutine replace_current_and_advance
 
@@ -502,8 +621,19 @@ contains
         character(len=:), allocatable :: line, new_line
         integer :: col, i
 
+        ! DEBUG: Log entry into perform_replacement
+        open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
+        write(99, '(A,I0,A,I0,A,I0)') 'perform_replacement: cursor at line=', cursor%line, &
+            ' selection_start=', cursor%selection_start_line, ' col=', cursor%selection_start_col
+        close(99)
+
         ! Get current line
         line = buffer_get_line(buffer, cursor%line)
+
+        ! DEBUG: Log what line we got
+        open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
+        write(99, '(A,A)') 'perform_replacement: line content="', trim(line), '"'
+        close(99)
 
         ! Build new line with replacement
         col = cursor%selection_start_col
@@ -524,17 +654,43 @@ contains
             new_line(col+len(replace_text):) = line(col+match_len:)
         end if
 
+        ! DEBUG: Log the new line
+        open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
+        write(99, '(A,A)') 'perform_replacement: new_line="', trim(new_line), '"'
+        close(99)
+
+        ! DEBUG: Log before delete
+        open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
+        write(99, '(A,I0,A,I0)') 'perform_replacement: About to delete at line=', cursor%line, ' col=1'
+        close(99)
+
         ! Delete old line content
         cursor%column = 1
         do i = 1, len(line)
             call buffer_delete_at_cursor(buffer, cursor)
         end do
 
+        ! DEBUG: Log after delete
+        open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
+        write(99, '(A)') 'perform_replacement: Deleted old content'
+        close(99)
+
         ! Insert new line content
         do i = 1, len(new_line)
             call buffer_insert_char(buffer, cursor, new_line(i:i))
             cursor%column = cursor%column + 1
         end do
+
+        ! DEBUG: Log after insert
+        open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
+        write(99, '(A)') 'perform_replacement: Inserted new content'
+        line = buffer_get_line(buffer, 4)
+        write(99, '(A,A)') 'perform_replacement: Line 4 is now="', trim(line), '"'
+        if (allocated(line)) deallocate(line)
+        line = buffer_get_line(buffer, 1)
+        write(99, '(A,A)') 'perform_replacement: Line 1 is now="', trim(line), '"'
+        if (allocated(line)) deallocate(line)
+        close(99)
 
         ! Position cursor after replacement
         cursor%column = col + len(replace_text)
@@ -552,6 +708,15 @@ contains
         integer :: pos
 
         pos = get_buffer_position(buffer, cursor%line, cursor%column)
+
+        ! DEBUG: Log the position being deleted
+        if (cursor%line == 4) then
+            open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
+            write(99, '(A,I0,A,I0,A,I0)') 'buffer_delete_at_cursor: line=', cursor%line, &
+                ' col=', cursor%column, ' calculated pos=', pos
+            close(99)
+        end if
+
         if (pos > 0 .and. pos <= get_buffer_content_size(buffer)) then
             call buffer_delete(buffer, pos, 1)
         end if
@@ -579,12 +744,14 @@ contains
 
         do i = 1, get_buffer_content_size(buffer)
             if (current_line == line .and. pos == column) then
+                pos = i  ! Set pos to buffer position before returning
                 return
             end if
 
             ch = buffer_get_char(buffer, i)
             if (ch == char(10)) then
                 if (current_line == line) then
+                    pos = i  ! Set pos to buffer position before returning
                     return
                 end if
                 current_line = current_line + 1
