@@ -21,6 +21,7 @@ module command_handler_module
     use file_tree_module
     use git_ops_module
     use text_prompt_module, only: show_text_prompt, show_yes_no_prompt
+    use fortress_navigator_module, only: open_fortress_navigator
     implicit none
     private
 
@@ -105,6 +106,10 @@ contains
         case('ctrl-b')
             ! Toggle fuss mode (file tree)
             call toggle_fuss_mode(editor)
+
+        case('ctrl-o')
+            ! Open fortress navigator (file/directory picker)
+            call handle_fortress_navigator(editor, buffer)
 
         case('esc')
             ! ESC - Clear selections and return to single cursor mode
@@ -4442,5 +4447,45 @@ contains
             editor%fuss_mode_active = .false.
         end if
     end subroutine handle_git_diff
+
+    subroutine handle_fortress_navigator(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: selected_path
+        logical :: is_directory, cancelled
+        integer :: load_status
+
+        ! Call fortress navigator
+        call open_fortress_navigator(selected_path, is_directory, cancelled)
+
+        ! If user selected something, open it
+        if (.not. cancelled .and. allocated(selected_path)) then
+            if (len_trim(selected_path) > 0) then
+                if (.not. is_directory) then
+                    ! Selected a file - open it in fac
+                    ! TODO: Phase 3 - create orphan tab if in workspace mode
+                    ! For now, just open the file
+                    if (allocated(editor%filename)) deallocate(editor%filename)
+                    allocate(character(len=len_trim(selected_path)) :: editor%filename)
+                    editor%filename = selected_path
+
+                    ! Load file into buffer
+                    call buffer_load_file(buffer, selected_path, load_status)
+
+                    ! Reset cursor to top
+                    editor%cursors(editor%active_cursor)%line = 1
+                    editor%cursors(editor%active_cursor)%column = 1
+                    editor%cursors(editor%active_cursor)%desired_column = 1
+                else
+                    ! Selected a directory
+                    ! TODO: Phase 2 - switch to workspace mode
+                    ! For now, just ignore directories
+                end if
+            end if
+        end if
+
+        ! Re-render after returning from fortress
+        call terminal_clear_screen()
+    end subroutine handle_fortress_navigator
 
 end module command_handler_module
