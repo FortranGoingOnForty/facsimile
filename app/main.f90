@@ -7,18 +7,23 @@ program facsimile
     use text_buffer_module
     use renderer_module
     use command_handler_module
+    use workspace_module
     implicit none
 
     type(editor_state_t) :: editor
     type(buffer_t) :: buffer
     character(len=32) :: key_input
-    character(len=256) :: filename, arg
-    logical :: running, should_quit
+    character(len=256) :: filename, arg, workspace_dir
+    logical :: running, should_quit, is_workspace_mode, workspace_success
     integer :: status, argc, rows, cols
 
 
     ! Get command line arguments
     argc = command_argument_count()
+    is_workspace_mode = .false.
+    workspace_dir = ""
+    filename = ""
+
     if (argc > 0) then
         call get_command_argument(1, arg)
 
@@ -34,18 +39,62 @@ program facsimile
             stop
         end if
 
-        ! Otherwise treat as filename
-        filename = arg
+        ! Check if argument is a directory (workspace mode)
+        call execute_command_line("test -d '" // trim(arg) // "'", exitstat=status)
+        if (status == 0) then
+            ! Directory - workspace mode
+            is_workspace_mode = .true.
+            call workspace_get_path(trim(arg), workspace_dir)
+        else
+            ! File - check if parent directory has a workspace
+            workspace_dir = workspace_detect_from_file(trim(arg))
+            if (len_trim(workspace_dir) > 0) then
+                is_workspace_mode = .true.
+            end if
+            filename = arg
+        end if
     else
-        filename = ''
+        ! No arguments - TODO Phase 5: launch Fortress welcome menu
+        ! For now, just exit with usage message
+        write(output_unit, '(A)') 'Usage: fac [file|directory]'
+        write(output_unit, '(A)') '  fac file.txt     - Edit a single file'
+        write(output_unit, '(A)') '  fac .            - Open workspace in current directory'
+        write(output_unit, '(A)') '  fac /path/to/dir - Open workspace at path'
+        stop
+    end if
+
+    ! Handle workspace mode
+    if (is_workspace_mode) then
+        ! Check if workspace exists, create if not
+        if (.not. workspace_exists(workspace_dir)) then
+            call workspace_init(workspace_dir, workspace_success)
+            if (.not. workspace_success) then
+                write(error_unit, '(A)') 'Error: Failed to create workspace'
+                stop 1
+            end if
+        else
+            ! Load existing workspace
+            call workspace_load(workspace_dir, workspace_success)
+            if (.not. workspace_success) then
+                write(error_unit, '(A)') 'Error: Failed to load workspace'
+                stop 1
+            end if
+        end if
     end if
 
     ! Initialize editor
     call init_editor(editor)
     running = .true.
 
-    ! Set workspace to current directory
-    call get_workspace_path(editor%workspace_path)
+    ! Set workspace path
+    if (is_workspace_mode) then
+        ! Use detected/created workspace directory
+        allocate(character(len=len_trim(workspace_dir)) :: editor%workspace_path)
+        editor%workspace_path = trim(workspace_dir)
+    else
+        ! Single-file mode - use current directory
+        call get_workspace_path(editor%workspace_path)
+    end if
 
     ! Initialize terminal
     call terminal_init()
