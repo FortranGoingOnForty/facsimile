@@ -34,6 +34,12 @@ module unified_search_module
     ! Active search mode - persists after first search
     logical :: search_mode_active = .false.
 
+    ! Track last search parameters to detect changes
+    character(len=:), allocatable :: last_search_pattern
+    logical :: last_case_sensitive = .false.
+    logical :: last_whole_word = .false.
+    logical :: last_use_regex = .false.
+
     ! Field focus (1 = find, 2 = replace)
     integer :: active_field = 1
 
@@ -135,11 +141,31 @@ contains
                     allocate(character(len=find_pos) :: current_search_pattern)
                     current_search_pattern = find_buffer(1:find_pos)
 
+                    ! Check if search parameters changed - if so, reset search mode
+                    if (search_mode_active) then
+                        if (.not. allocated(last_search_pattern) .or. &
+                            current_search_pattern /= last_search_pattern .or. &
+                            case_sensitive .neqv. last_case_sensitive .or. &
+                            whole_word .neqv. last_whole_word .or. &
+                            use_regex .neqv. last_use_regex) then
+                            ! Parameters changed - treat as new search
+                            search_mode_active = .false.
+                        end if
+                    end if
+
                     if (.not. search_mode_active) then
                         ! First search - count and find
                         search_mode_active = .true.
                         call count_all_matches(buffer, current_search_pattern)
                         call perform_search(editor, buffer, current_search_pattern)
+
+                        ! Save current parameters
+                        if (allocated(last_search_pattern)) deallocate(last_search_pattern)
+                        allocate(character(len=len(current_search_pattern)) :: last_search_pattern)
+                        last_search_pattern = current_search_pattern
+                        last_case_sensitive = case_sensitive
+                        last_whole_word = whole_word
+                        last_use_regex = use_regex
                     else
                         ! Cycle to next match
                         call search_forward(editor, buffer)
@@ -589,9 +615,15 @@ contains
     subroutine clear_search_pattern()
         if (allocated(current_search_pattern)) deallocate(current_search_pattern)
         if (allocated(current_replace_text)) deallocate(current_replace_text)
+        if (allocated(last_search_pattern)) deallocate(last_search_pattern)
         search_mode_active = .false.
         last_search_line = 1
         last_search_col = 1
+
+        ! Reset search parameter tracking
+        last_case_sensitive = .false.
+        last_whole_word = .false.
+        last_use_regex = .false.
 
         ! Free compiled regex if any
         if (compiled_regex_id >= 0) then
