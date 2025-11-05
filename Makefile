@@ -40,7 +40,8 @@ endif
 TARGET = fac
 
 # Source files (order matters for dependencies)
-SOURCES = src/buffer/text_buffer_module.f90 \
+SOURCES = src/utils/utf8_module.f90 \
+          src/buffer/text_buffer_module.f90 \
           src/clipboard/yank_stack_module.f90 \
           src/clipboard/clipboard_module.f90 \
           src/terminal/raw_mode_module.f90 \
@@ -80,6 +81,6 @@ $(TARGET): $(OBJECTS) $(C_OBJECTS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(OBJECTS) $(C_OBJECTS) $(TARGET) *.mod src/*/*.mod src/workspace/*.o
+	rm -f $(OBJECTS) $(C_OBJECTS) $(TARGET) *.mod src/*/*.mod src/workspace/*.o src/utils/*.o
 
 .PHONY: all clean
