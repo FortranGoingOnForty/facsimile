@@ -29,6 +29,7 @@ module command_handler_module
     type(yank_stack_t) :: yank_stack
     type(undo_stack_t) :: undo_stack
     character(len=:), allocatable :: search_pattern  ! For ctrl-d functionality
+    logical :: match_case_sensitive = .true.  ! Case sensitivity for ctrl-d match mode
     logical :: last_action_was_edit = .false.
 
 contains
@@ -80,10 +81,12 @@ contains
             return
         end if
 
-        ! Reset search_pattern for any key except ctrl-d
+        ! Reset search_pattern for any key except ctrl-d and alt-c
         ! This ensures ctrl-d always starts fresh when not in an active match sequence
-        if (trim(key_str) /= 'ctrl-d' .and. allocated(search_pattern)) then
+        ! alt-c is preserved to allow toggling case sensitivity during match mode
+        if (trim(key_str) /= 'ctrl-d' .and. trim(key_str) /= 'alt-c' .and. allocated(search_pattern)) then
             deallocate(search_pattern)
+            match_case_sensitive = .true.  ! Reset to default
         end if
 
         ! Route input when in fuss mode (except ctrl-b and ctrl-q which work in both modes)
@@ -832,6 +835,13 @@ contains
             call select_next_match(editor, buffer)
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
+
+        case('alt-c')
+            ! Toggle case sensitivity for match mode (ctrl-d)
+            ! Only has effect when in active match mode (search_pattern allocated)
+            if (allocated(search_pattern)) then
+                match_case_sensitive = .not. match_case_sensitive
+            end if
 
         case('alt-[', 'alt-]')
             ! Jump to matching bracket
@@ -2920,6 +2930,7 @@ contains
         logical, intent(out) :: found
         integer, intent(out) :: found_line, found_col
         character(len=:), allocatable :: line
+        character(len=:), allocatable :: search_line, search_pattern
         integer :: line_count, current_line, pos
         integer :: search_col
 
@@ -2927,6 +2938,11 @@ contains
         found_line = 0
         found_col = 0
         line_count = buffer_get_line_count(buffer)
+
+        ! Prepare pattern for case-insensitive search if needed
+        if (.not. match_case_sensitive) then
+            search_pattern = to_lower(pattern)
+        end if
 
         ! Search from current position to end
         do current_line = start_line, line_count
@@ -2938,12 +2954,21 @@ contains
                 search_col = 1
             end if
 
-            pos = index(line(search_col:), pattern)
+            ! Perform case-sensitive or case-insensitive search
+            if (match_case_sensitive) then
+                pos = index(line(search_col:), pattern)
+            else
+                search_line = to_lower(line(search_col:))
+                pos = index(search_line, search_pattern)
+                if (allocated(search_line)) deallocate(search_line)
+            end if
+
             if (pos > 0) then
                 found = .true.
                 found_line = current_line
                 found_col = search_col + pos - 1
                 if (allocated(line)) deallocate(line)
+                if (allocated(search_pattern)) deallocate(search_pattern)
                 return
             end if
             if (allocated(line)) deallocate(line)
@@ -2956,12 +2981,24 @@ contains
             if (current_line == start_line) then
                 ! Search only up to start position
                 if (start_col > 1) then
-                    pos = index(line(1:start_col-1), pattern)
+                    if (match_case_sensitive) then
+                        pos = index(line(1:start_col-1), pattern)
+                    else
+                        search_line = to_lower(line(1:start_col-1))
+                        pos = index(search_line, search_pattern)
+                        if (allocated(search_line)) deallocate(search_line)
+                    end if
                 else
                     pos = 0
                 end if
             else
-                pos = index(line, pattern)
+                if (match_case_sensitive) then
+                    pos = index(line, pattern)
+                else
+                    search_line = to_lower(line)
+                    pos = index(search_line, search_pattern)
+                    if (allocated(search_line)) deallocate(search_line)
+                end if
             end if
 
             if (pos > 0) then
@@ -2969,12 +3006,33 @@ contains
                 found_line = current_line
                 found_col = pos
                 if (allocated(line)) deallocate(line)
+                if (allocated(search_pattern)) deallocate(search_pattern)
                 return
             end if
 
             if (allocated(line)) deallocate(line)
         end do
+
+        if (allocated(search_pattern)) deallocate(search_pattern)
     end subroutine find_next_occurrence
+
+    ! Helper function to convert a string to lowercase for case-insensitive comparison
+    function to_lower(str) result(lower_str)
+        character(len=*), intent(in) :: str
+        character(len=:), allocatable :: lower_str
+        integer :: i
+
+        allocate(character(len=len(str)) :: lower_str)
+
+        do i = 1, len(str)
+            if (iachar(str(i:i)) >= iachar('A') .and. &
+                iachar(str(i:i)) <= iachar('Z')) then
+                lower_str(i:i) = char(iachar(str(i:i)) + 32)
+            else
+                lower_str(i:i) = str(i:i)
+            end if
+        end do
+    end function to_lower
 
     ! ========================================================================
     ! Buffer Helper Functions - Wrappers for cursor-based operations
