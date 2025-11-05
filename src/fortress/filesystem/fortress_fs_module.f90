@@ -101,7 +101,31 @@ contains
 
         ! Cleanup temp files
         call execute_command_line("rm -f " // trim(temp_file) // " " // trim(stat_file) // " 2>/dev/null")
+
+        ! Filter out "." and ".." entries
+        call filter_dot_entries(files, is_dir, is_exec, count)
     end subroutine get_file_list
+
+    !> Filter out "." and ".." from file list
+    subroutine filter_dot_entries(files, is_dir, is_exec, count)
+        character(len=*), dimension(*), intent(inout) :: files
+        logical, dimension(*), intent(inout) :: is_dir, is_exec
+        integer, intent(inout) :: count
+        integer :: i, j
+
+        j = 0
+        do i = 1, count
+            if (trim(files(i)) /= "." .and. trim(files(i)) /= "..") then
+                j = j + 1
+                if (i /= j) then
+                    files(j) = files(i)
+                    is_dir(j) = is_dir(i)
+                    is_exec(j) = is_exec(i)
+                end if
+            end if
+        end do
+        count = j
+    end subroutine filter_dot_entries
 
     function get_pwd() result(path)
         character(len=MAX_PATH) :: path

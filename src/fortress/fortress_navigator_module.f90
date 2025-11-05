@@ -5,6 +5,7 @@ module fortress_navigator_module
     use iso_fortran_env, only: output_unit, input_unit
     use fortress_fs_module
     use fortress_display_module
+    use terminal_io_module, only: terminal_read_char
     implicit none
     private
 
@@ -31,7 +32,7 @@ contains
         character(len=*), intent(in), optional :: initial_path
         character(len=MAX_PATH) :: current_dir, parent_dir, temp_dir
         character(len=1) :: key
-        integer :: rows, cols
+        integer :: rows, cols, ios
         logical :: running
 
         ! Initialize state
@@ -56,6 +57,9 @@ contains
             call get_file_list(parent_dir, parent_files, parent_is_dir, parent_is_exec, parent_count)
             call get_file_list(current_dir, current_files, current_is_dir, current_is_exec, current_count)
 
+            ! Find current directory in parent listing
+            parent_selected = find_in_parent(current_dir, parent_files, parent_count)
+
             ! Get terminal size
             call get_term_size(rows, cols)
 
@@ -74,8 +78,15 @@ contains
                                          parent_files, parent_is_dir, parent_is_exec, parent_count, &
                                          selected, parent_selected, scroll_offset, parent_scroll_offset)
 
-            ! Read key
-            read(input_unit, '(a1)') key
+            ! Read key using raw terminal input (blocking mode)
+            ! Keep trying until we get input to avoid tight redraw loop
+            do
+                ios = terminal_read_char()
+                if (ios >= 0) exit
+                ! Small delay to avoid busy-waiting
+                call sleep(0)
+            end do
+            key = achar(ios)
 
             ! Handle input
             select case (key)
@@ -150,18 +161,22 @@ contains
     function check_arrow_key(key) result(is_arrow)
         character(len=1), intent(inout) :: key
         logical :: is_arrow
-        character(len=1) :: next_char
-        integer :: ios
+        integer :: char_code
 
         is_arrow = .false.
 
         if (key == char(27)) then
             ! Try to read next character
-            read(input_unit, '(a1)', advance='no', iostat=ios) next_char
-            if (ios == 0 .and. next_char == '[') then
-                ! It's an arrow key sequence
-                read(input_unit, '(a1)') key
-                is_arrow = .true.
+            char_code = terminal_read_char()
+            if (char_code >= 0) then
+                if (achar(char_code) == '[') then
+                    ! It's an arrow key sequence - read the direction
+                    char_code = terminal_read_char()
+                    if (char_code >= 0) then
+                        key = achar(char_code)
+                        is_arrow = .true.
+                    end if
+                end if
             end if
         end if
     end function check_arrow_key
@@ -197,31 +212,16 @@ contains
         end select
     end subroutine handle_arrow_key
 
-    !> Get terminal size using tput
+    !> Get terminal size using fac's terminal module
     subroutine get_term_size(rows, cols)
+        use terminal_io_module, only: terminal_get_size
         integer, intent(out) :: rows, cols
-        integer :: unit, ios
-        character(len=MAX_PATH) :: temp_file
 
-        call get_environment_variable("HOME", temp_file)
-        temp_file = trim(temp_file) // "/.fac_term_size"
+        call terminal_get_size(rows, cols)
 
-        call execute_command_line("echo ""$(tput lines) $(tput cols)"" > " // trim(temp_file) // " 2>/dev/null", wait=.true.)
-
-        open(newunit=unit, file=temp_file, status='old', iostat=ios)
-        if (ios == 0) then
-            read(unit, *, iostat=ios) rows, cols
-            close(unit)
-            if (ios /= 0) then
-                rows = 24
-                cols = 80
-            end if
-        else
-            rows = 24
-            cols = 80
-        end if
-
-        call execute_command_line("rm -f " // trim(temp_file) // " 2>/dev/null")
+        ! Sanity check
+        if (rows <= 0) rows = 24
+        if (cols <= 0) cols = 80
     end subroutine get_term_size
 
 end module fortress_navigator_module
