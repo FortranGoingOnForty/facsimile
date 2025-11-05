@@ -536,13 +536,13 @@ contains
                 end if
             end if
 
-            ! DEBUG: After replacement
-            open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
-            write(99, '(A)') 'REPLACE: perform_replacement completed and synced to pane'
-            close(99)
-
-            ! Clear selection after replacement
-            editor%cursors(editor%active_cursor)%has_selection = .false.
+            ! Create selection highlighting the replacement text
+            ! Cursor is already at end of replacement from perform_replacement
+            editor%cursors(editor%active_cursor)%has_selection = .true.
+            editor%cursors(editor%active_cursor)%selection_start_line = &
+                editor%cursors(editor%active_cursor)%line
+            editor%cursors(editor%active_cursor)%selection_start_col = &
+                editor%cursors(editor%active_cursor)%column - len(current_replace_text)
 
             ! Sync cursor to pane (important!)
             call sync_editor_to_pane(editor)
@@ -550,21 +550,8 @@ contains
             ! Re-count matches after replacement
             call count_all_matches(buffer, current_search_pattern)
 
-            ! DEBUG: Before final render
-            open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
-            write(99, '(A)') 'REPLACE: About to render'
-            close(99)
-
-            ! Render to show the replacement (without selection)
+            ! Render to show the replacement with selection
             call render_screen(buffer, editor)
-
-            ! DEBUG: After final render - verify buffer was modified
-            open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
-            write(99, '(A)') 'REPLACE: Rendered'
-            line = buffer_get_line(buffer, 4)
-            write(99, '(A,A)') 'REPLACE: Line 4 after render="', trim(line), '"'
-            if (allocated(line)) deallocate(line)
-            close(99)
         end if
     end subroutine replace_current_and_advance
 
