@@ -10,7 +10,7 @@ static struct termios orig_termios;
 static int raw_mode_enabled = 0;
 
 // Enable raw mode - returns 0 on success, -1 on failure
-int enable_raw_mode() {
+int enable_raw_mode(void) {
     if (raw_mode_enabled) return 0;
 
     if (tcgetattr(STDIN_FILENO, &orig_termios) == -1) {
@@ -20,16 +20,16 @@ int enable_raw_mode() {
     struct termios raw = orig_termios;
 
     // Input flags: disable break, CR to NL, parity check, strip char, start/stop output control
-    raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+    raw.c_iflag &= ~(tcflag_t)(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
 
     // Output flags: disable post processing
-    raw.c_oflag &= ~(OPOST);
+    raw.c_oflag &= ~(tcflag_t)(OPOST);
 
     // Control flags: set 8 bit chars
     raw.c_cflag |= (CS8);
 
     // Local flags: disable canonical mode, echo, signals, extended input processing
-    raw.c_lflag &= ~(ECHO | ICANON | ISIG | IEXTEN);
+    raw.c_lflag &= ~(tcflag_t)(ECHO | ICANON | ISIG | IEXTEN);
 
     // Control characters: minimum bytes and timeout for read()
     raw.c_cc[VMIN] = 0;  // Return each byte, or zero for timeout
@@ -44,7 +44,7 @@ int enable_raw_mode() {
 }
 
 // Disable raw mode - returns 0 on success, -1 on failure
-int disable_raw_mode() {
+int disable_raw_mode(void) {
     if (!raw_mode_enabled) return 0;
 
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios) == -1) {
@@ -56,7 +56,7 @@ int disable_raw_mode() {
 }
 
 // Check if input is available (non-blocking)
-int input_available() {
+int input_available(void) {
     int nread;
     if (ioctl(STDIN_FILENO, FIONREAD, &nread) == -1) {
         return 0;
@@ -65,9 +65,9 @@ int input_available() {
 }
 
 // Read a single character (with timeout)
-int read_char_timeout() {
+int read_char_timeout(void) {
     char c;
-    int nread = read(STDIN_FILENO, &c, 1);
+    ssize_t nread = read(STDIN_FILENO, &c, 1);
     if (nread == 1) {
         return (unsigned char)c;
     } else {
