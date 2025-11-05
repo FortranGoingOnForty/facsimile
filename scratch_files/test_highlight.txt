@@ -1,0 +1,8 @@
+Test file for search highlighting.
+
+The word test appears here.
+And test appears again.
+One more test for good measure.
+
+Testing regex: 123 456 789
+More numbers: 42 100 999

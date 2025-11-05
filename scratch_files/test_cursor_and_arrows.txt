@@ -1,0 +1,43 @@
+Test File for Cursor Visibility and Arrow Keys in Panes
+========================================================
+
+This file tests the two main issues that were fixed:
+1. Cursor visibility in panes
+2. Arrow keys working after splitting panes
+
+Test Instructions:
+------------------
+
+1. Open this file in the editor
+2. Press Alt-V to split the pane vertically
+3. Verify that you can see the cursor (it should be visible!)
+4. Test arrow keys:
+   - Up arrow should move cursor up
+   - Down arrow should move cursor down
+   - Left arrow should move cursor left
+   - Right arrow should move cursor right
+5. Press Ctrl-Shift-Left to navigate to left pane
+6. Verify the cursor is visible in the left pane
+7. Test arrow keys again in the left pane
+8. Press Alt-S to split horizontally
+9. Test arrow keys in the new pane
+10. Navigate between panes with Ctrl-Shift-Arrow keys
+
+Expected Results:
+-----------------
+- Cursor should always be visible in the active pane
+- Arrow keys should work normally in all panes
+- Navigation between panes should work smoothly
+- Each pane should maintain independent cursor position
+
+Additional Test Lines:
+Line 1: Lorem ipsum dolor sit amet
+Line 2: consectetur adipiscing elit
+Line 3: sed do eiusmod tempor incididunt
+Line 4: ut labore et dolore magna aliqua
+Line 5: Ut enim ad minim veniam
+Line 6: quis nostrud exercitation ullamco
+Line 7: laboris nisi ut aliquip ex ea commodo
+Line 8: consequat. Duis aute irure dolor
+Line 9: in reprehenderit in voluptate velit
+Line 10: esse cillum dolore eu fugiat nulla

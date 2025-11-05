@@ -1,0 +1,19 @@
+Help Menu Test
+==============
+
+Press ctrl-? (ctrl-shift-/) to open the help menu.
+
+The help menu shows all 38 keybindings organized by category:
+- Navigation
+- Selection
+- Editing
+- Clipboard
+- Lines
+- Multiple Cursors
+- Special
+- File
+- Help
+
+Press any key to close the help menu and return to editing.
+
+Try it now: ctrl-?

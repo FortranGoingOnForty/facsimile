@@ -1,0 +1,56 @@
+Pane Navigation Test File
+=========================
+
+Line 1: This is a test file for testing pane navigation
+Line 2: Use Alt-V to split the pane vertically
+Line 3: Use Alt-S to split the pane horizontally
+Line 4: Use Ctrl-Shift-Arrows to navigate between panes
+
+Navigation Keys (two options):
+Standard:
+- Ctrl-Shift-Left: Navigate to pane on the left
+- Ctrl-Shift-Right: Navigate to pane on the right
+- Ctrl-Shift-Up: Navigate to pane above
+- Ctrl-Shift-Down: Navigate to pane below
+
+Vim-style (alternate):
+- Alt-H: Navigate to pane on the left
+- Alt-L: Navigate to pane on the right
+- Alt-K: Navigate to pane above
+- Alt-J: Navigate to pane below
+
+Test Scenarios:
+1. Open this file
+2. Press Alt-V to create a vertical split
+3. Press Ctrl-Shift-Left to move to the left pane
+4. Press Ctrl-Shift-Right to move to the right pane
+5. Press Alt-S to create a horizontal split in the current pane
+6. Press Ctrl-Shift-Up to move to the upper pane
+7. Press Ctrl-Shift-Down to move to the lower pane
+
+Visual Feedback:
+- Active pane: Normal background with visible cursor
+- Inactive panes: Dark gray background (color 234)
+- Separator lines between panes
+
+Closing Panes:
+- Alt-Q: Close current pane only
+- Ctrl-W: Close current pane (closes tab when last pane)
+
+This file has enough lines to test scrolling:
+Line 31: Lorem ipsum dolor sit amet
+Line 32: consectetur adipiscing elit
+Line 33: sed do eiusmod tempor incididunt
+Line 34: ut labore et dolore magna aliqua
+Line 35: Ut enim ad minim veniam
+Line 36: quis nostrud exercitation ullamco
+Line 37: laboris nisi ut aliquip ex ea
+Line 38: commodo consequat
+Line 39: Duis aute irure dolor in reprehenderit
+Line 40: in voluptate velit esse cillum
+Line 41: dolore eu fugiat nulla pariatur
+Line 42: Excepteur sint occaecat cupidatat
+Line 43: non proident, sunt in culpa
+Line 44: qui officia deserunt mollit anim
+Line 45: id est laborum
+Line 46: End of test file
