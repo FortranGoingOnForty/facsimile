@@ -139,4 +139,50 @@ info:
 	@echo "Default CFLAGS: $(CFLAGS)"
 	@echo "Dev CFLAGS: $(CFLAGS_DEV)"
 
-.PHONY: all clean dev debug info
+# Version management targets
+bump-patch:
+	@echo "Current version: $(VERSION)"
+	@NEW_VERSION=$$(echo $(VERSION) | awk -F. '{print $$1"."$$2"."$$3+1}'); \
+	echo "Bumping to: $$NEW_VERSION"; \
+	echo $$NEW_VERSION > VERSION; \
+	echo "Updated VERSION file to $$NEW_VERSION"
+	@echo "Now run: make clean && make"
+
+bump-minor:
+	@echo "Current version: $(VERSION)"
+	@NEW_VERSION=$$(echo $(VERSION) | awk -F. '{print $$1"."$$2+1".0"}'); \
+	echo "Bumping to: $$NEW_VERSION"; \
+	echo $$NEW_VERSION > VERSION; \
+	echo "Updated VERSION file to $$NEW_VERSION"
+	@echo "Now run: make clean && make"
+
+bump-major:
+	@echo "Current version: $(VERSION)"
+	@NEW_VERSION=$$(echo $(VERSION) | awk -F. '{print $$1+1".0.0"}'); \
+	echo "Bumping to: $$NEW_VERSION"; \
+	echo $$NEW_VERSION > VERSION; \
+	echo "Updated VERSION file to $$NEW_VERSION"
+	@echo "Now run: make clean && make"
+
+# Show current version
+version:
+	@echo "$(VERSION)"
+
+# Release checklist
+release: clean all
+	@echo ""
+	@echo "========================================"
+	@echo "Release Build Complete: v$(VERSION)"
+	@echo "========================================"
+	@echo ""
+	@./$(TARGET) --version
+	@echo ""
+	@echo "Next steps:"
+	@echo "1. Test the binary: ./$(TARGET)"
+	@echo "2. Commit changes: git add VERSION Makefile app/main.f90 .gitignore"
+	@echo "3. Commit: git commit -m 'Release v$(VERSION)'"
+	@echo "4. Tag: git tag v$(VERSION)"
+	@echo "5. Push: git push && git push --tags"
+	@echo ""
+
+.PHONY: all clean dev debug info bump-patch bump-minor bump-major version release
