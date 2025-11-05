@@ -60,9 +60,11 @@ contains
         if (allocated(screen_buffer%lines)) deallocate(screen_buffer%lines)
     end subroutine cleanup_renderer
 
-    subroutine render_screen(buffer, editor)
+    subroutine render_screen(buffer, editor, match_mode_active, match_case_sens)
         type(buffer_t), intent(in) :: buffer
         type(editor_state_t), intent(inout) :: editor
+        logical, intent(in), optional :: match_mode_active
+        logical, intent(in), optional :: match_case_sens
         integer :: screen_row, buffer_line, line_count
         character(len=:), allocatable :: line_content
         character(len=1) :: cursor_char
@@ -130,7 +132,7 @@ contains
             if (allocated(editor%tabs(editor%active_tab_index)%panes)) then
                 call render_all_panes(buffer, editor)
                 ! Render status bar after panes
-                call render_status_bar(editor, buffer)
+                call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
                 ! Position cursor for panes
                 call render_cursor_for_panes(editor)
                 return  ! Exit after rendering panes
@@ -181,7 +183,7 @@ contains
             end do
 
         ! Render status bar
-        call render_status_bar(editor, buffer)
+        call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
 
         ! Position cursor for panes or regular view
         if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0 .and. &
@@ -352,14 +354,19 @@ contains
         if (allocated(line)) deallocate(line)
     end subroutine render_line_with_selections
 
-    subroutine render_status_bar(editor, buffer)
+    subroutine render_status_bar(editor, buffer, match_mode_active, match_case_sens)
         type(editor_state_t), intent(in) :: editor
         type(buffer_t), intent(in) :: buffer
+        logical, intent(in), optional :: match_mode_active
+        logical, intent(in), optional :: match_case_sens
         character(len=256) :: status_left, status_center, status_right, status_bar
         integer :: padding_len, left_pad, right_pad
         type(cursor_t) :: cursor
+        logical :: show_match_hint
 
         cursor = editor%cursors(editor%active_cursor)
+        show_match_hint = .false.
+        if (present(match_mode_active)) show_match_hint = match_mode_active
 
         ! Move to status bar position
         call terminal_move_cursor(editor%screen_rows, 1)
@@ -373,8 +380,16 @@ contains
                    merge(' [modified]', '           ', buffer%modified), ' '
         end if
 
-        ! Add help hint in center
-        status_center = 'ctrl-/:help'
+        ! Add hint in center - show match mode hint when active, otherwise show help
+        if (show_match_hint .and. present(match_case_sens)) then
+            if (match_case_sens) then
+                status_center = '[Cc] alt-c:toggle'
+            else
+                status_center = '[cc] alt-c:toggle'
+            end if
+        else
+            status_center = 'ctrl-/:help'
+        end if
 
         if (size(editor%cursors) > 1) then
             write(status_right, '(a,i0,a,a,i0,a,i0,a)') '[', size(editor%cursors), ' cursors] ', &
@@ -392,12 +407,43 @@ contains
             status_bar = trim(status_left) // repeat(' ', left_pad) // &
                         trim(status_center) // repeat(' ', right_pad) // trim(status_right)
         else
-            ! Not enough space, just show left and right
-            padding_len = editor%screen_cols - len_trim(status_left) - len_trim(status_right)
-            if (padding_len > 0) then
-                status_bar = trim(status_left) // repeat(' ', padding_len) // trim(status_right)
+            ! Not enough space for all three sections
+            ! If in match mode, prioritize showing the hint by reducing right side info
+            if (show_match_hint) then
+                ! Show: left + hint + minimal right (just line/col, no cursor count)
+                write(status_right, '(a,i0,a,i0,a)') 'Ln ', cursor%line, ',Col ', cursor%column, ' '
+                padding_len = editor%screen_cols - len_trim(status_left) - len_trim(status_center) - len_trim(status_right)
+                if (padding_len > 0) then
+                    left_pad = padding_len / 2
+                    right_pad = padding_len - left_pad
+                    status_bar = trim(status_left) // repeat(' ', left_pad) // &
+                                trim(status_center) // repeat(' ', right_pad) // trim(status_right)
+                else
+                    ! Still not enough space, show hint + right only
+                    padding_len = editor%screen_cols - len_trim(status_center) - len_trim(status_right)
+                    if (padding_len > 0) then
+                        status_bar = repeat(' ', padding_len / 2) // trim(status_center) // &
+                                    repeat(' ', padding_len - padding_len / 2) // trim(status_right)
+                    else
+                        ! Absolute minimum: just show the hint centered
+                        padding_len = editor%screen_cols - len_trim(status_center)
+                        if (padding_len > 0) then
+                            left_pad = padding_len / 2
+                            status_bar = repeat(' ', left_pad) // trim(status_center) // &
+                                        repeat(' ', padding_len - left_pad)
+                        else
+                            status_bar = status_center(1:editor%screen_cols)
+                        end if
+                    end if
+                end if
             else
-                status_bar = status_left(1:editor%screen_cols)
+                ! Normal mode: just show left and right
+                padding_len = editor%screen_cols - len_trim(status_left) - len_trim(status_right)
+                if (padding_len > 0) then
+                    status_bar = trim(status_left) // repeat(' ', padding_len) // trim(status_right)
+                else
+                    status_bar = status_left(1:editor%screen_cols)
+                end if
             end if
         end if
 
@@ -594,9 +640,11 @@ contains
     end subroutine update_viewport
 
     ! Render screen with split panes (tree on left, editor on right)
-    subroutine render_screen_with_tree(buffer, editor)
+    subroutine render_screen_with_tree(buffer, editor, match_mode_active, match_case_sens)
         type(buffer_t), intent(in) :: buffer
         type(editor_state_t), intent(inout) :: editor
+        logical, intent(in), optional :: match_mode_active
+        logical, intent(in), optional :: match_case_sens
         integer :: tree_width, editor_start_col, editor_width
         integer :: separator_col
         integer :: row
@@ -628,7 +676,7 @@ contains
         call render_editor_area_with_tree(buffer, editor, editor_start_col, editor_width)
 
         ! Render status bar (full width)
-        call render_status_bar(editor, buffer)
+        call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
 
         ! Position cursor in editor pane (use appropriate method based on pane count)
         if (size(editor%tabs(editor%active_tab_index)%panes) > 1) then

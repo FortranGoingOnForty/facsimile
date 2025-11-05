@@ -25,6 +25,7 @@ module command_handler_module
 
     public :: handle_key_command, init_command_handler, cleanup_command_handler
     public :: save_initial_state_for_undo
+    public :: search_pattern, match_case_sensitive  ! Exposed for status bar hint
 
     type(yank_stack_t) :: yank_stack
     type(undo_stack_t) :: undo_stack

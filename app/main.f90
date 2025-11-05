@@ -86,7 +86,7 @@ program facsimile
     call save_initial_state_for_undo(buffer, editor)
 
     ! Initial render
-    call render_screen(buffer, editor)
+    call render_screen(buffer, editor, allocated(search_pattern), match_case_sensitive)
 
     ! Main event loop
     do while (running)
@@ -139,9 +139,9 @@ program facsimile
             else
                 ! Re-render screen after each command
                 if (editor%fuss_mode_active) then
-                    call render_screen_with_tree(buffer, editor)
+                    call render_screen_with_tree(buffer, editor, allocated(search_pattern), match_case_sensitive)
                 else
-                    call render_screen(buffer, editor)
+                    call render_screen(buffer, editor, allocated(search_pattern), match_case_sensitive)
                 end if
             end if
         end if
