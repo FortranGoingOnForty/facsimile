@@ -69,7 +69,10 @@ contains
                     case_sensitive = .not. case_sensitive
                     call build_search_prompt(prompt)
                     call terminal_move_cursor(editor%screen_rows, 1)
-                    call terminal_write(prompt // input_buffer(1:input_pos) // '  ')
+                    ! Clear the entire line first to avoid duplicate text
+                    call terminal_write(repeat(' ', editor%screen_cols))
+                    call terminal_move_cursor(editor%screen_rows, 1)
+                    call terminal_write(prompt // input_buffer(1:input_pos))
                     call terminal_move_cursor(editor%screen_rows, len_trim(prompt) + input_pos + 1)
                     in_alt_sequence = .false.
                 else if (ch == iachar('w') .or. ch == iachar('W')) then
@@ -77,7 +80,10 @@ contains
                     whole_word = .not. whole_word
                     call build_search_prompt(prompt)
                     call terminal_move_cursor(editor%screen_rows, 1)
-                    call terminal_write(prompt // input_buffer(1:input_pos) // '  ')
+                    ! Clear the entire line first to avoid duplicate text
+                    call terminal_write(repeat(' ', editor%screen_cols))
+                    call terminal_move_cursor(editor%screen_rows, 1)
+                    call terminal_write(prompt // input_buffer(1:input_pos))
                     call terminal_move_cursor(editor%screen_rows, len_trim(prompt) + input_pos + 1)
                     in_alt_sequence = .false.
                 else
@@ -480,11 +486,11 @@ contains
             options = trim(options) // ' (' // trim(count_str) // ')'
         end if
 
-        ! Build full prompt
+        ! Build full prompt with ESC indicator
         if (len_trim(options) > 0) then
-            prompt = 'Search ' // trim(options) // ': '
+            prompt = 'Search ' // trim(options) // ' | ESC:exit: '
         else
-            prompt = 'Search: '
+            prompt = 'Search | ESC:exit: '
         end if
     end subroutine build_search_prompt
 

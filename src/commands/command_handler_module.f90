@@ -14,6 +14,7 @@ module command_handler_module
     use search_prompt_module, only: show_search_prompt, search_forward, search_backward, &
                                      current_search_pattern
     use replace_prompt_module, only: show_replace_prompt
+    use unified_search_module, only: show_unified_search_prompt
     use undo_stack_module
     use terminal_io_module, only: terminal_move_cursor, terminal_write, terminal_clear_screen
     use bracket_matching_module, only: find_matching_bracket
@@ -866,8 +867,8 @@ contains
 
         ! Search commands
         case('ctrl-f')
-            ! Search forward (Ctrl+F)
-            call show_search_prompt(editor, buffer)
+            ! Unified search and replace (Ctrl+F)
+            call show_unified_search_prompt(editor, buffer)
             call update_viewport(editor)
 
         case('ctrl-r')

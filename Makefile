@@ -75,6 +75,7 @@ SOURCES = src/utils/utf8_module.f90 \
           src/ui/text_prompt_module.f90 \
           src/ui/search_prompt_module.f90 \
           src/ui/replace_prompt_module.f90 \
+          src/ui/unified_search_module.f90 \
           src/ui/goto_prompt_module.f90 \
           src/commands/command_handler_module.f90 \
           app/main.f90
