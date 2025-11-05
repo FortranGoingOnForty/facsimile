@@ -58,6 +58,7 @@ TARGET = fac
 
 # Source files (order matters for dependencies)
 SOURCES = src/utils/utf8_module.f90 \
+          src/utils/regex_module.f90 \
           src/buffer/text_buffer_module.f90 \
           src/clipboard/yank_stack_module.f90 \
           src/clipboard/clipboard_module.f90 \
@@ -81,7 +82,8 @@ SOURCES = src/utils/utf8_module.f90 \
           app/main.f90
 
 OBJECTS = $(SOURCES:.f90=.o)
-C_SOURCES = src/terminal/termios_wrapper.c
+C_SOURCES = src/terminal/termios_wrapper.c \
+            src/utils/regex_wrapper.c
 C_OBJECTS = $(C_SOURCES:.c=.o)
 
 all: $(TARGET)
