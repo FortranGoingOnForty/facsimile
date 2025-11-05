@@ -65,6 +65,7 @@ module editor_state_module
         integer(int32) :: active_pane_index = 1
 
         logical :: modified = .false.
+        logical :: is_orphan = .false.  ! True if file is outside workspace (uses absolute path)
     end type tab_t
 
     ! Main editor state

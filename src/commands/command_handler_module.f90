@@ -4449,36 +4449,67 @@ contains
     end subroutine handle_git_diff
 
     subroutine handle_fortress_navigator(editor, buffer)
+        use workspace_module, only: workspace_is_file_in_workspace
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: selected_path
-        logical :: is_directory, cancelled
-        integer :: load_status
+        logical :: is_directory, cancelled, is_in_workspace
+        integer :: load_status, tab_idx
 
-        ! Call fortress navigator
-        call open_fortress_navigator(selected_path, is_directory, cancelled)
+        ! Call fortress navigator (start in workspace if available)
+        if (allocated(editor%workspace_path)) then
+            call open_fortress_navigator(selected_path, is_directory, cancelled, editor%workspace_path)
+        else
+            call open_fortress_navigator(selected_path, is_directory, cancelled)
+        end if
 
         ! If user selected something, open it
         if (.not. cancelled .and. allocated(selected_path)) then
             if (len_trim(selected_path) > 0) then
                 if (.not. is_directory) then
-                    ! Selected a file - open it in fac
-                    ! TODO: Phase 3 - create orphan tab if in workspace mode
-                    ! For now, just open the file
-                    if (allocated(editor%filename)) deallocate(editor%filename)
-                    allocate(character(len=len_trim(selected_path)) :: editor%filename)
-                    editor%filename = selected_path
+                    ! Selected a file - create a new tab for it
+                    ! Check if file is within workspace
+                    if (allocated(editor%workspace_path)) then
+                        is_in_workspace = workspace_is_file_in_workspace(selected_path, editor%workspace_path)
+                    else
+                        is_in_workspace = .false.
+                    end if
 
-                    ! Load file into buffer
-                    call buffer_load_file(buffer, selected_path, load_status)
+                    ! Create new tab
+                    call create_tab(editor, trim(selected_path))
+                    tab_idx = editor%active_tab_index
 
-                    ! Reset cursor to top
-                    editor%cursors(editor%active_cursor)%line = 1
-                    editor%cursors(editor%active_cursor)%column = 1
-                    editor%cursors(editor%active_cursor)%desired_column = 1
+                    ! Mark as orphan if outside workspace
+                    if (allocated(editor%tabs) .and. tab_idx > 0 .and. tab_idx <= size(editor%tabs)) then
+                        editor%tabs(tab_idx)%is_orphan = .not. is_in_workspace
+
+                        ! Load file into tab's buffer
+                        call buffer_load_file(editor%tabs(tab_idx)%buffer, selected_path, load_status)
+
+                        ! Also load into first pane's buffer
+                        if (allocated(editor%tabs(tab_idx)%panes) .and. &
+                            size(editor%tabs(tab_idx)%panes) > 0) then
+                            call buffer_load_file(editor%tabs(tab_idx)%panes(1)%buffer, selected_path, load_status)
+                            ! Copy to main buffer for rendering
+                            call copy_buffer(buffer, editor%tabs(tab_idx)%panes(1)%buffer)
+                        else
+                            ! Copy tab buffer to main buffer
+                            call copy_buffer(buffer, editor%tabs(tab_idx)%buffer)
+                        end if
+
+                        ! Update editor filename
+                        if (allocated(editor%filename)) deallocate(editor%filename)
+                        allocate(character(len=len_trim(selected_path)) :: editor%filename)
+                        editor%filename = selected_path
+
+                        ! Reset cursor to top
+                        editor%cursors(editor%active_cursor)%line = 1
+                        editor%cursors(editor%active_cursor)%column = 1
+                        editor%cursors(editor%active_cursor)%desired_column = 1
+                    end if
                 else
                     ! Selected a directory
-                    ! TODO: Phase 2 - switch to workspace mode
+                    ! TODO: Phase 6 - switch to workspace mode
                     ! For now, just ignore directories
                 end if
             end if

@@ -1519,6 +1519,11 @@ contains
             ! Position cursor
             call terminal_move_cursor(1, col)
 
+            ! Apply orphan tab styling (gray foreground)
+            if (editor%tabs(i)%is_orphan) then
+                call terminal_write(char(27) // '[90m')  ! Bright black/gray
+            end if
+
             ! Highlight active tab
             if (i == editor%active_tab_index) then
                 call terminal_write(char(27) // '[7m')  ! Reverse video
@@ -1526,7 +1531,8 @@ contains
 
             call terminal_write(tab_label)
 
-            if (i == editor%active_tab_index) then
+            ! Reset if we applied any styling
+            if (i == editor%active_tab_index .or. editor%tabs(i)%is_orphan) then
                 call terminal_write(char(27) // '[0m')  ! Reset
             end if
 

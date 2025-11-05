@@ -8,6 +8,8 @@ program facsimile
     use renderer_module
     use command_handler_module
     use workspace_module
+    use backup_module
+    use save_prompt_module
     implicit none
 
     type(editor_state_t) :: editor
@@ -40,7 +42,9 @@ program facsimile
         end if
 
         ! Check if argument is a directory (workspace mode)
-        call execute_command_line("test -d '" // trim(arg) // "'", exitstat=status)
+        ! Use stat -f %HT which always succeeds and returns the file type
+        call execute_command_line("stat -f '%HT' '" // trim(arg) // "' > /tmp/.fac_filetype 2>/dev/null || echo 'File' > /tmp/.fac_filetype", wait=.true.)
+        call read_file_type(status)
         if (status == 0) then
             ! Directory - workspace mode
             is_workspace_mode = .true.
@@ -91,14 +95,23 @@ program facsimile
         ! Use detected/created workspace directory
         allocate(character(len=len_trim(workspace_dir)) :: editor%workspace_path)
         editor%workspace_path = trim(workspace_dir)
+
+        ! Restore workspace state (tabs, cursor positions, etc.)
+        call workspace_restore_state(editor, editor%workspace_path, workspace_success)
+        ! Silently ignore restore failures for now
     else
         ! Single-file mode - use current directory
         call get_workspace_path(editor%workspace_path)
     end if
 
-    ! Initialize terminal
+    ! Initialize terminal (before backup restore prompts)
     call terminal_init()
     call terminal_clear_screen()
+
+    ! Check for backups and offer restoration (after workspace load, after terminal init)
+    if (is_workspace_mode .and. backup_detect(editor%workspace_path)) then
+        call handle_backup_restoration(editor, buffer)
+    end if
 
     ! Get terminal size
     call terminal_get_size(rows, cols)
@@ -196,6 +209,9 @@ program facsimile
 
                     ! Also update tab buffer for backwards compatibility
                     call copy_buffer(editor%tabs(editor%active_tab_index)%buffer, buffer)
+
+                    ! Sync modified flag from buffer to tab
+                    editor%tabs(editor%active_tab_index)%modified = buffer%modified
                 end if
             end if
 
@@ -212,17 +228,62 @@ program facsimile
         end if
     end do
 
-    ! Don't auto-save on quit - user must explicitly save with Ctrl+S
-    ! In the future, we could prompt if there are unsaved changes
+    ! Handle unsaved files - prompt for save/backup
+    if (allocated(editor%tabs) .and. allocated(editor%workspace_path)) then
+        ! Workspace mode - handle all modified tabs
+        call handle_unsaved_files_on_quit(editor, buffer, should_quit)
+        ! If user cancelled (should_quit = .false.), skip cleanup and restart loop
+    else if (buffer%modified .and. allocated(editor%workspace_path) .and. allocated(editor%filename)) then
+        ! Single-file mode - handle the current buffer if modified
+        call handle_single_file_on_quit(buffer, editor, should_quit)
+    end if
 
-    ! Cleanup
-    call cleanup_renderer()
-    call cleanup_command_handler()
-    call terminal_cleanup()
-    call cleanup_editor(editor)
-    call cleanup_buffer(buffer)
+    ! Only proceed with cleanup if actually quitting
+    if (should_quit) then
+        ! Save workspace state if in workspace mode
+        if (allocated(editor%workspace_path)) then
+            call workspace_save_state(editor, editor%workspace_path, workspace_success)
+            ! Silently ignore save failures for now
+        end if
+
+        ! Cleanup
+        call cleanup_renderer()
+        call cleanup_command_handler()
+        call terminal_cleanup()
+        call cleanup_editor(editor)
+        call cleanup_buffer(buffer)
+    else
+        ! User cancelled quit - re-render and continue
+        running = .true.
+        call terminal_clear_screen()
+        if (editor%fuss_mode_active) then
+            call render_screen_with_tree(buffer, editor, allocated(search_pattern), match_case_sensitive)
+        else
+            call render_screen(buffer, editor, allocated(search_pattern), match_case_sensitive)
+        end if
+    end if
 
 contains
+
+    subroutine read_file_type(is_directory)
+        integer, intent(out) :: is_directory
+        character(len=20) :: file_type
+        integer :: unit, ios
+
+        is_directory = 1  ! Default to not a directory
+
+        open(newunit=unit, file='/tmp/.fac_filetype', status='old', iostat=ios)
+        if (ios == 0) then
+            read(unit, '(A)', iostat=ios) file_type
+            close(unit)
+            call execute_command_line('rm -f /tmp/.fac_filetype', wait=.true.)
+            if (ios == 0) then
+                if (trim(file_type) == 'Directory') then
+                    is_directory = 0
+                end if
+            end if
+        end if
+    end subroutine read_file_type
 
     subroutine get_workspace_path(path)
         character(len=:), allocatable, intent(out) :: path
@@ -230,7 +291,7 @@ contains
         integer :: status
 
         ! Use execute_command_line to get current directory
-        call execute_command_line('pwd > /tmp/fac_pwd.txt', exitstat=status)
+        call execute_command_line('pwd > /tmp/fac_pwd.txt', wait=.true., exitstat=status)
         if (status == 0) then
             open(unit=99, file='/tmp/fac_pwd.txt', status='old', action='read', iostat=status)
             if (status == 0) then
@@ -290,5 +351,172 @@ contains
         write(output_unit, '(A)') '  Enter                Jump to match and exit'
         write(output_unit, '(A)') '  ESC                  Exit find/replace mode'
     end subroutine print_help
+
+    !> Handle unsaved files on quit - prompt for save/backup
+    subroutine handle_unsaved_files_on_quit(editor, buffer, should_quit)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        logical, intent(inout) :: should_quit
+        type(save_prompt_result_t) :: prompt_result
+        integer :: i, save_status
+        logical :: backup_success
+
+        ! Check each tab for modifications
+        do i = 1, size(editor%tabs)
+            if (editor%tabs(i)%modified) then
+                ! Prompt user for this file
+                call save_prompt(editor%tabs(i)%filename, prompt_result)
+
+                if (prompt_result%action == 'y') then
+                    ! User wants to save - switch to this tab and save
+                    editor%active_tab_index = i
+                    call switch_to_tab_with_buffer(editor, i, buffer)
+
+                    ! Save the file
+                    call buffer_save_file(buffer, editor%tabs(i)%filename, save_status)
+                    if (save_status == 0) then
+                        buffer%modified = .false.
+                        editor%tabs(i)%modified = .false.
+                    end if
+
+                else if (prompt_result%action == 'n') then
+                    ! User wants to skip - create backup
+                    call backup_create(editor%workspace_path, editor%tabs(i)%filename, backup_success)
+                    ! Continue even if backup fails
+
+                else if (prompt_result%action == 'c') then
+                    ! User cancelled - don't quit
+                    should_quit = .false.
+                    return
+                end if
+            end if
+        end do
+
+        ! All handled - proceed with quit
+        should_quit = .true.
+    end subroutine handle_unsaved_files_on_quit
+
+    !> Handle single file on quit (for non-workspace mode)
+    subroutine handle_single_file_on_quit(buffer, editor, should_quit)
+        type(buffer_t), intent(inout) :: buffer
+        type(editor_state_t), intent(inout) :: editor
+        logical, intent(inout) :: should_quit
+        type(save_prompt_result_t) :: prompt_result
+        integer :: save_status
+        logical :: backup_success
+
+        if (.not. buffer%modified) return
+        if (.not. allocated(editor%filename)) return
+
+        ! Prompt user for this file
+        call save_prompt(editor%filename, prompt_result)
+
+        if (prompt_result%action == 'y') then
+            ! User wants to save
+            call buffer_save_file(buffer, editor%filename, save_status)
+            if (save_status == 0) then
+                buffer%modified = .false.
+                editor%modified = .false.
+            end if
+        else if (prompt_result%action == 'n') then
+            ! User wants to skip - create backup
+            call backup_create(editor%workspace_path, editor%filename, backup_success)
+            ! Continue even if backup fails
+        else if (prompt_result%action == 'c') then
+            ! User cancelled - don't quit
+            should_quit = .false.
+            return
+        end if
+
+        ! Proceed with quit
+        should_quit = .true.
+    end subroutine handle_single_file_on_quit
+
+    !> Handle backup restoration on workspace load
+    subroutine handle_backup_restoration(editor, buffer)
+        use backup_module, only: backup_list, backup_info_t, backup_restore, backup_delete
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        type(backup_info_t), allocatable :: backups(:)
+        integer :: backup_count, i, status
+        character :: choice
+        character(len=32) :: key_input
+        logical :: restore_success
+
+        ! Get list of backups
+        call backup_list(editor%workspace_path, backups, backup_count)
+
+        ! Prompt for each backup
+        i = 1
+        do while (i <= backup_count)
+            if (len_trim(backups(i)%original_file) > 0) then
+                ! Show restore prompt
+                choice = backup_prompt_restore(backups(i)%original_file)
+
+                if (choice == 'r') then
+                    ! Restore the backup
+                    call backup_restore(editor%workspace_path, backups(i)%backup_file, &
+                                       backups(i)%original_file, restore_success)
+
+                    ! Show confirmation
+                    call terminal_clear_screen()
+                    call terminal_move_cursor(1, 1)
+                    if (restore_success) then
+                        call terminal_write('Restored: ' // trim(backups(i)%original_file))
+                    else
+                        call terminal_write('Failed to restore: ' // trim(backups(i)%original_file))
+                    end if
+                    call terminal_move_cursor(3, 1)
+                    call terminal_write('Press any key to continue...')
+                    call get_key_input(key_input, status)
+
+                    i = i + 1  ! Move to next
+
+                else if (choice == 'i') then
+                    ! Ignore - delete the backup
+                    call backup_delete(editor%workspace_path, backups(i)%backup_file)
+                    i = i + 1  ! Move to next
+
+                else if (choice == 'd') then
+                    ! Show diff
+                    call show_backup_diff(editor%workspace_path, backups(i)%backup_file, &
+                                         backups(i)%original_file)
+                    ! Don't increment i - ask again after showing diff
+                end if
+            else
+                i = i + 1  ! Skip empty entries
+            end if
+        end do
+
+        ! Clear screen after all prompts
+        call terminal_clear_screen()
+    end subroutine handle_backup_restoration
+
+    !> Show diff between backup and current file
+    subroutine show_backup_diff(workspace_path, backup_file, original_file)
+        character(len=*), intent(in) :: workspace_path, backup_file, original_file
+        character(len=512) :: backup_path, cmd
+        character(len=32) :: key_input
+        integer :: status
+
+        ! Build backup path
+        write(backup_path, '(A,A,A)') trim(workspace_path), '/.fac/backups/', trim(backup_file)
+
+        ! Clear screen and show diff
+        call terminal_clear_screen()
+        call terminal_move_cursor(1, 1)
+        call terminal_write('Diff: ' // trim(original_file) // ' vs backup')
+        call terminal_move_cursor(2, 1)
+        call terminal_write('=' // repeat('=', 70))
+
+        ! Shell out to diff command
+        write(cmd, '(A,A,A,A,A)') "diff -u '", trim(backup_path), "' '", trim(original_file), "'"
+        call execute_command_line(trim(cmd), wait=.true.)
+
+        ! Wait for user
+        call terminal_move_cursor(24, 1)
+        call terminal_write('Press any key to continue...')
+        call get_key_input(key_input, status)
+    end subroutine show_backup_diff
 
 end program facsimile
