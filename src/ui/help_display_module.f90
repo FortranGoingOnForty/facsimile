@@ -107,13 +107,13 @@ contains
         n_lines = n_lines + 11 + 2  ! EDITING
         n_lines = n_lines + 4 + 2   ! CLIPBOARD
         n_lines = n_lines + 3 + 2   ! LINES
-        n_lines = n_lines + 8 + 2   ! SEARCH & REPLACE
-        n_lines = n_lines + 4 + 2   ! MULTIPLE CURSORS
+        n_lines = n_lines + 9 + 2   ! SEARCH & REPLACE
+        n_lines = n_lines + 5 + 2   ! MULTIPLE CURSORS (increased from 4)
         n_lines = n_lines + 6 + 2   ! SPECIAL
-        n_lines = n_lines + 8 + 2   ! TABS
+        n_lines = n_lines + 7 + 2   ! TABS
         n_lines = n_lines + 7 + 2   ! PANES
         n_lines = n_lines + 10 + 2  ! GIT
-        n_lines = n_lines + 4 + 2   ! FILE
+        n_lines = n_lines + 5 + 2   ! FILE
 
         allocate(lines(n_lines))
         i = 1
@@ -158,7 +158,7 @@ contains
         lines(i) = ""; i = i + 1
 
         ! CLIPBOARD
-        lines(i) = "CLIPBOARD"; i = i + 1
+        lines(i) = "CLIPBOARD (uses system clipboard)"; i = i + 1
         lines(i) = "  ctrl-x              cut line/selection"; i = i + 1
         lines(i) = "  ctrl-c              copy line/selection"; i = i + 1
         lines(i) = "  ctrl-v              paste"; i = i + 1
@@ -174,18 +174,20 @@ contains
         lines(i) = "SEARCH & REPLACE"; i = i + 1
         lines(i) = "  ctrl-f              search forward"; i = i + 1
         lines(i) = "  ctrl-r              find and replace"; i = i + 1
-        lines(i) = "  n                   next match"; i = i + 1
-        lines(i) = "  N                   previous match"; i = i + 1
-        lines(i) = "  ctrl-d              select next match"; i = i + 1
+        lines(i) = "  n                   next match (after ctrl-f)"; i = i + 1
+        lines(i) = "  N                   previous match (after ctrl-f)"; i = i + 1
+        lines(i) = "  ctrl-d              select word & find next match"; i = i + 1
+        lines(i) = "  esc                 exit match mode / clear selections"; i = i + 1
         lines(i) = "  alt-c (in search)   toggle case sensitive"; i = i + 1
         lines(i) = "  alt-w (in search)   toggle whole word match"; i = i + 1
         lines(i) = ""; i = i + 1
 
         ! MULTIPLE CURSORS
         lines(i) = "MULTIPLE CURSORS"; i = i + 1
-        lines(i) = "  ctrl-d              select next match"; i = i + 1
-        lines(i) = "  alt-click           add/remove cursor"; i = i + 1
-        lines(i) = "  ctrl-alt-up/down    cursor above/below"; i = i + 1
+        lines(i) = "  ctrl-d              select word & add cursor at next match"; i = i + 1
+        lines(i) = "  alt-click           add/remove cursor at position"; i = i + 1
+        lines(i) = "  ctrl-alt-up/down    add cursor on line above/below"; i = i + 1
+        lines(i) = "  esc                 reduce to single cursor"; i = i + 1
         lines(i) = ""; i = i + 1
 
         ! SPECIAL
@@ -200,12 +202,11 @@ contains
         ! TABS
         lines(i) = "TABS"; i = i + 1
         lines(i) = "  ctrl-t              new empty tab"; i = i + 1
-        lines(i) = "  tab/shift-tab       next/previous tab"; i = i + 1
         lines(i) = "  ctrl-w              close current tab"; i = i + 1
-        lines(i) = "  alt-1 to alt-9      jump to tab 1-9"; i = i + 1
-        lines(i) = "  alt-0               jump to tab 10"; i = i + 1
-        lines(i) = "  ctrl-alt-left       previous tab"; i = i + 1
-        lines(i) = "  ctrl-alt-right      next tab"; i = i + 1
+        lines(i) = "  ctrl-1 to ctrl-9    jump to tab 1-9 (or alt-1 to alt-9)"; i = i + 1
+        lines(i) = "  ctrl-0              jump to tab 10 (or alt-0)"; i = i + 1
+        lines(i) = "  ctrl-pageup         previous tab (or ctrl-alt-left)"; i = i + 1
+        lines(i) = "  ctrl-pagedown       next tab (or ctrl-alt-right)"; i = i + 1
         lines(i) = ""; i = i + 1
 
         ! PANES
@@ -214,8 +215,8 @@ contains
         lines(i) = "  alt-s               split pane horizontally"; i = i + 1
         lines(i) = "  alt-q               close current pane only"; i = i + 1
         lines(i) = "  ctrl-w              close pane (then tab if last)"; i = i + 1
-        lines(i) = "  ctrl-shift-arrows   navigate between panes"; i = i + 1
-        lines(i) = "  alt-h/l/k/j         navigate left/right/up/down"; i = i + 1
+        lines(i) = "  alt-h/j/k/l         navigate left/down/up/right (Vim style)"; i = i + 1
+        lines(i) = "  ctrl-shift-arrows   navigate between panes (alternative)"; i = i + 1
         lines(i) = ""; i = i + 1
 
         ! GIT (in fuss mode)
@@ -233,9 +234,10 @@ contains
 
         ! FILE
         lines(i) = "FILE"; i = i + 1
+        lines(i) = "  ctrl-b              toggle file browser (fuss mode)"; i = i + 1
         lines(i) = "  ctrl-s              save"; i = i + 1
         lines(i) = "  ctrl-q              quit"; i = i + 1
-        lines(i) = "  ctrl-/              show this help"; i = i + 1
+        lines(i) = "  ctrl-/ or ctrl-?    show this help"; i = i + 1
         lines(i) = ""; i = i + 1
 
         n_lines = i - 1
