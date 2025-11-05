@@ -671,14 +671,20 @@ contains
         ! Render vertical separator (start at row 2 for tab bar)
         call render_vertical_separator(separator_col, 2, editor%screen_rows - 1)
 
-        ! Render editor in right pane
-        call render_editor_pane(buffer, editor, editor_start_col, editor_width)
+        ! Render editor in right pane (check for multiple panes)
+        call render_editor_area_with_tree(buffer, editor, editor_start_col, editor_width)
 
         ! Render status bar (full width)
         call render_status_bar(editor, buffer)
 
-        ! Position cursor in editor pane
-        call render_cursor_in_pane(editor, editor_start_col, editor_width)
+        ! Position cursor in editor pane (use appropriate method based on pane count)
+        if (size(editor%tabs(editor%active_tab_index)%panes) > 1) then
+            ! Multiple panes: use pane-aware cursor rendering with tree offset
+            call render_cursor_for_panes_with_tree(editor, editor_start_col, editor_width)
+        else
+            ! Single pane: use simple cursor rendering
+            call render_cursor_in_pane(editor, editor_start_col, editor_width)
+        end if
 
         call terminal_show_cursor()
     end subroutine render_screen_with_tree
@@ -692,6 +698,76 @@ contains
             call terminal_write(char(27) // '[90m│' // char(27) // '[0m')  ! Gray vertical line
         end do
     end subroutine render_vertical_separator
+
+    subroutine render_editor_area_with_tree(buffer, editor, start_col, width)
+        use editor_state_module, only: pane_t
+        type(buffer_t), intent(in) :: buffer
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: start_col, width
+        type(pane_t) :: pane
+        integer :: i, tab_idx, n_panes
+        integer :: pane_col, pane_row, pane_width, pane_height
+        integer :: screen_height
+
+        ! Get active tab
+        tab_idx = editor%active_tab_index
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) then
+            ! No valid tab, render empty
+            return
+        end if
+
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) then
+            ! No panes, render empty
+            return
+        end if
+
+        n_panes = size(editor%tabs(tab_idx)%panes)
+        if (n_panes == 0) return
+
+        screen_height = editor%screen_rows - 2  ! Account for tab bar and status bar
+
+        ! If only one pane, use simple rendering
+        if (n_panes == 1) then
+            call render_editor_pane(buffer, editor, start_col, width)
+            return
+        end if
+
+        ! Multiple panes: render each with adjusted coordinates for tree view
+        ! Clear the editor area first
+        do i = 2, editor%screen_rows - 1
+            call terminal_move_cursor(i, start_col)
+            call terminal_write(repeat(' ', width))
+        end do
+
+        ! Render each pane with coordinates adjusted for tree offset
+        do i = 1, n_panes
+            pane = editor%tabs(tab_idx)%panes(i)
+
+            ! Calculate pane position relative to editor area (not full screen)
+            pane_col = start_col + int(pane%x_start * real(width))
+            if (i < n_panes) then
+                pane_width = int((pane%x_end - pane%x_start) * real(width)) - 1
+            else
+                pane_width = int((pane%x_end - pane%x_start) * real(width))
+            end if
+            pane_row = 2 + int(pane%y_start * real(screen_height))
+            pane_height = int((pane%y_end - pane%y_start) * real(screen_height))
+
+            ! Store the calculated screen coordinates in the pane
+            editor%tabs(tab_idx)%panes(i)%screen_col = pane_col
+            editor%tabs(tab_idx)%panes(i)%screen_row = pane_row
+            editor%tabs(tab_idx)%panes(i)%screen_width = pane_width
+            editor%tabs(tab_idx)%panes(i)%screen_height = pane_height
+
+            ! Render the pane content
+            call render_single_pane(buffer, editor, i, pane_col, pane_row, pane_width, pane_height)
+
+            ! Draw vertical separator between panes
+            if (i < n_panes) then
+                call render_pane_separator(pane_col + pane_width, pane_row, pane_height)
+            end if
+        end do
+    end subroutine render_editor_area_with_tree
 
     subroutine render_editor_pane(buffer, editor, start_col, width)
         type(buffer_t), intent(in) :: buffer
@@ -1221,6 +1297,12 @@ contains
         pane_row = 2 + int(pane%y_start * real(screen_height))
         pane_height = int((pane%y_end - pane%y_start) * real(screen_height))
 
+        ! Account for pane header when multiple panes exist
+        if (size(editor%tabs(tab_idx)%panes) > 1) then
+            pane_row = pane_row + 1  ! Content starts after header
+            pane_height = pane_height - 1  ! Height reduced by header
+        end if
+
         ! For multiple cursors, render all inactive ones first
         if (size(pane%cursors) > 1) then
             do i = 1, size(pane%cursors)
@@ -1270,6 +1352,69 @@ contains
         ! Always show cursor
         call terminal_show_cursor()
     end subroutine render_cursor_for_panes
+
+    subroutine render_cursor_for_panes_with_tree(editor, tree_offset, editor_width)
+        use editor_state_module, only: pane_t
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(in) :: tree_offset, editor_width
+        type(pane_t) :: pane
+        type(cursor_t) :: cursor
+        integer :: tab_idx, pane_idx
+        integer :: pane_col, pane_row, pane_width, pane_height
+        integer :: screen_row, screen_col, col_offset
+        integer :: screen_height
+
+        tab_idx = editor%active_tab_index
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+
+        pane_idx = editor%tabs(tab_idx)%active_pane_index
+        if (pane_idx < 1 .or. pane_idx > size(editor%tabs(tab_idx)%panes)) return
+
+        pane = editor%tabs(tab_idx)%panes(pane_idx)
+        if (.not. allocated(pane%cursors)) return
+        if (pane%active_cursor < 1 .or. pane%active_cursor > size(pane%cursors)) return
+
+        cursor = pane%cursors(pane%active_cursor)
+
+        ! Calculate column offset for line numbers
+        if (show_line_numbers) then
+            col_offset = LINE_NUMBER_WIDTH + 1
+        else
+            col_offset = 0
+        end if
+
+        ! Calculate pane coordinates (adjusted for tree)
+        screen_height = editor%screen_rows - 2
+        pane_col = tree_offset + int(pane%x_start * real(editor_width))
+        pane_width = int((pane%x_end - pane%x_start) * real(editor_width))
+        if (pane_idx < size(editor%tabs(tab_idx)%panes)) then
+            pane_width = pane_width - 1
+        end if
+        pane_row = 2 + int(pane%y_start * real(screen_height))
+        pane_height = int((pane%y_end - pane%y_start) * real(screen_height))
+
+        ! Account for pane header
+        if (size(editor%tabs(tab_idx)%panes) > 1) then
+            pane_row = pane_row + 1
+            pane_height = pane_height - 1
+        end if
+
+        ! Calculate cursor screen position
+        screen_row = pane_row + (cursor%line - pane%viewport_line)
+        screen_col = pane_col + col_offset + (cursor%column - pane%viewport_column)
+
+        ! Ensure cursor is within pane boundaries
+        if (screen_row >= pane_row .and. screen_row < pane_row + pane_height .and. &
+            screen_col >= pane_col + col_offset .and. screen_col < pane_col + pane_width) then
+            call terminal_move_cursor(screen_row, screen_col)
+        else
+            ! Cursor out of view, position at top-left of pane
+            call terminal_move_cursor(pane_row, pane_col + col_offset)
+        end if
+
+        call terminal_show_cursor()
+    end subroutine render_cursor_for_panes_with_tree
 
     subroutine render_cursor_in_pane(editor, pane_start_col, pane_width)
         type(editor_state_t), intent(in) :: editor
