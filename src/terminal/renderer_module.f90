@@ -728,7 +728,8 @@ contains
 
         ! If only one pane, use simple rendering
         if (n_panes == 1) then
-            call render_editor_pane(buffer, editor, start_col, width)
+            ! Use the pane's buffer, not the passed buffer parameter
+            call render_editor_pane(editor%tabs(tab_idx)%panes(1)%buffer, editor, start_col, width)
             return
         end if
 
@@ -895,7 +896,8 @@ contains
             editor%tabs(tab_idx)%panes(1)%screen_width = screen_width
             editor%tabs(tab_idx)%panes(1)%screen_height = screen_height
 
-            call render_editor_pane(buffer, editor, 1, screen_width)
+            ! Use the pane's buffer, not the passed buffer parameter
+            call render_editor_pane(editor%tabs(tab_idx)%panes(1)%buffer, editor, 1, screen_width)
             return
         end if
 
