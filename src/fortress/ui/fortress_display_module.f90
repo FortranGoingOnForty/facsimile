@@ -62,8 +62,9 @@ contains
             parent_idx = i + parent_scroll_offset
             current_idx = i + scroll_offset
 
-            ! Start with cursor at beginning of line and clear it
-            write(output_unit, '(a)', advance='no') ESC // "[1G" // ESC // "[K"
+            ! Move to absolute row position (row 3 + i) and clear line
+            write(line, '(a,i0,a)') ESC // "[", 2 + i, ";1H" // ESC // "[K"
+            write(output_unit, '(a)', advance='no') trim(line)
 
             ! === Parent pane (left 30%) ===
             if (parent_idx >= 1 .and. parent_idx <= parent_count) then
@@ -109,22 +110,22 @@ contains
                 if (current_is_dir(current_idx)) current_name = trim(current_name) // "/"
 
                 if (current_idx == selected) then
-                    write(output_unit, '(a)') BOLD // UNDERLINE // WHITE // trim(current_name) // RESET
+                    write(output_unit, '(a)', advance='no') BOLD // UNDERLINE // WHITE // trim(current_name) // RESET
                 else if (current_is_dir(current_idx)) then
-                    write(output_unit, '(a)') BLUE // trim(current_name) // RESET
+                    write(output_unit, '(a)', advance='no') BLUE // trim(current_name) // RESET
                 else if (current_is_exec(current_idx)) then
-                    write(output_unit, '(a)') GREEN // trim(current_name) // RESET
+                    write(output_unit, '(a)', advance='no') GREEN // trim(current_name) // RESET
                 else
-                    write(output_unit, '(a)') trim(current_name) // RESET
+                    write(output_unit, '(a)', advance='no') trim(current_name) // RESET
                 end if
-            else
-                write(output_unit, '(a)') ""
             end if
+            ! No else needed - line is already cleared
         end do
 
-        ! Footer - clear line first
-        write(output_unit, '(a)', advance='no') ESC // "[K"
-        write(output_unit, '(a)') DIM // "arrows:nav enter:open esc:quit" // RESET
+        ! Footer - position at last row and clear line
+        write(line, '(a,i0,a)') ESC // "[", r, ";1H" // ESC // "[K"
+        write(output_unit, '(a)', advance='no') trim(line)
+        write(output_unit, '(a)', advance='no') DIM // "arrows:nav enter:open esc:quit" // RESET
 
         ! Show cursor again
         write(output_unit, '(a)', advance='no') ESC // "[?25h"

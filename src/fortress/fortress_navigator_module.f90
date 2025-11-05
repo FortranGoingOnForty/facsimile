@@ -32,8 +32,8 @@ contains
         character(len=*), intent(in), optional :: initial_path
         character(len=MAX_PATH) :: current_dir, parent_dir, temp_dir, last_dir, last_parent
         character(len=1) :: key
-        integer :: rows, cols, ios
-        logical :: running, dir_changed, first_draw
+        integer :: rows, cols, ios, last_selected, last_scroll
+        logical :: running, dir_changed, first_draw, need_redraw
 
         ! Initialize state
         selected = 1
@@ -45,6 +45,9 @@ contains
         last_dir = ""
         last_parent = ""
         first_draw = .true.
+        need_redraw = .true.
+        last_selected = -1
+        last_scroll = -1
 
         ! Set initial directory
         if (present(initial_path)) then
@@ -52,6 +55,9 @@ contains
         else
             current_dir = get_pwd()
         end if
+
+        ! Get terminal size once (assumes terminal doesn't resize during navigation)
+        call get_term_size(rows, cols)
 
         ! Main navigation loop
         do while (running)
@@ -76,9 +82,6 @@ contains
             ! Find current directory in parent listing
             parent_selected = find_in_parent(current_dir, parent_files, parent_count)
 
-            ! Get terminal size
-            call get_term_size(rows, cols)
-
             ! Bounds check
             if (selected < 1) selected = 1
             if (selected > current_count) selected = current_count
@@ -88,23 +91,31 @@ contains
             call adjust_scroll(selected, scroll_offset, rows - 4)
             call adjust_scroll(parent_selected, parent_scroll_offset, rows - 4)
 
-            ! Render interface
-            call draw_fortress_interface(rows, cols, current_dir, &
-                                         current_files, current_is_dir, current_is_exec, current_count, &
-                                         parent_files, parent_is_dir, parent_is_exec, parent_count, &
-                                         selected, parent_selected, scroll_offset, parent_scroll_offset, first_draw)
+            ! Check if we need to redraw (directory changed, selection changed, or scroll changed)
+            need_redraw = dir_changed .or. first_draw .or. &
+                         selected /= last_selected .or. scroll_offset /= last_scroll
 
-            ! After first draw, set to false
-            if (first_draw) first_draw = .false.
+            ! Render interface only if something changed
+            if (need_redraw) then
+                call draw_fortress_interface(rows, cols, current_dir, &
+                                             current_files, current_is_dir, current_is_exec, current_count, &
+                                             parent_files, parent_is_dir, parent_is_exec, parent_count, &
+                                             selected, parent_selected, scroll_offset, parent_scroll_offset, first_draw)
 
-            ! Read key using raw terminal input (blocking mode)
-            ! Keep trying until we get input to avoid tight redraw loop
-            do
-                ios = terminal_read_char()
-                if (ios >= 0) exit
-                ! Small delay to avoid busy-waiting
-                call sleep(0)
-            end do
+                ! Update tracking variables
+                last_selected = selected
+                last_scroll = scroll_offset
+                if (first_draw) first_draw = .false.
+            end if
+
+            ! Read key using raw terminal input
+            ! Note: terminal_read_char is non-blocking, returns -1 if no input
+            ios = terminal_read_char()
+            if (ios < 0) then
+                ! No input available - With conditional redraw optimization above,
+                ! we won't redraw unnecessarily, so this tight loop is acceptable
+                cycle
+            end if
             key = achar(ios)
 
             ! Handle input
@@ -162,17 +173,26 @@ contains
 
     end subroutine open_fortress_navigator
 
-    !> Adjust scroll offset to keep selection visible
+    !> Adjust scroll offset to keep selection visible with margin
     subroutine adjust_scroll(sel, offset, visible_height)
         integer, intent(in) :: sel, visible_height
         integer, intent(inout) :: offset
+        integer :: margin, center_pos
 
-        if (sel < offset + 1) then
-            offset = sel - 1
-        else if (sel > offset + visible_height) then
-            offset = sel - visible_height
+        ! Add a margin to avoid selection being at the very edge
+        margin = 3
+        if (margin > visible_height / 4) margin = visible_height / 4
+
+        ! If selection is above the visible window (with margin)
+        if (sel < offset + 1 + margin) then
+            offset = sel - margin - 1
+            if (offset < 0) offset = 0
+        ! If selection is below the visible window (with margin)
+        else if (sel > offset + visible_height - margin) then
+            offset = sel - visible_height + margin
         end if
 
+        ! Ensure offset is not negative
         if (offset < 0) offset = 0
     end subroutine adjust_scroll
 
