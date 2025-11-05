@@ -2,6 +2,7 @@ module renderer_module
     use iso_fortran_env, only: int32, output_unit
     use terminal_io_module
     use text_buffer_module
+    use utf8_module
     use editor_state_module, only: editor_state_t, cursor_t
     use bracket_matching_module
     use file_tree_module

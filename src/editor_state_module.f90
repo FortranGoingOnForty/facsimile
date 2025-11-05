@@ -12,13 +12,18 @@ module editor_state_module
     public :: sync_editor_to_pane, switch_to_pane
 
     ! Cursor position and selection
+    ! Cursor type - positions are UTF-8 CHARACTER indices (not byte indices)
+    !
+    ! IMPORTANT: All column values are 1-based CHARACTER positions, NOT byte positions
+    ! For example, in the string "├──", column=2 refers to the second character (─),
+    ! even though that character starts at byte 4.
     type :: cursor_t
-        integer(int32) :: line = 1
-        integer(int32) :: column = 1
-        integer(int32) :: desired_column = 1  ! For vertical movement
+        integer(int32) :: line = 1             ! Line number (1-based)
+        integer(int32) :: column = 1           ! UTF-8 character position (1-based), NOT byte index
+        integer(int32) :: desired_column = 1   ! For vertical movement (character position)
         logical :: has_selection = .false.
         integer(int32) :: selection_start_line = 1
-        integer(int32) :: selection_start_col = 1
+        integer(int32) :: selection_start_col = 1  ! UTF-8 character position
     end type cursor_t
 
     ! Pane - represents a view within a tab

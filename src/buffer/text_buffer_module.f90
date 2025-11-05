@@ -1,13 +1,15 @@
 module text_buffer_module
     use iso_fortran_env, only: int32, int64, error_unit
+    use utf8_module
     implicit none
     private
 
     public :: buffer_t, init_buffer, cleanup_buffer, copy_buffer
     public :: buffer_insert, buffer_delete, buffer_get_char
-    public :: buffer_get_line, buffer_get_line_count
+    public :: buffer_get_line, buffer_get_line_count, buffer_get_line_char_count
     public :: buffer_load_file, buffer_save_file
     public :: buffer_move_gap
+    public :: buffer_char_at, buffer_byte_to_char_col, buffer_char_to_byte_col
 
     integer, parameter :: INITIAL_SIZE = 8192
     integer, parameter :: GROW_FACTOR = 2
@@ -339,5 +341,58 @@ contains
         dest%size = src%size
         dest%modified = src%modified
     end subroutine copy_buffer
+
+    ! ========================================================================
+    ! UTF-8 Helper Functions
+    ! ========================================================================
+
+    ! Get the number of UTF-8 characters (not bytes) in a line
+    function buffer_get_line_char_count(buffer, line_num) result(char_count)
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: line_num
+        integer :: char_count
+        character(len=:), allocatable :: line
+
+        line = buffer_get_line(buffer, line_num)
+        char_count = utf8_char_count(line)
+        if (allocated(line)) deallocate(line)
+    end function buffer_get_line_char_count
+
+    ! Get character at a specific character position (not byte) in a line
+    ! Returns empty string if out of bounds
+    function buffer_char_at(buffer, line_num, char_col) result(char_str)
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: line_num, char_col
+        character(len=:), allocatable :: char_str
+        character(len=:), allocatable :: line
+
+        line = buffer_get_line(buffer, line_num)
+        char_str = utf8_char_at(line, char_col)
+        if (allocated(line)) deallocate(line)
+    end function buffer_char_at
+
+    ! Convert byte column to character column in a line
+    function buffer_byte_to_char_col(buffer, line_num, byte_col) result(char_col)
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: line_num, byte_col
+        integer :: char_col
+        character(len=:), allocatable :: line
+
+        line = buffer_get_line(buffer, line_num)
+        char_col = utf8_byte_to_char_index(line, byte_col)
+        if (allocated(line)) deallocate(line)
+    end function buffer_byte_to_char_col
+
+    ! Convert character column to byte column in a line
+    function buffer_char_to_byte_col(buffer, line_num, char_col) result(byte_col)
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: line_num, char_col
+        integer :: byte_col
+        character(len=:), allocatable :: line
+
+        line = buffer_get_line(buffer, line_num)
+        byte_col = utf8_char_to_byte_index(line, char_col)
+        if (allocated(line)) deallocate(line)
+    end function buffer_char_to_byte_col
 
 end module text_buffer_module

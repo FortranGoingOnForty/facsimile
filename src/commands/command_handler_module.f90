@@ -975,7 +975,7 @@ contains
     subroutine move_cursor_left(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
-        character(len=:), allocatable :: line
+        integer :: char_count
 
         ! If we have a selection, move to START of selection (leftmost/earliest position)
         if (cursor%has_selection) then
@@ -998,18 +998,16 @@ contains
         else if (cursor%line > 1) then
             ! Move to end of previous line
             cursor%line = cursor%line - 1
-            line = buffer_get_line(buffer, cursor%line)
-            cursor%column = len(line) + 1
+            char_count = buffer_get_line_char_count(buffer, cursor%line)
+            cursor%column = char_count + 1
             cursor%desired_column = cursor%column
-            if (allocated(line)) deallocate(line)
         end if
     end subroutine move_cursor_left
 
     subroutine move_cursor_right(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
-        character(len=:), allocatable :: line
-        integer :: line_count
+        integer :: line_count, char_count
 
         ! If we have a selection, move to END of selection (rightmost/latest position)
         if (cursor%has_selection) then
@@ -1026,10 +1024,10 @@ contains
             return
         end if
 
-        line = buffer_get_line(buffer, cursor%line)
+        char_count = buffer_get_line_char_count(buffer, cursor%line)
         line_count = buffer_get_line_count(buffer)
 
-        if (cursor%column <= len(line)) then
+        if (cursor%column <= char_count) then
             cursor%column = cursor%column + 1
             cursor%desired_column = cursor%column
         else if (cursor%line < line_count) then
@@ -1038,8 +1036,6 @@ contains
             cursor%column = 1
             cursor%desired_column = cursor%column
         end if
-
-        if (allocated(line)) deallocate(line)
     end subroutine move_cursor_right
 
     subroutine move_cursor_smart_home(cursor, buffer)
