@@ -37,7 +37,7 @@ contains
         character(len=:), allocatable :: text
         integer :: unit, ios, file_size
         character(len=256) :: command
-        character(len=1000000) :: buffer  ! 1MB buffer for clipboard content
+        character(len=:), allocatable :: buffer  ! Dynamic buffer for clipboard content
 
         ! Get clipboard content
         command = 'pbpaste > /tmp/facsimile_clipboard.tmp 2>/dev/null'
@@ -58,13 +58,17 @@ contains
                 ! Get file size
                 inquire(unit=unit, size=file_size)
                 if (file_size > 0 .and. file_size < 1000000) then
-                    read(unit, iostat=ios) buffer(1:file_size)
+                    ! Allocate buffer to exact size needed
+                    allocate(character(len=file_size) :: buffer)
+                    read(unit, iostat=ios) buffer
                     if (ios == 0) then
                         allocate(character(len=file_size) :: text)
-                        text = buffer(1:file_size)
+                        text = buffer
                     else
                         text = ''
                     end if
+                    ! Clean up buffer
+                    if (allocated(buffer)) deallocate(buffer)
                 else
                     text = ''
                 end if
