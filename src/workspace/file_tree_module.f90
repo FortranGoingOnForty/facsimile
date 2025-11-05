@@ -9,6 +9,7 @@ module file_tree_module
     public :: tree_stage_file, tree_unstage_file, tree_toggle_expand
     public :: build_selectable_list
     public :: update_tree_viewport
+    public :: build_tree
 
     ! Tree node using linked list structure (first-child, next-sibling)
     type :: tree_node_t
