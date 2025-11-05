@@ -3,6 +3,7 @@
 
 module workspace_module
     use editor_state_module, only: editor_state_t, create_tab
+    use recents_module, only: recents_add_or_update
     implicit none
     private
 
@@ -153,6 +154,9 @@ contains
 
         close(unit)
         success = .true.
+
+        ! Track in recents (extract basename for label)
+        call track_workspace_in_recents(dir_path)
     end subroutine workspace_init
 
     !> Load workspace state (stub for now - Phase 3 will implement full deserialization)
@@ -171,6 +175,9 @@ contains
             close(unit)
             success = .true.
             ! TODO Phase 3: Parse JSON and restore tabs/panes/cursor state
+
+            ! Track in recents
+            call track_workspace_in_recents(dir_path)
         end if
     end subroutine workspace_load
 
@@ -648,5 +655,26 @@ contains
         close(unit)
         success = .true.
     end subroutine workspace_restore_state
+
+    !> Track workspace in recents (helper function)
+    subroutine track_workspace_in_recents(dir_path)
+        character(len=*), intent(in) :: dir_path
+        character(len=MAX_PATH_LEN) :: label
+        logical :: recents_success
+        integer :: i
+
+        ! Extract basename for label
+        label = dir_path
+        do i = len_trim(dir_path), 1, -1
+            if (dir_path(i:i) == '/') then
+                label = dir_path(i+1:)
+                exit
+            end if
+        end do
+
+        ! Add or update in recents
+        call recents_add_or_update(dir_path, trim(label), recents_success)
+        ! Silently ignore recents failures
+    end subroutine track_workspace_in_recents
 
 end module workspace_module

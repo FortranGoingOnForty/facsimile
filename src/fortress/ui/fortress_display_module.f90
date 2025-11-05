@@ -125,7 +125,7 @@ contains
         ! Footer - position at last row and clear line
         write(line, '(a,i0,a)') ESC // "[", r, ";1H" // ESC // "[K"
         write(output_unit, '(a)', advance='no') trim(line)
-        write(output_unit, '(a)', advance='no') DIM // "arrows:nav enter:open esc:quit" // RESET
+        write(output_unit, '(a)', advance='no') DIM // "arrows:nav enter:open f:favorite esc:quit" // RESET
 
         ! Show cursor again
         write(output_unit, '(a)', advance='no') ESC // "[?25h"

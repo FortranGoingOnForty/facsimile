@@ -5,7 +5,8 @@ module fortress_navigator_module
     use iso_fortran_env, only: output_unit, input_unit
     use fortress_fs_module
     use fortress_display_module
-    use terminal_io_module, only: terminal_read_char
+    use terminal_io_module, only: terminal_read_char, terminal_write, terminal_move_cursor
+    use favorites_module, only: favorites_add
     implicit none
     private
 
@@ -161,6 +162,9 @@ contains
                     selected = 1
                     scroll_offset = 0
 
+                case ('f', 'F')  ! Add current directory to favorites
+                    call add_to_favorites(current_dir, rows)
+
             end select
         end do
 
@@ -262,5 +266,51 @@ contains
         if (rows <= 0) rows = 24
         if (cols <= 0) cols = 80
     end subroutine get_term_size
+
+    !> Add current directory to favorites
+    subroutine add_to_favorites(dir_path, rows)
+        character(len=*), intent(in) :: dir_path
+        integer, intent(in) :: rows
+        character(len=256) :: label
+        logical :: success
+        integer :: i
+
+        ! Extract basename for label
+        label = dir_path
+        do i = len_trim(dir_path), 1, -1
+            if (dir_path(i:i) == '/') then
+                label = dir_path(i+1:)
+                exit
+            end if
+        end do
+
+        ! Add to favorites
+        call favorites_add(dir_path, trim(label), success)
+
+        ! Show feedback message
+        call terminal_move_cursor(rows, 1)
+        if (success) then
+            call terminal_write('Added to favorites: ' // trim(label))
+        else
+            call terminal_write('Already in favorites or error')
+        end if
+
+        ! Pause briefly so user can see message
+        call sleep_ms(800)
+    end subroutine add_to_favorites
+
+    !> Sleep for specified milliseconds
+    subroutine sleep_ms(milliseconds)
+        integer, intent(in) :: milliseconds
+        integer :: i, j, dummy
+
+        ! Simple busy-wait (not ideal but portable)
+        dummy = 0
+        do i = 1, milliseconds * 1000
+            do j = 1, 100
+                dummy = dummy + 1
+            end do
+        end do
+    end subroutine sleep_ms
 
 end module fortress_navigator_module

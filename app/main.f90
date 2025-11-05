@@ -10,6 +10,8 @@ program facsimile
     use workspace_module
     use backup_module
     use save_prompt_module
+    use welcome_menu_module, only: show_welcome_menu
+    use fortress_navigator_module, only: open_fortress_navigator
     implicit none
 
     type(editor_state_t) :: editor
@@ -17,6 +19,8 @@ program facsimile
     character(len=32) :: key_input
     character(len=256) :: filename, arg, workspace_dir
     logical :: running, should_quit, is_workspace_mode, workspace_success
+    logical :: welcome_cancelled, is_browse, nav_cancelled, is_directory
+    character(len=:), allocatable :: selected_path
     integer :: status, argc, rows, cols
 
 
@@ -58,13 +62,55 @@ program facsimile
             filename = arg
         end if
     else
-        ! No arguments - TODO Phase 5: launch Fortress welcome menu
-        ! For now, just exit with usage message
-        write(output_unit, '(A)') 'Usage: fac [file|directory]'
-        write(output_unit, '(A)') '  fac file.txt     - Edit a single file'
-        write(output_unit, '(A)') '  fac .            - Open workspace in current directory'
-        write(output_unit, '(A)') '  fac /path/to/dir - Open workspace at path'
-        stop
+        ! No arguments - launch Fortress welcome menu (Phase 5)
+        call terminal_init()
+        call show_welcome_menu(selected_path, welcome_cancelled)
+
+        if (welcome_cancelled) then
+            ! Check if user wants to browse filesystem
+            is_browse = .false.
+            if (allocated(selected_path) .and. selected_path == "BROWSE") then
+                is_browse = .true.
+            end if
+
+            call terminal_cleanup()
+
+            if (is_browse) then
+                ! Launch fortress navigator
+                call terminal_init()
+                call open_fortress_navigator(selected_path, is_directory, nav_cancelled)
+                call terminal_cleanup()
+
+                if (nav_cancelled .or. .not. allocated(selected_path)) then
+                    ! User cancelled navigation too
+                    stop
+                end if
+            else
+                ! User just cancelled
+                stop
+            end if
+        end if
+
+        ! User selected a workspace from welcome menu or navigator
+        ! Treat it as a directory argument
+        if (allocated(selected_path)) then
+            arg = selected_path
+
+            ! Check if it's a directory
+            call execute_command_line("test -d '" // trim(arg) // "' && echo '1' > /tmp/.fac_filetype || echo '0' > /tmp/.fac_filetype", wait=.true.)
+            call read_file_type(status)
+            if (status == 0) then
+                ! Directory - workspace mode
+                is_workspace_mode = .true.
+                call workspace_get_path(trim(arg), workspace_dir)
+            else
+                ! Invalid selection
+                write(error_unit, '(A)') 'Error: Selected path is not a directory'
+                stop 1
+            end if
+        else
+            stop
+        end if
     end if
 
     ! Handle workspace mode
