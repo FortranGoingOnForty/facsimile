@@ -1,5 +1,5 @@
 program facsimile
-    use iso_fortran_env, only: error_unit, input_unit, output_unit
+    use iso_fortran_env, only: error_unit, input_unit, output_unit, int64
     use version_module
     use terminal_io_module
     use input_handler_module, only: get_key_input
@@ -458,7 +458,10 @@ contains
 
                 else if (prompt_result%action == 'd') then
                     ! User wants to discard - create backup for later recovery
-                    call backup_create(editor%workspace_path, editor%tabs(i)%filename, backup_success)
+                    ! But skip [Untitled] files - they're in-memory only
+                    if (index(editor%tabs(i)%filename, '[Untitled') /= 1) then
+                        call backup_create(editor%workspace_path, editor%tabs(i)%filename, backup_success)
+                    end if
                     ! Continue even if backup fails
                 end if
             end if
@@ -537,7 +540,16 @@ contains
         if (.not. found) then
             call create_tab(editor, restored_file)
             if (allocated(editor%tabs) .and. editor%active_tab_index > 0) then
-                call switch_to_tab_with_buffer(editor, editor%active_tab_index, buffer)
+                ! Load the restored file into the buffer
+                call buffer_load_file(buffer, restored_file, status)
+                if (status == 0) then
+                    buffer%modified = .false.
+                    ! Now switch to the tab and sync the buffer
+                    call switch_to_tab_with_buffer(editor, editor%active_tab_index, buffer)
+                    if (allocated(editor%tabs) .and. editor%active_tab_index <= size(editor%tabs)) then
+                        editor%tabs(editor%active_tab_index)%modified = .false.
+                    end if
+                end if
             end if
         end if
     end subroutine handle_restored_file
@@ -547,59 +559,97 @@ contains
         use backup_module, only: backup_list, backup_info_t, backup_restore, backup_delete
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
-        type(backup_info_t), allocatable :: backups(:)
-        integer :: backup_count, i, status
+        type(backup_info_t), allocatable :: backups(:), unique_backups(:)
+        integer :: backup_count, unique_count, i, j, status
         character :: choice
         character(len=32) :: key_input
-        logical :: restore_success
+        logical :: restore_success, found
+        integer(int64) :: current_timestamp, best_timestamp
 
         ! Get list of backups
         call backup_list(editor%workspace_path, backups, backup_count)
 
-        ! Prompt for each backup
-        i = 1
-        do while (i <= backup_count)
-            if (len_trim(backups(i)%original_file) > 0) then
-                ! Show restore prompt with progress
-                choice = backup_prompt_restore(backups(i)%original_file, i, backup_count, backups(i)%timestamp)
+        ! Deduplicate - keep only the most recent backup for each unique file
+        allocate(unique_backups(backup_count))
+        unique_count = 0
 
-                if (choice == 'r') then
-                    ! Restore the backup
-                    call backup_restore(editor%workspace_path, backups(i)%backup_file, &
-                                       backups(i)%original_file, restore_success)
+        do i = 1, backup_count
+            if (len_trim(backups(i)%original_file) == 0) cycle
 
-                    if (restore_success) then
-                        ! After successful restore, open/reload this file in a tab
-                        call handle_restored_file(editor, buffer, backups(i)%original_file)
-                    end if
+            ! Skip [Untitled] backups - they're in-memory only
+            if (index(backups(i)%original_file, '[Untitled') == 1) then
+                call backup_delete(editor%workspace_path, backups(i)%backup_file)
+                cycle
+            end if
 
-                    ! Show confirmation
-                    call terminal_clear_screen()
-                    call terminal_move_cursor(1, 1)
-                    if (restore_success) then
-                        call terminal_write('Restored: ' // trim(backups(i)%original_file))
+            ! Check if we already have a backup for this file
+            found = .false.
+            do j = 1, unique_count
+                if (trim(unique_backups(j)%original_file) == trim(backups(i)%original_file)) then
+                    ! Found duplicate - keep the one with newer timestamp
+                    found = .true.
+                    read(backups(i)%timestamp, *, iostat=status) current_timestamp
+                    read(unique_backups(j)%timestamp, *, iostat=status) best_timestamp
+                    if (status == 0 .and. current_timestamp > best_timestamp) then
+                        ! This backup is newer - replace it and delete old one
+                        call backup_delete(editor%workspace_path, unique_backups(j)%backup_file)
+                        unique_backups(j) = backups(i)
                     else
-                        call terminal_write('Failed to restore: ' // trim(backups(i)%original_file))
+                        ! Keep existing, delete this duplicate
+                        call backup_delete(editor%workspace_path, backups(i)%backup_file)
                     end if
-                    call terminal_move_cursor(3, 1)
-                    call terminal_write('Press any key to continue...')
-                    call get_key_input(key_input, status)
-
-                    i = i + 1  ! Move to next
-
-                else if (choice == 'd') then
-                    ! Delete backup - keep current file
-                    call backup_delete(editor%workspace_path, backups(i)%backup_file)
-                    i = i + 1  ! Move to next
-
-                else if (choice == 'c') then
-                    ! Compare - show diff
-                    call show_backup_diff(editor%workspace_path, backups(i)%backup_file, &
-                                         backups(i)%original_file)
-                    ! Don't increment i - ask again after showing diff
+                    exit
                 end if
-            else
-                i = i + 1  ! Skip empty entries
+            end do
+
+            ! If not found, add to unique list
+            if (.not. found) then
+                unique_count = unique_count + 1
+                unique_backups(unique_count) = backups(i)
+            end if
+        end do
+
+        ! Prompt for each unique backup
+        i = 1
+        do while (i <= unique_count)
+            ! Show restore prompt with progress
+            choice = backup_prompt_restore(unique_backups(i)%original_file, i, unique_count, &
+                                           unique_backups(i)%timestamp)
+
+            if (choice == 'r') then
+                ! Restore the backup
+                call backup_restore(editor%workspace_path, unique_backups(i)%backup_file, &
+                                   unique_backups(i)%original_file, restore_success)
+
+                if (restore_success) then
+                    ! After successful restore, open/reload this file in a tab
+                    call handle_restored_file(editor, buffer, unique_backups(i)%original_file)
+                end if
+
+                ! Show confirmation
+                call terminal_clear_screen()
+                call terminal_move_cursor(1, 1)
+                if (restore_success) then
+                    call terminal_write('Restored: ' // trim(unique_backups(i)%original_file))
+                else
+                    call terminal_write('Failed to restore: ' // trim(unique_backups(i)%original_file))
+                end if
+                call terminal_move_cursor(3, 1)
+                call terminal_write('Press any key to continue...')
+                call get_key_input(key_input, status)
+
+                i = i + 1  ! Move to next
+
+            else if (choice == 'd') then
+                ! Delete backup - keep current file
+                call backup_delete(editor%workspace_path, unique_backups(i)%backup_file)
+                i = i + 1  ! Move to next
+
+            else if (choice == 'c') then
+                ! Compare - show diff (then loop back to prompt again)
+                call show_backup_diff(editor%workspace_path, unique_backups(i)%backup_file, &
+                                     unique_backups(i)%original_file)
+                ! Don't increment i - re-prompt for same file
             end if
         end do
 
