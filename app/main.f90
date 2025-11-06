@@ -274,7 +274,23 @@ program facsimile
         end if
     end do
 
+    ! IMPORTANT: Save workspace state FIRST, before any prompts or cleanup
+    ! This ensures we capture the current state before tabs might be closed
+    if (should_quit .and. allocated(editor%workspace_path)) then
+        call write_main_debug('=== SAVING WORKSPACE BEFORE QUIT PROMPTS ===')
+        if (allocated(editor%tabs)) then
+            call write_main_debug('Tab count: ' // char(48 + size(editor%tabs)))
+        end if
+        call workspace_save_state(editor, editor%workspace_path, workspace_success)
+        call write_main_debug('Workspace saved')
+    end if
+
     ! Handle unsaved files - prompt for save/backup
+    call write_main_debug('Before handle_unsaved_files_on_quit')
+    if (allocated(editor%tabs)) then
+        call write_main_debug('Tabs count: ' // char(48 + size(editor%tabs)))
+    end if
+
     if (allocated(editor%tabs) .and. allocated(editor%workspace_path)) then
         ! Workspace mode - handle all modified tabs
         call handle_unsaved_files_on_quit(editor, buffer, should_quit)
@@ -284,13 +300,16 @@ program facsimile
         call handle_single_file_on_quit(buffer, editor, should_quit)
     end if
 
+    call write_main_debug('After handle_unsaved_files_on_quit')
+    if (allocated(editor%tabs)) then
+        call write_main_debug('Tabs count: ' // char(48 + size(editor%tabs)))
+    else
+        call write_main_debug('Tabs deallocated!')
+    end if
+    call write_main_debug('should_quit = ' // merge('T', 'F', should_quit))
+
     ! Only proceed with cleanup if actually quitting
     if (should_quit) then
-        ! Save workspace state if in workspace mode
-        if (allocated(editor%workspace_path)) then
-            call workspace_save_state(editor, editor%workspace_path, workspace_success)
-            ! Silently ignore save failures for now
-        end if
 
         ! Cleanup
         call cleanup_renderer()
@@ -562,5 +581,13 @@ contains
         call terminal_write('Press any key to continue...')
         call get_key_input(key_input, status)
     end subroutine show_backup_diff
+
+    subroutine write_main_debug(message)
+        character(len=*), intent(in) :: message
+        integer :: unit
+        open(newunit=unit, file='/tmp/fac_debug.txt', status='unknown', position='append')
+        write(unit, '(A)') trim(message)
+        close(unit)
+    end subroutine write_main_debug
 
 end program facsimile

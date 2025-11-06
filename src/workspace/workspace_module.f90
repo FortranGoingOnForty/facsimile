@@ -229,12 +229,19 @@ contains
         write(unit, '(A)') '  "last_opened": "' // trim(timestamp) // '",'
         write(unit, '(A)') '  "tabs": ['
 
+        ! DEBUG: Show how many tabs we're saving
+        if (allocated(editor%tabs)) then
+            call write_workspace_debug('Saving ' // char(48 + size(editor%tabs)) // ' tabs to workspace.json')
+        else
+            call write_workspace_debug('No tabs allocated - saving empty tabs array')
+        end if
+
         ! Write tabs
         if (allocated(editor%tabs)) then
             ws_len = len_trim(dir_path)
             do i = 1, size(editor%tabs)
-                ! Write tab start
-                write(unit, '(A)', advance='no') '    {'
+                ! Write tab start - must be on its own line for parser
+                write(unit, '(A)') '    {'
 
                 ! Determine if we should use relative path
                 is_relative = .false.
@@ -251,7 +258,7 @@ contains
                 end if
 
                 ! Write filename
-                write(unit, '(A)', advance='no') '"filename": "'
+                write(unit, '(A)', advance='no') '      "filename": "'
                 if (is_relative) then
                     write(unit, '(A)', advance='no') trim(relative_path)
                 else if (allocated(editor%tabs(i)%filename)) then
@@ -259,36 +266,36 @@ contains
                 else
                     write(unit, '(A)', advance='no') 'untitled'
                 end if
-                write(unit, '(A)', advance='no') '", '
+                write(unit, '(A)') '", '
 
                 ! Write flags
                 if (editor%tabs(i)%is_orphan) then
-                    write(unit, '(A)') '"is_orphan": true, '
+                    write(unit, '(A)') '      "is_orphan": true, '
                 else
-                    write(unit, '(A)') '"is_orphan": false, '
+                    write(unit, '(A)') '      "is_orphan": false, '
                 end if
 
                 if (editor%tabs(i)%modified) then
-                    write(unit, '(A)') '"modified": true, '
+                    write(unit, '(A)') '      "modified": true, '
                 else
-                    write(unit, '(A)') '"modified": false, '
+                    write(unit, '(A)') '      "modified": false, '
                 end if
 
                 ! Write panes array
-                write(unit, '(A)') '"panes": ['
+                write(unit, '(A)') '      "panes": ['
                 if (allocated(editor%tabs(i)%panes) .and. size(editor%tabs(i)%panes) > 0) then
                     do j = 1, size(editor%tabs(i)%panes)
-                        write(unit, '(A)', advance='no') '      {'
+                        write(unit, '(A)') '        {'
 
-                        ! Write pane coordinates
-                        write(unit, '(A,F6.4,A)', advance='no') '"x_start": ', &
-                            editor%tabs(i)%panes(j)%x_start, ', '
-                        write(unit, '(A,F6.4,A)', advance='no') '"y_start": ', &
-                            editor%tabs(i)%panes(j)%y_start, ', '
-                        write(unit, '(A,F6.4,A)', advance='no') '"x_end": ', &
-                            editor%tabs(i)%panes(j)%x_end, ', '
-                        write(unit, '(A,F6.4,A)', advance='no') '"y_end": ', &
-                            editor%tabs(i)%panes(j)%y_end, ', '
+                        ! Write pane coordinates - each on its own line for parseability
+                        write(unit, '(A,F6.4,A)') '          "x_start": ', &
+                            editor%tabs(i)%panes(j)%x_start, ','
+                        write(unit, '(A,F6.4,A)') '          "y_start": ', &
+                            editor%tabs(i)%panes(j)%y_start, ','
+                        write(unit, '(A,F6.4,A)') '          "x_end": ', &
+                            editor%tabs(i)%panes(j)%x_end, ','
+                        write(unit, '(A,F6.4,A)') '          "y_end": ', &
+                            editor%tabs(i)%panes(j)%y_end, ','
 
                         ! Write pane filename (may differ from tab filename)
                         if (allocated(editor%tabs(i)%panes(j)%filename)) then
@@ -297,65 +304,57 @@ contains
                                 if (len_trim(editor%tabs(i)%panes(j)%filename) > ws_len) then
                                     if (editor%tabs(i)%panes(j)%filename(1:ws_len) == dir_path(1:ws_len)) then
                                         if (editor%tabs(i)%panes(j)%filename(ws_len+1:ws_len+1) == '/') then
-                                            write(unit, '(A)', advance='no') '"filename": "'
-                                            write(unit, '(A)', advance='no') &
-                                                trim(editor%tabs(i)%panes(j)%filename(ws_len+2:))
-                                            write(unit, '(A)', advance='no') '", '
+                                            write(unit, '(A)') '          "filename": "' // &
+                                                trim(editor%tabs(i)%panes(j)%filename(ws_len+2:)) // '",'
                                         else
-                                            write(unit, '(A)', advance='no') '"filename": "'
-                                            write(unit, '(A)', advance='no') &
-                                                trim(editor%tabs(i)%panes(j)%filename)
-                                            write(unit, '(A)', advance='no') '", '
+                                            write(unit, '(A)') '          "filename": "' // &
+                                                trim(editor%tabs(i)%panes(j)%filename) // '",'
                                         end if
                                     else
-                                        write(unit, '(A)', advance='no') '"filename": "'
-                                        write(unit, '(A)', advance='no') &
-                                            trim(editor%tabs(i)%panes(j)%filename)
-                                        write(unit, '(A)', advance='no') '", '
+                                        write(unit, '(A)') '          "filename": "' // &
+                                            trim(editor%tabs(i)%panes(j)%filename) // '",'
                                     end if
                                 else
-                                    write(unit, '(A)', advance='no') '"filename": "'
-                                    write(unit, '(A)', advance='no') trim(editor%tabs(i)%panes(j)%filename)
-                                    write(unit, '(A)', advance='no') '", '
+                                    write(unit, '(A)') '          "filename": "' // &
+                                        trim(editor%tabs(i)%panes(j)%filename) // '",'
                                 end if
                             else
                                 ! Orphan tab - use absolute path
-                                write(unit, '(A)', advance='no') '"filename": "'
-                                write(unit, '(A)', advance='no') trim(editor%tabs(i)%panes(j)%filename)
-                                write(unit, '(A)', advance='no') '", '
+                                write(unit, '(A)') '          "filename": "' // &
+                                    trim(editor%tabs(i)%panes(j)%filename) // '",'
                             end if
                         else
-                            write(unit, '(A)', advance='no') '"filename": "", '
+                            write(unit, '(A)') '          "filename": "",'
                         end if
 
-                        ! Write cursor and viewport
+                        ! Write cursor and viewport - each on own line
                         if (allocated(editor%tabs(i)%panes(j)%cursors) .and. &
                             size(editor%tabs(i)%panes(j)%cursors) > 0) then
-                            write(unit, '(A,I0,A)', advance='no') '"cursor_line": ', &
-                                editor%tabs(i)%panes(j)%cursors(1)%line, ', '
-                            write(unit, '(A,I0,A)', advance='no') '"cursor_column": ', &
-                                editor%tabs(i)%panes(j)%cursors(1)%column, ', '
+                            write(unit, '(A,I0,A)') '          "cursor_line": ', &
+                                editor%tabs(i)%panes(j)%cursors(1)%line, ','
+                            write(unit, '(A,I0,A)') '          "cursor_column": ', &
+                                editor%tabs(i)%panes(j)%cursors(1)%column, ','
                         else
-                            write(unit, '(A)', advance='no') '"cursor_line": 1, "cursor_column": 1, '
+                            write(unit, '(A)') '          "cursor_line": 1,'
+                            write(unit, '(A)') '          "cursor_column": 1,'
                         end if
 
-                        write(unit, '(A,I0,A)', advance='no') '"viewport_line": ', &
-                            editor%tabs(i)%panes(j)%viewport_line, ', '
-                        write(unit, '(A,I0)', advance='no') '"viewport_column": ', &
+                        write(unit, '(A,I0,A)') '          "viewport_line": ', &
+                            editor%tabs(i)%panes(j)%viewport_line, ','
+                        write(unit, '(A,I0)') '          "viewport_column": ', &
                             editor%tabs(i)%panes(j)%viewport_column
 
                         ! Close pane object
+                        write(unit, '(A)') '        }'
                         if (j < size(editor%tabs(i)%panes)) then
-                            write(unit, '(A)') '},'
-                        else
-                            write(unit, '(A)') '}'
+                            write(unit, '(A)') '        ,'
                         end if
                     end do
                 end if
-                write(unit, '(A)', advance='no') '], '
+                write(unit, '(A)') '      ],'
 
                 ! Write active pane index
-                write(unit, '(A,I0)', advance='no') '"active_pane": ', &
+                write(unit, '(A,I0)') '      "active_pane": ', &
                     editor%tabs(i)%active_pane_index
 
                 ! Close tab object
@@ -429,6 +428,9 @@ contains
         is_orphan = .false.
         pane_count = 0
 
+        ! DEBUG: Trace restoration
+        call write_workspace_debug('=== Starting workspace restoration ===')
+
         do
             read(unit, '(A)', iostat=ios) line
             if (ios /= 0) exit
@@ -438,6 +440,7 @@ contains
             ! Check if we're entering the tabs array
             if (index(line, '"tabs":') > 0) then
                 in_tabs_array = .true.
+                call write_workspace_debug('Found tabs array in JSON')
                 cycle
             end if
 
@@ -453,12 +456,14 @@ contains
                 tab_filename = ""
                 is_orphan = .false.
                 pane_count = 0
+                call write_workspace_debug('Detected tab object start')
                 cycle
             end if
 
             ! Check if we're entering panes array
             if (reading_tab .and. index(line, '"panes":') > 0) then
                 in_panes_array = .true.
+                call write_workspace_debug('Entered panes array')
                 cycle
             end if
 
@@ -488,6 +493,7 @@ contains
             if (reading_pane .and. index(line, '}') > 0) then
                 ! For Phase 3: Only restore first pane of each tab for simplicity
                 ! Full multi-pane restoration can be added later when workspace switching is implemented
+                call write_workspace_debug('Pane end: pane_count=' // char(48 + pane_count) // ', filename_len=' // char(48 + len_trim(pane_filename)))
                 if (pane_count == 1 .and. len_trim(pane_filename) > 0) then
                     ! Build full path
                     if (is_orphan .or. pane_filename(1:1) == '/') then
@@ -516,8 +522,10 @@ contains
                     end if
 
                     ! Create tab
+                    call write_workspace_debug('Creating tab for: ' // trim(full_path))
                     call create_tab(editor, trim(full_path))
                     tab_idx = editor%active_tab_index
+                    call write_workspace_debug('Tab created, index: ' // char(48 + tab_idx))
 
                     ! Set orphan flag and load file
                     if (allocated(editor%tabs) .and. tab_idx > 0) then
@@ -586,6 +594,7 @@ contains
                         quote2 = index(line(1:quote1-1), '"', .true.)
                         if (quote2 > 0) then
                             pane_filename = line(quote2+1:quote1-1)
+                            call write_workspace_debug('Parsed pane filename: [' // trim(pane_filename) // ']')
                         end if
                     end if
                 end if
@@ -749,5 +758,13 @@ contains
         ! Track in recents
         call track_workspace_in_recents(new_workspace_path)
     end subroutine workspace_switch
+
+    subroutine write_workspace_debug(message)
+        character(len=*), intent(in) :: message
+        integer :: unit
+        open(newunit=unit, file='/tmp/fac_debug.txt', status='unknown', position='append')
+        write(unit, '(A)') trim(message)
+        close(unit)
+    end subroutine write_workspace_debug
 
 end module workspace_module

@@ -215,7 +215,18 @@ contains
         ! Replace tabs array
         call move_alloc(temp_tabs, editor%tabs)
         editor%active_tab_index = new_index
+
+        ! DEBUG: Show tab creation
+        call write_debug_log('[DEBUG] Tab created: ' // trim(filename))
     end subroutine create_tab
+
+    subroutine write_debug_log(message)
+        character(len=*), intent(in) :: message
+        integer :: unit
+        open(newunit=unit, file='/tmp/fac_debug.txt', status='unknown', position='append')
+        write(unit, '(A)') trim(message)
+        close(unit)
+    end subroutine write_debug_log
 
     ! Switch to a specific tab index (1-based)
     subroutine switch_to_tab(editor, tab_index)

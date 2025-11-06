@@ -128,31 +128,47 @@ contains
     subroutine backup_restore(workspace_path, backup_file, original_file, success)
         character(len=*), intent(in) :: workspace_path, backup_file, original_file
         logical, intent(out) :: success
-        character(len=MAX_PATH_LEN) :: cmd
-        integer :: ios
+        integer :: unit_src, unit_dst, ios
+        character(len=1024) :: line
 
         success = .false.
 
-        ! backup_file already contains full path, use it directly
-        ! Copy backup to original location
-        write(cmd, '(A,A,A,A,A)') "cp '", trim(backup_file), "' '", trim(original_file), "'"
-        call execute_command_line(trim(cmd), wait=.true., exitstat=ios)
+        ! Copy backup to original location using native Fortran I/O
+        ! (avoids execute_command_line issues with flang)
+        open(newunit=unit_src, file=trim(backup_file), status='old', action='read', iostat=ios)
+        if (ios /= 0) return
 
-        if (ios == 0) then
-            ! Delete the backup after successful restore
-            call backup_delete(workspace_path, backup_file)
-            success = .true.
+        open(newunit=unit_dst, file=trim(original_file), status='replace', action='write', iostat=ios)
+        if (ios /= 0) then
+            close(unit_src)
+            return
         end if
+
+        ! Copy line by line
+        do
+            read(unit_src, '(A)', iostat=ios) line
+            if (ios /= 0) exit
+            write(unit_dst, '(A)') trim(line)
+        end do
+
+        close(unit_src)
+        close(unit_dst)
+
+        ! Delete the backup after successful restore
+        call backup_delete(workspace_path, backup_file)
+        success = .true.
     end subroutine backup_restore
 
     !> Delete a backup file
     subroutine backup_delete(workspace_path, backup_file)
         character(len=*), intent(in) :: workspace_path, backup_file
-        character(len=MAX_PATH_LEN) :: cmd
+        integer :: unit, ios
 
-        ! backup_file already contains full path, use it directly
-        write(cmd, '(A,A,A)') "rm -f '", trim(backup_file), "'"
-        call execute_command_line(trim(cmd), wait=.true.)
+        ! Delete using Fortran file operations (avoids execute_command_line issues)
+        open(newunit=unit, file=trim(backup_file), status='old', iostat=ios)
+        if (ios == 0) then
+            close(unit, status='delete')
+        end if
     end subroutine backup_delete
 
     !> Prompt user to restore backup (returns 'r', 'i', or 'd')

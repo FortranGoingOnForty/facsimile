@@ -79,6 +79,9 @@ contains
         line_count = buffer_get_line_count(buffer)
         is_edit_action = .false.
 
+        ! DEBUG: Log incoming key
+        call write_command_debug('Key received: [' // trim(key_str) // ']')
+
         ! Ignore empty key strings (from terminal position reports, etc)
         if (len_trim(key_str) == 0 .and. key_str(1:1) /= ' ') then
             return
@@ -752,6 +755,8 @@ contains
             is_edit_action = .true.
 
         case('ctrl-t')
+            ! DEBUG: Log that we're handling Ctrl-T
+            call write_command_debug('Ctrl-T pressed - creating new tab')
             ! Create new empty tab
             call create_tab(editor, '[Untitled]')
             ! Switch to the new tab (it's already active after create_tab)
@@ -4590,5 +4595,13 @@ contains
             end if
         end do
     end subroutine handle_dirty_buffers_before_switch
+
+    subroutine write_command_debug(message)
+        character(len=*), intent(in) :: message
+        integer :: unit
+        open(newunit=unit, file='/tmp/fac_debug.txt', status='unknown', position='append')
+        write(unit, '(A)') trim(message)
+        close(unit)
+    end subroutine write_command_debug
 
 end module command_handler_module
