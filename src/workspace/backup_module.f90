@@ -171,11 +171,13 @@ contains
         end if
     end subroutine backup_delete
 
-    !> Prompt user to restore backup (returns 'r', 'k', or 'd')
-    function backup_prompt_restore(original_file) result(choice)
+    !> Prompt user to restore backup (returns 'r', 'd' (delete), or 'c' (compare))
+    function backup_prompt_restore(original_file, current_backup, total_backups, backup_timestamp) result(choice)
         use terminal_io_module, only: terminal_write, terminal_move_cursor, terminal_clear_screen
         use input_handler_module, only: get_key_input
         character(len=*), intent(in) :: original_file
+        integer, intent(in), optional :: current_backup, total_backups
+        character(len=*), intent(in), optional :: backup_timestamp
         character :: choice
         character(len=32) :: key_input
         character(len=512) :: prompt
@@ -185,17 +187,33 @@ contains
         call terminal_clear_screen()
         call terminal_move_cursor(2, 1)
 
-        write(prompt, '(A,A)') 'Backup found for: ', trim(original_file)
+        ! Build prompt with progress and timestamp if available
+        if (present(current_backup) .and. present(total_backups)) then
+            if (present(backup_timestamp)) then
+                write(prompt, '(A,I0,A,I0,A,A,A,A,A)') 'Backup found [', current_backup, &
+                    ' of ', total_backups, ']: ', trim(original_file), ' (from ', trim(backup_timestamp), ')'
+            else
+                write(prompt, '(A,I0,A,I0,A,A)') 'Backup found [', current_backup, &
+                    ' of ', total_backups, ']: ', trim(original_file)
+            end if
+        else
+            if (present(backup_timestamp)) then
+                write(prompt, '(A,A,A,A,A)') 'Backup found for: ', trim(original_file), &
+                    ' (from ', trim(backup_timestamp), ')'
+            else
+                write(prompt, '(A,A)') 'Backup found for: ', trim(original_file)
+            end if
+        end if
         call terminal_write(trim(prompt))
 
         call terminal_move_cursor(4, 1)
-        call terminal_write('[r]estore      - Restore from backup (current file will be replaced)')
+        call terminal_write('[r]estore - Use backup (current file will be replaced)')
 
         call terminal_move_cursor(5, 1)
-        call terminal_write('[k]eep current - Keep current file and delete backup')
+        call terminal_write('[d]elete  - Delete backup and keep current file')
 
         call terminal_move_cursor(6, 1)
-        call terminal_write('[d]iff         - Show differences between files')
+        call terminal_write('[c]ompare - Show differences between files')
 
         call terminal_move_cursor(8, 1)
         call terminal_write('Choice: ')
@@ -207,18 +225,18 @@ contains
                 if (key_input == 'r' .or. key_input == 'R') then
                     choice = 'r'
                     exit
-                else if (key_input == 'k' .or. key_input == 'K') then
-                    choice = 'k'
-                    exit
-                else if (key_input == 'i' .or. key_input == 'I') then
-                    ! Accept 'i' for backwards compatibility
-                    choice = 'k'
-                    exit
                 else if (key_input == 'd' .or. key_input == 'D') then
-                    choice = 'd'
+                    choice = 'd'  ! Delete backup
+                    exit
+                else if (key_input == 'c' .or. key_input == 'C') then
+                    choice = 'c'  ! Compare
+                    exit
+                else if (key_input == 'k' .or. key_input == 'K' .or. key_input == 'i' .or. key_input == 'I') then
+                    ! Accept 'k' and 'i' for backwards compatibility
+                    choice = 'd'  ! Map to delete
                     exit
                 else if (key_input == 'ESCAPE') then
-                    choice = 'k'  ! ESC = keep current
+                    choice = 'd'  ! ESC = delete backup
                     exit
                 end if
             end if
