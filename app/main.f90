@@ -277,20 +277,10 @@ program facsimile
     ! IMPORTANT: Save workspace state FIRST, before any prompts or cleanup
     ! This ensures we capture the current state before tabs might be closed
     if (should_quit .and. allocated(editor%workspace_path)) then
-        call write_main_debug('=== SAVING WORKSPACE BEFORE QUIT PROMPTS ===')
-        if (allocated(editor%tabs)) then
-            call write_main_debug('Tab count: ' // char(48 + size(editor%tabs)))
-        end if
         call workspace_save_state(editor, editor%workspace_path, workspace_success)
-        call write_main_debug('Workspace saved')
     end if
 
     ! Handle unsaved files - prompt for save/backup
-    call write_main_debug('Before handle_unsaved_files_on_quit')
-    if (allocated(editor%tabs)) then
-        call write_main_debug('Tabs count: ' // char(48 + size(editor%tabs)))
-    end if
-
     if (allocated(editor%tabs) .and. allocated(editor%workspace_path)) then
         ! Workspace mode - handle all modified tabs
         call handle_unsaved_files_on_quit(editor, buffer, should_quit)
@@ -299,14 +289,6 @@ program facsimile
         ! Single-file mode - handle the current buffer if modified
         call handle_single_file_on_quit(buffer, editor, should_quit)
     end if
-
-    call write_main_debug('After handle_unsaved_files_on_quit')
-    if (allocated(editor%tabs)) then
-        call write_main_debug('Tabs count: ' // char(48 + size(editor%tabs)))
-    else
-        call write_main_debug('Tabs deallocated!')
-    end if
-    call write_main_debug('should_quit = ' // merge('T', 'F', should_quit))
 
     ! Only proceed with cleanup if actually quitting
     if (should_quit) then
@@ -423,36 +405,61 @@ contains
         type(buffer_t), intent(inout) :: buffer
         logical, intent(inout) :: should_quit
         type(save_prompt_result_t) :: prompt_result
-        integer :: i, save_status
-        logical :: backup_success
+        integer :: i, save_status, modified_count, current_modified
+        logical :: backup_success, save_all
 
-        ! Check each tab for modifications
+        ! Count total modified tabs
+        modified_count = 0
         do i = 1, size(editor%tabs)
             if (editor%tabs(i)%modified) then
-                ! Prompt user for this file
-                call save_prompt(editor%tabs(i)%filename, prompt_result)
+                modified_count = modified_count + 1
+            end if
+        end do
 
-                if (prompt_result%action == 'y') then
+        ! Process each modified tab
+        current_modified = 0
+        save_all = .false.
+        do i = 1, size(editor%tabs)
+            if (editor%tabs(i)%modified) then
+                current_modified = current_modified + 1
+
+                ! Skip prompt if "save all" was selected
+                if (.not. save_all) then
+                    ! Prompt user for this file with progress
+                    call save_prompt(editor%tabs(i)%filename, prompt_result, current_modified, modified_count)
+
+                    if (prompt_result%action == 'a') then
+                        ! Save all - set flag and treat as save for this file
+                        save_all = .true.
+                        prompt_result%action = 's'
+                    end if
+
+                    if (prompt_result%action == 'c') then
+                        ! User cancelled - don't quit
+                        should_quit = .false.
+                        return
+                    end if
+                else
+                    ! Save all is active - auto-save this file
+                    prompt_result%action = 's'
+                end if
+
+                if (prompt_result%action == 's') then
                     ! User wants to save - switch to this tab and save
                     editor%active_tab_index = i
                     call switch_to_tab_with_buffer(editor, i, buffer)
 
-                    ! Save the file
+                    ! Save the file (no backup - it's saved!)
                     call buffer_save_file(buffer, editor%tabs(i)%filename, save_status)
                     if (save_status == 0) then
                         buffer%modified = .false.
                         editor%tabs(i)%modified = .false.
                     end if
 
-                else if (prompt_result%action == 'n') then
-                    ! User wants to skip - create backup
+                else if (prompt_result%action == 'd') then
+                    ! User wants to discard - create backup for later recovery
                     call backup_create(editor%workspace_path, editor%tabs(i)%filename, backup_success)
                     ! Continue even if backup fails
-
-                else if (prompt_result%action == 'c') then
-                    ! User cancelled - don't quit
-                    should_quit = .false.
-                    return
                 end if
             end if
         end do
@@ -515,8 +522,8 @@ contains
         i = 1
         do while (i <= backup_count)
             if (len_trim(backups(i)%original_file) > 0) then
-                ! Show restore prompt
-                choice = backup_prompt_restore(backups(i)%original_file)
+                ! Show restore prompt with progress
+                choice = backup_prompt_restore(backups(i)%original_file, i, backup_count, backups(i)%timestamp)
 
                 if (choice == 'r') then
                     ! Restore the backup
@@ -537,13 +544,13 @@ contains
 
                     i = i + 1  ! Move to next
 
-                else if (choice == 'i') then
-                    ! Ignore - delete the backup
+                else if (choice == 'd') then
+                    ! Delete backup - keep current file
                     call backup_delete(editor%workspace_path, backups(i)%backup_file)
                     i = i + 1  ! Move to next
 
-                else if (choice == 'd') then
-                    ! Show diff
+                else if (choice == 'c') then
+                    ! Compare - show diff
                     call show_backup_diff(editor%workspace_path, backups(i)%backup_file, &
                                          backups(i)%original_file)
                     ! Don't increment i - ask again after showing diff
@@ -581,13 +588,5 @@ contains
         call terminal_write('Press any key to continue...')
         call get_key_input(key_input, status)
     end subroutine show_backup_diff
-
-    subroutine write_main_debug(message)
-        character(len=*), intent(in) :: message
-        integer :: unit
-        open(newunit=unit, file='/tmp/fac_debug.txt', status='unknown', position='append')
-        write(unit, '(A)') trim(message)
-        close(unit)
-    end subroutine write_main_debug
 
 end program facsimile
