@@ -8,13 +8,13 @@ module save_prompt_module
     public :: save_prompt, save_prompt_result_t
 
     type :: save_prompt_result_t
-        character :: action = 'c'  ! 'y' = yes (save), 'n' = no (backup), 'c' = cancel
+        character :: action = 'c'  ! 's' = save, 'd' = discard (backup), 'c' = cancel
     end type save_prompt_result_t
 
 contains
 
     !> Prompt user to save a file
-    !> Returns 'y' to save, 'n' to skip (backup), 'c' to cancel quit
+    !> Returns 's' to save, 'd' to discard (backup), 'c' to cancel quit
     subroutine save_prompt(filename, result)
         use terminal_io_module, only: terminal_write, terminal_move_cursor, terminal_clear_screen
         use input_handler_module, only: get_key_input
@@ -41,19 +41,19 @@ contains
         call terminal_clear_screen()
         call terminal_move_cursor(3, 1)
 
-        write(prompt_text, '(A,A,A)') 'Save ', trim(basename), '? '
+        write(prompt_text, '(A,A,A)') 'Save changes to: ', trim(basename), '?'
         call terminal_write(trim(prompt_text))
 
-        call terminal_move_cursor(4, 1)
-        call terminal_write('[y]es - save file')
-
         call terminal_move_cursor(5, 1)
-        call terminal_write('[n]o  - skip (will be backed up)')
+        call terminal_write('[s]ave    - Save changes and create backup for crash protection')
 
         call terminal_move_cursor(6, 1)
-        call terminal_write('[c]ancel - don''t quit')
+        call terminal_write('[d]iscard - Don''t save, but create backup for later recovery')
 
-        call terminal_move_cursor(8, 1)
+        call terminal_move_cursor(7, 1)
+        call terminal_write('[c]ancel  - Cancel quit and return to editing')
+
+        call terminal_move_cursor(9, 1)
         call terminal_write('Choice: ')
 
         ! Get user input
@@ -61,11 +61,11 @@ contains
         do
             call get_key_input(key_input, status)
             if (status == 0) then
-                if (key_input == 'y' .or. key_input == 'Y') then
-                    result%action = 'y'
+                if (key_input == 's' .or. key_input == 'S') then
+                    result%action = 's'
                     exit
-                else if (key_input == 'n' .or. key_input == 'N') then
-                    result%action = 'n'
+                else if (key_input == 'd' .or. key_input == 'D') then
+                    result%action = 'd'
                     exit
                 else if (key_input == 'c' .or. key_input == 'C') then
                     result%action = 'c'

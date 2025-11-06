@@ -171,7 +171,7 @@ contains
         end if
     end subroutine backup_delete
 
-    !> Prompt user to restore backup (returns 'r', 'i', or 'd')
+    !> Prompt user to restore backup (returns 'r', 'k', or 'd')
     function backup_prompt_restore(original_file) result(choice)
         use terminal_io_module, only: terminal_write, terminal_move_cursor, terminal_clear_screen
         use input_handler_module, only: get_key_input
@@ -183,11 +183,22 @@ contains
 
         ! Clear screen and show prompt
         call terminal_clear_screen()
-        call terminal_move_cursor(1, 1)
+        call terminal_move_cursor(2, 1)
 
-        write(prompt, '(A,A,A)') 'Backup found for: ', trim(original_file), &
-            char(10) // '[r]estore / [i]gnore / [d]iff? '
+        write(prompt, '(A,A)') 'Backup found for: ', trim(original_file)
         call terminal_write(trim(prompt))
+
+        call terminal_move_cursor(4, 1)
+        call terminal_write('[r]estore      - Restore from backup (current file will be replaced)')
+
+        call terminal_move_cursor(5, 1)
+        call terminal_write('[k]eep current - Keep current file and delete backup')
+
+        call terminal_move_cursor(6, 1)
+        call terminal_write('[d]iff         - Show differences between files')
+
+        call terminal_move_cursor(8, 1)
+        call terminal_write('Choice: ')
 
         ! Get user input
         do
@@ -196,14 +207,18 @@ contains
                 if (key_input == 'r' .or. key_input == 'R') then
                     choice = 'r'
                     exit
+                else if (key_input == 'k' .or. key_input == 'K') then
+                    choice = 'k'
+                    exit
                 else if (key_input == 'i' .or. key_input == 'I') then
-                    choice = 'i'
+                    ! Accept 'i' for backwards compatibility
+                    choice = 'k'
                     exit
                 else if (key_input == 'd' .or. key_input == 'D') then
                     choice = 'd'
                     exit
                 else if (key_input == 'ESCAPE') then
-                    choice = 'i'  ! ESC = ignore
+                    choice = 'k'  ! ESC = keep current
                     exit
                 end if
             end if

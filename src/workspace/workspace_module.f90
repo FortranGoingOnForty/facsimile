@@ -2,8 +2,8 @@
 ! Handles workspace detection, creation, loading, and saving
 
 module workspace_module
-    use editor_state_module, only: editor_state_t, create_tab
-    use text_buffer_module, only: buffer_t
+    use editor_state_module, only: editor_state_t, create_tab, sync_pane_to_editor
+    use text_buffer_module, only: buffer_t, init_buffer
     use recents_module, only: recents_add_or_update
     implicit none
     private
@@ -229,13 +229,6 @@ contains
         write(unit, '(A)') '  "last_opened": "' // trim(timestamp) // '",'
         write(unit, '(A)') '  "tabs": ['
 
-        ! DEBUG: Show how many tabs we're saving
-        if (allocated(editor%tabs)) then
-            call write_workspace_debug('Saving ' // char(48 + size(editor%tabs)) // ' tabs to workspace.json')
-        else
-            call write_workspace_debug('No tabs allocated - saving empty tabs array')
-        end if
-
         ! Write tabs
         if (allocated(editor%tabs)) then
             ws_len = len_trim(dir_path)
@@ -428,8 +421,6 @@ contains
         is_orphan = .false.
         pane_count = 0
 
-        ! DEBUG: Trace restoration
-        call write_workspace_debug('=== Starting workspace restoration ===')
 
         do
             read(unit, '(A)', iostat=ios) line
@@ -440,7 +431,6 @@ contains
             ! Check if we're entering the tabs array
             if (index(line, '"tabs":') > 0) then
                 in_tabs_array = .true.
-                call write_workspace_debug('Found tabs array in JSON')
                 cycle
             end if
 
@@ -456,14 +446,12 @@ contains
                 tab_filename = ""
                 is_orphan = .false.
                 pane_count = 0
-                call write_workspace_debug('Detected tab object start')
                 cycle
             end if
 
             ! Check if we're entering panes array
             if (reading_tab .and. index(line, '"panes":') > 0) then
                 in_panes_array = .true.
-                call write_workspace_debug('Entered panes array')
                 cycle
             end if
 
@@ -493,7 +481,6 @@ contains
             if (reading_pane .and. index(line, '}') > 0) then
                 ! For Phase 3: Only restore first pane of each tab for simplicity
                 ! Full multi-pane restoration can be added later when workspace switching is implemented
-                call write_workspace_debug('Pane end: pane_count=' // char(48 + pane_count) // ', filename_len=' // char(48 + len_trim(pane_filename)))
                 if (pane_count == 1 .and. len_trim(pane_filename) > 0) then
                     ! Build full path
                     if (is_orphan .or. pane_filename(1:1) == '/') then
@@ -502,56 +489,98 @@ contains
                         full_path = trim(dir_path) // '/' // trim(pane_filename)
                     end if
 
-                    ! Check if file exists before creating tab (Phase 7: missing file handling)
-                    file_exists = .false.
-                    open(newunit=file_unit, file=trim(full_path), status='old', iostat=ios)
-                    if (ios == 0) then
-                        file_exists = .true.
-                        close(file_unit)
-                    end if
+                    ! Check if this is an untitled tab (in-memory only)
+                    if (index(pane_filename, '[Untitled') == 1) then
+                        ! Untitled tab - create without loading from file
+                        call create_tab(editor, trim(pane_filename))
+                        tab_idx = editor%active_tab_index
 
-                    if (.not. file_exists) then
-                        ! File doesn't exist - show warning and skip this tab
-                        warning_msg = "Warning: File not found (skipping): " // trim(full_path)
-                        call terminal_write(trim(warning_msg))
-                        ! Brief pause so user can see the warning
-                        call execute_command_line("sleep 0.8", wait=.true.)
-                        ! Continue to next tab without creating this one
-                        reading_pane = .false.
-                        cycle
-                    end if
+                        ! Set orphan flag and initialize empty buffers
+                        if (allocated(editor%tabs) .and. tab_idx > 0) then
+                            editor%tabs(tab_idx)%is_orphan = .false.
 
-                    ! Create tab
-                    call write_workspace_debug('Creating tab for: ' // trim(full_path))
-                    call create_tab(editor, trim(full_path))
-                    tab_idx = editor%active_tab_index
-                    call write_workspace_debug('Tab created, index: ' // char(48 + tab_idx))
+                            ! Initialize empty buffer for tab
+                            call init_buffer(editor%tabs(tab_idx)%buffer)
 
-                    ! Set orphan flag and load file
-                    if (allocated(editor%tabs) .and. tab_idx > 0) then
-                        editor%tabs(tab_idx)%is_orphan = is_orphan
+                            ! Set cursor and viewport in first pane
+                            if (allocated(editor%tabs(tab_idx)%panes) .and. size(editor%tabs(tab_idx)%panes) > 0) then
+                                ! Initialize empty buffer for pane
+                                call init_buffer(editor%tabs(tab_idx)%panes(1)%buffer)
 
-                        call buffer_load_file(editor%tabs(tab_idx)%buffer, trim(full_path), load_status)
+                                ! Set pane filename
+                                if (allocated(editor%tabs(tab_idx)%panes(1)%filename)) then
+                                    deallocate(editor%tabs(tab_idx)%panes(1)%filename)
+                                end if
+                                allocate(character(len=len_trim(pane_filename)) :: editor%tabs(tab_idx)%panes(1)%filename)
+                                editor%tabs(tab_idx)%panes(1)%filename = trim(pane_filename)
 
-                        ! Set cursor and viewport in first pane
-                        if (allocated(editor%tabs(tab_idx)%panes) .and. size(editor%tabs(tab_idx)%panes) > 0) then
-                            call buffer_load_file(editor%tabs(tab_idx)%panes(1)%buffer, trim(full_path), load_status)
+                                ! Set pane coordinates
+                                editor%tabs(tab_idx)%panes(1)%x_start = x_start
+                                editor%tabs(tab_idx)%panes(1)%y_start = y_start
+                                editor%tabs(tab_idx)%panes(1)%x_end = x_end
+                                editor%tabs(tab_idx)%panes(1)%y_end = y_end
 
-                            ! Set pane coordinates (even if only 1 pane for now)
-                            editor%tabs(tab_idx)%panes(1)%x_start = x_start
-                            editor%tabs(tab_idx)%panes(1)%y_start = y_start
-                            editor%tabs(tab_idx)%panes(1)%x_end = x_end
-                            editor%tabs(tab_idx)%panes(1)%y_end = y_end
+                                if (allocated(editor%tabs(tab_idx)%panes(1)%cursors) .and. &
+                                    size(editor%tabs(tab_idx)%panes(1)%cursors) > 0) then
+                                    editor%tabs(tab_idx)%panes(1)%cursors(1)%line = cursor_line
+                                    editor%tabs(tab_idx)%panes(1)%cursors(1)%column = cursor_col
+                                    editor%tabs(tab_idx)%panes(1)%cursors(1)%desired_column = cursor_col
+                                end if
 
-                            if (allocated(editor%tabs(tab_idx)%panes(1)%cursors) .and. &
-                                size(editor%tabs(tab_idx)%panes(1)%cursors) > 0) then
-                                editor%tabs(tab_idx)%panes(1)%cursors(1)%line = cursor_line
-                                editor%tabs(tab_idx)%panes(1)%cursors(1)%column = cursor_col
-                                editor%tabs(tab_idx)%panes(1)%cursors(1)%desired_column = cursor_col
+                                editor%tabs(tab_idx)%panes(1)%viewport_line = viewport_line
+                                editor%tabs(tab_idx)%panes(1)%viewport_column = viewport_col
                             end if
+                        end if
+                    else
+                        ! Regular file tab - check if file exists before creating
+                        file_exists = .false.
+                        open(newunit=file_unit, file=trim(full_path), status='old', iostat=ios)
+                        if (ios == 0) then
+                            file_exists = .true.
+                            close(file_unit)
+                        end if
 
-                            editor%tabs(tab_idx)%panes(1)%viewport_line = viewport_line
-                            editor%tabs(tab_idx)%panes(1)%viewport_column = viewport_col
+                        if (.not. file_exists) then
+                            ! File doesn't exist - show warning and skip this tab
+                            warning_msg = "Warning: File not found (skipping): " // trim(full_path)
+                            call terminal_write(trim(warning_msg))
+                            ! Brief pause so user can see the warning
+                            call execute_command_line("sleep 0.8", wait=.true.)
+                            ! Continue to next tab without creating this one
+                            reading_pane = .false.
+                            cycle
+                        end if
+
+                        ! Create tab
+                        call create_tab(editor, trim(full_path))
+                        tab_idx = editor%active_tab_index
+
+                        ! Set orphan flag and load file
+                        if (allocated(editor%tabs) .and. tab_idx > 0) then
+                            editor%tabs(tab_idx)%is_orphan = is_orphan
+
+                            call buffer_load_file(editor%tabs(tab_idx)%buffer, trim(full_path), load_status)
+
+                            ! Set cursor and viewport in first pane
+                            if (allocated(editor%tabs(tab_idx)%panes) .and. size(editor%tabs(tab_idx)%panes) > 0) then
+                                call buffer_load_file(editor%tabs(tab_idx)%panes(1)%buffer, trim(full_path), load_status)
+
+                                ! Set pane coordinates (even if only 1 pane for now)
+                                editor%tabs(tab_idx)%panes(1)%x_start = x_start
+                                editor%tabs(tab_idx)%panes(1)%y_start = y_start
+                                editor%tabs(tab_idx)%panes(1)%x_end = x_end
+                                editor%tabs(tab_idx)%panes(1)%y_end = y_end
+
+                                if (allocated(editor%tabs(tab_idx)%panes(1)%cursors) .and. &
+                                    size(editor%tabs(tab_idx)%panes(1)%cursors) > 0) then
+                                    editor%tabs(tab_idx)%panes(1)%cursors(1)%line = cursor_line
+                                    editor%tabs(tab_idx)%panes(1)%cursors(1)%column = cursor_col
+                                    editor%tabs(tab_idx)%panes(1)%cursors(1)%desired_column = cursor_col
+                                end if
+
+                                editor%tabs(tab_idx)%panes(1)%viewport_line = viewport_line
+                                editor%tabs(tab_idx)%panes(1)%viewport_column = viewport_col
+                            end if
                         end if
                     end if
                 end if
@@ -594,7 +623,6 @@ contains
                         quote2 = index(line(1:quote1-1), '"', .true.)
                         if (quote2 > 0) then
                             pane_filename = line(quote2+1:quote1-1)
-                            call write_workspace_debug('Parsed pane filename: [' // trim(pane_filename) // ']')
                         end if
                     end if
                 end if
@@ -695,6 +723,21 @@ contains
         end do
 
         close(unit)
+
+        ! Sync the active pane to editor state so status bar shows correct filename
+        if (allocated(editor%tabs) .and. editor%active_tab_index > 0) then
+            if (editor%active_tab_index <= size(editor%tabs)) then
+                if (allocated(editor%tabs(editor%active_tab_index)%panes)) then
+                    if (editor%tabs(editor%active_tab_index)%active_pane_index > 0 .and. &
+                        editor%tabs(editor%active_tab_index)%active_pane_index <= &
+                        size(editor%tabs(editor%active_tab_index)%panes)) then
+                        call sync_pane_to_editor(editor, editor%active_tab_index, &
+                                                editor%tabs(editor%active_tab_index)%active_pane_index)
+                    end if
+                end if
+            end if
+        end if
+
         success = .true.
     end subroutine workspace_restore_state
 
@@ -758,13 +801,5 @@ contains
         ! Track in recents
         call track_workspace_in_recents(new_workspace_path)
     end subroutine workspace_switch
-
-    subroutine write_workspace_debug(message)
-        character(len=*), intent(in) :: message
-        integer :: unit
-        open(newunit=unit, file='/tmp/fac_debug.txt', status='unknown', position='append')
-        write(unit, '(A)') trim(message)
-        close(unit)
-    end subroutine write_workspace_debug
 
 end module workspace_module

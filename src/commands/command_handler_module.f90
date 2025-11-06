@@ -79,9 +79,6 @@ contains
         line_count = buffer_get_line_count(buffer)
         is_edit_action = .false.
 
-        ! DEBUG: Log incoming key
-        call write_command_debug('Key received: [' // trim(key_str) // ']')
-
         ! Ignore empty key strings (from terminal position reports, etc)
         if (len_trim(key_str) == 0 .and. key_str(1:1) /= ' ') then
             return
@@ -755,28 +752,96 @@ contains
             is_edit_action = .true.
 
         case('ctrl-t')
-            ! DEBUG: Log that we're handling Ctrl-T
-            call write_command_debug('Ctrl-T pressed - creating new tab')
-            ! Create new empty tab
-            call create_tab(editor, '[Untitled]')
-            ! Switch to the new tab (it's already active after create_tab)
-            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-                ! Copy the new tab's buffer to display
-                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+            ! Create new empty tab with unique name
+            block
+                integer :: untitled_counter, i, name_len, max_untitled, dash_pos, num_start
+                character(len=32) :: untitled_name, num_str
+                logical :: name_exists
+                integer :: ios
 
-                ! Update editor state with the new tab
-                if (allocated(editor%filename)) deallocate(editor%filename)
-                allocate(character(len=10) :: editor%filename)
-                editor%filename = '[Untitled]'
+                ! Scan existing tabs to find highest untitled number
+                max_untitled = 0
+                if (allocated(editor%tabs)) then
+                    do i = 1, size(editor%tabs)
+                        if (allocated(editor%tabs(i)%filename)) then
+                            ! Check if it's an untitled tab
+                            if (index(editor%tabs(i)%filename, '[Untitled') == 1) then
+                                ! Check for plain [Untitled]
+                                if (trim(editor%tabs(i)%filename) == '[Untitled]') then
+                                    max_untitled = max(max_untitled, 1)
+                                else
+                                    ! Check for [Untitled-N]
+                                    dash_pos = index(editor%tabs(i)%filename, '-')
+                                    if (dash_pos > 0) then
+                                        num_start = dash_pos + 1
+                                        num_str = editor%tabs(i)%filename(num_start:len_trim(editor%tabs(i)%filename)-1)
+                                        read(num_str, *, iostat=ios) untitled_counter
+                                        if (ios == 0) then
+                                            max_untitled = max(max_untitled, untitled_counter)
+                                        end if
+                                    end if
+                                end if
+                            end if
+                        end if
+                    end do
+                end if
 
-                ! Reset cursor to top
-                editor%cursors(editor%active_cursor)%line = 1
-                editor%cursors(editor%active_cursor)%column = 1
-                editor%cursors(editor%active_cursor)%desired_column = 1
-                editor%viewport_line = 1
-                editor%viewport_column = 1
-                editor%modified = .false.
-            end if
+                ! Start checking from max_untitled + 1, but check backwards too in case of gaps
+                untitled_counter = max(1, max_untitled)
+                do
+                    if (untitled_counter == 1) then
+                        write(untitled_name, '(A)') '[Untitled]'
+                    else
+                        write(untitled_name, '(A,I0,A)') '[Untitled-', untitled_counter, ']'
+                    end if
+
+                    ! Check if this name already exists
+                    name_exists = .false.
+                    if (allocated(editor%tabs)) then
+                        do i = 1, size(editor%tabs)
+                            if (allocated(editor%tabs(i)%filename)) then
+                                if (trim(editor%tabs(i)%filename) == trim(untitled_name)) then
+                                    name_exists = .true.
+                                    exit
+                                end if
+                            end if
+                        end do
+                    end if
+
+                    if (.not. name_exists) exit
+                    untitled_counter = untitled_counter + 1
+                end do
+
+                call create_tab(editor, trim(untitled_name))
+
+                ! Switch to the new tab (it's already active after create_tab)
+                if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                    ! Clear the display buffer and copy from the new tab's pane (which is empty)
+                    call cleanup_buffer(buffer)
+                    call init_buffer(buffer)
+
+                    ! Copy empty buffer to the new tab's pane
+                    if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
+                        size(editor%tabs(editor%active_tab_index)%panes) > 0) then
+                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(1)%buffer, buffer)
+                        call copy_buffer(editor%tabs(editor%active_tab_index)%buffer, buffer)
+                    end if
+
+                    ! Update editor state with the new tab
+                    name_len = len_trim(untitled_name)
+                    if (allocated(editor%filename)) deallocate(editor%filename)
+                    allocate(character(len=name_len) :: editor%filename)
+                    editor%filename = trim(untitled_name)
+
+                    ! Reset cursor to top
+                    editor%cursors(editor%active_cursor)%line = 1
+                    editor%cursors(editor%active_cursor)%column = 1
+                    editor%cursors(editor%active_cursor)%desired_column = 1
+                    editor%viewport_line = 1
+                    editor%viewport_column = 1
+                    editor%modified = .false.
+                end if
+            end block
 
         case('ctrl-j')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
@@ -4595,13 +4660,5 @@ contains
             end if
         end do
     end subroutine handle_dirty_buffers_before_switch
-
-    subroutine write_command_debug(message)
-        character(len=*), intent(in) :: message
-        integer :: unit
-        open(newunit=unit, file='/tmp/fac_debug.txt', status='unknown', position='append')
-        write(unit, '(A)') trim(message)
-        close(unit)
-    end subroutine write_command_debug
 
 end module command_handler_module
