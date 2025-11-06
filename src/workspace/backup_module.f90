@@ -128,14 +128,14 @@ contains
     subroutine backup_restore(workspace_path, backup_file, original_file, success)
         character(len=*), intent(in) :: workspace_path, backup_file, original_file
         logical, intent(out) :: success
-        character(len=MAX_PATH_LEN) :: backup_path, cmd
+        character(len=MAX_PATH_LEN) :: cmd
         integer :: ios
 
         success = .false.
-        backup_path = trim(workspace_path) // "/.fac/backups/" // trim(backup_file)
 
+        ! backup_file already contains full path, use it directly
         ! Copy backup to original location
-        write(cmd, '(A,A,A,A,A)') "cp '", trim(backup_path), "' '", trim(original_file), "'"
+        write(cmd, '(A,A,A,A,A)') "cp '", trim(backup_file), "' '", trim(original_file), "'"
         call execute_command_line(trim(cmd), wait=.true., exitstat=ios)
 
         if (ios == 0) then
@@ -148,10 +148,10 @@ contains
     !> Delete a backup file
     subroutine backup_delete(workspace_path, backup_file)
         character(len=*), intent(in) :: workspace_path, backup_file
-        character(len=MAX_PATH_LEN) :: backup_path, cmd
+        character(len=MAX_PATH_LEN) :: cmd
 
-        backup_path = trim(workspace_path) // "/.fac/backups/" // trim(backup_file)
-        write(cmd, '(A,A,A)') "rm -f '", trim(backup_path), "'"
+        ! backup_file already contains full path, use it directly
+        write(cmd, '(A,A,A)') "rm -f '", trim(backup_file), "'"
         call execute_command_line(trim(cmd), wait=.true.)
     end subroutine backup_delete
 

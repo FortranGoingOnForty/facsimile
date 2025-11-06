@@ -541,13 +541,11 @@ contains
     !> Show diff between backup and current file
     subroutine show_backup_diff(workspace_path, backup_file, original_file)
         character(len=*), intent(in) :: workspace_path, backup_file, original_file
-        character(len=512) :: backup_path, cmd
+        character(len=512) :: cmd
         character(len=32) :: key_input
         integer :: status
 
-        ! Build backup path
-        write(backup_path, '(A,A,A)') trim(workspace_path), '/.fac/backups/', trim(backup_file)
-
+        ! backup_file already contains full path, use it directly
         ! Clear screen and show diff
         call terminal_clear_screen()
         call terminal_move_cursor(1, 1)
@@ -556,7 +554,7 @@ contains
         call terminal_write('=' // repeat('=', 70))
 
         ! Shell out to diff command
-        write(cmd, '(A,A,A,A,A)') "diff -u '", trim(backup_path), "' '", trim(original_file), "'"
+        write(cmd, '(A,A,A,A,A)') "diff -u '", trim(backup_file), "' '", trim(original_file), "'"
         call execute_command_line(trim(cmd), wait=.true.)
 
         ! Wait for user
