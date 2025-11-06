@@ -2,11 +2,20 @@
 ! Handles workspace detection, creation, loading, and saving
 
 module workspace_module
+    use iso_c_binding, only: c_int
     use editor_state_module, only: editor_state_t, create_tab, sync_pane_to_editor
     use text_buffer_module, only: buffer_t, init_buffer
     use recents_module, only: recents_add_or_update
     implicit none
     private
+
+    ! Interface to C getpid function
+    interface
+        function getpid() bind(c, name="getpid")
+            use iso_c_binding, only: c_int
+            integer(c_int) :: getpid
+        end function getpid
+    end interface
 
     public :: workspace_exists, workspace_init, workspace_load, workspace_save
     public :: workspace_get_path, workspace_detect_from_file, workspace_is_file_in_workspace
@@ -76,17 +85,23 @@ contains
     subroutine workspace_get_path(input_path, absolute_path)
         character(len=*), intent(in) :: input_path
         character(len=MAX_PATH_LEN), intent(out) :: absolute_path
-        integer :: unit, ios
+        character(len=MAX_PATH_LEN) :: temp_file, pid_str
+        integer :: unit, ios, pid
+
+        ! Get process ID for unique temp file (avoid race conditions)
+        pid = getpid()
+        write(pid_str, '(I0)') pid
+        temp_file = '/tmp/.fac_realpath_' // trim(pid_str)
 
         ! Use realpath via shell command
-        call execute_command_line("realpath '" // trim(input_path) // "' > /tmp/.fac_realpath 2>/dev/null", &
+        call execute_command_line("realpath '" // trim(input_path) // "' > '" // trim(temp_file) // "' 2>/dev/null", &
                                  wait=.true.)
 
-        open(newunit=unit, file='/tmp/.fac_realpath', status='old', iostat=ios)
+        open(newunit=unit, file=trim(temp_file), status='old', iostat=ios)
         if (ios == 0) then
             read(unit, '(a)', iostat=ios) absolute_path
             close(unit)
-            call execute_command_line("rm -f /tmp/.fac_realpath", wait=.true.)
+            call execute_command_line("rm -f '" // trim(temp_file) // "'", wait=.true.)
         else
             absolute_path = input_path
         end if

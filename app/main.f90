@@ -504,6 +504,44 @@ contains
         should_quit = .true.
     end subroutine handle_single_file_on_quit
 
+    !> Handle a restored file - open in tab or reload existing tab
+    subroutine handle_restored_file(editor, buffer, restored_file)
+        use text_buffer_module, only: buffer_load_file
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=*), intent(in) :: restored_file
+        integer :: tab_idx, status
+        logical :: found
+
+        ! Check if file is already open in a tab
+        found = .false.
+        if (allocated(editor%tabs)) then
+            do tab_idx = 1, size(editor%tabs)
+                if (allocated(editor%tabs(tab_idx)%filename)) then
+                    if (trim(editor%tabs(tab_idx)%filename) == trim(restored_file)) then
+                        ! File is already in a tab - reload it
+                        found = .true.
+                        call switch_to_tab_with_buffer(editor, tab_idx, buffer)
+                        call buffer_load_file(buffer, restored_file, status)
+                        if (status == 0) then
+                            buffer%modified = .false.
+                            editor%tabs(tab_idx)%modified = .false.
+                        end if
+                        exit
+                    end if
+                end if
+            end do
+        end if
+
+        ! If not found, create a new tab with this file
+        if (.not. found) then
+            call create_tab(editor, restored_file)
+            if (allocated(editor%tabs) .and. editor%active_tab_index > 0) then
+                call switch_to_tab_with_buffer(editor, editor%active_tab_index, buffer)
+            end if
+        end if
+    end subroutine handle_restored_file
+
     !> Handle backup restoration on workspace load
     subroutine handle_backup_restoration(editor, buffer)
         use backup_module, only: backup_list, backup_info_t, backup_restore, backup_delete
@@ -529,6 +567,11 @@ contains
                     ! Restore the backup
                     call backup_restore(editor%workspace_path, backups(i)%backup_file, &
                                        backups(i)%original_file, restore_success)
+
+                    if (restore_success) then
+                        ! After successful restore, open/reload this file in a tab
+                        call handle_restored_file(editor, buffer, backups(i)%original_file)
+                    end if
 
                     ! Show confirmation
                     call terminal_clear_screen()
