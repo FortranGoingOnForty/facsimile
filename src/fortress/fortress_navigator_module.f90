@@ -168,11 +168,25 @@ contains
             end select
         end do
 
-        ! If not cancelled, allocate and set selected_path
+        ! Set outputs based on result
         if (.not. cancelled) then
-            is_directory = current_is_dir(selected)
+            ! Check if selected_path was already set (file selection in loop)
+            if (.not. allocated(selected_path)) then
+                ! Directory selection or other exit - set to current directory
+                selected_path = trim(current_dir)
+            end if
+            ! Determine if the selected path is a directory
+            if (allocated(selected_path)) then
+                if (selected_path == trim(current_dir)) then
+                    is_directory = .true.
+                else
+                    is_directory = .false.  ! Already set in loop for files
+                end if
+            end if
         else
+            ! Cancelled - set empty path
             selected_path = ""
+            is_directory = .false.
         end if
 
     end subroutine open_fortress_navigator

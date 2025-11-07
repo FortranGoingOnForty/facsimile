@@ -87,15 +87,30 @@ program facsimile
                     ! User cancelled navigation too
                     stop
                 end if
+
+                ! Handle the selection from navigator
+                if (is_directory) then
+                    ! Directory - open as workspace
+                    is_workspace_mode = .true.
+                    call workspace_get_path(trim(selected_path), workspace_dir)
+                else
+                    ! File - open in single-file mode (like `fac filename`)
+                    filename = selected_path
+                    ! Check if parent directory has a workspace
+                    workspace_dir = workspace_detect_from_file(trim(filename))
+                    if (len_trim(workspace_dir) > 0) then
+                        is_workspace_mode = .true.
+                    end if
+                end if
             else
                 ! User just cancelled
                 stop
             end if
         end if
 
-        ! User selected a workspace from welcome menu or navigator
-        ! Treat it as a directory argument
-        if (allocated(selected_path)) then
+        ! User selected a workspace from welcome menu (not browse)
+        ! This handles favorites, recents, and CURRENT DIRECTORY
+        if (allocated(selected_path) .and. .not. is_browse) then
             ! Check if user selected CURRENT DIRECTORY option
             if (selected_path == "CWD") then
                 ! Get actual current working directory
@@ -115,12 +130,10 @@ program facsimile
                 is_workspace_mode = .true.
                 call workspace_get_path(trim(arg), workspace_dir)
             else
-                ! Invalid selection
+                ! Invalid selection (favorites/recents should only have directories)
                 write(error_unit, '(A)') 'Error: Selected path is not a directory'
                 stop 1
             end if
-        else
-            stop
         end if
     end if
 
