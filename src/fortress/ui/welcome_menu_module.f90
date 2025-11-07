@@ -62,7 +62,7 @@ contains
                 case ('up', 'k')
                     if (selected_index > 0) then
                         selected_index = selected_index - 1
-                        call adjust_scroll(selected_index, scroll_offset, rows - 8)
+                        call adjust_scroll(scroll_offset)
                     end if
 
                 case ('down', 'j')
@@ -70,13 +70,13 @@ contains
                         ! Allow selecting up to fav_count (0 = CWD, 1..fav_count = favorites)
                         if (selected_index < fav_count) then
                             selected_index = selected_index + 1
-                            call adjust_scroll(selected_index, scroll_offset, rows - 8)
+                            call adjust_scroll(scroll_offset)
                         end if
                     else
                         ! Allow selecting up to rec_count (0 = CWD, 1..rec_count = recents)
                         if (selected_index < rec_count) then
                             selected_index = selected_index + 1
-                            call adjust_scroll(selected_index, scroll_offset, rows - 8)
+                            call adjust_scroll(scroll_offset)
                         end if
                     end if
 
@@ -266,13 +266,9 @@ contains
         call terminal_write(trim(line))
     end subroutine render_welcome_menu
 
-    !> Adjust scroll offset to keep selection visible
-    subroutine adjust_scroll(selected, offset, visible_height)
-        integer, intent(in) :: selected, visible_height
+    !> Adjust scroll offset to keep CURRENT DIRECTORY visible
+    subroutine adjust_scroll(offset)
         integer, intent(inout) :: offset
-        integer :: margin
-
-        margin = 2
 
         ! IMPORTANT: offset must always be 0 to keep CWD (index 0) visible
         ! Since CWD is always at the top, we never scroll past it
