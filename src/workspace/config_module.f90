@@ -18,7 +18,6 @@ contains
         character(len=:), allocatable, intent(out) :: config_path
         character(len=MAX_PATH_LEN) :: home_dir, xdg_config_home
         integer :: unit, ios
-        logical :: xdg_exists
 
         ! Try XDG_CONFIG_HOME environment variable
         call get_environment_variable('XDG_CONFIG_HOME', xdg_config_home)

@@ -100,7 +100,7 @@ contains
             if (need_redraw) then
                 call draw_fortress_interface(rows, cols, current_dir, &
                                              current_files, current_is_dir, current_is_exec, current_count, &
-                                             parent_files, parent_is_dir, parent_is_exec, parent_count, &
+                                             parent_files, parent_is_dir, parent_count, &
                                              selected, parent_selected, scroll_offset, parent_scroll_offset, first_draw)
 
                 ! Update tracking variables
@@ -125,7 +125,7 @@ contains
                     ! Check if arrow key or standalone ESC
                     if (check_arrow_key(key)) then
                         call handle_arrow_key(key, selected, current_dir, temp_dir, current_files, &
-                                             current_is_dir, current_count, parent_selected, rows - 4, running)
+                                             current_is_dir, current_count)
                     else
                         ! Standalone ESC - quit
                         cancelled = .true.
@@ -181,7 +181,7 @@ contains
     subroutine adjust_scroll(sel, offset, visible_height)
         integer, intent(in) :: sel, visible_height
         integer, intent(inout) :: offset
-        integer :: margin, center_pos
+        integer :: margin
 
         ! Add a margin to avoid selection being at the very edge
         margin = 3
@@ -225,14 +225,13 @@ contains
     end function check_arrow_key
 
     !> Handle arrow key navigation
-    subroutine handle_arrow_key(key, sel, curr_dir, temp_dir, files, is_dir, file_count, par_sel, vis_h, running)
+    subroutine handle_arrow_key(key, sel, curr_dir, temp_dir, files, is_dir, file_count)
         character(len=1), intent(in) :: key
-        integer, intent(inout) :: sel, par_sel
+        integer, intent(inout) :: sel
         character(len=MAX_PATH), intent(inout) :: curr_dir, temp_dir
         character(len=*), dimension(*), intent(in) :: files
         logical, dimension(*), intent(in) :: is_dir
-        integer, intent(in) :: file_count, vis_h
-        logical, intent(inout) :: running
+        integer, intent(in) :: file_count
 
         select case (key)
             case ('A')  ! Up arrow

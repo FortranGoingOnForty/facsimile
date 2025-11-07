@@ -21,7 +21,7 @@ contains
         character(len=*), intent(in) :: filename
         type(save_prompt_result_t), intent(out) :: result
         integer, intent(in), optional :: current_index, total_count
-        character(len=512) :: prompt_text, basename, progress_text
+        character(len=512) :: prompt_text, basename
         character(len=32) :: key_input
         integer :: status, i, slash_pos
         logical :: show_all_option

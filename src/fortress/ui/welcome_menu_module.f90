@@ -47,7 +47,7 @@ contains
         do
             ! Render menu
             call render_welcome_menu(favorites, fav_count, recents, rec_count, &
-                showing_favorites, selected_index, scroll_offset, rows, cols)
+                showing_favorites, selected_index, scroll_offset, rows)
 
             ! Get input
             call get_key_input(key_input, status)
@@ -139,12 +139,12 @@ contains
 
     !> Render the welcome menu
     subroutine render_welcome_menu(favorites, fav_count, recents, rec_count, &
-                                   showing_favorites, selected_index, scroll_offset, rows, cols)
+                                   showing_favorites, selected_index, scroll_offset, rows)
         type(favorite_t), intent(in) :: favorites(:)
         type(recent_t), intent(in) :: recents(:)
         integer, intent(in) :: fav_count, rec_count
         logical, intent(in) :: showing_favorites
-        integer, intent(in) :: selected_index, scroll_offset, rows, cols
+        integer, intent(in) :: selected_index, scroll_offset, rows
         character(len=512) :: line
         integer :: i, display_row, visible_height, item_count
         character(len=64) :: title
@@ -262,7 +262,7 @@ contains
     function directory_exists(path) result(exists)
         character(len=*), intent(in) :: path
         logical :: exists
-        integer :: unit, ios
+        integer :: ios
 
         ! Try to open directory (will fail if doesn't exist)
         call execute_command_line('test -d "' // trim(path) // '"', wait=.true., exitstat=ios)

@@ -213,12 +213,12 @@ contains
             if (size(editor%cursors) > 1) then
                 ! Move all cursors
                 do i = 1, size(editor%cursors)
-                    call move_cursor_up(editor%cursors(i), buffer, line_count)
+                    call move_cursor_up(editor%cursors(i), buffer)
                 end do
                 ! Remove duplicate cursors that ended up at same position
                 call deduplicate_cursors(editor)
             else
-                call move_cursor_up(editor%cursors(editor%active_cursor), buffer, line_count)
+                call move_cursor_up(editor%cursors(editor%active_cursor), buffer)
             end if
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
@@ -985,10 +985,9 @@ contains
         last_action_was_edit = is_edit_action
     end subroutine handle_key_command
 
-    subroutine move_cursor_up(cursor, buffer, line_count)
+    subroutine move_cursor_up(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
-        integer, intent(in) :: line_count
         character(len=:), allocatable :: current_line, target_line
 
         cursor%has_selection = .false.  ! Clear selection
@@ -3026,11 +3025,6 @@ contains
         found_col = 0
         line_count = buffer_get_line_count(buffer)
 
-        ! Prepare pattern for case-insensitive search if needed
-        if (.not. match_case_sensitive) then
-            search_pattern = to_lower(pattern)
-        end if
-
         ! Search from current position to end
         do current_line = start_line, line_count
             line = buffer_get_line(buffer, current_line)
@@ -3046,6 +3040,7 @@ contains
                 pos = index(line(search_col:), pattern)
             else
                 search_line = to_lower(line(search_col:))
+                search_pattern = to_lower(pattern)
                 pos = index(search_line, search_pattern)
                 if (allocated(search_line)) deallocate(search_line)
             end if
@@ -3072,6 +3067,7 @@ contains
                         pos = index(line(1:start_col-1), pattern)
                     else
                         search_line = to_lower(line(1:start_col-1))
+                        search_pattern = to_lower(pattern)
                         pos = index(search_line, search_pattern)
                         if (allocated(search_line)) deallocate(search_line)
                     end if
@@ -3083,6 +3079,7 @@ contains
                     pos = index(line, pattern)
                 else
                     search_line = to_lower(line)
+                    search_pattern = to_lower(pattern)
                     pos = index(search_line, search_pattern)
                     if (allocated(search_line)) deallocate(search_line)
                 end if
@@ -3867,22 +3864,22 @@ contains
         end if
     end subroutine delete_range
 
-    subroutine insert_char_at(buffer, line_num, col, ch)
-        type(buffer_t), intent(inout) :: buffer
-        integer, intent(in) :: line_num, col
-        character, intent(in) :: ch
-        integer :: pos
-
-        ! Calculate buffer position
-        pos = get_line_start_pos(buffer, line_num) + col - 1
-
-        ! Move gap to insertion point
-        call buffer_move_gap(buffer, pos)
-
-        ! Insert character
-        buffer%data(buffer%gap_start:buffer%gap_start) = ch
-        buffer%gap_start = buffer%gap_start + 1
-    end subroutine insert_char_at
+    ! UNUSED:     subroutine insert_char_at(buffer, line_num, col, ch)
+    ! UNUSED:         type(buffer_t), intent(inout) :: buffer
+    ! UNUSED:         integer, intent(in) :: line_num, col
+    ! UNUSED:         character, intent(in) :: ch
+    ! UNUSED:         integer :: pos
+    ! UNUSED: 
+    ! UNUSED:         ! Calculate buffer position
+    ! UNUSED:         pos = get_line_start_pos(buffer, line_num) + col - 1
+    ! UNUSED: 
+    ! UNUSED:         ! Move gap to insertion point
+    ! UNUSED:         call buffer_move_gap(buffer, pos)
+    ! UNUSED: 
+    ! UNUSED:         ! Insert character
+    ! UNUSED:         buffer%data(buffer%gap_start:buffer%gap_start) = ch
+    ! UNUSED:         buffer%gap_start = buffer%gap_start + 1
+    ! UNUSED:     end subroutine insert_char_at
 
     ! Handle input when in fuss mode
     subroutine handle_fuss_input(key_str, editor, buffer)
@@ -4597,7 +4594,7 @@ contains
 
                     ! Check for dirty buffers and prompt to save
                     if (allocated(editor%tabs)) then
-                        call handle_dirty_buffers_before_switch(editor, buffer, should_switch)
+                        call handle_dirty_buffers_before_switch(editor, should_switch)
                     end if
 
                     ! If user didn't cancel, perform the switch
@@ -4627,11 +4624,10 @@ contains
     end subroutine handle_fortress_navigator
 
     !> Handle dirty buffers before workspace switch
-    subroutine handle_dirty_buffers_before_switch(editor, buffer, should_continue)
+    subroutine handle_dirty_buffers_before_switch(editor, should_continue)
         use save_prompt_module, only: save_prompt, save_prompt_result_t
         use text_buffer_module, only: buffer_save_file
         type(editor_state_t), intent(inout) :: editor
-        type(buffer_t), intent(inout) :: buffer
         logical, intent(inout) :: should_continue
         type(save_prompt_result_t) :: prompt_result
         integer :: i, save_status

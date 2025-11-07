@@ -51,10 +51,7 @@ contains
         character(len=256) :: find_buffer, replace_buffer
         character(len=256) :: prompt
         integer :: find_pos, replace_pos, ch
-        logical :: found, in_alt_sequence
-        integer :: found_line, found_col
-        logical :: use_pane_buf
-        integer :: tab_i, pane_i
+        logical :: in_alt_sequence
 
         ! Initialize
         find_buffer = ''
@@ -364,7 +361,6 @@ contains
         character(len=*), intent(in) :: pattern
         logical :: found
         integer :: found_line, found_col
-        character(len=256) :: debug_msg
 
         ! Compile regex if in regex mode
         if (use_regex) then
@@ -482,8 +478,6 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         integer :: match_len
-        character(len=256) :: debug_msg
-        character(len=:), allocatable :: line
         integer :: tab_i, pane_i
 
         if (.not. allocated(current_search_pattern)) return

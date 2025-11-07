@@ -130,7 +130,7 @@ contains
         if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0 .and. &
             editor%active_tab_index <= size(editor%tabs)) then
             if (allocated(editor%tabs(editor%active_tab_index)%panes)) then
-                call render_all_panes(buffer, editor)
+                call render_all_panes(editor)
                 ! Render status bar after panes
                 call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
                 ! Position cursor for panes
@@ -673,7 +673,7 @@ contains
         call render_vertical_separator(separator_col, 2, editor%screen_rows - 1)
 
         ! Render editor in right pane (check for multiple panes)
-        call render_editor_area_with_tree(buffer, editor, editor_start_col, editor_width)
+        call render_editor_area_with_tree(editor, editor_start_col, editor_width)
 
         ! Render status bar (full width)
         call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
@@ -700,9 +700,8 @@ contains
         end do
     end subroutine render_vertical_separator
 
-    subroutine render_editor_area_with_tree(buffer, editor, start_col, width)
+    subroutine render_editor_area_with_tree(editor, start_col, width)
         use editor_state_module, only: pane_t
-        type(buffer_t), intent(in) :: buffer
         type(editor_state_t), intent(inout) :: editor
         integer, intent(in) :: start_col, width
         type(pane_t) :: pane
@@ -834,9 +833,8 @@ contains
         end do
     end subroutine render_editor_pane
 
-    subroutine render_all_panes(buffer, editor)
+    subroutine render_all_panes(editor)
         use editor_state_module, only: pane_t
-        type(buffer_t), intent(in) :: buffer
         type(editor_state_t), intent(inout) :: editor
         type(pane_t) :: pane
         integer :: i, tab_idx, n_panes, active_pane_idx

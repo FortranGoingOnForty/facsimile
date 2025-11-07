@@ -555,6 +555,7 @@ contains
 
         buffer = ''
         i = 1
+        is_release = .false.
 
         ! Read until 'M' (press) or 'm' (release)
         do

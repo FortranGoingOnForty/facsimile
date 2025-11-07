@@ -22,14 +22,14 @@ module fortress_display_module
 contains
 
     subroutine draw_fortress_interface(r, c, current_dir, current_files, current_is_dir, current_is_exec, &
-                                       current_count, parent_files, parent_is_dir, parent_is_exec, parent_count, &
+                                       current_count, parent_files, parent_is_dir, parent_count, &
                                        selected, parent_selected, scroll_offset, parent_scroll_offset, first_draw)
         integer, intent(in) :: r, c, current_count, parent_count, selected, parent_selected
         integer, intent(in) :: scroll_offset, parent_scroll_offset
         character(len=*), intent(in) :: current_dir
         character(len=*), dimension(*), intent(in) :: current_files, parent_files
         logical, dimension(*), intent(in) :: current_is_dir, parent_is_dir
-        logical, dimension(*), intent(in) :: current_is_exec, parent_is_exec
+        logical, dimension(*), intent(in) :: current_is_exec
         logical, intent(in), optional :: first_draw
         integer :: left_w, i, j, parent_idx, current_idx, vis_h
         character(len=256) :: parent_name, current_name

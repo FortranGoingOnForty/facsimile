@@ -11,10 +11,10 @@ module workspace_module
 
     ! Interface to C getpid function
     interface
-        function getpid() bind(c, name="getpid")
+        function c_getpid() bind(c, name="getpid")
             use iso_c_binding, only: c_int
-            integer(c_int) :: getpid
-        end function getpid
+            integer(c_int) :: c_getpid
+        end function c_getpid
     end interface
 
     public :: workspace_exists, workspace_init, workspace_load, workspace_save
@@ -89,7 +89,7 @@ contains
         integer :: unit, ios, pid
 
         ! Get process ID for unique temp file (avoid race conditions)
-        pid = getpid()
+        pid = c_getpid()
         write(pid_str, '(I0)') pid
         temp_file = '/tmp/.fac_realpath_' // trim(pid_str)
 

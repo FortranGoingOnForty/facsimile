@@ -27,7 +27,7 @@ contains
         logical, intent(out) :: success
         character(len=MAX_PATH_LEN) :: backup_dir, backup_file, basename
         character(len=MAX_PATH_LEN) :: src_file, timestamp_str
-        integer :: unit_src, unit_dst, ios, slash_pos, i
+        integer :: unit_src, unit_dst, ios, i
         character(len=1024) :: line
 
         success = .false.
@@ -99,7 +99,7 @@ contains
         type(backup_info_t), allocatable, intent(out) :: backups(:)
         integer, intent(out) :: count
         character(len=MAX_PATH_LEN) :: metadata_file, line
-        integer :: unit, ios, i
+        integer :: unit, ios
 
         count = 0
         allocate(backups(MAX_BACKUPS))
@@ -125,8 +125,8 @@ contains
     end subroutine backup_list
 
     !> Restore a backup file
-    subroutine backup_restore(workspace_path, backup_file, original_file, success)
-        character(len=*), intent(in) :: workspace_path, backup_file, original_file
+    subroutine backup_restore(backup_file, original_file, success)
+        character(len=*), intent(in) :: backup_file, original_file
         logical, intent(out) :: success
         integer :: unit_src, unit_dst, ios
         character(len=1024) :: line
@@ -155,13 +155,13 @@ contains
         close(unit_dst)
 
         ! Delete the backup after successful restore
-        call backup_delete(workspace_path, backup_file)
+        call backup_delete(backup_file)
         success = .true.
     end subroutine backup_restore
 
     !> Delete a backup file
-    subroutine backup_delete(workspace_path, backup_file)
-        character(len=*), intent(in) :: workspace_path, backup_file
+    subroutine backup_delete(backup_file)
+        character(len=*), intent(in) :: backup_file
         integer :: unit, ios
 
         ! Delete using Fortran file operations (avoids execute_command_line issues)
