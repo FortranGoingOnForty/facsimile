@@ -12,6 +12,7 @@ program facsimile
     use save_prompt_module
     use welcome_menu_module, only: show_welcome_menu
     use fortress_navigator_module, only: open_fortress_navigator
+    use binary_prompt_module, only: binary_file_prompt
     implicit none
 
     type(editor_state_t) :: editor
@@ -220,6 +221,37 @@ program facsimile
         if (status == 0) then
             allocate(character(len=len_trim(filename)) :: editor%filename)
             editor%filename = trim(filename)
+        else if (status == -2) then
+            ! Binary file detected - prompt user
+            if (binary_file_prompt(trim(filename))) then
+                ! User wants to view in hex mode
+                call buffer_load_file_as_hex(buffer, trim(filename), status)
+                if (status == 0) then
+                    ! Deallocate if already allocated
+                    if (allocated(editor%filename)) deallocate(editor%filename)
+                    allocate(character(len=len_trim(filename) + 6) :: editor%filename)
+                    editor%filename = trim(filename) // ' [HEX]'
+
+                    ! Copy hex buffer to tab and pane buffers
+                    if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                        call copy_buffer(editor%tabs(editor%active_tab_index)%buffer, buffer)
+                        if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
+                            size(editor%tabs(editor%active_tab_index)%panes) > 0) then
+                            call copy_buffer(editor%tabs(editor%active_tab_index)%panes(1)%buffer, buffer)
+                        end if
+                    end if
+                    ! TODO: Mark as read-only in future enhancement
+                else
+                    ! Failed to load hex view
+                    call terminal_cleanup()
+                    write(error_unit, '(A)') 'Error: Failed to load binary file'
+                    stop 1
+                end if
+            else
+                ! User cancelled - cleanup and exit
+                call terminal_cleanup()
+                stop
+            end if
         else
             ! If file doesn't exist, create empty buffer for new file
             call init_buffer(buffer)

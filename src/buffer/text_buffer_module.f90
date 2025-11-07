@@ -7,7 +7,7 @@ module text_buffer_module
     public :: buffer_t, init_buffer, cleanup_buffer, copy_buffer
     public :: buffer_insert, buffer_delete, buffer_get_char
     public :: buffer_get_line, buffer_get_line_count, buffer_get_line_char_count
-    public :: buffer_load_file, buffer_save_file
+    public :: buffer_load_file, buffer_save_file, buffer_load_file_as_hex
     public :: buffer_move_gap
     public :: buffer_char_at, buffer_byte_to_char_col, buffer_char_to_byte_col
 
@@ -252,8 +252,9 @@ contains
         type(buffer_t), intent(inout) :: buffer
         character(len=*), intent(in) :: filename
         integer, intent(out) :: status
-        integer :: unit, filesize, ios
+        integer :: unit, filesize, ios, i, null_count, check_size
         character(len=:), allocatable :: content
+        character :: ch
 
         status = -1
         open(newunit=unit, file=filename, status='old', action='read', &
@@ -266,6 +267,37 @@ contains
 
         inquire(unit=unit, size=filesize)
         if (filesize > 0) then
+            ! Check if file is binary by reading first chunk
+            check_size = min(512, filesize)
+            null_count = 0
+
+            ! Read first chunk to check for binary content
+            do i = 1, check_size
+                read(unit, iostat=ios) ch
+                if (ios /= 0) exit
+                if (iachar(ch) == 0) null_count = null_count + 1
+            end do
+
+            ! If more than 1% null bytes, it's likely binary
+            if (null_count > check_size / 100) then
+                close(unit)
+                write(error_unit, '(A)') ''
+                write(error_unit, '(A)') 'Error: Cannot open binary file: ' // trim(filename)
+                write(error_unit, '(A)') ''
+                write(error_unit, '(A)') 'This appears to be a binary file (contains null bytes).'
+                write(error_unit, '(A)') 'Binary files like .mod, .o, .a, executables, and images cannot be edited as text.'
+                write(error_unit, '(A)') ''
+                write(error_unit, '(A)') 'To view binary files, try:'
+                write(error_unit, '(A)') '  xxd ' // trim(filename) // '     # Hex dump'
+                write(error_unit, '(A)') '  file ' // trim(filename) // '    # File type info'
+                write(error_unit, '(A)') ''
+                status = -2  ! Special status for binary files
+                return
+            end if
+
+            ! Rewind to beginning to read full file
+            rewind(unit)
+
             allocate(character(len=filesize) :: content)
             read(unit, iostat=ios) content
             if (ios == 0) then
@@ -394,5 +426,123 @@ contains
         byte_col = utf8_char_to_byte_index(line, char_col)
         if (allocated(line)) deallocate(line)
     end function buffer_char_to_byte_col
+
+    ! Load binary file as hex display (like xxd format)
+    subroutine buffer_load_file_as_hex(buffer, filename, status)
+        type(buffer_t), intent(inout) :: buffer
+        character(len=*), intent(in) :: filename
+        integer, intent(out) :: status
+        integer :: unit, filesize, ios, i, line_count, bytes_read, byte_count
+        character(len=:), allocatable :: hex_content
+        character(len=16) :: byte_buffer
+        character(len=100) :: hex_line
+        character :: ch
+        integer :: line_offset
+
+        status = -1
+        open(newunit=unit, file=filename, status='old', action='read', &
+             form='unformatted', access='stream', iostat=ios)
+
+        if (ios /= 0) then
+            write(error_unit, *) 'Error opening file: ', trim(filename)
+            return
+        end if
+
+        inquire(unit=unit, size=filesize)
+        if (filesize > 0) then
+            ! Estimate hex content size (each byte becomes ~4 chars + formatting)
+            ! Format: "00000000: 00 01 02 ... 0f  ................\n"
+            ! Each line = 8 (offset) + 2 (: ) + 48 (hex) + 2 (  ) + 16 (ascii) + 1 (newline) = 77 chars
+            line_count = (filesize + 15) / 16  ! Round up to nearest 16-byte line
+            allocate(character(len=line_count * 80) :: hex_content)
+            hex_content = ''
+
+            line_offset = 0
+            bytes_read = 0
+
+            do while (bytes_read < filesize)
+                ! Clear byte buffer and read up to 16 bytes
+                byte_buffer = repeat(' ', 16)
+                byte_count = 0
+                do i = 1, 16
+                    if (bytes_read >= filesize) exit
+                    read(unit, iostat=ios) ch
+                    if (ios /= 0) exit
+                    byte_buffer(i:i) = ch
+                    bytes_read = bytes_read + 1
+                    byte_count = byte_count + 1
+                end do
+
+                if (byte_count == 0) exit
+
+                ! Build hex line (format similar to xxd)
+                hex_line = repeat(' ', 100)  ! Clear output line
+                call format_hex_line(byte_buffer, byte_count, line_offset, hex_line)
+                hex_content = trim(hex_content) // trim(hex_line) // char(10)
+                line_offset = line_offset + 16
+            end do
+
+            close(unit)
+
+            ! Initialize buffer with hex content
+            call init_buffer(buffer, trim(hex_content))
+            status = 0
+        else
+            close(unit)
+            call init_buffer(buffer, "Empty file")
+            status = 0
+        end if
+    end subroutine buffer_load_file_as_hex
+
+    ! Format a line in xxd-style hex display
+    subroutine format_hex_line(bytes, count, offset, output)
+        character(len=*), intent(in) :: bytes
+        integer, intent(in) :: count, offset
+        character(len=*), intent(out) :: output
+        integer :: i, byte_val, pos
+        character :: ch
+
+        ! Build the line: "00000000: 01 02 03 04 05 06 07 08  09 0a 0b 0c 0d 0e 0f 10  ................"
+        output = ''
+        pos = 1
+
+        ! Add offset (8 hex digits + ": ")
+        write(output(pos:pos+9), '(Z8.8,A)') offset, ': '
+        pos = 11
+
+        ! Add hex bytes (3 chars each: "XX ", plus extra space after 8th byte)
+        do i = 1, 16
+            if (i <= count) then
+                byte_val = iachar(bytes(i:i))
+                write(output(pos:pos+2), '(Z2.2,A)') byte_val, ' '
+            else
+                output(pos:pos+2) = '   '
+            end if
+            pos = pos + 3
+
+            ! Extra space after 8th byte
+            if (i == 8) then
+                output(pos:pos) = ' '
+                pos = pos + 1
+            end if
+        end do
+
+        ! Add ASCII representation
+        output(pos:pos) = ' '
+        pos = pos + 1
+
+        do i = 1, count
+            ch = bytes(i:i)
+            byte_val = iachar(ch)
+            if (byte_val >= 32 .and. byte_val <= 126) then
+                ! Printable ASCII
+                output(pos:pos) = ch
+            else
+                ! Non-printable - use dot
+                output(pos:pos) = '.'
+            end if
+            pos = pos + 1
+        end do
+    end subroutine format_hex_line
 
 end module text_buffer_module

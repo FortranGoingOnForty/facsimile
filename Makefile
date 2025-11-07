@@ -86,6 +86,7 @@ SOURCES = src/version_module.f90 \
           src/ui/unified_search_module.f90 \
           src/ui/goto_prompt_module.f90 \
           src/ui/save_prompt_module.f90 \
+          src/ui/binary_prompt_module.f90 \
           src/fortress/filesystem/fortress_fs_module.f90 \
           src/fortress/ui/fortress_display_module.f90 \
           src/fortress/ui/welcome_menu_module.f90 \

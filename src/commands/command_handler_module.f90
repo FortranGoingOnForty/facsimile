@@ -22,6 +22,7 @@ module command_handler_module
     use git_ops_module
     use text_prompt_module, only: show_text_prompt, show_yes_no_prompt
     use fortress_navigator_module, only: open_fortress_navigator
+    use binary_prompt_module, only: binary_file_prompt
     implicit none
     private
 
@@ -4084,6 +4085,27 @@ contains
         ! Load file into the new tab's buffer
         if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
             call buffer_load_file(editor%tabs(editor%active_tab_index)%buffer, full_path, status)
+
+            ! Handle binary files
+            if (status == -2) then
+                ! Binary file detected - prompt user
+                if (binary_file_prompt(full_path)) then
+                    ! User wants to view in hex mode
+                    call buffer_load_file_as_hex(editor%tabs(editor%active_tab_index)%buffer, full_path, status)
+                    if (status /= 0) then
+                        ! Failed to load hex view - close the tab and return
+                        call close_tab(editor, editor%active_tab_index)
+                        return
+                    end if
+                    ! Mark as hex view in filename
+                    full_path = trim(full_path) // ' [HEX]'
+                else
+                    ! User cancelled - close the tab and return
+                    call close_tab(editor, editor%active_tab_index)
+                    return
+                end if
+            end if
+
             if (status == 0) then
                 ! Copy tab's buffer to main buffer so it's displayed
                 call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
@@ -4159,6 +4181,27 @@ contains
             ! Load the file into the new pane's buffer
             if (allocated(editor%tabs(tab_idx)%panes) .and. pane_idx > 0) then
                 call buffer_load_file(editor%tabs(tab_idx)%panes(pane_idx)%buffer, full_path, status)
+
+                ! Handle binary files
+                if (status == -2) then
+                    ! Binary file detected - prompt user
+                    if (binary_file_prompt(full_path)) then
+                        ! User wants to view in hex mode
+                        call buffer_load_file_as_hex(editor%tabs(tab_idx)%panes(pane_idx)%buffer, full_path, status)
+                        if (status /= 0) then
+                            ! Failed to load hex view - close the pane and return
+                            call close_pane(editor)
+                            return
+                        end if
+                        ! Mark as hex view in filename
+                        full_path = trim(full_path) // ' [HEX]'
+                    else
+                        ! User cancelled - close the pane and return
+                        call close_pane(editor)
+                        return
+                    end if
+                end if
+
                 if (status == 0) then
                     ! Update filename for the pane
                     if (allocated(editor%tabs(tab_idx)%panes(pane_idx)%filename)) &
@@ -4230,6 +4273,27 @@ contains
             ! Load the file into the new pane's buffer
             if (allocated(editor%tabs(tab_idx)%panes) .and. pane_idx > 0) then
                 call buffer_load_file(editor%tabs(tab_idx)%panes(pane_idx)%buffer, full_path, status)
+
+                ! Handle binary files
+                if (status == -2) then
+                    ! Binary file detected - prompt user
+                    if (binary_file_prompt(full_path)) then
+                        ! User wants to view in hex mode
+                        call buffer_load_file_as_hex(editor%tabs(tab_idx)%panes(pane_idx)%buffer, full_path, status)
+                        if (status /= 0) then
+                            ! Failed to load hex view - close the pane and return
+                            call close_pane(editor)
+                            return
+                        end if
+                        ! Mark as hex view in filename
+                        full_path = trim(full_path) // ' [HEX]'
+                    else
+                        ! User cancelled - close the pane and return
+                        call close_pane(editor)
+                        return
+                    end if
+                end if
+
                 if (status == 0) then
                     ! Update filename for the pane
                     if (allocated(editor%tabs(tab_idx)%panes(pane_idx)%filename)) &
