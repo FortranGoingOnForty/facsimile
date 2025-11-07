@@ -1,0 +1,43 @@
+Scrollable Help Menu Test
+==========================
+
+The help menu (ctrl-/) now has these improvements:
+
+1. SCROLLABLE PAGER
+   - Navigate with arrow keys (↑↓) or vim keys (j/k)
+   - Page Up/Page Down for faster scrolling
+   - Home/End to jump to top/bottom
+   - Quit with 'q' or ESC
+   - Shows scroll position at bottom
+
+2. NEWLY ADDED KEYBINDINGS
+   - tab/shift-tab for tab switching (was missing!)
+   - alt-0 for jumping to tab 10
+   - esc for clearing selection
+   - ctrl-t for transpose characters
+   - alt-shift-' for removing brackets/quotes
+   - Better organization of special characters bindings
+
+3. COMPLETE SECTIONS
+   All sections now have their full keybindings:
+   - NAVIGATION (11 bindings)
+   - SELECTION (6 bindings)
+   - EDITING (11 bindings)
+   - CLIPBOARD (3 bindings)
+   - LINES (2 bindings)
+   - SEARCH & REPLACE (7 bindings)
+   - MULTIPLE CURSORS (3 bindings)
+   - SPECIAL (5 bindings)
+   - TABS (7 bindings)
+   - PANES (6 bindings)
+   - GIT (9 bindings in fuss mode)
+   - FILE (3 bindings)
+
+Try it now:
+1. Press ctrl-/ to open help
+2. Use j/k or arrows to scroll line by line
+3. Use PageDown to scroll faster
+4. Press q or ESC to exit
+
+On smaller terminals, you can now see ALL keybindings
+by scrolling, instead of having them cut off!

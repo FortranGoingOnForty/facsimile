@@ -73,6 +73,11 @@ SOURCES = src/version_module.f90 \
           src/workspace/file_tree_module.f90 \
           src/workspace/git_ops_module.f90 \
           src/workspace/file_tree_renderer_module.f90 \
+          src/workspace/config_module.f90 \
+          src/workspace/favorites_module.f90 \
+          src/workspace/recents_module.f90 \
+          src/workspace/workspace_module.f90 \
+          src/workspace/backup_module.f90 \
           src/terminal/renderer_module.f90 \
           src/ui/help_display_module.f90 \
           src/ui/text_prompt_module.f90 \
@@ -80,6 +85,11 @@ SOURCES = src/version_module.f90 \
           src/ui/replace_prompt_module.f90 \
           src/ui/unified_search_module.f90 \
           src/ui/goto_prompt_module.f90 \
+          src/ui/save_prompt_module.f90 \
+          src/fortress/filesystem/fortress_fs_module.f90 \
+          src/fortress/ui/fortress_display_module.f90 \
+          src/fortress/ui/welcome_menu_module.f90 \
+          src/fortress/fortress_navigator_module.f90 \
           src/commands/command_handler_module.f90 \
           app/main.f90
 

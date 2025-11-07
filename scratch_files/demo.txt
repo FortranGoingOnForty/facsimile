@@ -1,0 +1,48 @@
+==================================================
+        FACSIMILE EDITOR - FEATURE DEMO
+==================================================
+
+TEST QUOTE CYCLING (place cursor inside and press ctrl-'):
+"This text is in double quotes"
+'This text is in single quotes'
+`This text is in backticks`
+
+TEST BRACKET REMOVAL (place cursor inside and press ctrl-opt-backspace):
+(Remove these parentheses)
+[Remove these square brackets]
+{Remove these curly braces}
+
+TEST WORD JUMPING (use alt-left/right):
+The quick brown fox jumps over the lazy dog
+
+TEST LINE MANIPULATION:
+Line 1 - Move me with alt-up/down
+Line 2 - Duplicate me with alt-shift-up/down
+Line 3 - I stay in place
+
+TEST CLIPBOARD OPERATIONS:
+Copy this line with ctrl-c
+Cut this line with ctrl-x
+Then paste with ctrl-v
+
+TEST YANK STACK:
+Kill this forward with ctrl-k (from cursor)
+Kill this backward with ctrl-u (from cursor)
+Then yank back with ctrl-y
+
+PROGRAMMING EXAMPLE:
+function calculate(x, y) {
+    return (x + y) * 2;
+}
+
+const result = calculate(5, 10);
+console.log("Result is: " + result);
+
+==================================================
+All implemented keybinds work! Try them out:
+- Navigation: arrows, ctrl-a/e, alt-left/right
+- Editing: ctrl-k/u/y, ctrl-x/c/v
+- Line ops: alt-up/down, alt-shift-up/down
+- Special: ctrl-', ctrl-opt-backspace
+- File: ctrl-s (save), ctrl-q (quit)
+==================================================

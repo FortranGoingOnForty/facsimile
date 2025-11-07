@@ -9,7 +9,7 @@ module editor_state_module
     public :: create_tab, switch_to_tab, switch_to_tab_with_buffer, get_active_tab_index, close_tab
     public :: split_pane_vertical, split_pane_horizontal, close_pane, get_active_pane_indices
     public :: navigate_to_pane_left, navigate_to_pane_right, navigate_to_pane_up, navigate_to_pane_down
-    public :: sync_editor_to_pane, switch_to_pane, switch_to_pane_with_buffer
+    public :: sync_pane_to_editor, sync_editor_to_pane, switch_to_pane, switch_to_pane_with_buffer
     public :: sync_buffer_to_all_instances
 
     ! Cursor position and selection
@@ -65,6 +65,7 @@ module editor_state_module
         integer(int32) :: active_pane_index = 1
 
         logical :: modified = .false.
+        logical :: is_orphan = .false.  ! True if file is outside workspace (uses absolute path)
     end type tab_t
 
     ! Main editor state
@@ -760,6 +761,13 @@ contains
             end if
             editor%viewport_line = pane%viewport_line
             editor%viewport_column = pane%viewport_column
+
+            ! Sync filename from pane to editor
+            if (allocated(editor%filename)) deallocate(editor%filename)
+            if (allocated(pane%filename)) then
+                allocate(character(len=len(pane%filename)) :: editor%filename)
+                editor%filename = pane%filename
+            end if
         end associate
     end subroutine sync_pane_to_editor
 

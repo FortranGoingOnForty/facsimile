@@ -1,0 +1,18 @@
+Testing search and replace functionality.
+
+Test 1: Basic search highlighting
+The word test appears multiple times in this test file.
+We need to test that the search highlights the test correctly.
+
+Test 2: Regex search highlighting  
+Numbers: 123, 456, 789
+Emails: test@example.com, user@domain.org
+URLs: https://www.example.com
+
+Test 3: Replace behavior
+Replace these: foo foo foo
+After pressing ctrl-r on foo, cursor should be at end of replacement.
+
+Test 4: Variable length regex replace
+Words: test123, test456, test789
+Replace test[0-9]+ with "replaced" - cursor should be at end.

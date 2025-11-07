@@ -1,0 +1,9 @@
+Quick test for new features:
+
+1. Test shift selection: place cursor here and hold shift+right
+2. Test word deletion: delete this word with alt+d
+3. Test transpose: fix this typo "teh" with ctrl-t
+4. Test ctrl-h as backspace
+5. Test ctrl-w to delete word backward
+
+Success! All Phase 2 features are ready to use.

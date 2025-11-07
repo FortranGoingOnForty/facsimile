@@ -21,6 +21,7 @@ module command_handler_module
     use file_tree_module
     use git_ops_module
     use text_prompt_module, only: show_text_prompt, show_yes_no_prompt
+    use fortress_navigator_module, only: open_fortress_navigator
     implicit none
     private
 
@@ -105,6 +106,10 @@ contains
         case('ctrl-b')
             ! Toggle fuss mode (file tree)
             call toggle_fuss_mode(editor)
+
+        case('ctrl-o')
+            ! Open fortress navigator (file/directory picker)
+            call handle_fortress_navigator(editor, buffer)
 
         case('esc')
             ! ESC - Clear selections and return to single cursor mode
@@ -658,40 +663,14 @@ contains
             end if
 
         case('ctrl-w')
-            ! Close current tab (wipes editor if last tab)
+            ! Close current tab (prompts to save if modified)
             if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
-                ! Local variable for tab index
-                block
-                    integer :: tab_idx
-                    tab_idx = editor%active_tab_index
-
-                ! If this is the last tab, close it and clear editor
-                if (size(editor%tabs) == 1) then
-                    call close_tab(editor, tab_idx)
-
-                    ! Clear the buffer and open fuss mode
-                    call cleanup_buffer(buffer)
-                    call init_buffer(buffer)
-                    editor%fuss_mode_active = .true.
-                    if (allocated(editor%filename)) deallocate(editor%filename)
-                    editor%modified = .false.
-                    if (allocated(editor%workspace_path)) then
-                        call init_tree_state(tree_state, editor%workspace_path)
-                    end if
+                ! Check if tab is modified - prompt before closing
+                if (editor%tabs(editor%active_tab_index)%modified) then
+                    call prompt_save_before_close_tab(editor, buffer)
                 else
-                    ! Multiple tabs - close current tab normally
-                    call close_tab(editor, tab_idx)
-
-                    ! Copy new active tab's buffer
-                    if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
-                        call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
-                        editor%modified = editor%tabs(editor%active_tab_index)%modified
-                        if (allocated(editor%filename)) deallocate(editor%filename)
-                        allocate(character(len=len(editor%tabs(editor%active_tab_index)%filename)) :: editor%filename)
-                        editor%filename = editor%tabs(editor%active_tab_index)%filename
-                    end if
+                    call close_tab_without_prompt(editor, buffer)
                 end if
-                end block
             end if
 
         case('ctrl-shift-left', 'alt-h')
@@ -747,26 +726,96 @@ contains
             is_edit_action = .true.
 
         case('ctrl-t')
-            ! Create new empty tab
-            call create_tab(editor, '[Untitled]')
-            ! Switch to the new tab (it's already active after create_tab)
-            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-                ! Copy the new tab's buffer to display
-                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+            ! Create new empty tab with unique name
+            block
+                integer :: untitled_counter, i, name_len, max_untitled, dash_pos, num_start
+                character(len=32) :: untitled_name, num_str
+                logical :: name_exists
+                integer :: ios
 
-                ! Update editor state with the new tab
-                if (allocated(editor%filename)) deallocate(editor%filename)
-                allocate(character(len=10) :: editor%filename)
-                editor%filename = '[Untitled]'
+                ! Scan existing tabs to find highest untitled number
+                max_untitled = 0
+                if (allocated(editor%tabs)) then
+                    do i = 1, size(editor%tabs)
+                        if (allocated(editor%tabs(i)%filename)) then
+                            ! Check if it's an untitled tab
+                            if (index(editor%tabs(i)%filename, '[Untitled') == 1) then
+                                ! Check for plain [Untitled]
+                                if (trim(editor%tabs(i)%filename) == '[Untitled]') then
+                                    max_untitled = max(max_untitled, 1)
+                                else
+                                    ! Check for [Untitled-N]
+                                    dash_pos = index(editor%tabs(i)%filename, '-')
+                                    if (dash_pos > 0) then
+                                        num_start = dash_pos + 1
+                                        num_str = editor%tabs(i)%filename(num_start:len_trim(editor%tabs(i)%filename)-1)
+                                        read(num_str, *, iostat=ios) untitled_counter
+                                        if (ios == 0) then
+                                            max_untitled = max(max_untitled, untitled_counter)
+                                        end if
+                                    end if
+                                end if
+                            end if
+                        end if
+                    end do
+                end if
 
-                ! Reset cursor to top
-                editor%cursors(editor%active_cursor)%line = 1
-                editor%cursors(editor%active_cursor)%column = 1
-                editor%cursors(editor%active_cursor)%desired_column = 1
-                editor%viewport_line = 1
-                editor%viewport_column = 1
-                editor%modified = .false.
-            end if
+                ! Start checking from max_untitled + 1, but check backwards too in case of gaps
+                untitled_counter = max(1, max_untitled)
+                do
+                    if (untitled_counter == 1) then
+                        write(untitled_name, '(A)') '[Untitled]'
+                    else
+                        write(untitled_name, '(A,I0,A)') '[Untitled-', untitled_counter, ']'
+                    end if
+
+                    ! Check if this name already exists
+                    name_exists = .false.
+                    if (allocated(editor%tabs)) then
+                        do i = 1, size(editor%tabs)
+                            if (allocated(editor%tabs(i)%filename)) then
+                                if (trim(editor%tabs(i)%filename) == trim(untitled_name)) then
+                                    name_exists = .true.
+                                    exit
+                                end if
+                            end if
+                        end do
+                    end if
+
+                    if (.not. name_exists) exit
+                    untitled_counter = untitled_counter + 1
+                end do
+
+                call create_tab(editor, trim(untitled_name))
+
+                ! Switch to the new tab (it's already active after create_tab)
+                if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                    ! Clear the display buffer and copy from the new tab's pane (which is empty)
+                    call cleanup_buffer(buffer)
+                    call init_buffer(buffer)
+
+                    ! Copy empty buffer to the new tab's pane
+                    if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
+                        size(editor%tabs(editor%active_tab_index)%panes) > 0) then
+                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(1)%buffer, buffer)
+                        call copy_buffer(editor%tabs(editor%active_tab_index)%buffer, buffer)
+                    end if
+
+                    ! Update editor state with the new tab
+                    name_len = len_trim(untitled_name)
+                    if (allocated(editor%filename)) deallocate(editor%filename)
+                    allocate(character(len=name_len) :: editor%filename)
+                    editor%filename = trim(untitled_name)
+
+                    ! Reset cursor to top
+                    editor%cursors(editor%active_cursor)%line = 1
+                    editor%cursors(editor%active_cursor)%column = 1
+                    editor%cursors(editor%active_cursor)%desired_column = 1
+                    editor%viewport_line = 1
+                    editor%viewport_column = 1
+                    editor%modified = .false.
+                end if
+            end block
 
         case('ctrl-j')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
@@ -2262,19 +2311,55 @@ contains
     end subroutine paste_clipboard
 
     subroutine save_file(editor, buffer)
-        type(editor_state_t), intent(in) :: editor
+        use text_prompt_module, only: show_text_prompt
+        type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
-        integer :: ios
+        integer :: ios, tab_idx
         character(len=256) :: temp_filename, command
-        logical :: file_exists
+        character(len=512) :: new_filename
+        logical :: file_exists, cancelled
 
         if (.not. allocated(editor%filename)) return
 
-        ! Check if this is an untitled file
-        if (trim(editor%filename) == '[Untitled]') then
-            call terminal_move_cursor(editor%screen_rows, 1)
-            call terminal_write('Cannot save: Please use Save As or provide a filename (file is untitled)')
-            return
+        ! Check if this is an untitled file - prompt for filename
+        if (index(editor%filename, '[Untitled') == 1) then
+            call show_text_prompt('Save as: ', new_filename, cancelled, editor%screen_rows)
+
+            if (cancelled .or. len_trim(new_filename) == 0) then
+                ! User cancelled or entered empty filename
+                call terminal_move_cursor(editor%screen_rows, 1)
+                call terminal_write('Save cancelled')
+                return
+            end if
+
+            ! Update editor filename
+            if (allocated(editor%filename)) deallocate(editor%filename)
+            allocate(character(len=len_trim(new_filename)) :: editor%filename)
+            editor%filename = trim(new_filename)
+
+            ! Update tab filename if in workspace mode
+            if (allocated(editor%tabs) .and. editor%active_tab_index > 0) then
+                tab_idx = editor%active_tab_index
+                if (tab_idx <= size(editor%tabs)) then
+                    if (allocated(editor%tabs(tab_idx)%filename)) then
+                        deallocate(editor%tabs(tab_idx)%filename)
+                    end if
+                    allocate(character(len=len_trim(new_filename)) :: editor%tabs(tab_idx)%filename)
+                    editor%tabs(tab_idx)%filename = trim(new_filename)
+
+                    ! Update pane filename
+                    if (allocated(editor%tabs(tab_idx)%panes)) then
+                        if (size(editor%tabs(tab_idx)%panes) > 0) then
+                            if (allocated(editor%tabs(tab_idx)%panes(1)%filename)) then
+                                deallocate(editor%tabs(tab_idx)%panes(1)%filename)
+                            end if
+                            allocate(character(len=len_trim(new_filename)) :: &
+                                    editor%tabs(tab_idx)%panes(1)%filename)
+                            editor%tabs(tab_idx)%panes(1)%filename = trim(new_filename)
+                        end if
+                    end if
+                end if
+            end if
         end if
 
         ! First try normal save
@@ -4442,5 +4527,240 @@ contains
             editor%fuss_mode_active = .false.
         end if
     end subroutine handle_git_diff
+
+    subroutine handle_fortress_navigator(editor, buffer)
+        use workspace_module, only: workspace_is_file_in_workspace, workspace_switch
+        use save_prompt_module, only: save_prompt, save_prompt_result_t
+        use input_handler_module, only: get_key_input
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: selected_path
+        character(len=32) :: key_input
+        logical :: is_directory, cancelled, is_in_workspace, switch_success
+        logical :: should_switch
+        integer :: load_status, tab_idx, status
+
+        ! Call fortress navigator (start in workspace if available)
+        if (allocated(editor%workspace_path)) then
+            call open_fortress_navigator(selected_path, is_directory, cancelled, editor%workspace_path)
+        else
+            call open_fortress_navigator(selected_path, is_directory, cancelled)
+        end if
+
+        ! If user selected something, open it
+        if (.not. cancelled .and. allocated(selected_path)) then
+            if (len_trim(selected_path) > 0) then
+                if (.not. is_directory) then
+                    ! Selected a file - create a new tab for it
+                    ! Check if file is within workspace
+                    if (allocated(editor%workspace_path)) then
+                        is_in_workspace = workspace_is_file_in_workspace(selected_path, editor%workspace_path)
+                    else
+                        is_in_workspace = .false.
+                    end if
+
+                    ! Create new tab
+                    call create_tab(editor, trim(selected_path))
+                    tab_idx = editor%active_tab_index
+
+                    ! Mark as orphan if outside workspace
+                    if (allocated(editor%tabs) .and. tab_idx > 0 .and. tab_idx <= size(editor%tabs)) then
+                        editor%tabs(tab_idx)%is_orphan = .not. is_in_workspace
+
+                        ! Load file into tab's buffer
+                        call buffer_load_file(editor%tabs(tab_idx)%buffer, selected_path, load_status)
+
+                        ! Also load into first pane's buffer
+                        if (allocated(editor%tabs(tab_idx)%panes) .and. &
+                            size(editor%tabs(tab_idx)%panes) > 0) then
+                            call buffer_load_file(editor%tabs(tab_idx)%panes(1)%buffer, selected_path, load_status)
+                            ! Copy to main buffer for rendering
+                            call copy_buffer(buffer, editor%tabs(tab_idx)%panes(1)%buffer)
+                        else
+                            ! Copy tab buffer to main buffer
+                            call copy_buffer(buffer, editor%tabs(tab_idx)%buffer)
+                        end if
+
+                        ! Update editor filename
+                        if (allocated(editor%filename)) deallocate(editor%filename)
+                        allocate(character(len=len_trim(selected_path)) :: editor%filename)
+                        editor%filename = selected_path
+
+                        ! Reset cursor to top
+                        editor%cursors(editor%active_cursor)%line = 1
+                        editor%cursors(editor%active_cursor)%column = 1
+                        editor%cursors(editor%active_cursor)%desired_column = 1
+                    end if
+                else
+                    ! Selected a directory - switch workspace (Phase 6)
+                    should_switch = .true.
+
+                    ! Check for dirty buffers and prompt to save
+                    if (allocated(editor%tabs)) then
+                        call handle_dirty_buffers_before_switch(editor, buffer, should_switch)
+                    end if
+
+                    ! If user didn't cancel, perform the switch
+                    if (should_switch) then
+                        call workspace_switch(editor, selected_path, switch_success)
+
+                        if (.not. switch_success) then
+                            ! Show error message
+                            call terminal_move_cursor(1, 1)
+                            call terminal_write("Error: Could not switch to workspace: " // trim(selected_path))
+                            call terminal_write("Press any key to continue...")
+                            ! Wait for keypress (simple implementation)
+                            call get_key_input(key_input, status)
+                        else
+                            ! Phase 7: Update file tree if it's active after successful workspace switch
+                            if (editor%fuss_mode_active .and. allocated(editor%workspace_path)) then
+                                call refresh_tree_state(tree_state, editor%workspace_path)
+                            end if
+                        end if
+                    end if
+                end if
+            end if
+        end if
+
+        ! Re-render after returning from fortress
+        call terminal_clear_screen()
+    end subroutine handle_fortress_navigator
+
+    !> Handle dirty buffers before workspace switch
+    subroutine handle_dirty_buffers_before_switch(editor, buffer, should_continue)
+        use save_prompt_module, only: save_prompt, save_prompt_result_t
+        use text_buffer_module, only: buffer_save_file
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        logical, intent(inout) :: should_continue
+        type(save_prompt_result_t) :: prompt_result
+        integer :: i, save_status
+
+        should_continue = .true.
+
+        ! Check each tab for modified buffers
+        do i = 1, size(editor%tabs)
+            if (editor%tabs(i)%modified .and. allocated(editor%tabs(i)%filename)) then
+                ! Prompt user for this file
+                call save_prompt(editor%tabs(i)%filename, prompt_result)
+
+                select case (prompt_result%action)
+                    case ('y')
+                        ! Save the file
+                        if (allocated(editor%tabs(i)%panes) .and. size(editor%tabs(i)%panes) > 0) then
+                            call buffer_save_file(editor%tabs(i)%panes(1)%buffer, &
+                                                  editor%tabs(i)%filename, save_status)
+                        else
+                            call buffer_save_file(editor%tabs(i)%buffer, &
+                                                  editor%tabs(i)%filename, save_status)
+                        end if
+
+                        if (save_status == 0) then
+                            editor%tabs(i)%modified = .false.
+                        end if
+
+                    case ('n')
+                        ! Skip saving - continue
+
+                    case ('c')
+                        ! Cancel the workspace switch
+                        should_continue = .false.
+                        return
+                end select
+            end if
+        end do
+    end subroutine handle_dirty_buffers_before_switch
+
+    !> Prompt to save before closing tab
+    subroutine prompt_save_before_close_tab(editor, buffer)
+        use save_prompt_module, only: save_prompt, save_prompt_result_t
+        use text_prompt_module, only: show_text_prompt
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        type(save_prompt_result_t) :: prompt_result
+        integer :: save_status, tab_idx
+        character(len=512) :: new_filename
+        logical :: cancelled
+
+        tab_idx = editor%active_tab_index
+
+        ! Prompt user to save
+        call save_prompt(editor%tabs(tab_idx)%filename, prompt_result)
+
+        if (prompt_result%action == 's') then
+            ! User wants to save
+            ! Check if untitled - need filename
+            if (index(editor%tabs(tab_idx)%filename, '[Untitled') == 1) then
+                call show_text_prompt('Save as: ', new_filename, cancelled, editor%screen_rows)
+                if (.not. cancelled .and. len_trim(new_filename) > 0) then
+                    ! Update filename and save
+                    if (allocated(editor%tabs(tab_idx)%filename)) deallocate(editor%tabs(tab_idx)%filename)
+                    allocate(character(len=len_trim(new_filename)) :: editor%tabs(tab_idx)%filename)
+                    editor%tabs(tab_idx)%filename = trim(new_filename)
+
+                    call buffer_save_file(buffer, new_filename, save_status)
+                    if (save_status == 0) then
+                        buffer%modified = .false.
+                        editor%tabs(tab_idx)%modified = .false.
+                    end if
+                else
+                    ! User cancelled filename prompt - don't close tab
+                    return
+                end if
+            else
+                ! Not untitled - just save
+                call buffer_save_file(buffer, editor%tabs(tab_idx)%filename, save_status)
+                if (save_status == 0) then
+                    buffer%modified = .false.
+                    editor%tabs(tab_idx)%modified = .false.
+                end if
+            end if
+
+            ! After saving, close the tab
+            call close_tab_without_prompt(editor, buffer)
+
+        else if (prompt_result%action == 'd') then
+            ! User wants to discard - just close
+            call close_tab_without_prompt(editor, buffer)
+
+        ! else if 'c' (cancel) - do nothing, don't close tab
+        end if
+    end subroutine prompt_save_before_close_tab
+
+    !> Close tab without prompting
+    subroutine close_tab_without_prompt(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer :: tab_idx
+
+        tab_idx = editor%active_tab_index
+
+        ! If this is the last tab, close it and clear editor
+        if (size(editor%tabs) == 1) then
+            call close_tab(editor, tab_idx)
+
+            ! Clear the buffer and open fuss mode
+            call cleanup_buffer(buffer)
+            call init_buffer(buffer)
+            editor%fuss_mode_active = .true.
+            if (allocated(editor%filename)) deallocate(editor%filename)
+            editor%modified = .false.
+            if (allocated(editor%workspace_path)) then
+                call init_tree_state(tree_state, editor%workspace_path)
+            end if
+        else
+            ! Multiple tabs - close current tab normally
+            call close_tab(editor, tab_idx)
+
+            ! Copy new active tab's buffer
+            if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
+                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+                editor%modified = editor%tabs(editor%active_tab_index)%modified
+                if (allocated(editor%filename)) deallocate(editor%filename)
+                allocate(character(len=len(editor%tabs(editor%active_tab_index)%filename)) :: editor%filename)
+                editor%filename = editor%tabs(editor%active_tab_index)%filename
+            end if
+        end if
+    end subroutine close_tab_without_prompt
 
 end module command_handler_module
