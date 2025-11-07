@@ -94,10 +94,17 @@ program facsimile
         ! User selected a workspace from welcome menu or navigator
         ! Treat it as a directory argument
         if (allocated(selected_path)) then
-            arg = selected_path
+            ! Check if user selected CURRENT DIRECTORY option
+            if (selected_path == "CWD") then
+                ! Get actual current working directory
+                call get_workspace_path(selected_path)
+                arg = selected_path
+            else
+                arg = selected_path
+            end if
 
             ! Check if it's a directory
-            call execute_command_line("test -d '" // trim(arg) // "' && echo '1' > /tmp/.fac_filetype || echo '0' > /tmp/.fac_filetype", wait=.true.)
+            call execute_command_line("test -d '" // trim(arg) // "' && echo 'Directory' > /tmp/.fac_filetype || echo 'File' > /tmp/.fac_filetype", wait=.true.)
             call read_file_type(status)
             if (status == 0) then
                 ! Directory - workspace mode
