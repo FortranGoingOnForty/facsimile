@@ -17,7 +17,7 @@ program facsimile
     type(editor_state_t) :: editor
     type(buffer_t) :: buffer
     character(len=32) :: key_input
-    character(len=256) :: filename, arg, workspace_dir
+    character(len=512) :: filename, arg, workspace_dir
     logical :: running, should_quit, is_workspace_mode, workspace_success
     logical :: welcome_cancelled, is_browse, nav_cancelled, is_directory
     character(len=:), allocatable :: selected_path
@@ -46,8 +46,8 @@ program facsimile
         end if
 
         ! Check if argument is a directory (workspace mode)
-        ! Use stat -f %HT which always succeeds and returns the file type
-        call execute_command_line("stat -f '%HT' '" // trim(arg) // "' > /tmp/.fac_filetype 2>/dev/null || echo 'File' > /tmp/.fac_filetype", wait=.true.)
+        ! Use test -d which is POSIX compliant (works on Linux, macOS, BSD)
+        call execute_command_line("test -d '" // trim(arg) // "' && echo 'Directory' > /tmp/.fac_filetype || echo 'File' > /tmp/.fac_filetype", wait=.true.)
         call read_file_type(status)
         if (status == 0) then
             ! Directory - workspace mode
@@ -639,7 +639,7 @@ contains
 
             ! Skip [Untitled] backups - they're in-memory only
             if (index(backups(i)%original_file, '[Untitled') == 1) then
-                call backup_delete(editor%workspace_path, backups(i)%backup_file)
+                call backup_delete(backups(i)%backup_file)
                 cycle
             end if
 
@@ -653,11 +653,11 @@ contains
                     read(unique_backups(j)%timestamp, *, iostat=status) best_timestamp
                     if (status == 0 .and. current_timestamp > best_timestamp) then
                         ! This backup is newer - replace it and delete old one
-                        call backup_delete(editor%workspace_path, unique_backups(j)%backup_file)
+                        call backup_delete(unique_backups(j)%backup_file)
                         unique_backups(j) = backups(i)
                     else
                         ! Keep existing, delete this duplicate
-                        call backup_delete(editor%workspace_path, backups(i)%backup_file)
+                        call backup_delete(backups(i)%backup_file)
                     end if
                     exit
                 end if
@@ -679,7 +679,7 @@ contains
 
             if (choice == 'r') then
                 ! Restore the backup
-                call backup_restore(editor%workspace_path, unique_backups(i)%backup_file, &
+                call backup_restore(unique_backups(i)%backup_file, &
                                    unique_backups(i)%original_file, restore_success)
 
                 if (restore_success) then
@@ -703,12 +703,12 @@ contains
 
             else if (choice == 'd') then
                 ! Delete backup - keep current file
-                call backup_delete(editor%workspace_path, unique_backups(i)%backup_file)
+                call backup_delete(unique_backups(i)%backup_file)
                 i = i + 1  ! Move to next
 
             else if (choice == 'c') then
                 ! Compare - show diff (then loop back to prompt again)
-                call show_backup_diff(editor%workspace_path, unique_backups(i)%backup_file, &
+                call show_backup_diff(unique_backups(i)%backup_file, &
                                      unique_backups(i)%original_file)
                 ! Don't increment i - re-prompt for same file
             end if
@@ -719,8 +719,8 @@ contains
     end subroutine handle_backup_restoration
 
     !> Show diff between backup and current file
-    subroutine show_backup_diff(workspace_path, backup_file, original_file)
-        character(len=*), intent(in) :: workspace_path, backup_file, original_file
+    subroutine show_backup_diff(backup_file, original_file)
+        character(len=*), intent(in) :: backup_file, original_file
         character(len=512) :: cmd
         character(len=32) :: key_input
         integer :: status
