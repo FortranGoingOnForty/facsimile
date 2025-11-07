@@ -93,8 +93,9 @@ contains
             match_case_sensitive = .true.  ! Reset to default
         end if
 
-        ! Route input when in fuss mode (except ctrl-b and ctrl-q which work in both modes)
-        if (editor%fuss_mode_active .and. trim(key_str) /= 'ctrl-b' .and. trim(key_str) /= 'ctrl-q') then
+        ! Route input when in fuss mode (except ctrl-b/F2 and ctrl-q which work in both modes)
+        if (editor%fuss_mode_active .and. trim(key_str) /= 'ctrl-b' .and. &
+            trim(key_str) /= 'f2' .and. trim(key_str) /= 'ctrl-q') then
             call handle_fuss_input(key_str, editor, buffer)
             return
         end if
@@ -104,7 +105,7 @@ contains
         case('ctrl-q')
             should_quit = .true.
 
-        case('ctrl-b')
+        case('ctrl-b', 'f2')
             ! Toggle fuss mode (file tree)
             call toggle_fuss_mode(editor)
 
@@ -4107,6 +4108,14 @@ contains
             end if
 
             if (status == 0) then
+                ! Copy tab's buffer to pane's buffer
+                if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
+                    editor%tabs(editor%active_tab_index)%active_pane_index > 0) then
+                    call copy_buffer(editor%tabs(editor%active_tab_index)%panes( &
+                        editor%tabs(editor%active_tab_index)%active_pane_index)%buffer, &
+                        editor%tabs(editor%active_tab_index)%buffer)
+                end if
+
                 ! Copy tab's buffer to main buffer so it's displayed
                 call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
 

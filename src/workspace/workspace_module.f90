@@ -230,9 +230,25 @@ contains
         success = .false.
         workspace_file = trim(dir_path) // "/.fac/workspace.json"
 
+        ! DEBUG: Write to stderr (unit 0) so it doesn't interfere
+        write(0, '(A)') '[DEBUG SAVE] workspace_save_state called'
+        write(0, '(A)') '[DEBUG SAVE] Workspace file: ' // trim(workspace_file)
+        if (allocated(editor%tabs)) then
+            write(0, '(A,I0)') '[DEBUG SAVE] Tabs allocated, size: ', size(editor%tabs)
+            if (size(editor%tabs) > 0) then
+                write(0, '(A)') '[DEBUG SAVE] First tab filename: ' // trim(editor%tabs(1)%filename)
+            end if
+        else
+            write(0, '(A)') '[DEBUG SAVE] ERROR: Tabs not allocated!'
+        end if
+        write(0, '(A,I0)') '[DEBUG SAVE] Active tab index: ', editor%active_tab_index
+
         ! Open file for writing
         open(newunit=unit, file=workspace_file, status='replace', iostat=ios)
-        if (ios /= 0) return
+        if (ios /= 0) then
+            write(0, '(A,I0)') '[DEBUG SAVE] ERROR: Failed to open file, ios=', ios
+            return
+        end if
 
         ! Get current timestamp (simplified)
         call date_and_time(timestamp)
@@ -246,6 +262,7 @@ contains
 
         ! Write tabs
         if (allocated(editor%tabs)) then
+            write(0, '(A,I0)') '[DEBUG SAVE] Writing ', size(editor%tabs), ' tabs'
             ws_len = len_trim(dir_path)
             do i = 1, size(editor%tabs)
                 ! Write tab start - must be on its own line for parser
@@ -410,13 +427,20 @@ contains
         character(len=20) :: value_str
         character(len=512) :: warning_msg
 
+        ! DEBUG: Start of restoration
+        write(0, '(A)') '[DEBUG RESTORE WS] workspace_restore_state called'
+        write(0, '(A)') '[DEBUG RESTORE WS] Dir path: ' // trim(dir_path)
+
         success = .false.
         workspace_file = trim(dir_path) // "/.fac/workspace.json"
+
+        write(0, '(A)') '[DEBUG RESTORE WS] Workspace file: ' // trim(workspace_file)
 
         ! Open workspace file
         open(newunit=unit, file=workspace_file, status='old', iostat=ios)
         if (ios /= 0) then
             ! Workspace file doesn't exist or can't be read (Phase 7: error handling)
+            write(0, '(A,I0)') '[DEBUG RESTORE WS] ERROR: Failed to open workspace.json, ios=', ios
             warning_msg = "Warning: Could not open workspace.json - using empty workspace"
             call terminal_write(trim(warning_msg))
             ! Brief pause so user can see the warning
@@ -425,6 +449,8 @@ contains
             call workspace_init(dir_path, success)
             return
         end if
+
+        write(0, '(A)') '[DEBUG RESTORE WS] Workspace file opened successfully'
 
         ! Parse JSON line by line (simple parser for our specific format)
         in_tabs_array = .false.
@@ -435,6 +461,7 @@ contains
         pane_filename = ""
         is_orphan = .false.
         pane_count = 0
+        editor%active_tab_index = 1  ! Default to first tab
 
 
         do
@@ -446,6 +473,23 @@ contains
             ! Check if we're entering the tabs array
             if (index(line, '"tabs":') > 0) then
                 in_tabs_array = .true.
+                cycle
+            end if
+
+            ! Parse active_tab index (outside tabs array)
+            if (.not. in_tabs_array .and. index(line, '"active_tab":') > 0) then
+                colon_pos = index(line, ':')
+                comma_pos = index(line, ',')
+                if (colon_pos > 0) then
+                    if (comma_pos > colon_pos) then
+                        value_str = adjustl(line(colon_pos+1:comma_pos-1))
+                    else
+                        value_str = adjustl(line(colon_pos+1:))
+                    end if
+                    read(value_str, *, iostat=ios) editor%active_tab_index
+                    ! Ensure it's at least 1 if tabs were restored
+                    if (editor%active_tab_index < 1) editor%active_tab_index = 1
+                end if
                 cycle
             end if
 
@@ -567,14 +611,17 @@ contains
                         end if
 
                         ! Create tab
+                        write(0, '(A)') '[DEBUG RESTORE WS] Creating tab for file: ' // trim(full_path)
                         call create_tab(editor, trim(full_path))
                         tab_idx = editor%active_tab_index
 
                         ! Set orphan flag and load file
                         if (allocated(editor%tabs) .and. tab_idx > 0) then
+                            write(0, '(A,I0)') '[DEBUG RESTORE WS] Tab created successfully, index: ', tab_idx
                             editor%tabs(tab_idx)%is_orphan = is_orphan
 
                             call buffer_load_file(editor%tabs(tab_idx)%buffer, trim(full_path), load_status)
+                            write(0, '(A,I0)') '[DEBUG RESTORE WS] Buffer loaded, status: ', load_status
 
                             ! Set cursor and viewport in first pane
                             if (allocated(editor%tabs(tab_idx)%panes) .and. size(editor%tabs(tab_idx)%panes) > 0) then
@@ -739,6 +786,29 @@ contains
 
         close(unit)
 
+        write(0, '(A)') '[DEBUG RESTORE WS] Finished parsing JSON'
+
+        ! Clamp active_tab_index to valid range
+        if (allocated(editor%tabs)) then
+            write(0, '(A,I0)') '[DEBUG RESTORE WS] Tabs allocated, count: ', size(editor%tabs)
+            if (size(editor%tabs) > 0) then
+                if (editor%active_tab_index > size(editor%tabs)) then
+                    editor%active_tab_index = size(editor%tabs)
+                end if
+                if (editor%active_tab_index < 1) then
+                    editor%active_tab_index = 1
+                end if
+            else
+                write(0, '(A)') '[DEBUG RESTORE WS] No tabs in array!'
+                editor%active_tab_index = 0  ! No tabs
+            end if
+        else
+            write(0, '(A)') '[DEBUG RESTORE WS] Tabs NOT allocated!'
+            editor%active_tab_index = 0  ! No tabs
+        end if
+
+        write(0, '(A,I0)') '[DEBUG RESTORE WS] Final active_tab_index: ', editor%active_tab_index
+
         ! Sync the active pane to editor state so status bar shows correct filename
         if (allocated(editor%tabs) .and. editor%active_tab_index > 0) then
             if (editor%active_tab_index <= size(editor%tabs)) then
@@ -746,6 +816,7 @@ contains
                     if (editor%tabs(editor%active_tab_index)%active_pane_index > 0 .and. &
                         editor%tabs(editor%active_tab_index)%active_pane_index <= &
                         size(editor%tabs(editor%active_tab_index)%panes)) then
+                        write(0, '(A)') '[DEBUG RESTORE WS] Syncing active pane to editor'
                         call sync_pane_to_editor(editor, editor%active_tab_index, &
                                                 editor%tabs(editor%active_tab_index)%active_pane_index)
                     end if
@@ -754,6 +825,7 @@ contains
         end if
 
         success = .true.
+        write(0, '(A)') '[DEBUG RESTORE WS] workspace_restore_state completed successfully'
     end subroutine workspace_restore_state
 
     !> Track workspace in recents (helper function)

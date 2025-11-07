@@ -83,7 +83,7 @@ contains
 
     subroutine handle_escape_sequence(key_str)
         character(len=*), intent(out) :: key_str
-        character :: ch1, ch2, ch3, modifier_ch
+        character :: ch, ch1, ch2, ch3, modifier_ch
         integer :: char_code, ios
 
         key_str = 'esc'
@@ -176,15 +176,130 @@ contains
                     call handle_modified_special_key(key_str, 6)
                 end if
             case('1')
-                ! Modified arrow key or home/end: ESC [ 1 ; 2 A format
-                call handle_modified_key(key_str)
-            case('2', '4', '7', '8')
+                ! Could be function key (F1-F9) or modified arrow/home/end
+                ! Check next character
+                char_code = terminal_read_char()
+                if (char_code >= 0) then
+                    ch3 = achar(char_code)
+                    if (ch3 == '~') then
+                        ! F1: ESC [ 1 1 ~ (alternate format)
+                        key_str = 'f1'
+                    else if (ch3 == '0') then
+                        ! F10 might be ESC [ 2 1 ~, check for tilde
+                        char_code = terminal_read_char()
+                        if (char_code >= 0 .and. achar(char_code) == '~') then
+                            key_str = 'f10'
+                        end if
+                    else if (ch3 == '1' .or. ch3 == '2' .or. ch3 == '3' .or. ch3 == '4' .or. &
+                             ch3 == '5' .or. ch3 == '7' .or. ch3 == '8' .or. ch3 == '9') then
+                        ! Function keys F1-F9: ESC [ 1 X ~
+                        char_code = terminal_read_char()
+                        if (char_code >= 0 .and. achar(char_code) == '~') then
+                            select case(ch3)
+                            case('1')
+                                key_str = 'f1'
+                            case('2')
+                                key_str = 'f2'
+                            case('3')
+                                key_str = 'f3'
+                            case('4')
+                                key_str = 'f4'
+                            case('5')
+                                key_str = 'f5'
+                            case('7')
+                                key_str = 'f6'
+                            case('8')
+                                key_str = 'f7'
+                            case('9')
+                                key_str = 'f8'
+                            end select
+                        end if
+                    else if (ch3 == ';') then
+                        ! Modified arrow key or home/end: ESC [ 1 ; 2 A format
+                        call handle_modified_key(key_str)
+                    end if
+                end if
+            case('2')
+                ! Could be F9-F12 or alternate modified keys
+                char_code = terminal_read_char()
+                if (char_code >= 0) then
+                    ch3 = achar(char_code)
+                    if (ch3 == '0' .or. ch3 == '1' .or. ch3 == '3' .or. ch3 == '4') then
+                        ! Function keys F9-F12: ESC [ 2 X ~
+                        char_code = terminal_read_char()
+                        if (char_code >= 0 .and. achar(char_code) == '~') then
+                            select case(ch3)
+                            case('0')
+                                key_str = 'f9'
+                            case('1')
+                                key_str = 'f10'
+                            case('3')
+                                key_str = 'f11'
+                            case('4')
+                                key_str = 'f12'
+                            end select
+                        end if
+                    else if (ch3 == ';') then
+                        ! ESC [ 2 ; A format (shift+arrow)
+                        char_code = terminal_read_char()
+                        if (char_code >= 0) then
+                            ch = achar(char_code)
+                            key_str = 'shift-'
+                            select case(ch)
+                            case('A')
+                                key_str = trim(key_str) // 'up'
+                            case('B')
+                                key_str = trim(key_str) // 'down'
+                            case('C')
+                                key_str = trim(key_str) // 'right'
+                            case('D')
+                                key_str = trim(key_str) // 'left'
+                            end select
+                        end if
+                    else
+                        ! Direct format ESC [ 2 A (we already read the 'A' in ch3)
+                        key_str = 'shift-'
+                        select case(ch3)
+                        case('A')
+                            key_str = trim(key_str) // 'up'
+                        case('B')
+                            key_str = trim(key_str) // 'down'
+                        case('C')
+                            key_str = trim(key_str) // 'right'
+                        case('D')
+                            key_str = trim(key_str) // 'left'
+                        end select
+                    end if
+                end if
+            case('4', '7', '8')
                 ! Alternate format: ESC [ 2 A (modifier directly, no '1')
                 ! This is sent by some terminals for shift+arrows
                 call handle_alternate_modified_key(key_str, ch2)
             case('<')
                 ! Mouse event in SGR mode
                 call handle_mouse_event(key_str)
+            end select
+        else if (ch1 == 'O') then
+            ! SS3 sequence (e.g., function keys F1-F4)
+            char_code = terminal_read_char()
+            if (char_code < 0) then
+                ! Timeout - this is just Alt+O
+                key_str = 'alt-o'
+                return
+            end if
+            ch2 = achar(char_code)
+            select case(ch2)
+            case('P')
+                key_str = 'f1'
+            case('Q')
+                key_str = 'f2'
+            case('R')
+                key_str = 'f3'
+            case('S')
+                key_str = 'f4'
+            case default
+                ! Unknown SS3 sequence - return as Alt+ch2
+                write(key_str, '(a,a)') 'alt-', ch2
             end select
         else if (ch1 == achar(27)) then
             ! ESC ESC - likely Alt+something

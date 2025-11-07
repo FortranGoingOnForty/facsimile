@@ -112,42 +112,62 @@ program facsimile
         ! User selected a workspace from welcome menu (not browse)
         ! This handles favorites, recents, and CURRENT DIRECTORY
         if (allocated(selected_path) .and. .not. is_browse) then
+            write(0, '(A)') '[DEBUG WELCOME] selected_path allocated, value: ' // selected_path
+            write(0, '(A,L1)') '[DEBUG WELCOME] is_browse: ', is_browse
+
             ! Check if user selected CURRENT DIRECTORY option
             if (selected_path == "CWD") then
+                write(0, '(A)') '[DEBUG WELCOME] CWD selected, getting workspace path'
                 ! Get actual current working directory
                 call get_workspace_path(selected_path)
+                write(0, '(A)') '[DEBUG WELCOME] Workspace path: ' // selected_path
                 arg = selected_path
             else
+                write(0, '(A)') '[DEBUG WELCOME] Not CWD, using selected_path directly'
                 arg = selected_path
             end if
 
             ! Check if it's a directory
+            write(0, '(A)') '[DEBUG WELCOME] Testing if directory: ' // trim(arg)
             call execute_command_line("test -d '" // trim(arg) // &
                 "' && echo 'Directory' > /tmp/.fac_filetype || " // &
                 "echo 'File' > /tmp/.fac_filetype", wait=.true.)
             call read_file_type(status)
+            write(0, '(A,I0)') '[DEBUG WELCOME] read_file_type status: ', status
             if (status == 0) then
                 ! Directory - workspace mode
+                write(0, '(A)') '[DEBUG WELCOME] Setting is_workspace_mode = TRUE'
                 is_workspace_mode = .true.
                 call workspace_get_path(trim(arg), workspace_dir)
+                write(0, '(A)') '[DEBUG WELCOME] workspace_dir: ' // trim(workspace_dir)
             else
                 ! Invalid selection (favorites/recents should only have directories)
                 write(error_unit, '(A)') 'Error: Selected path is not a directory'
                 stop 1
             end if
+        else
+            write(0, '(A,L1)') '[DEBUG WELCOME] selected_path allocated: ', allocated(selected_path)
+            if (allocated(selected_path)) then
+                write(0, '(A)') '[DEBUG WELCOME] selected_path value: ' // selected_path
+            end if
+            write(0, '(A,L1)') '[DEBUG WELCOME] is_browse: ', is_browse
         end if
     end if
 
     ! Handle workspace mode
+    write(0, '(A,L1)') '[DEBUG WORKSPACE] is_workspace_mode: ', is_workspace_mode
     if (is_workspace_mode) then
+        write(0, '(A)') '[DEBUG WORKSPACE] In workspace mode, workspace_dir: ' // trim(workspace_dir)
         ! Check if workspace exists, create if not
         if (.not. workspace_exists(workspace_dir)) then
+            write(0, '(A)') '[DEBUG WORKSPACE] Workspace does not exist, creating'
             call workspace_init(workspace_dir, workspace_success)
             if (.not. workspace_success) then
                 write(error_unit, '(A)') 'Error: Failed to create workspace'
                 stop 1
             end if
         else
+            write(0, '(A)') '[DEBUG WORKSPACE] Workspace exists, loading'
             ! Load existing workspace
             call workspace_load(workspace_dir, workspace_success)
             if (.not. workspace_success) then
@@ -155,29 +175,67 @@ program facsimile
                 stop 1
             end if
         end if
+    else
+        write(0, '(A)') '[DEBUG WORKSPACE] NOT in workspace mode'
     end if
 
     ! Initialize editor
     call init_editor(editor)
     running = .true.
 
+    ! Initialize terminal early (needed for workspace restoration warnings)
+    call terminal_init()
+    call terminal_clear_screen()
+
+    ! Initialize main buffer early (needed for workspace restoration)
+    call init_buffer(buffer)
+
     ! Set workspace path
+    write(0, '(A,L1)') '[DEBUG RESTORE CHECK] is_workspace_mode: ', is_workspace_mode
     if (is_workspace_mode) then
+        write(0, '(A)') '[DEBUG RESTORE CHECK] workspace_dir: ' // trim(workspace_dir)
         ! Use detected/created workspace directory
         allocate(character(len=len_trim(workspace_dir)) :: editor%workspace_path)
         editor%workspace_path = trim(workspace_dir)
 
+        ! DEBUG: Print before restoration (unit 0 = stderr)
+        write(0, '(A)') '[DEBUG RESTORE] About to restore workspace from: ' // trim(editor%workspace_path)
+        write(0, '(A)') '[DEBUG RESTORE] Workspace JSON path: ' // trim(editor%workspace_path) // '/.fac/workspace.json'
+
         ! Restore workspace state (tabs, cursor positions, etc.)
         call workspace_restore_state(editor, editor%workspace_path, workspace_success)
-        ! Silently ignore restore failures for now
+
+        ! DEBUG: Print restoration results
+        write(0, '(A,L1)') '[DEBUG RESTORE] Workspace restore success: ', workspace_success
+        if (allocated(editor%tabs)) then
+            write(0, '(A,I0)') '[DEBUG RESTORE] Number of tabs restored: ', size(editor%tabs)
+        else
+            write(0, '(A)') '[DEBUG RESTORE] No tabs allocated after restore'
+        end if
+        write(0, '(A,I0)') '[DEBUG RESTORE] Active tab index: ', editor%active_tab_index
+
+        ! Sync restored active tab's buffer to main buffer
+        if (workspace_success .and. allocated(editor%tabs) .and. editor%active_tab_index > 0) then
+            if (editor%active_tab_index <= size(editor%tabs)) then
+                if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
+                    size(editor%tabs(editor%active_tab_index)%panes) > 0) then
+                    ! Copy active pane's buffer to main buffer (replaces the empty init)
+                    write(0, '(A)') '[DEBUG RESTORE] Copying restored tab buffer to main buffer'
+                    call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%panes(1)%buffer)
+                else
+                    write(0, '(A)') '[DEBUG RESTORE] Active tab has no panes!'
+                end if
+            else
+                write(0, '(A,I0,A,I0)') '[DEBUG RESTORE] Active tab index ', editor%active_tab_index, &
+                    ' exceeds tab count ', size(editor%tabs)
+            end if
+        else
+            write(0, '(A)') '[DEBUG RESTORE] Skipping buffer sync - conditions not met'
+        end if
     else
         ! Single-file mode - use current directory
         call get_workspace_path(editor%workspace_path)
     end if
-
-    ! Initialize terminal (before backup restore prompts)
-    call terminal_init()
-    call terminal_clear_screen()
 
     ! Check for backups and offer restoration (after workspace load, after terminal init)
     if (is_workspace_mode .and. backup_detect(editor%workspace_path)) then
@@ -259,7 +317,10 @@ program facsimile
             editor%filename = trim(filename)
         end if
     else
-        call init_buffer(buffer)
+        ! Only initialize empty buffer if we don't have restored tabs
+        if (.not. (allocated(editor%tabs) .and. editor%active_tab_index > 0)) then
+            call init_buffer(buffer)
+        end if
     end if
 
     ! Save initial file state for undo (position 0)
