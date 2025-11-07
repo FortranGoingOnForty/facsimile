@@ -111,7 +111,7 @@ $(TARGET): src/version_module.f90 $(OBJECTS) $(C_OBJECTS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(OBJECTS) $(C_OBJECTS) $(TARGET) *.mod src/*/*.mod src/workspace/*.o src/utils/*.o src/version_module.f90
+	rm -f $(OBJECTS) $(C_OBJECTS) $(TARGET) *.mod src/*/*.mod src/workspace/*.o src/utils/*.o
 
 # Development build with comprehensive warnings
 dev: clean
@@ -145,7 +145,9 @@ bump-patch:
 	@NEW_VERSION=$$(echo $(VERSION) | awk -F. '{print $$1"."$$2"."$$3+1}'); \
 	echo "Bumping to: $$NEW_VERSION"; \
 	echo $$NEW_VERSION > VERSION; \
-	echo "Updated VERSION file to $$NEW_VERSION"
+	echo "Updated VERSION file to $$NEW_VERSION"; \
+	$(MAKE) src/version_module.f90; \
+	echo "Updated src/version_module.f90"
 	@echo "Now run: make clean && make"
 
 bump-minor:
@@ -153,7 +155,9 @@ bump-minor:
 	@NEW_VERSION=$$(echo $(VERSION) | awk -F. '{print $$1"."$$2+1".0"}'); \
 	echo "Bumping to: $$NEW_VERSION"; \
 	echo $$NEW_VERSION > VERSION; \
-	echo "Updated VERSION file to $$NEW_VERSION"
+	echo "Updated VERSION file to $$NEW_VERSION"; \
+	$(MAKE) src/version_module.f90; \
+	echo "Updated src/version_module.f90"
 	@echo "Now run: make clean && make"
 
 bump-major:
@@ -161,7 +165,9 @@ bump-major:
 	@NEW_VERSION=$$(echo $(VERSION) | awk -F. '{print $$1+1".0.0"}'); \
 	echo "Bumping to: $$NEW_VERSION"; \
 	echo $$NEW_VERSION > VERSION; \
-	echo "Updated VERSION file to $$NEW_VERSION"
+	echo "Updated VERSION file to $$NEW_VERSION"; \
+	$(MAKE) src/version_module.f90; \
+	echo "Updated src/version_module.f90"
 	@echo "Now run: make clean && make"
 
 # Show current version
@@ -179,7 +185,7 @@ release: clean all
 	@echo ""
 	@echo "Next steps:"
 	@echo "1. Test the binary: ./$(TARGET)"
-	@echo "2. Commit changes: git add VERSION Makefile app/main.f90 .gitignore"
+	@echo "2. Commit changes: git add VERSION src/version_module.f90"
 	@echo "3. Commit: git commit -m 'Release v$(VERSION)'"
 	@echo "4. Tag: git tag v$(VERSION)"
 	@echo "5. Push: git push && git push --tags"
