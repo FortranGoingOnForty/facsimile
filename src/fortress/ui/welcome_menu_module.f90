@@ -153,15 +153,17 @@ contains
         call terminal_move_cursor(1, 1)
 
         ! Header
-        line = '╔═══════════════════════════════════════' // &
-               '═══════════════════════════════════╗'
+        line = '╔═══════════════════════' // &
+               '═══════════════════════' // &
+               '══════════════════════╗'
         call terminal_write(trim(line))
         call terminal_move_cursor(2, 1)
         write(line, '(A)') '║                     FAC - Welcome Menu                               ║'
         call terminal_write(trim(line))
         call terminal_move_cursor(3, 1)
-        line = '╚═══════════════════════════════════════' // &
-               '═══════════════════════════════════╝'
+        line = '╚═══════════════════════' // &
+               '═══════════════════════' // &
+               '══════════════════════╝'
         call terminal_write(trim(line))
 
         ! View title
@@ -177,8 +179,9 @@ contains
 
         ! Separator
         call terminal_move_cursor(6, 1)
-        line = '────────────────────────────────────────' // &
-               '────────────────────────────────────'
+        line = '────────────────────────' // &
+               '────────────────────────' // &
+               '──────────────────────'
         call terminal_write(trim(line))
 
         ! List items
@@ -225,8 +228,9 @@ contains
 
         ! Footer with keybindings
         call terminal_move_cursor(rows - 2, 1)
-        line = '────────────────────────────────────────' // &
-               '────────────────────────────────────'
+        line = '────────────────────────' // &
+               '────────────────────────' // &
+               '──────────────────────'
         call terminal_write(trim(line))
 
         call terminal_move_cursor(rows - 1, 1)

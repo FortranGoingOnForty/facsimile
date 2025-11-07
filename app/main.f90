@@ -47,7 +47,9 @@ program facsimile
 
         ! Check if argument is a directory (workspace mode)
         ! Use test -d which is POSIX compliant (works on Linux, macOS, BSD)
-        call execute_command_line("test -d '" // trim(arg) // "' && echo 'Directory' > /tmp/.fac_filetype || echo 'File' > /tmp/.fac_filetype", wait=.true.)
+        call execute_command_line("test -d '" // trim(arg) // &
+            "' && echo 'Directory' > /tmp/.fac_filetype || " // &
+            "echo 'File' > /tmp/.fac_filetype", wait=.true.)
         call read_file_type(status)
         if (status == 0) then
             ! Directory - workspace mode
@@ -97,7 +99,9 @@ program facsimile
             arg = selected_path
 
             ! Check if it's a directory
-            call execute_command_line("test -d '" // trim(arg) // "' && echo '1' > /tmp/.fac_filetype || echo '0' > /tmp/.fac_filetype", wait=.true.)
+            call execute_command_line("test -d '" // trim(arg) // &
+                "' && echo '1' > /tmp/.fac_filetype || " // &
+                "echo '0' > /tmp/.fac_filetype", wait=.true.)
             call read_file_type(status)
             if (status == 0) then
                 ! Directory - workspace mode
