@@ -399,6 +399,61 @@ contains
         write(output_unit, '(A)') '  ESC                  Exit find/replace mode'
     end subroutine print_help
 
+    !> Prompt for filename and save an untitled file
+    subroutine prompt_for_filename_and_save(editor, buffer, tab_index, success)
+        use text_prompt_module, only: show_text_prompt
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer, intent(in) :: tab_index
+        logical, intent(out) :: success
+        character(len=512) :: new_filename
+        logical :: cancelled
+        integer :: save_status
+
+        success = .false.
+
+        ! Prompt for filename
+        call show_text_prompt('Save as: ', new_filename, cancelled, editor%screen_rows)
+
+        if (cancelled .or. len_trim(new_filename) == 0) then
+            ! User cancelled or entered empty filename
+            return
+        end if
+
+        ! Update the tab filename
+        if (allocated(editor%tabs(tab_index)%filename)) then
+            deallocate(editor%tabs(tab_index)%filename)
+        end if
+        allocate(character(len=len_trim(new_filename)) :: editor%tabs(tab_index)%filename)
+        editor%tabs(tab_index)%filename = trim(new_filename)
+
+        ! Update pane filename if exists
+        if (allocated(editor%tabs(tab_index)%panes)) then
+            if (size(editor%tabs(tab_index)%panes) > 0) then
+                if (allocated(editor%tabs(tab_index)%panes(1)%filename)) then
+                    deallocate(editor%tabs(tab_index)%panes(1)%filename)
+                end if
+                allocate(character(len=len_trim(new_filename)) :: editor%tabs(tab_index)%panes(1)%filename)
+                editor%tabs(tab_index)%panes(1)%filename = trim(new_filename)
+            end if
+        end if
+
+        ! Update editor filename
+        if (allocated(editor%filename)) then
+            deallocate(editor%filename)
+        end if
+        allocate(character(len=len_trim(new_filename)) :: editor%filename)
+        editor%filename = trim(new_filename)
+
+        ! Now save the file
+        call buffer_save_file(buffer, new_filename, save_status)
+        if (save_status == 0) then
+            buffer%modified = .false.
+            editor%tabs(tab_index)%modified = .false.
+            success = .true.
+        end if
+    end subroutine prompt_for_filename_and_save
+
     !> Handle unsaved files on quit - prompt for save/backup
     subroutine handle_unsaved_files_on_quit(editor, buffer, should_quit)
         type(editor_state_t), intent(inout) :: editor
@@ -449,11 +504,17 @@ contains
                     editor%active_tab_index = i
                     call switch_to_tab_with_buffer(editor, i, buffer)
 
-                    ! Save the file (no backup - it's saved!)
-                    call buffer_save_file(buffer, editor%tabs(i)%filename, save_status)
-                    if (save_status == 0) then
-                        buffer%modified = .false.
-                        editor%tabs(i)%modified = .false.
+                    ! Check if this is an [Untitled] file - need to prompt for filename
+                    if (index(editor%tabs(i)%filename, '[Untitled') == 1) then
+                        call prompt_for_filename_and_save(editor, buffer, i, should_quit)
+                        if (.not. should_quit) return  ! User cancelled
+                    else
+                        ! Save the file (no backup - it's saved!)
+                        call buffer_save_file(buffer, editor%tabs(i)%filename, save_status)
+                        if (save_status == 0) then
+                            buffer%modified = .false.
+                            editor%tabs(i)%modified = .false.
+                        end if
                     end if
 
                 else if (prompt_result%action == 'd') then
