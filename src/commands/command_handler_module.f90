@@ -999,20 +999,18 @@ contains
 
         cursor%has_selection = .false.  ! Clear selection
         if (cursor%line > 1) then
-            ! Check if current line is empty
             current_line = buffer_get_line(buffer, cursor%line)
-
             cursor%line = cursor%line - 1
             target_line = buffer_get_line(buffer, cursor%line)
 
-            ! If coming from an empty line, go to end of target line
-            if (len(current_line) == 0) then
+            ! If on empty line with no goal column established, go to end of target line
+            ! Otherwise, use the goal column
+            if (len(current_line) == 0 .and. cursor%desired_column == 1) then
                 cursor%column = len(target_line) + 1
                 cursor%desired_column = cursor%column
             else
-                ! Normal behavior - use desired column
+                ! Use goal column, clamped to line bounds
                 cursor%column = cursor%desired_column
-                ! Clamp to line bounds
                 if (cursor%column > len(target_line) + 1) then
                     cursor%column = len(target_line) + 1
                 end if
@@ -1031,20 +1029,18 @@ contains
 
         cursor%has_selection = .false.  ! Clear selection
         if (cursor%line < line_count) then
-            ! Check if current line is empty
             current_line = buffer_get_line(buffer, cursor%line)
-
             cursor%line = cursor%line + 1
             target_line = buffer_get_line(buffer, cursor%line)
 
-            ! If coming from an empty line, go to column 1 of target line
-            if (len(current_line) == 0) then
+            ! If on empty line with no goal column established, go to col 1 of target line
+            ! Otherwise, use the goal column
+            if (len(current_line) == 0 .and. cursor%desired_column == 1) then
                 cursor%column = 1
-                cursor%desired_column = 1
+                ! desired_column stays 1
             else
-                ! Normal behavior - use desired column
+                ! Use goal column, clamped to line bounds
                 cursor%column = cursor%desired_column
-                ! Clamp to line bounds
                 if (cursor%column > len(target_line) + 1) then
                     cursor%column = len(target_line) + 1
                 end if
