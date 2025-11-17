@@ -39,14 +39,16 @@ contains
         call terminal_clear_screen()
         call terminal_move_cursor(3, 1)
 
-        write(prompt_text, '(A)') '══════════════════════════════════════════════'
+        prompt_text = '═══════════════════════' // &
+                      '═══════════════════════'
         call terminal_write(trim(prompt_text))
 
         call terminal_move_cursor(4, 1)
         call terminal_write('  WARNING: Binary File Detected')
 
         call terminal_move_cursor(5, 1)
-        write(prompt_text, '(A)') '══════════════════════════════════════════════'
+        prompt_text = '═══════════════════════' // &
+                      '═══════════════════════'
         call terminal_write(trim(prompt_text))
 
         call terminal_move_cursor(7, 1)
