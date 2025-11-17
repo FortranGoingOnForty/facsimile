@@ -7,10 +7,9 @@ module file_tree_renderer_module
 
     public :: render_file_tree
 
-    ! UTF-8 box-drawing characters
-    character(len=*), parameter :: BRANCH_LAST = '└──'
-    character(len=*), parameter :: BRANCH_MID = '├──'
-    character(len=*), parameter :: VERTICAL = '│'
+    ! Simple expansion indicators (no box-drawing)
+    character(len=*), parameter :: EXPANDED_DIR = '-'
+    character(len=*), parameter :: COLLAPSED_DIR = '+'
     character(len=1), parameter :: ESC = achar(27)
 
 contains
@@ -87,7 +86,7 @@ contains
                 ! Fourth row: exit
                 call terminal_move_cursor(end_row, start_col)
                 call terminal_write(ESC // '[90m') ! Gray
-                call terminal_write('ctrl-/:collapse esc/ctrl-b:close')
+                call terminal_write('ctrl-/:collapse esc/F3:close')
                 call terminal_write(ESC // '[0m')
             end if
         else
@@ -95,7 +94,7 @@ contains
             if (end_row >= start_row + 1) then
                 call terminal_move_cursor(end_row, start_col)
                 call terminal_write(ESC // '[90m') ! Gray
-                call terminal_write('.:hide  ctrl-/:hints  esc/ctrl-b:close')
+                call terminal_write('.:hide  ctrl-/:hints  esc/F3:close')
                 call terminal_write(ESC // '[0m')
             end if
         end if
@@ -110,7 +109,7 @@ contains
         integer, intent(inout) :: item_idx, current_row
         integer, intent(in) :: end_row, start_col, width
 
-        character(len=:), allocatable :: line, new_prefix, branch
+        character(len=:), allocatable :: line, new_prefix
         type(tree_node_t), pointer :: child
         logical :: is_selected, is_last_child
 
@@ -127,24 +126,23 @@ contains
 
             ! Only render if within viewport and current_row fits
             if (item_idx >= state%viewport_offset .and. current_row <= end_row) then
-                ! Build line with tree structure
-                if (is_last) then
-                    branch = BRANCH_LAST
-                else
-                    branch = BRANCH_MID
-                end if
-
-                ! Construct the line - prefix can be empty string, that's fine
-                if (.not. node%is_file .and. associated(node%first_child)) then
-                    ! Directory with children - add expand/collapse indicator
-                    if (node%expanded) then
-                        line = prefix // branch // ' ▾ ' // trim(node%name)
+                ! Build line with simple +/- indicators and indentation
+                if (.not. node%is_file) then
+                    ! Directory - add expand/collapse indicator and / suffix
+                    if (associated(node%first_child)) then
+                        ! Directory with children
+                        if (node%expanded) then
+                            line = prefix // EXPANDED_DIR // ' ' // trim(node%name) // '/'
+                        else
+                            line = prefix // COLLAPSED_DIR // ' ' // trim(node%name) // '/'
+                        end if
                     else
-                        line = prefix // branch // ' ▸ ' // trim(node%name)
+                        ! Empty directory - no expand/collapse indicator
+                        line = prefix // '  ' // trim(node%name) // '/'
                     end if
                 else
-                    ! File or empty directory - no indicator
-                    line = prefix // branch // ' ' // trim(node%name)
+                    ! File - just indentation and name
+                    line = prefix // '  ' // trim(node%name)
                 end if
 
                 ! Add status indicators for files only
@@ -194,15 +192,8 @@ contains
                 ! Root's children start with no prefix
                 new_prefix = ''
             else
-                ! Non-root children inherit prefix and add continuation
-                ! IMPORTANT: Don't trim prefix! It contains accumulated indentation
-                if (is_last) then
-                    ! Current node is last, so children get spaces (no vertical line continues)
-                    new_prefix = prefix // '    '
-                else
-                    ! Current node is not last, so vertical line continues for children
-                    new_prefix = prefix // VERTICAL // '   '
-                end if
+                ! Non-root children inherit prefix and add 2-space indentation
+                new_prefix = prefix // '  '
             end if
 
             call render_tree_node(child, new_prefix, is_last_child, .false., &

@@ -277,6 +277,7 @@ program facsimile
         end if
 
         if (status == 0) then
+            if (allocated(editor%filename)) deallocate(editor%filename)
             allocate(character(len=len_trim(filename)) :: editor%filename)
             editor%filename = trim(filename)
         else if (status == -2) then
@@ -313,6 +314,7 @@ program facsimile
         else
             ! If file doesn't exist, create empty buffer for new file
             call init_buffer(buffer)
+            if (allocated(editor%filename)) deallocate(editor%filename)
             allocate(character(len=len_trim(filename)) :: editor%filename)
             editor%filename = trim(filename)
         end if

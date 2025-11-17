@@ -93,9 +93,10 @@ contains
             match_case_sensitive = .true.  ! Reset to default
         end if
 
-        ! Route input when in fuss mode (except ctrl-b/F2 and ctrl-q which work in both modes)
+        ! Route input when in fuss mode (except ctrl-b/ctrl-shift-b/F2/F3 and ctrl-q which work in both modes)
         if (editor%fuss_mode_active .and. trim(key_str) /= 'ctrl-b' .and. &
-            trim(key_str) /= 'f2' .and. trim(key_str) /= 'ctrl-q') then
+            trim(key_str) /= 'ctrl-shift-b' .and. trim(key_str) /= 'f2' .and. &
+            trim(key_str) /= 'f3' .and. trim(key_str) /= 'ctrl-q') then
             call handle_fuss_input(key_str, editor, buffer)
             return
         end if
@@ -105,8 +106,12 @@ contains
         case('ctrl-q')
             should_quit = .true.
 
-        case('ctrl-b', 'f2')
+        case('ctrl-b', 'ctrl-shift-b', 'f2', 'f3')
             ! Toggle fuss mode (file tree)
+            ! ctrl-b: Original binding (conflicts with tmux prefix)
+            ! ctrl-shift-b: Alternative (tmux may still catch this)
+            ! f2: Alternative function key binding
+            ! f3: Tmux/terminal-safe alternative (recommended)
             call toggle_fuss_mode(editor)
 
         case('ctrl-o')

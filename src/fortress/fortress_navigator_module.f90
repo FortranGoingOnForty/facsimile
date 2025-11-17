@@ -136,16 +136,15 @@ contains
                     cancelled = .true.
                     running = .false.
 
-                case (char(10), char(13))  ! Enter - select current item
+                case (char(10), char(13))  ! Enter - select current item (file or directory)
                     if (current_count > 0) then
                         if (current_is_dir(selected)) then
-                            ! Enter directory
-                            temp_dir = current_dir
-                            current_dir = join_path(current_dir, trim(current_files(selected)))
-                            selected = 1
-                            scroll_offset = 0
+                            ! Select directory and exit
+                            selected_path = join_path(current_dir, trim(current_files(selected)))
+                            is_directory = .true.
+                            running = .false.
                         else
-                            ! Select file
+                            ! Select file and exit
                             selected_path = join_path(current_dir, trim(current_files(selected)))
                             is_directory = .false.
                             running = .false.

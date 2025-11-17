@@ -67,7 +67,7 @@ contains
             call get_key_input(key_input, status)
             if (status == 0) then
                 select case(trim(key_input))
-                case('q', 'Q', 'esc')
+                case('q', 'Q', 'esc', 'ctrl-/', 'ctrl-?')
                     done = .true.
                 case('up', 'k')
                     if (viewport_start > 1) viewport_start = viewport_start - 1
