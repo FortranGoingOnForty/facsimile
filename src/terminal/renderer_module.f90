@@ -584,8 +584,13 @@ contains
                         cursor = editor%tabs(tab_idx)%panes(pane_idx)%cursors(&
                                  editor%tabs(tab_idx)%panes(pane_idx)%active_cursor)
 
-                        ! Calculate pane dimensions
-                        screen_width = editor%screen_cols
+                        ! Calculate pane dimensions (account for fuss mode)
+                        if (editor%fuss_mode_active) then
+                            ! Fuss mode: editor takes ~70% of screen
+                            screen_width = editor%screen_cols * 70 / 100
+                        else
+                            screen_width = editor%screen_cols
+                        end if
                         screen_height = editor%screen_rows - 2
                         pane_height = int((editor%tabs(tab_idx)%panes(pane_idx)%y_end - &
                                           editor%tabs(tab_idx)%panes(pane_idx)%y_start) * real(screen_height))
@@ -631,11 +636,22 @@ contains
             editor%viewport_line = cursor%line - editor%screen_rows + margin + 2
         end if
 
-        ! Horizontal scrolling
+        ! Horizontal scrolling (account for fuss mode and line numbers)
+        if (editor%fuss_mode_active) then
+            screen_width = editor%screen_cols * 70 / 100
+        else
+            screen_width = editor%screen_cols
+        end if
+
+        ! Account for line numbers
+        if (show_line_numbers) then
+            screen_width = screen_width - LINE_NUMBER_WIDTH - 1
+        end if
+
         if (cursor%column < editor%viewport_column + margin) then
             editor%viewport_column = max(1, cursor%column - margin)
-        else if (cursor%column > editor%viewport_column + editor%screen_cols - margin) then
-            editor%viewport_column = cursor%column - editor%screen_cols + margin
+        else if (cursor%column > editor%viewport_column + screen_width - margin) then
+            editor%viewport_column = cursor%column - screen_width + margin
         end if
     end subroutine update_viewport
 
