@@ -247,8 +247,12 @@ program facsimile
     editor%screen_rows = rows
     editor%screen_cols = cols
 
-    ! Initialize renderer
-    call init_renderer(rows, cols)
+    ! Initialize renderer (pass filename for syntax highlighting detection)
+    if (len_trim(filename) > 0) then
+        call init_renderer(rows, cols, trim(filename))
+    else
+        call init_renderer(rows, cols)
+    end if
 
     ! Initialize command handler (for yank stack)
     call init_command_handler()

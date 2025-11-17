@@ -11,9 +11,16 @@ CC = gcc
 ifeq ($(UNAME_S),Darwin)
     # macOS
     ifeq ($(UNAME_M),arm64)
-        # Apple Silicon - use flang-new for better arm64 support
+        # Apple Silicon - use gfortran-15 for syntax highlighting support
         BREW_PREFIX = /opt/homebrew
-        ifneq ($(wildcard $(BREW_PREFIX)/bin/flang-new),)
+        ifneq ($(wildcard $(BREW_PREFIX)/bin/gfortran-15),)
+            FC = $(BREW_PREFIX)/bin/gfortran-15
+            FFLAGS = -O2 -Wall -ffree-line-length-none
+            FFLAGS_DEV = -O0 -g -Wall -Wextra -pedantic -Wunused-variable -Wuninitialized \
+                         -Wimplicit-interface -fcheck=all -fbacktrace -ffree-line-length-none
+            FFLAGS_DEBUG = -O0 -g -fcheck=all -fbacktrace -ffree-line-length-none
+        else ifneq ($(wildcard $(BREW_PREFIX)/bin/flang-new),)
+            # Fallback to flang-new if gfortran-15 not available
             FC = $(BREW_PREFIX)/bin/flang-new
             # flang-new flags
             FFLAGS = -O2
@@ -23,7 +30,7 @@ ifeq ($(UNAME_S),Darwin)
             # Debug flags with debug symbols
             FFLAGS_DEBUG = -O0 -g
         else
-            # Fallback to gfortran if flang-new not available
+            # Fallback to any available gfortran
             ifneq ($(wildcard $(BREW_PREFIX)/bin/gfortran-*),)
                 FC = $(shell ls $(BREW_PREFIX)/bin/gfortran-* | head -n1)
             endif
@@ -78,6 +85,7 @@ SOURCES = src/version_module.f90 \
           src/workspace/recents_module.f90 \
           src/workspace/workspace_module.f90 \
           src/workspace/backup_module.f90 \
+          src/syntax/syntax_highlighter_module.f90 \
           src/terminal/renderer_module.f90 \
           src/ui/help_display_module.f90 \
           src/ui/text_prompt_module.f90 \

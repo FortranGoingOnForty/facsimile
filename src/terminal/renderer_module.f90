@@ -7,6 +7,7 @@ module renderer_module
     use bracket_matching_module
     use file_tree_module
     use file_tree_renderer_module
+    use syntax_highlighter_module
     implicit none
     private
 
@@ -40,10 +41,14 @@ module renderer_module
     ! File tree state (for fuss mode)
     type(tree_state_t) :: tree_state
 
+    ! Syntax highlighting state
+    type(syntax_highlighter_t) :: syntax_highlighter
+
 contains
 
-    subroutine init_renderer(rows, cols)
+    subroutine init_renderer(rows, cols, filename)
         integer, intent(in) :: rows, cols
+        character(len=*), intent(in), optional :: filename
         integer :: i
 
         screen_buffer%rows = rows
@@ -54,10 +59,18 @@ contains
         do i = 1, rows
             screen_buffer%lines(i) = repeat(' ', cols)
         end do
+
+        ! Initialize syntax highlighter if filename provided
+        if (present(filename)) then
+            call init_highlighter(syntax_highlighter, filename)
+        else
+            call init_highlighter(syntax_highlighter)
+        end if
     end subroutine init_renderer
 
     subroutine cleanup_renderer()
         if (allocated(screen_buffer%lines)) deallocate(screen_buffer%lines)
+        call cleanup_highlighter(syntax_highlighter)
     end subroutine cleanup_renderer
 
     subroutine render_screen(buffer, editor, match_mode_active, match_case_sens)
@@ -203,13 +216,25 @@ contains
         type(editor_state_t), intent(in) :: editor
         integer, intent(in) :: line_num, start_col, width
         character(len=:), allocatable :: line
-        integer :: i, col, line_len
+        integer :: i, col, line_len, token_idx
         integer :: sel_start_line, sel_start_col, sel_end_line, sel_end_col
         logical :: in_selection, is_bracket_match, is_current_line
         character :: ch
+        type(token_t), allocatable :: tokens(:)
+        character(len=:), allocatable :: token_color
 
         line = buffer_get_line(buffer, line_num)
         line_len = len(line)
+
+        ! Get syntax tokens for this line
+        if (syntax_highlighter%enabled) then
+            call tokenize_line(syntax_highlighter, line, tokens)
+        else
+            allocate(tokens(1))
+            tokens(1)%type = TOKEN_PLAIN
+            tokens(1)%start_col = 1
+            tokens(1)%end_col = max(1, line_len)
+        end if
 
         ! Check if this is the current line
         is_current_line = (line_num == editor%cursors(editor%active_cursor)%line) .and. highlight_current_line
@@ -272,6 +297,17 @@ contains
                 is_bracket_match = .true.
             end if
 
+            ! Find which token this column belongs to
+            token_color = ""
+            if (syntax_highlighter%enabled) then
+                do token_idx = 1, size(tokens)
+                    if (col >= tokens(token_idx)%start_col .and. col <= tokens(token_idx)%end_col) then
+                        token_color = get_token_color(tokens(token_idx)%type)
+                        exit
+                    end if
+                end do
+            end if
+
             ! Render character with or without highlighting
             if (col <= line_len) then
                 ch = line(col:col)
@@ -286,8 +322,15 @@ contains
                 ! Highlight matching brackets with cyan background
                 call terminal_write(char(27) // '[46m' // ch // char(27) // '[0m')
             else if (is_current_line) then
-                ! Subtle background for current line (dark gray)
-                call terminal_write(char(27) // '[48;5;236m' // ch // char(27) // '[0m')
+                ! Subtle background for current line with syntax color
+                if (len(token_color) > 0) then
+                    call terminal_write(token_color // char(27) // '[48;5;236m' // ch // char(27) // '[0m')
+                else
+                    call terminal_write(char(27) // '[48;5;236m' // ch // char(27) // '[0m')
+                end if
+            else if (len(token_color) > 0) then
+                ! Apply syntax highlighting
+                call terminal_write(token_color // ch // char(27) // '[0m')
             else
                 call terminal_write(ch)
             end if
