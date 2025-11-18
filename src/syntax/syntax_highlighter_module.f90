@@ -211,6 +211,8 @@ contains
         if (token_count > 0) then
             tokens = tokens(1:token_count)
         else
+            ! tokens is already allocated, just resize to 1 element
+            deallocate(tokens)
             allocate(tokens(1))
             tokens(1)%type = TOKEN_PLAIN
             tokens(1)%start_col = 1

@@ -4,7 +4,7 @@ module command_handler_module
     use editor_state_module, only: editor_state_t, cursor_t, switch_to_tab_with_buffer, &
                                    close_tab, create_tab, close_pane, split_pane_vertical, split_pane_horizontal, &
                                    navigate_to_pane_left, navigate_to_pane_right, navigate_to_pane_up, navigate_to_pane_down, &
-                                   sync_editor_to_pane
+                                   sync_editor_to_pane, tab_t
     use text_buffer_module
     use renderer_module, only: update_viewport, render_screen, tree_state
     use yank_stack_module
@@ -23,6 +23,11 @@ module command_handler_module
     use text_prompt_module, only: show_text_prompt, show_yes_no_prompt
     use fortress_navigator_module, only: open_fortress_navigator
     use binary_prompt_module, only: binary_file_prompt
+    use lsp_server_manager_module, only: request_completion, request_hover
+    use completion_popup_module, only: show_completion_popup, hide_completion_popup, &
+                                        handle_completion_response, navigate_completion_up, &
+                                        navigate_completion_down, get_selected_completion, &
+                                        is_completion_visible
     implicit none
     private
 
@@ -119,6 +124,12 @@ contains
             call handle_fortress_navigator(editor, buffer)
 
         case('esc')
+            ! If completion popup is visible, hide it
+            if (is_completion_visible(editor%completion_popup)) then
+                call hide_completion_popup(editor%completion_popup)
+                return
+            end if
+
             ! ESC - Clear selections and return to single cursor mode
             if (size(editor%cursors) > 1) then
                 ! Keep only the active cursor
@@ -217,6 +228,12 @@ contains
 
         ! Navigation
         case('up')
+            ! If completion popup is visible, navigate it instead
+            if (is_completion_visible(editor%completion_popup)) then
+                call navigate_completion_up(editor%completion_popup)
+                return
+            end if
+
             if (size(editor%cursors) > 1) then
                 ! Move all cursors
                 do i = 1, size(editor%cursors)
@@ -231,6 +248,12 @@ contains
             call update_viewport(editor)
 
         case('down')
+            ! If completion popup is visible, navigate it instead
+            if (is_completion_visible(editor%completion_popup)) then
+                call navigate_completion_down(editor%completion_popup)
+                return
+            end if
+
             if (size(editor%cursors) > 1) then
                 ! Move all cursors
                 do i = 1, size(editor%cursors)
@@ -531,6 +554,28 @@ contains
             is_edit_action = .true.
 
         case('enter')
+            ! If completion popup is visible, insert selected completion
+            if (is_completion_visible(editor%completion_popup)) then
+                block
+                    character(len=:), allocatable :: completion_text
+                    integer :: text_i
+                    completion_text = get_selected_completion(editor%completion_popup)
+                    if (len(completion_text) > 0) then
+                        ! Insert the completion text at cursor
+                        if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+                        do text_i = 1, len(completion_text)
+                            call buffer_insert_char(buffer, editor%cursors(editor%active_cursor), &
+                                                   completion_text(text_i:text_i))
+                            editor%cursors(editor%active_cursor)%column = &
+                                editor%cursors(editor%active_cursor)%column + 1
+                        end do
+                    end if
+                    call hide_completion_popup(editor%completion_popup)
+                end block
+                is_edit_action = .true.
+                return
+            end if
+
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (size(editor%cursors) > 1) then
                 ! Sort cursors and apply from bottom to top to avoid position shifts
@@ -871,6 +916,51 @@ contains
             ! Save the active pane/tab's buffer
             ! (All panes in a tab share the same buffer, so saving saves the entire tab)
             call save_file(editor, buffer)
+
+        ! LSP features
+        case('ctrl-space')
+            ! Trigger code completion
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                    ! Request completion at current cursor position
+                    ! LSP uses 0-based positions
+                    block
+                        integer :: request_id, lsp_line, lsp_char
+                        lsp_line = editor%cursors(editor%active_cursor)%line - 1
+                        lsp_char = editor%cursors(editor%active_cursor)%column - 1
+
+                        request_id = request_completion(editor%lsp_manager, &
+                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            editor%tabs(editor%active_tab_index)%filename, &
+                            lsp_line, lsp_char)
+
+                        if (request_id > 0) then
+                            ! Show popup at cursor position (will populate when response arrives)
+                            call show_completion_popup(editor%completion_popup, &
+                                editor%cursors(editor%active_cursor)%line - editor%viewport_line + 2, &
+                                editor%cursors(editor%active_cursor)%column - editor%viewport_column + 1)
+                        end if
+                    end block
+                end if
+            end if
+
+        case('ctrl-h')
+            ! Trigger hover information
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                    ! Request hover at current cursor position
+                    block
+                        integer :: request_id, lsp_line, lsp_char
+                        lsp_line = editor%cursors(editor%active_cursor)%line - 1
+                        lsp_char = editor%cursors(editor%active_cursor)%column - 1
+
+                        request_id = request_hover(editor%lsp_manager, &
+                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            editor%tabs(editor%active_tab_index)%filename, &
+                            lsp_line, lsp_char)
+                    end block
+                end if
+            end if
 
         case("ctrl-'", "ctrl-apostrophe", "alt-'")
             ! Cycle quotes: " -> ' -> `

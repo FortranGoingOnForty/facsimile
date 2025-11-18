@@ -4,7 +4,10 @@ module editor_state_module
     use lsp_server_manager_module, only: lsp_manager_t, init_lsp_manager, cleanup_lsp_manager, &
                                          get_or_start_server, process_server_messages, &
                                          start_lsp_for_file, notify_file_opened, &
-                                         notify_file_changed, notify_file_closed
+                                         notify_file_changed, notify_file_closed, &
+                                         request_completion, request_hover
+    use completion_popup_module, only: completion_popup_t, init_completion_popup, &
+                                       cleanup_completion_popup
     implicit none
     private
 
@@ -97,6 +100,7 @@ module editor_state_module
 
         ! LSP support
         type(lsp_manager_t) :: lsp_manager
+        type(completion_popup_t) :: completion_popup
     end type editor_state_t
 
 contains
@@ -125,6 +129,9 @@ contains
 
         ! Initialize LSP manager
         call init_lsp_manager(editor%lsp_manager)
+
+        ! Initialize completion popup
+        call init_completion_popup(editor%completion_popup)
     end subroutine init_editor
 
     subroutine cleanup_editor(editor)
@@ -145,6 +152,9 @@ contains
 
         ! Cleanup LSP manager
         call cleanup_lsp_manager(editor%lsp_manager)
+
+        ! Cleanup completion popup
+        call cleanup_completion_popup(editor%completion_popup)
     end subroutine cleanup_editor
 
     ! Helper to cleanup a single tab

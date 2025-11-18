@@ -55,6 +55,8 @@ contains
 
         ! Check for special keys
         select case(iachar(ch))
+        case(0)  ! Ctrl-Space (NULL character)
+            key_str = 'ctrl-space'
         case(27)  ! ESC
             call handle_escape_sequence(key_str)
         case(9)  ! Tab
