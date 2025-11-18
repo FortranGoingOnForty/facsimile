@@ -19,6 +19,7 @@ module lsp_protocol_module
     public :: create_references_request
     public :: create_code_action_request
     public :: create_document_symbols_request
+    public :: create_signature_help_request
     public :: create_formatting_request
     public :: create_rename_request
     public :: parse_lsp_message
@@ -408,6 +409,31 @@ contains
 
         msg%params = params
     end function create_document_symbols_request
+
+    function create_signature_help_request(uri, line, character) result(msg)
+        character(len=*), intent(in) :: uri
+        integer, intent(in) :: line, character  ! 0-based LSP positions
+        type(lsp_message_t) :: msg
+        type(json_value_t) :: params, text_document, position
+
+        msg%jsonrpc = "2.0"
+        msg%id = get_next_request_id()
+        msg%method = "textDocument/signatureHelp"
+        msg%is_request = .true.
+
+        params = json_create_object()
+
+        text_document = json_create_object()
+        call json_add_string(text_document, "uri", uri)
+        call json_add_object(params, "textDocument", text_document)
+
+        position = json_create_object()
+        call json_add_number(position, "line", real(line, 8))
+        call json_add_number(position, "character", real(character, 8))
+        call json_add_object(params, "position", position)
+
+        msg%params = params
+    end function create_signature_help_request
 
     function create_formatting_request(uri, tab_size, insert_spaces) result(msg)
         character(len=*), intent(in) :: uri

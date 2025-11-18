@@ -24,7 +24,8 @@ module command_handler_module
     use fortress_navigator_module, only: open_fortress_navigator
     use binary_prompt_module, only: binary_file_prompt
     use lsp_server_manager_module, only: request_completion, request_hover, request_definition, &
-                                         request_references, request_code_actions, request_document_symbols
+                                         request_references, request_code_actions, request_document_symbols, &
+                                         request_signature_help
     use completion_popup_module, only: show_completion_popup, hide_completion_popup, &
                                         handle_completion_response, navigate_completion_up, &
                                         navigate_completion_down, get_selected_completion, &
@@ -51,6 +52,9 @@ module command_handler_module
                                     symbols_panel_handle_key, get_selected_symbol_location, &
                                     hide_symbols_panel, show_symbols_panel, &
                                     set_symbols, clear_symbols
+    use signature_tooltip_module, only: signature_tooltip_t, show_signature_tooltip, &
+                                        hide_signature_tooltip, is_signature_tooltip_visible, &
+                                        handle_signature_response
     use jump_stack_module, only: push_jump_location, pop_jump_location, &
                                  is_jump_stack_empty
     implicit none
@@ -1430,6 +1434,42 @@ contains
                 end if
                 call sync_editor_to_pane(editor)
                 is_edit_action = .true.
+
+                ! Auto-trigger signature help on '(' or ','
+                if (key_str(1:1) == '(' .or. key_str(1:1) == ',') then
+                    if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                        if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                            block
+                                integer :: request_id, lsp_line, lsp_char
+                                lsp_line = editor%cursors(editor%active_cursor)%line - 1
+                                lsp_char = editor%cursors(editor%active_cursor)%column - 1
+
+                                ! Save editor state for callback
+                                if (.not. allocated(saved_editor_for_callback)) then
+                                    allocate(saved_editor_for_callback)
+                                end if
+                                saved_editor_for_callback = editor
+
+                                request_id = request_signature_help(editor%lsp_manager, &
+                                    editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                                    editor%tabs(editor%active_tab_index)%filename, &
+                                    lsp_line, lsp_char, handle_signature_response_wrapper)
+
+                                if (request_id > 0) then
+                                    ! Show tooltip placeholder
+                                    call show_signature_tooltip(editor%signature_tooltip, &
+                                        editor%cursors(editor%active_cursor)%line - editor%viewport_line + 1, &
+                                        editor%cursors(editor%active_cursor)%column - editor%viewport_column + 1)
+                                end if
+                            end block
+                        end if
+                    end if
+                end if
+
+                ! Hide signature help on ')'
+                if (key_str(1:1) == ')') then
+                    call hide_signature_tooltip(editor%signature_tooltip)
+                end if
             end if
         end select
 
@@ -5711,5 +5751,17 @@ contains
         deallocate(symbols)
 
     end subroutine handle_symbols_response_impl
+
+    ! Wrapper callback that matches the LSP callback signature for signature help
+    subroutine handle_signature_response_wrapper(request_id, response)
+        use lsp_protocol_module, only: lsp_message_t
+        integer, intent(in) :: request_id
+        type(lsp_message_t), intent(in) :: response
+
+        ! Call the actual handler with saved editor state
+        if (allocated(saved_editor_for_callback)) then
+            call handle_signature_response(saved_editor_for_callback%signature_tooltip, response)
+        end if
+    end subroutine handle_signature_response_wrapper
 
 end module command_handler_module
