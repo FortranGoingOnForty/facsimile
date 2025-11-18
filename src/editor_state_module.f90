@@ -16,6 +16,8 @@ module editor_state_module
                                        cleanup_diagnostics_panel
     use references_panel_module, only: references_panel_t, init_references_panel, &
                                       cleanup_references_panel
+    use code_actions_menu_module, only: code_actions_menu_t, init_code_actions_menu, &
+                                        cleanup_code_actions_menu
     use document_sync_module, only: document_sync_t, init_document_sync, &
                                     cleanup_document_sync
     use jump_stack_module, only: jump_stack_t, init_jump_stack, &
@@ -118,6 +120,7 @@ module editor_state_module
         type(diagnostics_store_t) :: diagnostics
         type(diagnostics_panel_t) :: diagnostics_panel
         type(references_panel_t) :: references_panel
+        type(code_actions_menu_t) :: code_actions_menu
 
         ! Navigation
         type(jump_stack_t) :: jump_stack
@@ -165,6 +168,9 @@ contains
         ! Initialize references panel
         call init_references_panel(editor%references_panel)
 
+        ! Initialize code actions menu
+        call init_code_actions_menu(editor%code_actions_menu)
+
         ! Initialize jump stack
         call init_jump_stack(editor%jump_stack)
     end subroutine init_editor
@@ -202,6 +208,9 @@ contains
 
         ! Cleanup references panel
         call cleanup_references_panel(editor%references_panel)
+
+        ! Cleanup code actions menu
+        call cleanup_code_actions_menu(editor%code_actions_menu)
 
         ! Cleanup jump stack
         call cleanup_jump_stack(editor%jump_stack)

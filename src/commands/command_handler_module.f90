@@ -24,7 +24,7 @@ module command_handler_module
     use fortress_navigator_module, only: open_fortress_navigator
     use binary_prompt_module, only: binary_file_prompt
     use lsp_server_manager_module, only: request_completion, request_hover, request_definition, &
-                                         request_references
+                                         request_references, request_code_actions
     use completion_popup_module, only: show_completion_popup, hide_completion_popup, &
                                         handle_completion_response, navigate_completion_up, &
                                         navigate_completion_down, get_selected_completion, &
@@ -41,6 +41,11 @@ module command_handler_module
                                       hide_references_panel, &
                                       show_references_panel, &
                                       set_references, reference_location_t
+    use code_actions_menu_module, only: code_actions_menu_t, init_code_actions_menu, &
+                                        cleanup_code_actions_menu, show_code_actions_menu, &
+                                        hide_code_actions_menu, is_code_actions_menu_visible, &
+                                        code_actions_menu_handle_key, set_code_actions, &
+                                        clear_code_actions, get_selected_action
     use jump_stack_module, only: push_jump_location, pop_jump_location, &
                                  is_jump_stack_empty
     implicit none
@@ -169,6 +174,13 @@ contains
                 end if
             end if
 
+            ! If code actions menu is visible, hide it
+            if (is_code_actions_menu_visible(editor%code_actions_menu)) then
+                if (code_actions_menu_handle_key(editor%code_actions_menu, trim(key_str))) then
+                    return
+                end if
+            end if
+
             ! ESC - Clear selections and return to single cursor mode
             if (size(editor%cursors) > 1) then
                 ! Keep only the active cursor
@@ -287,6 +299,13 @@ contains
                 end if
             end if
 
+            ! If code actions menu is visible, navigate it
+            if (is_code_actions_menu_visible(editor%code_actions_menu)) then
+                if (code_actions_menu_handle_key(editor%code_actions_menu, trim(key_str))) then
+                    return
+                end if
+            end if
+
             if (size(editor%cursors) > 1) then
                 ! Move all cursors
                 do i = 1, size(editor%cursors)
@@ -317,6 +336,13 @@ contains
             ! If references panel is visible, navigate it
             if (is_references_panel_visible(editor%references_panel)) then
                 if (references_panel_handle_key(editor%references_panel, trim(key_str))) then
+                    return
+                end if
+            end if
+
+            ! If code actions menu is visible, navigate it
+            if (is_code_actions_menu_visible(editor%code_actions_menu)) then
+                if (code_actions_menu_handle_key(editor%code_actions_menu, trim(key_str))) then
                     return
                 end if
             end if
@@ -631,6 +657,24 @@ contains
             is_edit_action = .true.
 
         case('enter')
+            ! If code actions menu is visible, apply selected action
+            if (is_code_actions_menu_visible(editor%code_actions_menu)) then
+                block
+                    character(len=:), allocatable :: action_json
+
+                    if (get_selected_action(editor%code_actions_menu, action_json)) then
+                        ! TODO: Apply the selected code action
+                        ! This will involve sending workspace/executeCommand or workspace/applyEdit
+                        call terminal_move_cursor(editor%screen_rows, 1)
+                        call terminal_write('Applying code action...                ')
+
+                        ! Hide menu after selection
+                        call hide_code_actions_menu(editor%code_actions_menu)
+                    end if
+                end block
+                return
+            end if
+
             ! If references panel is visible, jump to selected reference
             if (is_references_panel_visible(editor%references_panel)) then
                 block
@@ -1060,6 +1104,40 @@ contains
                         if (request_id > 0) then
                             ! Show tooltip at cursor position (will populate when response arrives)
                             call show_hover_tooltip(editor%hover_tooltip, &
+                                editor%cursors(editor%active_cursor)%line - editor%viewport_line + 2, &
+                                editor%cursors(editor%active_cursor)%column - editor%viewport_column + 1)
+                        end if
+                    end block
+                end if
+            end if
+
+        case('ctrl-.')
+            ! Trigger code actions
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                    ! Request code actions at current cursor position
+                    block
+                        integer :: request_id, lsp_line, lsp_char
+                        lsp_line = editor%cursors(editor%active_cursor)%line - 1
+                        lsp_char = editor%cursors(editor%active_cursor)%column - 1
+
+                        ! Save editor state for callback
+                        if (allocated(saved_editor_for_callback)) then
+                            deallocate(saved_editor_for_callback)
+                        end if
+                        allocate(saved_editor_for_callback)
+                        saved_editor_for_callback = editor
+
+                        request_id = request_code_actions(editor%lsp_manager, &
+                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            editor%tabs(editor%active_tab_index)%filename, &
+                            lsp_line, lsp_char, &
+                            lsp_line, lsp_char, &
+                            handle_code_actions_response_wrapper)
+
+                        if (request_id > 0) then
+                            ! Show menu placeholder (will populate when response arrives)
+                            call show_code_actions_menu(editor%code_actions_menu, &
                                 editor%cursors(editor%active_cursor)%line - editor%viewport_line + 2, &
                                 editor%cursors(editor%active_cursor)%column - editor%viewport_column + 1)
                         end if
@@ -5303,4 +5381,104 @@ contains
         deallocate(references)
 
     end subroutine handle_references_response_impl
+
+    ! Wrapper callback that matches the LSP callback signature for code actions
+    subroutine handle_code_actions_response_wrapper(request_id, response)
+        use lsp_protocol_module, only: lsp_message_t
+        integer, intent(in) :: request_id
+        type(lsp_message_t), intent(in) :: response
+
+        ! Call the actual handler with saved editor state
+        if (allocated(saved_editor_for_callback)) then
+            call handle_code_actions_response_impl(saved_editor_for_callback, response)
+        end if
+    end subroutine handle_code_actions_response_wrapper
+
+    ! Handle LSP textDocument/codeAction response implementation
+    subroutine handle_code_actions_response_impl(editor, response)
+        use lsp_protocol_module, only: lsp_message_t
+        use json_module, only: json_value_t, json_get_array, json_get_object, &
+                               json_get_string, json_get_bool, json_array_size, &
+                               json_get_array_element, json_has_key, json_stringify
+        use code_actions_menu_module, only: code_action_t
+        type(editor_state_t), intent(inout) :: editor
+        type(lsp_message_t), intent(in) :: response
+        type(json_value_t) :: result_array, action_obj, edit_obj
+        type(code_action_t), allocatable :: actions(:)
+        integer :: num_actions, i
+        character(len=:), allocatable :: title, kind, action_json
+        logical :: is_preferred
+
+        ! The result is directly in response%result for LSP responses
+        result_array = response%result
+        num_actions = json_array_size(result_array)
+
+        if (num_actions == 0) then
+            call hide_code_actions_menu(editor%code_actions_menu)
+            call terminal_move_cursor(editor%screen_rows, 1)
+            call terminal_write('No code actions available at this position                ')
+            return
+        end if
+
+        ! Allocate and fill actions array
+        allocate(actions(num_actions))
+
+        do i = 1, num_actions
+            action_obj = json_get_array_element(result_array, i)
+
+            ! Get title (required)
+            if (json_has_key(action_obj, 'title')) then
+                title = json_get_string(action_obj, 'title', '')
+                if (allocated(actions(i)%title)) deallocate(actions(i)%title)
+                allocate(character(len=len(title)) :: actions(i)%title)
+                actions(i)%title = title
+            end if
+
+            ! Get kind (optional)
+            if (json_has_key(action_obj, 'kind')) then
+                kind = json_get_string(action_obj, 'kind', '')
+                if (allocated(actions(i)%kind)) deallocate(actions(i)%kind)
+                allocate(character(len=len(kind)) :: actions(i)%kind)
+                actions(i)%kind = kind
+            end if
+
+            ! Get isPreferred (optional)
+            if (json_has_key(action_obj, 'isPreferred')) then
+                actions(i)%is_preferred = json_get_bool(action_obj, 'isPreferred', .false.)
+            else
+                actions(i)%is_preferred = .false.
+            end if
+
+            ! Store the entire action as JSON for later application
+            action_json = json_stringify(action_obj)
+            if (allocated(actions(i)%action_json)) deallocate(actions(i)%action_json)
+            allocate(character(len=len(action_json)) :: actions(i)%action_json)
+            actions(i)%action_json = action_json
+        end do
+
+        ! Update the code actions menu
+        call set_code_actions(editor%code_actions_menu, actions, num_actions)
+
+        ! Show success message
+        call terminal_move_cursor(editor%screen_rows, 1)
+        if (num_actions == 1) then
+            call terminal_write('1 code action available                ')
+        else
+            block
+                character(len=50) :: msg
+                write(msg, '(I0,A)') num_actions, ' code actions available                '
+                call terminal_write(trim(msg))
+            end block
+        end if
+
+        ! Clean up
+        do i = 1, num_actions
+            if (allocated(actions(i)%title)) deallocate(actions(i)%title)
+            if (allocated(actions(i)%kind)) deallocate(actions(i)%kind)
+            if (allocated(actions(i)%action_json)) deallocate(actions(i)%action_json)
+        end do
+        deallocate(actions)
+
+    end subroutine handle_code_actions_response_impl
+
 end module command_handler_module

@@ -86,6 +86,7 @@ SOURCES = src/version_module.f90 \
           src/ui/hover_tooltip_module.f90 \
           src/ui/diagnostics_panel_module.f90 \
           src/ui/references_panel_module.f90 \
+          src/ui/code_actions_menu_module.f90 \
           src/editor_state_module.f90 \
           src/undo/undo_stack_module.f90 \
           src/workspace/file_tree_module.f90 \

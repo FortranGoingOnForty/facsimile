@@ -17,10 +17,10 @@ module lsp_protocol_module
     public :: create_hover_request
     public :: create_definition_request
     public :: create_references_request
+    public :: create_code_action_request
     public :: create_document_symbols_request
     public :: create_formatting_request
     public :: create_rename_request
-    public :: create_code_action_request
     public :: parse_lsp_message
     public :: format_json_rpc
 
@@ -345,6 +345,52 @@ contains
         msg%params = params
     end function create_references_request
 
+    function create_code_action_request(uri, start_line, start_char, end_line, end_char, diagnostics) result(msg)
+        character(len=*), intent(in) :: uri
+        integer, intent(in) :: start_line, start_char, end_line, end_char
+        type(json_value_t), intent(in), optional :: diagnostics
+        type(lsp_message_t) :: msg
+        type(json_value_t) :: params, text_document, range_obj, start_pos, end_pos, context
+        type(json_value_t) :: empty_array
+
+        msg%jsonrpc = "2.0"
+        msg%id = get_next_request_id()
+        msg%method = "textDocument/codeAction"
+        msg%is_request = .true.
+
+        params = json_create_object()
+
+        ! Text document
+        text_document = json_create_object()
+        call json_add_string(text_document, "uri", uri)
+        call json_add_object(params, "textDocument", text_document)
+
+        ! Range
+        range_obj = json_create_object()
+        start_pos = json_create_object()
+        call json_add_number(start_pos, "line", real(start_line, real64))
+        call json_add_number(start_pos, "character", real(start_char, real64))
+        call json_add_object(range_obj, "start", start_pos)
+
+        end_pos = json_create_object()
+        call json_add_number(end_pos, "line", real(end_line, real64))
+        call json_add_number(end_pos, "character", real(end_char, real64))
+        call json_add_object(range_obj, "end", end_pos)
+        call json_add_object(params, "range", range_obj)
+
+        ! Context with diagnostics
+        context = json_create_object()
+        if (present(diagnostics)) then
+            call json_add_array(context, "diagnostics", diagnostics)
+        else
+            empty_array = json_create_array()
+            call json_add_array(context, "diagnostics", empty_array)
+        end if
+        call json_add_object(params, "context", context)
+
+        msg%params = params
+    end function create_code_action_request
+
     function create_document_symbols_request(uri) result(msg)
         character(len=*), intent(in) :: uri
         type(lsp_message_t) :: msg
@@ -415,40 +461,6 @@ contains
 
         msg%params = params
     end function create_rename_request
-
-    function create_code_action_request(uri, start_line, start_char, end_line, end_char) result(msg)
-        character(len=*), intent(in) :: uri
-        integer, intent(in) :: start_line, start_char, end_line, end_char
-        type(lsp_message_t) :: msg
-        type(json_value_t) :: params, text_document, range, start_pos, end_pos
-
-        msg%jsonrpc = "2.0"
-        msg%id = get_next_request_id()
-        msg%method = "textDocument/codeAction"
-        msg%is_request = .true.
-
-        params = json_create_object()
-
-        text_document = json_create_object()
-        call json_add_string(text_document, "uri", uri)
-        call json_add_object(params, "textDocument", text_document)
-
-        range = json_create_object()
-
-        start_pos = json_create_object()
-        call json_add_number(start_pos, "line", real(start_line, real64))
-        call json_add_number(start_pos, "character", real(start_char, real64))
-        call json_add_object(range, "start", start_pos)
-
-        end_pos = json_create_object()
-        call json_add_number(end_pos, "line", real(end_line, real64))
-        call json_add_number(end_pos, "character", real(end_char, real64))
-        call json_add_object(range, "end", end_pos)
-
-        call json_add_object(params, "range", range)
-
-        msg%params = params
-    end function create_code_action_request
 
     function format_json_rpc(msg) result(formatted)
         type(lsp_message_t), intent(in) :: msg
