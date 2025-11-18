@@ -24,7 +24,7 @@ module command_handler_module
     use fortress_navigator_module, only: open_fortress_navigator
     use binary_prompt_module, only: binary_file_prompt
     use lsp_server_manager_module, only: request_completion, request_hover, request_definition, &
-                                         request_references, request_code_actions
+                                         request_references, request_code_actions, request_document_symbols
     use completion_popup_module, only: show_completion_popup, hide_completion_popup, &
                                         handle_completion_response, navigate_completion_up, &
                                         navigate_completion_down, get_selected_completion, &
@@ -46,6 +46,11 @@ module command_handler_module
                                         hide_code_actions_menu, is_code_actions_menu_visible, &
                                         code_actions_menu_handle_key, set_code_actions, &
                                         clear_code_actions, get_selected_action
+    use symbols_panel_module, only: symbols_panel_t, document_symbol_t, &
+                                    toggle_symbols_panel, is_symbols_panel_visible, &
+                                    symbols_panel_handle_key, get_selected_symbol_location, &
+                                    hide_symbols_panel, show_symbols_panel, &
+                                    set_symbols, clear_symbols
     use jump_stack_module, only: push_jump_location, pop_jump_location, &
                                  is_jump_stack_empty
     implicit none
@@ -181,6 +186,13 @@ contains
                 end if
             end if
 
+            ! If symbols panel is visible, hide it
+            if (is_symbols_panel_visible(editor%symbols_panel)) then
+                if (symbols_panel_handle_key(editor%symbols_panel, trim(key_str))) then
+                    return
+                end if
+            end if
+
             ! ESC - Clear selections and return to single cursor mode
             if (size(editor%cursors) > 1) then
                 ! Keep only the active cursor
@@ -306,6 +318,13 @@ contains
                 end if
             end if
 
+            ! If symbols panel is visible, navigate it
+            if (is_symbols_panel_visible(editor%symbols_panel)) then
+                if (symbols_panel_handle_key(editor%symbols_panel, trim(key_str))) then
+                    return
+                end if
+            end if
+
             if (size(editor%cursors) > 1) then
                 ! Move all cursors
                 do i = 1, size(editor%cursors)
@@ -343,6 +362,13 @@ contains
             ! If code actions menu is visible, navigate it
             if (is_code_actions_menu_visible(editor%code_actions_menu)) then
                 if (code_actions_menu_handle_key(editor%code_actions_menu, trim(key_str))) then
+                    return
+                end if
+            end if
+
+            ! If symbols panel is visible, navigate it
+            if (is_symbols_panel_visible(editor%symbols_panel)) then
+                if (symbols_panel_handle_key(editor%symbols_panel, trim(key_str))) then
                     return
                 end if
             end if
@@ -670,6 +696,24 @@ contains
 
                         ! Hide menu after selection
                         call hide_code_actions_menu(editor%code_actions_menu)
+                    end if
+                end block
+                return
+            end if
+
+            ! If symbols panel is visible, jump to selected symbol
+            if (is_symbols_panel_visible(editor%symbols_panel)) then
+                block
+                    integer(int32) :: line, col
+
+                    if (get_selected_symbol_location(editor%symbols_panel, line, col)) then
+                        ! Jump to the symbol location
+                        editor%cursors(editor%active_cursor)%line = line
+                        editor%cursors(editor%active_cursor)%column = col
+                        call update_viewport(editor)
+
+                        ! Hide panel after jump
+                        call hide_symbols_panel(editor%symbols_panel)
                     end if
                 end block
                 return
@@ -1204,6 +1248,36 @@ contains
                             call terminal_write('Searching for references...                ')
                             ! Show panel (will be populated when response arrives)
                             call show_references_panel(editor%references_panel, editor%screen_cols, editor%screen_rows)
+                        end if
+                    end block
+                end if
+            end if
+
+        case('ctrl-shift-o')
+            ! Document symbols outline
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                    ! Request document symbols
+                    block
+                        integer :: request_id
+
+                        ! Save editor state for callback
+                        if (.not. allocated(saved_editor_for_callback)) then
+                            allocate(saved_editor_for_callback)
+                        end if
+                        saved_editor_for_callback = editor
+
+                        request_id = request_document_symbols(editor%lsp_manager, &
+                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            editor%tabs(editor%active_tab_index)%filename, &
+                            handle_symbols_response_wrapper)
+
+                        if (request_id > 0) then
+                            ! Response will be handled by callback
+                            call terminal_move_cursor(editor%screen_rows, 1)
+                            call terminal_write('Loading document symbols...                ')
+                            ! Show panel (will be populated when response arrives)
+                            call show_symbols_panel(editor%symbols_panel, editor%screen_cols, editor%screen_rows)
                         end if
                     end block
                 end if
@@ -5480,5 +5554,162 @@ contains
         deallocate(actions)
 
     end subroutine handle_code_actions_response_impl
+
+    ! Wrapper callback that matches the LSP callback signature for symbols
+    subroutine handle_symbols_response_wrapper(request_id, response)
+        use lsp_protocol_module, only: lsp_message_t
+        integer, intent(in) :: request_id
+        type(lsp_message_t), intent(in) :: response
+
+        ! Call the actual handler with saved editor state
+        if (allocated(saved_editor_for_callback)) then
+            call handle_symbols_response_impl(saved_editor_for_callback, response)
+        end if
+    end subroutine handle_symbols_response_wrapper
+
+    ! Handle LSP textDocument/documentSymbol response implementation
+    subroutine handle_symbols_response_impl(editor, response)
+        use lsp_protocol_module, only: lsp_message_t
+        use json_module, only: json_value_t, json_get_array, json_get_object, &
+                               json_get_string, json_get_number, json_array_size, &
+                               json_get_array_element, json_has_key
+        type(editor_state_t), intent(inout) :: editor
+        type(lsp_message_t), intent(in) :: response
+        type(json_value_t) :: result_array, symbol_obj, location_obj, range_obj
+        type(json_value_t) :: start_obj, end_obj, children_array
+        type(document_symbol_t), allocatable :: symbols(:)
+        integer :: num_symbols, i
+        character(len=:), allocatable :: name, detail
+        real(8) :: kind_real, line_real, col_real
+
+        ! The result is directly in response%result for LSP responses
+        result_array = response%result
+        num_symbols = json_array_size(result_array)
+
+        if (num_symbols == 0) then
+            call clear_symbols(editor%symbols_panel)
+            call terminal_move_cursor(editor%screen_rows, 1)
+            call terminal_write('No symbols found in document                ')
+            return
+        end if
+
+        ! Allocate symbols array
+        allocate(symbols(num_symbols))
+
+        ! Parse each symbol
+        do i = 1, num_symbols
+            symbol_obj = json_get_array_element(result_array, i)
+
+            ! Get symbol name (required)
+            if (json_has_key(symbol_obj, 'name')) then
+                name = json_get_string(symbol_obj, 'name', '')
+                if (allocated(symbols(i)%name)) deallocate(symbols(i)%name)
+                allocate(character(len=len(name)) :: symbols(i)%name)
+                symbols(i)%name = name
+            end if
+
+            ! Get detail (optional)
+            if (json_has_key(symbol_obj, 'detail')) then
+                detail = json_get_string(symbol_obj, 'detail', '')
+                if (len(detail) > 0) then
+                    if (allocated(symbols(i)%detail)) deallocate(symbols(i)%detail)
+                    allocate(character(len=len(detail)) :: symbols(i)%detail)
+                    symbols(i)%detail = detail
+                end if
+            end if
+
+            ! Get kind (required)
+            if (json_has_key(symbol_obj, 'kind')) then
+                kind_real = json_get_number(symbol_obj, 'kind', 13.0d0)  ! Default to Variable
+                symbols(i)%kind = int(kind_real)
+            else
+                symbols(i)%kind = 13  ! Variable
+            end if
+
+            ! Get range or location
+            if (json_has_key(symbol_obj, 'range')) then
+                ! DocumentSymbol format (hierarchical)
+                range_obj = json_get_object(symbol_obj, 'range')
+
+                ! Get start position
+                if (json_has_key(range_obj, 'start')) then
+                    start_obj = json_get_object(range_obj, 'start')
+                    line_real = json_get_number(start_obj, 'line', 0.0d0)
+                    symbols(i)%line = int(line_real) + 1
+                    col_real = json_get_number(start_obj, 'character', 0.0d0)
+                    symbols(i)%column = int(col_real) + 1
+                end if
+
+                ! Get end position
+                if (json_has_key(range_obj, 'end')) then
+                    end_obj = json_get_object(range_obj, 'end')
+                    line_real = json_get_number(end_obj, 'line', 0.0d0)
+                    symbols(i)%end_line = int(line_real) + 1
+                    col_real = json_get_number(end_obj, 'character', 0.0d0)
+                    symbols(i)%end_column = int(col_real) + 1
+                end if
+
+                ! Check for children (hierarchical symbols)
+                if (json_has_key(symbol_obj, 'children')) then
+                    children_array = json_get_array(symbol_obj, 'children')
+                    symbols(i)%num_children = json_array_size(children_array)
+                    ! TODO: Parse children recursively
+                end if
+
+            else if (json_has_key(symbol_obj, 'location')) then
+                ! SymbolInformation format (flat)
+                location_obj = json_get_object(symbol_obj, 'location')
+
+                if (json_has_key(location_obj, 'range')) then
+                    range_obj = json_get_object(location_obj, 'range')
+
+                    ! Get start position
+                    if (json_has_key(range_obj, 'start')) then
+                        start_obj = json_get_object(range_obj, 'start')
+                        line_real = json_get_number(start_obj, 'line', 0.0d0)
+                        symbols(i)%line = int(line_real) + 1
+                        col_real = json_get_number(start_obj, 'character', 0.0d0)
+                        symbols(i)%column = int(col_real) + 1
+                    end if
+
+                    ! Get end position
+                    if (json_has_key(range_obj, 'end')) then
+                        end_obj = json_get_object(range_obj, 'end')
+                        line_real = json_get_number(end_obj, 'line', 0.0d0)
+                        symbols(i)%end_line = int(line_real) + 1
+                        col_real = json_get_number(end_obj, 'character', 0.0d0)
+                        symbols(i)%end_column = int(col_real) + 1
+                    end if
+                end if
+            end if
+
+            symbols(i)%depth = 0  ! Top level
+            symbols(i)%is_expanded = .true.
+        end do
+
+        ! Update the symbols panel
+        call set_symbols(editor%symbols_panel, symbols, num_symbols)
+
+        ! Show success message
+        call terminal_move_cursor(editor%screen_rows, 1)
+        if (num_symbols == 1) then
+            call terminal_write('1 symbol found                ')
+        else
+            block
+                character(len=50) :: msg
+                write(msg, '(I0,A)') num_symbols, ' symbols found                '
+                call terminal_write(trim(msg))
+            end block
+        end if
+
+        ! Clean up
+        do i = 1, num_symbols
+            if (allocated(symbols(i)%name)) deallocate(symbols(i)%name)
+            if (allocated(symbols(i)%detail)) deallocate(symbols(i)%detail)
+            if (allocated(symbols(i)%children)) deallocate(symbols(i)%children)
+        end do
+        deallocate(symbols)
+
+    end subroutine handle_symbols_response_impl
 
 end module command_handler_module
