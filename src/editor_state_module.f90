@@ -8,6 +8,8 @@ module editor_state_module
                                          request_completion, request_hover
     use completion_popup_module, only: completion_popup_t, init_completion_popup, &
                                        cleanup_completion_popup
+    use hover_tooltip_module, only: hover_tooltip_t, init_hover_tooltip, &
+                                    cleanup_hover_tooltip
     implicit none
     private
 
@@ -101,6 +103,7 @@ module editor_state_module
         ! LSP support
         type(lsp_manager_t) :: lsp_manager
         type(completion_popup_t) :: completion_popup
+        type(hover_tooltip_t) :: hover_tooltip
     end type editor_state_t
 
 contains
@@ -132,6 +135,9 @@ contains
 
         ! Initialize completion popup
         call init_completion_popup(editor%completion_popup)
+
+        ! Initialize hover tooltip
+        call init_hover_tooltip(editor%hover_tooltip)
     end subroutine init_editor
 
     subroutine cleanup_editor(editor)
@@ -155,6 +161,9 @@ contains
 
         ! Cleanup completion popup
         call cleanup_completion_popup(editor%completion_popup)
+
+        ! Cleanup hover tooltip
+        call cleanup_hover_tooltip(editor%hover_tooltip)
     end subroutine cleanup_editor
 
     ! Helper to cleanup a single tab

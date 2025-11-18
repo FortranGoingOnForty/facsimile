@@ -28,6 +28,8 @@ module command_handler_module
                                         handle_completion_response, navigate_completion_up, &
                                         navigate_completion_down, get_selected_completion, &
                                         is_completion_visible
+    use hover_tooltip_module, only: show_hover_tooltip, hide_hover_tooltip, &
+                                     handle_hover_response, is_hover_visible
     implicit none
     private
 
@@ -127,6 +129,12 @@ contains
             ! If completion popup is visible, hide it
             if (is_completion_visible(editor%completion_popup)) then
                 call hide_completion_popup(editor%completion_popup)
+                return
+            end if
+
+            ! If hover tooltip is visible, hide it
+            if (is_hover_visible(editor%hover_tooltip)) then
+                call hide_hover_tooltip(editor%hover_tooltip)
                 return
             end if
 
@@ -268,6 +276,11 @@ contains
             call update_viewport(editor)
 
         case('left')
+            ! Hide hover tooltip on movement
+            if (is_hover_visible(editor%hover_tooltip)) then
+                call hide_hover_tooltip(editor%hover_tooltip)
+            end if
+
             if (size(editor%cursors) > 1) then
                 ! Move all cursors
                 do i = 1, size(editor%cursors)
@@ -282,6 +295,11 @@ contains
             call update_viewport(editor)
 
         case('right')
+            ! Hide hover tooltip on movement
+            if (is_hover_visible(editor%hover_tooltip)) then
+                call hide_hover_tooltip(editor%hover_tooltip)
+            end if
+
             if (size(editor%cursors) > 1) then
                 ! Move all cursors
                 do i = 1, size(editor%cursors)
@@ -958,6 +976,13 @@ contains
                             editor%tabs(editor%active_tab_index)%lsp_server_index, &
                             editor%tabs(editor%active_tab_index)%filename, &
                             lsp_line, lsp_char)
+
+                        if (request_id > 0) then
+                            ! Show tooltip at cursor position (will populate when response arrives)
+                            call show_hover_tooltip(editor%hover_tooltip, &
+                                editor%cursors(editor%active_cursor)%line - editor%viewport_line + 2, &
+                                editor%cursors(editor%active_cursor)%column - editor%viewport_column + 1)
+                        end if
                     end block
                 end if
             end if

@@ -63,8 +63,8 @@ contains
             key_str = 'tab'
         case(10, 13)  ! Enter
             key_str = 'enter'
-        case(8)  ! Ctrl-H (backspace)
-            key_str = 'backspace'
+        case(8)  ! Ctrl-H
+            key_str = 'ctrl-h'
         case(26)  ! Ctrl-Z
             key_str = 'ctrl-z'
         case(31)  ! Ctrl-/ and Ctrl-? (both send ASCII 31)
