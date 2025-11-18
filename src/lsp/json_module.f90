@@ -202,6 +202,50 @@ contains
         obj%object_value%count = n + 1
     end subroutine json_add_array
 
+    subroutine json_add_value(obj, key, value)
+        type(json_value_t), intent(inout) :: obj
+        character(len=*), intent(in) :: key
+        type(json_value_t), intent(in) :: value
+        type(json_pair_t), dimension(:), allocatable :: new_pairs
+        integer :: n
+
+        if (obj%value_type /= JSON_OBJECT) return
+        if (.not. associated(obj%object_value)) return
+
+        n = obj%object_value%count
+        allocate(new_pairs(n + 1))
+
+        if (n > 0) new_pairs(1:n) = obj%object_value%pairs
+
+        new_pairs(n + 1)%key = key
+        new_pairs(n + 1)%value = value
+
+        deallocate(obj%object_value%pairs)
+        obj%object_value%pairs = new_pairs
+        obj%object_value%count = n + 1
+    end subroutine json_add_value
+
+    subroutine json_array_add_element(arr, element)
+        type(json_value_t), intent(inout) :: arr
+        type(json_value_t), intent(in) :: element
+        type(json_value_t), dimension(:), allocatable :: new_elements
+        integer :: n
+
+        if (arr%value_type /= JSON_ARRAY) return
+        if (.not. associated(arr%array_value)) return
+
+        n = arr%array_value%count
+        allocate(new_elements(n + 1))
+
+        if (n > 0) new_elements(1:n) = arr%array_value%elements
+
+        new_elements(n + 1) = element
+
+        deallocate(arr%array_value%elements)
+        arr%array_value%elements = new_elements
+        arr%array_value%count = n + 1
+    end subroutine json_array_add_element
+
     recursive function json_stringify(value) result(str)
         type(json_value_t), intent(in) :: value
         character(len=:), allocatable :: str
@@ -226,7 +270,7 @@ contains
         end select
     end function json_stringify
 
-    function object_to_string(obj) result(str)
+    recursive function object_to_string(obj) result(str)
         type(json_object_t), pointer, intent(in) :: obj
         character(len=:), allocatable :: str
         integer :: i
@@ -245,7 +289,7 @@ contains
         str = str // "}"
     end function object_to_string
 
-    function array_to_string(arr) result(str)
+    recursive function array_to_string(arr) result(str)
         type(json_array_t), pointer, intent(in) :: arr
         character(len=:), allocatable :: str
         integer :: i
@@ -484,39 +528,151 @@ contains
         end select
     end function parse_value
 
-    function parse_object(str, pos) result(obj)
+    recursive function parse_object(str, pos) result(obj)
         character(len=*), intent(in) :: str
         integer, intent(inout) :: pos
         type(json_value_t) :: obj
+        character(len=:), allocatable :: key
+        type(json_value_t) :: value
+        logical :: first_pair
 
         obj = json_create_object()
         pos = pos + 1  ! skip '{'
+        first_pair = .true.
 
-        ! TODO: Implement object parsing
-        ! This is a simplified version
+        call skip_whitespace(str, pos)
 
-        ! Find closing '}'
-        do while (pos <= len(str) .and. str(pos:pos) /= '}')
+        ! Handle empty object
+        if (pos <= len(str) .and. str(pos:pos) == '}') then
             pos = pos + 1
+            return
+        end if
+
+        ! Parse key-value pairs
+        do while (pos <= len(str))
+            ! Skip comma if not first pair
+            if (.not. first_pair) then
+                if (str(pos:pos) /= ',') exit
+                pos = pos + 1
+                call skip_whitespace(str, pos)
+            end if
+            first_pair = .false.
+
+            ! Check for end of object
+            if (pos > len(str)) exit
+            if (str(pos:pos) == '}') then
+                pos = pos + 1
+                exit
+            end if
+
+            ! Parse key (must be a string)
+            if (str(pos:pos) /= '"') exit
+            key = parse_object_key(str, pos)
+
+            call skip_whitespace(str, pos)
+
+            ! Expect colon
+            if (pos > len(str) .or. str(pos:pos) /= ':') exit
+            pos = pos + 1
+
+            call skip_whitespace(str, pos)
+
+            ! Parse value
+            value = parse_value(str, pos)
+
+            ! Add key-value pair to object
+            call json_add_value(obj, key, value)
+
+            call skip_whitespace(str, pos)
+
+            ! Check for end of object
+            if (pos <= len(str) .and. str(pos:pos) == '}') then
+                pos = pos + 1
+                exit
+            end if
         end do
-        if (pos <= len(str)) pos = pos + 1  ! skip '}'
     end function parse_object
 
-    function parse_array(str, pos) result(arr)
+    function parse_object_key(str, pos) result(key)
+        character(len=*), intent(in) :: str
+        integer, intent(inout) :: pos
+        character(len=:), allocatable :: key
+        integer :: start_pos
+
+        pos = pos + 1  ! skip opening '"'
+        start_pos = pos
+
+        ! Find closing '"' (ignoring escaped quotes)
+        do while (pos <= len(str))
+            if (str(pos:pos) == '\' .and. pos < len(str)) then
+                pos = pos + 2  ! skip escaped character
+            else if (str(pos:pos) == '"') then
+                if (pos > start_pos) then
+                    key = str(start_pos:pos-1)
+                else
+                    key = ""
+                end if
+                pos = pos + 1  ! skip closing '"'
+                return
+            else
+                pos = pos + 1
+            end if
+        end do
+
+        ! If we get here, string was not terminated
+        key = ""
+    end function parse_object_key
+
+    recursive function parse_array(str, pos) result(arr)
         character(len=*), intent(in) :: str
         integer, intent(inout) :: pos
         type(json_value_t) :: arr
+        type(json_value_t) :: element
+        logical :: first_element
 
         arr = json_create_array()
         pos = pos + 1  ! skip '['
+        first_element = .true.
 
-        ! TODO: Implement array parsing
+        call skip_whitespace(str, pos)
 
-        ! Find closing ']'
-        do while (pos <= len(str) .and. str(pos:pos) /= ']')
+        ! Handle empty array
+        if (pos <= len(str) .and. str(pos:pos) == ']') then
             pos = pos + 1
+            return
+        end if
+
+        ! Parse elements
+        do while (pos <= len(str))
+            ! Skip comma if not first element
+            if (.not. first_element) then
+                if (str(pos:pos) /= ',') exit
+                pos = pos + 1
+                call skip_whitespace(str, pos)
+            end if
+            first_element = .false.
+
+            ! Check for end of array
+            if (pos > len(str)) exit
+            if (str(pos:pos) == ']') then
+                pos = pos + 1
+                exit
+            end if
+
+            ! Parse element
+            element = parse_value(str, pos)
+
+            ! Add element to array
+            call json_array_add_element(arr, element)
+
+            call skip_whitespace(str, pos)
+
+            ! Check for end of array
+            if (pos <= len(str) .and. str(pos:pos) == ']') then
+                pos = pos + 1
+                exit
+            end if
         end do
-        if (pos <= len(str)) pos = pos + 1  ! skip ']'
     end function parse_array
 
     function parse_string(str, pos) result(value)

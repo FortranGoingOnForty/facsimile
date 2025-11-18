@@ -215,4 +215,23 @@ release: clean all
 	@echo "5. Push: git push && git push --tags"
 	@echo ""
 
-.PHONY: all clean dev debug info bump-patch bump-minor bump-major version release
+# LSP development targets
+lsp-modules: src/lsp/json_module.o src/lsp/lsp_protocol_module.o src/lsp/lsp_server_manager_module.o src/lsp/lsp_client_module.o src/lsp/lsp_process_wrapper.o
+	@echo "LSP modules built successfully"
+
+test-lsp: lsp-modules
+	@echo "Testing LSP JSON parser..."
+	@$(FC) $(FFLAGS_DEBUG) /tmp/test_json.f90 src/lsp/json_module.o -o /tmp/test_json 2>/dev/null && /tmp/test_json || true
+	@echo ""
+	@echo "Testing LSP initialization..."
+	@$(FC) $(FFLAGS_DEBUG) /tmp/test_lsp_init.f90 src/lsp/json_module.o src/lsp/lsp_protocol_module.o src/lsp/lsp_process_wrapper.o src/lsp/lsp_client_module.o src/lsp/lsp_server_manager_module.o -o /tmp/test_lsp_init 2>/dev/null && /tmp/test_lsp_init || true
+
+clean-lsp:
+	rm -f src/lsp/*.o src/lsp/*.mod /tmp/test_json /tmp/test_lsp_init /tmp/test_lsp_raw
+
+# Build LSP modules with debug flags for development
+lsp-dev: clean-lsp
+	@echo "Building LSP modules with debug flags..."
+	@$(MAKE) lsp-modules FFLAGS="$(FFLAGS_DEBUG)" CFLAGS="$(CFLAGS_DEV)"
+
+.PHONY: all clean dev debug info bump-patch bump-minor bump-major version release lsp-modules test-lsp clean-lsp lsp-dev
