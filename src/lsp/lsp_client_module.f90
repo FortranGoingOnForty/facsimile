@@ -25,8 +25,30 @@ module lsp_client_module
         character(len=:), allocatable :: file_path
         character(len=:), allocatable :: language_id
         integer :: version = 0
-        type(lsp_server_t), pointer :: server => null()
+        integer :: server_index = 0  ! 0 means no server assigned
     end type document_info_t
+
+    ! Type stubs for return types
+    type :: lsp_completion_t
+        character(len=:), allocatable :: label
+        character(len=:), allocatable :: detail
+    end type lsp_completion_t
+
+    type :: lsp_location_t
+        character(len=:), allocatable :: uri
+        integer :: line
+        integer :: column
+    end type lsp_location_t
+
+    type :: lsp_document_symbol_t
+        character(len=:), allocatable :: name
+        integer :: kind
+    end type lsp_document_symbol_t
+
+    type :: lsp_code_action_t
+        character(len=:), allocatable :: title
+        character(len=:), allocatable :: command
+    end type lsp_code_action_t
 
     ! Main LSP client
     type :: lsp_client_t
@@ -77,7 +99,7 @@ contains
         type(lsp_server_t), pointer :: server
         type(lsp_message_t) :: msg
         character(len=:), allocatable :: lang_id, uri
-        integer :: i
+        integer :: i, server_index
 
         ! Check if already open
         do i = 1, client%num_documents
@@ -96,8 +118,8 @@ contains
         end if
 
         ! Get or start server for this language
-        server => get_or_start_server(client%manager, lang_id, client%workspace_root)
-        if (.not. associated(server)) return
+        server_index = get_or_start_server(client%manager, lang_id, client%workspace_root)
+        if (server_index <= 0) return
 
         ! Build URI
         uri = file_path_to_uri(file_path)
@@ -112,16 +134,16 @@ contains
         new_documents(client%num_documents + 1)%file_path = file_path
         new_documents(client%num_documents + 1)%language_id = lang_id
         new_documents(client%num_documents + 1)%version = 1
-        new_documents(client%num_documents + 1)%server => server
+        new_documents(client%num_documents + 1)%server_index = server_index
 
         deallocate(client%documents)
         client%documents = new_documents
         client%num_documents = client%num_documents + 1
 
         ! Send didOpen notification
-        if (server%initialized) then
+        if (client%manager%servers(server_index)%initialized) then
             msg = create_did_open_notification(uri, lang_id, 1, content)
-            call send_notification(server, msg)
+            call send_notification(client%manager%servers(server_index), msg)
         end if
     end subroutine open_document
 
@@ -134,10 +156,10 @@ contains
         do i = 1, client%num_documents
             if (client%documents(i)%file_path == file_path) then
                 ! Send didClose notification
-                if (associated(client%documents(i)%server)) then
-                    if (client%documents(i)%server%initialized) then
+                if (client%documents(i)%server_index > 0) then
+                    if (client%manager%servers(client%documents(i)%server_index)%initialized) then
                         msg = create_did_close_notification(client%documents(i)%uri)
-                        call send_notification(client%documents(i)%server, msg)
+                        call send_notification(client%manager%servers(client%documents(i)%server_index), msg)
                     end if
                 end if
 
@@ -160,14 +182,14 @@ contains
 
         do i = 1, client%num_documents
             if (client%documents(i)%file_path == file_path) then
-                if (associated(client%documents(i)%server)) then
-                    if (client%documents(i)%server%initialized) then
+                if (client%documents(i)%server_index > 0) then
+                    if (client%manager%servers(client%documents(i)%server_index)%initialized) then
                         if (present(content)) then
                             msg = create_did_save_notification(client%documents(i)%uri, content)
                         else
                             msg = create_did_save_notification(client%documents(i)%uri)
                         end if
-                        call send_notification(client%documents(i)%server, msg)
+                        call send_notification(client%manager%servers(client%documents(i)%server_index), msg)
                     end if
                 end if
                 exit
@@ -185,11 +207,11 @@ contains
             if (client%documents(i)%file_path == file_path) then
                 client%documents(i)%version = client%documents(i)%version + 1
 
-                if (associated(client%documents(i)%server)) then
-                    if (client%documents(i)%server%initialized) then
+                if (client%documents(i)%server_index > 0) then
+                    if (client%manager%servers(client%documents(i)%server_index)%initialized) then
                         msg = create_did_change_notification(client%documents(i)%uri, &
                                                             client%documents(i)%version, content)
-                        call send_notification(client%documents(i)%server, msg)
+                        call send_notification(client%manager%servers(client%documents(i)%server_index), msg)
                     end if
                 end if
                 exit
@@ -209,12 +231,12 @@ contains
 
         do i = 1, client%num_documents
             if (client%documents(i)%file_path == file_path) then
-                if (associated(client%documents(i)%server)) then
-                    if (client%documents(i)%server%initialized .and. &
-                        client%documents(i)%server%supports_completion) then
+                if (client%documents(i)%server_index > 0) then
+                    if (client%manager%servers(client%documents(i)%server_index)%initialized .and. &
+                        client%manager%servers(client%documents(i)%server_index)%supports_completion) then
                         msg = create_completion_request(client%documents(i)%uri, &
                                                        line - 1, column - 1)  ! LSP is 0-based
-                        call send_request(client%documents(i)%server, msg)
+                        call send_request(client%manager%servers(client%documents(i)%server_index), msg)
                         ! TODO: Wait for and process response
                     end if
                 end if
@@ -235,12 +257,12 @@ contains
 
         do i = 1, client%num_documents
             if (client%documents(i)%file_path == file_path) then
-                if (associated(client%documents(i)%server)) then
-                    if (client%documents(i)%server%initialized .and. &
-                        client%documents(i)%server%supports_hover) then
+                if (client%documents(i)%server_index > 0) then
+                    if (client%manager%servers(client%documents(i)%server_index)%initialized .and. &
+                        client%manager%servers(client%documents(i)%server_index)%supports_hover) then
                         msg = create_hover_request(client%documents(i)%uri, &
                                                  line - 1, column - 1)  ! LSP is 0-based
-                        call send_request(client%documents(i)%server, msg)
+                        call send_request(client%manager%servers(client%documents(i)%server_index), msg)
                         ! TODO: Wait for and process response
                     end if
                 end if
@@ -261,12 +283,12 @@ contains
 
         do i = 1, client%num_documents
             if (client%documents(i)%file_path == file_path) then
-                if (associated(client%documents(i)%server)) then
-                    if (client%documents(i)%server%initialized .and. &
-                        client%documents(i)%server%supports_definition) then
+                if (client%documents(i)%server_index > 0) then
+                    if (client%manager%servers(client%documents(i)%server_index)%initialized .and. &
+                        client%manager%servers(client%documents(i)%server_index)%supports_definition) then
                         msg = create_definition_request(client%documents(i)%uri, &
                                                        line - 1, column - 1)  ! LSP is 0-based
-                        call send_request(client%documents(i)%server, msg)
+                        call send_request(client%manager%servers(client%documents(i)%server_index), msg)
                         ! TODO: Wait for and process response
                     end if
                 end if
@@ -291,12 +313,12 @@ contains
 
         do i = 1, client%num_documents
             if (client%documents(i)%file_path == file_path) then
-                if (associated(client%documents(i)%server)) then
-                    if (client%documents(i)%server%initialized .and. &
-                        client%documents(i)%server%supports_references) then
+                if (client%documents(i)%server_index > 0) then
+                    if (client%manager%servers(client%documents(i)%server_index)%initialized .and. &
+                        client%manager%servers(client%documents(i)%server_index)%supports_references) then
                         msg = create_references_request(client%documents(i)%uri, &
                                                        line - 1, column - 1, include_decl)
-                        call send_request(client%documents(i)%server, msg)
+                        call send_request(client%manager%servers(client%documents(i)%server_index), msg)
                         ! TODO: Wait for and process response
                     end if
                 end if
@@ -316,11 +338,11 @@ contains
 
         do i = 1, client%num_documents
             if (client%documents(i)%file_path == file_path) then
-                if (associated(client%documents(i)%server)) then
-                    if (client%documents(i)%server%initialized .and. &
-                        client%documents(i)%server%supports_document_symbols) then
+                if (client%documents(i)%server_index > 0) then
+                    if (client%manager%servers(client%documents(i)%server_index)%initialized .and. &
+                        client%manager%servers(client%documents(i)%server_index)%supports_document_symbols) then
                         msg = create_document_symbols_request(client%documents(i)%uri)
-                        call send_request(client%documents(i)%server, msg)
+                        call send_request(client%manager%servers(client%documents(i)%server_index), msg)
                         ! TODO: Wait for and process response
                     end if
                 end if
@@ -346,11 +368,11 @@ contains
 
         do i = 1, client%num_documents
             if (client%documents(i)%file_path == file_path) then
-                if (associated(client%documents(i)%server)) then
-                    if (client%documents(i)%server%initialized .and. &
-                        client%documents(i)%server%supports_formatting) then
+                if (client%documents(i)%server_index > 0) then
+                    if (client%manager%servers(client%documents(i)%server_index)%initialized .and. &
+                        client%manager%servers(client%documents(i)%server_index)%supports_formatting) then
                         msg = create_formatting_request(client%documents(i)%uri, tabs, spaces)
-                        call send_request(client%documents(i)%server, msg)
+                        call send_request(client%manager%servers(client%documents(i)%server_index), msg)
                         ! TODO: Wait for and process response
                     end if
                 end if
@@ -368,12 +390,12 @@ contains
 
         do i = 1, client%num_documents
             if (client%documents(i)%file_path == file_path) then
-                if (associated(client%documents(i)%server)) then
-                    if (client%documents(i)%server%initialized .and. &
-                        client%documents(i)%server%supports_rename) then
+                if (client%documents(i)%server_index > 0) then
+                    if (client%manager%servers(client%documents(i)%server_index)%initialized .and. &
+                        client%manager%servers(client%documents(i)%server_index)%supports_rename) then
                         msg = create_rename_request(client%documents(i)%uri, &
                                                   line - 1, column - 1, new_name)
-                        call send_request(client%documents(i)%server, msg)
+                        call send_request(client%manager%servers(client%documents(i)%server_index), msg)
                         ! TODO: Wait for and process response
                     end if
                 end if
@@ -395,13 +417,13 @@ contains
 
         do i = 1, client%num_documents
             if (client%documents(i)%file_path == file_path) then
-                if (associated(client%documents(i)%server)) then
-                    if (client%documents(i)%server%initialized .and. &
-                        client%documents(i)%server%supports_code_actions) then
+                if (client%documents(i)%server_index > 0) then
+                    if (client%manager%servers(client%documents(i)%server_index)%initialized .and. &
+                        client%manager%servers(client%documents(i)%server_index)%supports_code_actions) then
                         msg = create_code_action_request(client%documents(i)%uri, &
                                                         start_line - 1, start_col - 1, &
                                                         end_line - 1, end_col - 1)
-                        call send_request(client%documents(i)%server, msg)
+                        call send_request(client%manager%servers(client%documents(i)%server_index), msg)
                         ! TODO: Wait for and process response
                     end if
                 end if
@@ -473,27 +495,5 @@ contains
             uri = "file://" // file_path  ! TODO: Get absolute path
         end if
     end function file_path_to_uri
-
-    ! Type stubs for return types (should be properly defined)
-    type :: lsp_completion_t
-        character(len=:), allocatable :: label
-        character(len=:), allocatable :: detail
-    end type lsp_completion_t
-
-    type :: lsp_location_t
-        character(len=:), allocatable :: uri
-        integer :: line
-        integer :: column
-    end type lsp_location_t
-
-    type :: lsp_document_symbol_t
-        character(len=:), allocatable :: name
-        integer :: kind
-    end type lsp_document_symbol_t
-
-    type :: lsp_code_action_t
-        character(len=:), allocatable :: title
-        character(len=:), allocatable :: command
-    end type lsp_code_action_t
 
 end module lsp_client_module

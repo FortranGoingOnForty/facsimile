@@ -85,7 +85,7 @@ lsp_process_t* lsp_start_server(const char* command) {
 int lsp_send_message(lsp_process_t* proc, const char* message, int len) {
     if (!proc || proc->stdin_fd < 0) return -1;
 
-    int written = write(proc->stdin_fd, message, len);
+    ssize_t written = write(proc->stdin_fd, message, (size_t)len);
     if (written < 0) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
             return -1;
@@ -93,14 +93,14 @@ int lsp_send_message(lsp_process_t* proc, const char* message, int len) {
         return 0;
     }
 
-    return written;
+    return (int)written;
 }
 
 // Read data from LSP server (non-blocking)
 int lsp_read_message(lsp_process_t* proc, char* buffer, int max_len) {
     if (!proc || proc->stdout_fd < 0) return -1;
 
-    int bytes_read = read(proc->stdout_fd, buffer, max_len - 1);
+    ssize_t bytes_read = read(proc->stdout_fd, buffer, (size_t)(max_len - 1));
     if (bytes_read < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             return 0;  // No data available
@@ -112,7 +112,7 @@ int lsp_read_message(lsp_process_t* proc, char* buffer, int max_len) {
         buffer[bytes_read] = '\0';
     }
 
-    return bytes_read;
+    return (int)bytes_read;
 }
 
 // Check if process is still running
