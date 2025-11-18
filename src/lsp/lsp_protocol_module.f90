@@ -455,6 +455,7 @@ contains
         character(len=:), allocatable :: formatted
         type(json_value_t) :: json_msg
         character(len=:), allocatable :: json_str
+        character(len=20) :: len_str
 
         json_msg = json_create_object()
         call json_add_string(json_msg, "jsonrpc", msg%jsonrpc)
@@ -480,9 +481,9 @@ contains
         json_str = json_stringify(json_msg)
 
         ! Format as LSP message with Content-Length header
-        write(formatted, '(a,i0,a,a,a)') &
-            "Content-Length: ", len(json_str), char(13)//char(10), &
-            char(13)//char(10), json_str
+        write(len_str, '(i0)') len(json_str)
+        formatted = "Content-Length: " // trim(len_str) // char(13)//char(10) // &
+                   char(13)//char(10) // json_str
     end function format_json_rpc
 
     function parse_lsp_message(message) result(msg)

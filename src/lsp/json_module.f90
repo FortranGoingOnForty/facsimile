@@ -202,7 +202,7 @@ contains
         obj%object_value%count = n + 1
     end subroutine json_add_array
 
-    function json_stringify(value) result(str)
+    recursive function json_stringify(value) result(str)
         type(json_value_t), intent(in) :: value
         character(len=:), allocatable :: str
 
