@@ -51,8 +51,8 @@ contains
     subroutine handle_hover_response(tooltip, response)
         type(hover_tooltip_t), intent(inout) :: tooltip
         type(json_value_t), intent(in) :: response
-        type(json_value_t) :: contents
-        character(len=:), allocatable :: hover_text
+        type(json_value_t) :: contents, markup_content
+        character(len=:), allocatable :: hover_text, language, value
 
         call cleanup_hover_tooltip(tooltip)
 
@@ -60,15 +60,42 @@ contains
         if (json_has_key(response, "contents")) then
             contents = json_get_object(response, "contents")
 
-            ! Try to get value from MarkupContent or MarkedString
-            if (json_has_key(contents, "value")) then
+            ! LSP hover can return different formats:
+            ! 1. MarkupContent with kind and value
+            ! 2. MarkedString (deprecated but still used)
+            ! 3. Plain string
+            ! 4. Array of MarkedString
+
+            if (json_has_key(contents, "kind") .and. json_has_key(contents, "value")) then
+                ! MarkupContent format
                 hover_text = json_get_string(contents, "value")
+            else if (json_has_key(contents, "language") .and. json_has_key(contents, "value")) then
+                ! MarkedString with language
+                language = json_get_string(contents, "language")
+                value = json_get_string(contents, "value")
+                hover_text = language // ": " // value
             else
-                ! Might be a plain string
+                ! Try as plain string
                 hover_text = json_get_string(response, "contents")
             end if
 
+            ! Clean up markdown formatting for terminal display
             if (len_trim(hover_text) > 0) then
+                ! Remove markdown code block markers if present
+                if (hover_text(1:3) == "```") then
+                    ! Find end of first line
+                    block
+                        integer :: start_pos, end_pos
+                        start_pos = index(hover_text, char(10))
+                        if (start_pos > 0) then
+                            end_pos = index(hover_text, "```", back=.true.)
+                            if (end_pos > start_pos) then
+                                hover_text = hover_text(start_pos+1:end_pos-1)
+                            end if
+                        end if
+                    end block
+                end if
+
                 tooltip%content = hover_text
                 call calculate_tooltip_dimensions(tooltip)
             end if

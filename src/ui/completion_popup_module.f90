@@ -2,7 +2,9 @@ module completion_popup_module
     use iso_fortran_env, only: int32
     use terminal_io_module, only: terminal_move_cursor, terminal_write
     use json_module, only: json_value_t, json_get_string, &
-                           json_get_object, json_has_key
+                           json_get_object, json_has_key, &
+                           json_array_size, json_get_array_element, &
+                           json_get_array, json_get_number
     implicit none
     private
 
@@ -77,30 +79,82 @@ contains
         type(completion_popup_t), intent(inout) :: popup
         type(json_value_t), intent(in) :: response
         type(json_value_t) :: items_array, item, text_edit
-        integer :: i, n_items
+        integer :: i, n_items, kind_num
         character(len=:), allocatable :: label, kind_str, detail, insert_text
 
         call cleanup_completion_popup(popup)
 
         ! Check if response has items array
         if (json_has_key(response, "items")) then
-            items_array = json_get_object(response, "items")
-            ! TODO: Get array count properly
-            n_items = 10  ! Placeholder - need to implement array size getter
+            items_array = json_get_array(response, "items")
+            n_items = json_array_size(items_array)
+
+            ! Limit to max visible items for now
+            n_items = min(n_items, MAX_VISIBLE_ITEMS * 2)
 
             if (n_items > 0) then
                 allocate(popup%items(n_items))
                 popup%item_count = n_items
 
                 do i = 1, n_items
-                    ! TODO: Get array element properly
-                    ! item = json_get_array_element(items_array, i-1)
+                    item = json_get_array_element(items_array, i-1)
 
                     ! Extract completion item fields
-                    popup%items(i)%label = "Item " // char(48 + i)  ! Placeholder
-                    popup%items(i)%kind = "Variable"
-                    popup%items(i)%detail = ""
-                    popup%items(i)%insert_text = popup%items(i)%label
+                    label = json_get_string(item, "label")
+                    if (len_trim(label) > 0) then
+                        popup%items(i)%label = label
+                    else
+                        popup%items(i)%label = "Item " // char(48 + mod(i-1, 10))
+                    end if
+
+                    ! Get completion kind (number mapping to type)
+                    if (json_has_key(item, "kind")) then
+                        kind_num = int(json_get_number(item, "kind"))
+                        select case(kind_num)
+                        case(1)
+                            popup%items(i)%kind = "Text"
+                        case(2)
+                            popup%items(i)%kind = "Method"
+                        case(3)
+                            popup%items(i)%kind = "Function"
+                        case(4)
+                            popup%items(i)%kind = "Constructor"
+                        case(5)
+                            popup%items(i)%kind = "Field"
+                        case(6)
+                            popup%items(i)%kind = "Variable"
+                        case(7)
+                            popup%items(i)%kind = "Class"
+                        case(8)
+                            popup%items(i)%kind = "Interface"
+                        case(9)
+                            popup%items(i)%kind = "Module"
+                        case(10)
+                            popup%items(i)%kind = "Property"
+                        case(14)
+                            popup%items(i)%kind = "Keyword"
+                        case default
+                            popup%items(i)%kind = ""
+                        end select
+                    else
+                        popup%items(i)%kind = ""
+                    end if
+
+                    ! Get detail text if available
+                    if (json_has_key(item, "detail")) then
+                        detail = json_get_string(item, "detail")
+                        popup%items(i)%detail = detail
+                    else
+                        popup%items(i)%detail = ""
+                    end if
+
+                    ! Get insert text or fall back to label
+                    if (json_has_key(item, "insertText")) then
+                        insert_text = json_get_string(item, "insertText")
+                        popup%items(i)%insert_text = insert_text
+                    else
+                        popup%items(i)%insert_text = popup%items(i)%label
+                    end if
                 end do
 
                 popup%selected_index = 1

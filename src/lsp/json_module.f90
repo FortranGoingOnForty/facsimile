@@ -12,6 +12,7 @@ module json_module
     public :: json_get_string, json_get_number, json_get_bool
     public :: json_get_object, json_get_array
     public :: json_has_key
+    public :: json_array_size, json_get_array_element
     public :: JSON_NULL, JSON_BOOL, JSON_NUMBER, JSON_STRING, JSON_ARRAY, JSON_OBJECT
 
     ! JSON value types
@@ -771,5 +772,31 @@ contains
             end select
         end do
     end subroutine skip_whitespace
+
+    ! Get the size of a JSON array
+    function json_array_size(arr) result(size)
+        type(json_value_t), intent(in) :: arr
+        integer :: size
+
+        size = 0
+        if (arr%value_type == JSON_ARRAY .and. associated(arr%array_value)) then
+            size = arr%array_value%count
+        end if
+    end function json_array_size
+
+    ! Get an element from a JSON array by index (0-based)
+    function json_get_array_element(arr, index) result(element)
+        type(json_value_t), intent(in) :: arr
+        integer, intent(in) :: index
+        type(json_value_t) :: element
+
+        element%value_type = JSON_NULL
+
+        if (arr%value_type == JSON_ARRAY .and. associated(arr%array_value)) then
+            if (index >= 0 .and. index < arr%array_value%count) then
+                element = arr%array_value%elements(index + 1)  ! Convert to 1-based
+            end if
+        end if
+    end function json_get_array_element
 
 end module json_module
