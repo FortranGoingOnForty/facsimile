@@ -14,6 +14,8 @@ module lsp_server_manager_module
     public :: send_request, send_notification
     public :: process_server_messages
     public :: register_callback
+    public :: get_language_for_file, start_lsp_for_file
+    public :: notify_file_opened, notify_file_changed, notify_file_closed
 
     ! Language server configuration
     type :: server_config_t
@@ -621,5 +623,123 @@ contains
 
         manager%num_callbacks = manager%num_callbacks - 1
     end subroutine remove_callback
+
+    ! Helper to get language from filename
+    function get_language_for_file(filename) result(language)
+        character(len=*), intent(in) :: filename
+        character(len=:), allocatable :: language
+        integer :: dot_pos
+
+        ! Find last dot in filename
+        dot_pos = index(filename, '.', back=.true.)
+        if (dot_pos == 0) then
+            language = ""
+            return
+        end if
+
+        ! Match extension to language
+        select case(filename(dot_pos:))
+        case('.py')
+            language = "python"
+        case('.rs')
+            language = "rust"
+        case('.c', '.h')
+            language = "c"
+        case('.cpp', '.cc', '.cxx', '.hpp', '.hxx', '.C', '.H')
+            language = "cpp"
+        case('.go')
+            language = "go"
+        case('.ts', '.tsx')
+            language = "typescript"
+        case('.js', '.jsx')
+            language = "javascript"
+        case('.f90', '.f95', '.f03', '.f08', '.F90', '.F95', '.F03', '.F08')
+            language = "fortran"
+        case('.java')
+            language = "java"
+        case('.rb')
+            language = "ruby"
+        case('.lua')
+            language = "lua"
+        case default
+            language = ""
+        end select
+    end function get_language_for_file
+
+    ! Start LSP server for a file if needed
+    function start_lsp_for_file(manager, filename) result(server_index)
+        type(lsp_manager_t), intent(inout) :: manager
+        character(len=*), intent(in) :: filename
+        integer :: server_index
+        character(len=:), allocatable :: language
+        character(len=256) :: workspace_path
+        integer :: slash_pos
+
+        server_index = 0
+
+        ! Get language from file extension
+        language = get_language_for_file(filename)
+        if (language == "") return
+
+        ! Extract workspace path from filename (directory containing file)
+        slash_pos = index(filename, '/', back=.true.)
+        if (slash_pos > 0) then
+            workspace_path = filename(1:slash_pos-1)
+        else
+            workspace_path = "."
+        end if
+
+        ! Get or start server for this language
+        server_index = get_or_start_server(manager, language, trim(workspace_path))
+    end function start_lsp_for_file
+
+    ! Send textDocument/didOpen notification
+    subroutine notify_file_opened(manager, server_index, filename, content)
+        use lsp_protocol_module, only: create_did_open_notification
+        type(lsp_manager_t), intent(inout) :: manager
+        integer, intent(in) :: server_index
+        character(len=*), intent(in) :: filename
+        character(len=*), intent(in) :: content
+        type(lsp_message_t) :: msg
+        character(len=:), allocatable :: language
+
+        if (server_index < 1 .or. server_index > manager%num_servers) return
+        if (.not. manager%servers(server_index)%initialized) return
+
+        language = get_language_for_file(filename)
+        msg = create_did_open_notification(filename, language, 1, content)
+        call send_notification(manager%servers(server_index), msg)
+    end subroutine notify_file_opened
+
+    ! Send textDocument/didChange notification
+    subroutine notify_file_changed(manager, server_index, filename, content)
+        use lsp_protocol_module, only: create_did_change_notification
+        type(lsp_manager_t), intent(inout) :: manager
+        integer, intent(in) :: server_index
+        character(len=*), intent(in) :: filename
+        character(len=*), intent(in) :: content
+        type(lsp_message_t) :: msg
+
+        if (server_index < 1 .or. server_index > manager%num_servers) return
+        if (.not. manager%servers(server_index)%initialized) return
+
+        msg = create_did_change_notification(filename, 2, content)
+        call send_notification(manager%servers(server_index), msg)
+    end subroutine notify_file_changed
+
+    ! Send textDocument/didClose notification
+    subroutine notify_file_closed(manager, server_index, filename)
+        use lsp_protocol_module, only: create_did_close_notification
+        type(lsp_manager_t), intent(inout) :: manager
+        integer, intent(in) :: server_index
+        character(len=*), intent(in) :: filename
+        type(lsp_message_t) :: msg
+
+        if (server_index < 1 .or. server_index > manager%num_servers) return
+        if (.not. manager%servers(server_index)%initialized) return
+
+        msg = create_did_close_notification(filename)
+        call send_notification(manager%servers(server_index), msg)
+    end subroutine notify_file_closed
 
 end module lsp_server_manager_module

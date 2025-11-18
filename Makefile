@@ -75,6 +75,10 @@ SOURCES = src/version_module.f90 \
           src/terminal/terminal_io_module.f90 \
           src/terminal/input_handler_module.f90 \
           src/utils/bracket_matching_module.f90 \
+          src/lsp/json_module.f90 \
+          src/lsp/lsp_protocol_module.f90 \
+          src/lsp/lsp_server_manager_module.f90 \
+          src/lsp/lsp_client_module.f90 \
           src/editor_state_module.f90 \
           src/undo/undo_stack_module.f90 \
           src/workspace/file_tree_module.f90 \
@@ -86,10 +90,6 @@ SOURCES = src/version_module.f90 \
           src/workspace/workspace_module.f90 \
           src/workspace/backup_module.f90 \
           src/syntax/syntax_highlighter_module.f90 \
-          src/lsp/json_module.f90 \
-          src/lsp/lsp_protocol_module.f90 \
-          src/lsp/lsp_server_manager_module.f90 \
-          src/lsp/lsp_client_module.f90 \
           src/terminal/renderer_module.f90 \
           src/ui/help_display_module.f90 \
           src/ui/text_prompt_module.f90 \
@@ -221,10 +221,17 @@ lsp-modules: src/lsp/json_module.o src/lsp/lsp_protocol_module.o src/lsp/lsp_ser
 
 test-lsp: lsp-modules
 	@echo "Testing LSP JSON parser..."
-	@$(FC) $(FFLAGS_DEBUG) /tmp/test_json.f90 src/lsp/json_module.o -o /tmp/test_json 2>/dev/null && /tmp/test_json || true
+	@$(FC) $(FFLAGS_DEBUG) tests/lsp/test_json.f90 src/lsp/json_module.o -o tests/lsp/test_json 2>/dev/null && tests/lsp/test_json || true
 	@echo ""
 	@echo "Testing LSP initialization..."
-	@$(FC) $(FFLAGS_DEBUG) /tmp/test_lsp_init.f90 src/lsp/json_module.o src/lsp/lsp_protocol_module.o src/lsp/lsp_process_wrapper.o src/lsp/lsp_client_module.o src/lsp/lsp_server_manager_module.o -o /tmp/test_lsp_init 2>/dev/null && /tmp/test_lsp_init || true
+	@$(FC) $(FFLAGS_DEBUG) tests/lsp/test_lsp_init.f90 src/lsp/json_module.o src/lsp/lsp_protocol_module.o src/lsp/lsp_process_wrapper.o src/lsp/lsp_client_module.o src/lsp/lsp_server_manager_module.o -o tests/lsp/test_lsp_init 2>/dev/null && tests/lsp/test_lsp_init || true
+
+test-lsp-editor: all
+	@echo "Testing LSP in editor with sample C file..."
+	@echo "Opening tests/lsp/sample.c - check for LSP server initialization"
+	@timeout 2 ./fac tests/lsp/sample.c < /dev/null 2>&1 | grep -q "LSP server initialized" && \
+		echo "✓ LSP server initialized for C file" || \
+		echo "✗ LSP server did not initialize (check if clangd is installed)"
 
 clean-lsp:
 	rm -f src/lsp/*.o src/lsp/*.mod /tmp/test_json /tmp/test_lsp_init /tmp/test_lsp_raw
@@ -234,4 +241,4 @@ lsp-dev: clean-lsp
 	@echo "Building LSP modules with debug flags..."
 	@$(MAKE) lsp-modules FFLAGS="$(FFLAGS_DEBUG)" CFLAGS="$(CFLAGS_DEV)"
 
-.PHONY: all clean dev debug info bump-patch bump-minor bump-major version release lsp-modules test-lsp clean-lsp lsp-dev
+.PHONY: all clean dev debug info bump-patch bump-minor bump-major version release lsp-modules test-lsp test-lsp-editor clean-lsp lsp-dev

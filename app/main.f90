@@ -13,6 +13,8 @@ program facsimile
     use welcome_menu_module, only: show_welcome_menu
     use fortress_navigator_module, only: open_fortress_navigator
     use binary_prompt_module, only: binary_file_prompt
+    use lsp_server_manager_module, only: notify_file_opened, notify_file_changed, &
+                                         notify_file_closed, process_server_messages
     implicit none
 
     type(editor_state_t) :: editor
@@ -284,6 +286,15 @@ program facsimile
             if (allocated(editor%filename)) deallocate(editor%filename)
             allocate(character(len=len_trim(filename)) :: editor%filename)
             editor%filename = trim(filename)
+
+            ! Send LSP didOpen notification if LSP server is active
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                    call notify_file_opened(editor%lsp_manager, &
+                        editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                        trim(filename), buffer_to_string(buffer))
+                end if
+            end if
         else if (status == -2) then
             ! Binary file detected - prompt user
             if (binary_file_prompt(trim(filename))) then
@@ -337,6 +348,9 @@ program facsimile
 
     ! Main event loop
     do while (running)
+        ! Process any LSP messages
+        call process_server_messages(editor%lsp_manager)
+
         ! Get input
         call get_key_input(key_input, status)
 

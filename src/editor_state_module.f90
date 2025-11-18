@@ -1,6 +1,10 @@
 module editor_state_module
     use iso_fortran_env, only: int32, int64
     use text_buffer_module, only: buffer_t, copy_buffer, init_buffer
+    use lsp_server_manager_module, only: lsp_manager_t, init_lsp_manager, cleanup_lsp_manager, &
+                                         get_or_start_server, process_server_messages, &
+                                         start_lsp_for_file, notify_file_opened, &
+                                         notify_file_changed, notify_file_closed
     implicit none
     private
 
@@ -66,6 +70,9 @@ module editor_state_module
 
         logical :: modified = .false.
         logical :: is_orphan = .false.  ! True if file is outside workspace (uses absolute path)
+
+        ! LSP support
+        integer :: lsp_server_index = 0  ! Index of LSP server handling this file
     end type tab_t
 
     ! Main editor state
@@ -87,6 +94,9 @@ module editor_state_module
         type(tab_t), allocatable :: tabs(:)
         integer(int32) :: active_tab_index = 1
         integer(int32) :: max_tabs = 10
+
+        ! LSP support
+        type(lsp_manager_t) :: lsp_manager
     end type editor_state_t
 
 contains
@@ -112,6 +122,9 @@ contains
         ! Initialize tabs array (empty initially)
         allocate(editor%tabs(0))
         editor%active_tab_index = 0
+
+        ! Initialize LSP manager
+        call init_lsp_manager(editor%lsp_manager)
     end subroutine init_editor
 
     subroutine cleanup_editor(editor)
@@ -129,6 +142,9 @@ contains
             end do
             deallocate(editor%tabs)
         end if
+
+        ! Cleanup LSP manager
+        call cleanup_lsp_manager(editor%lsp_manager)
     end subroutine cleanup_editor
 
     ! Helper to cleanup a single tab
@@ -211,6 +227,9 @@ contains
 
         temp_tabs(new_index)%active_pane_index = 1
         temp_tabs(new_index)%modified = .false.
+
+        ! Start LSP server for this file if applicable
+        temp_tabs(new_index)%lsp_server_index = start_lsp_for_file(editor%lsp_manager, filename)
 
         ! Replace tabs array
         call move_alloc(temp_tabs, editor%tabs)
