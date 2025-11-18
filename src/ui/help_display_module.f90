@@ -114,6 +114,7 @@ contains
         n_lines = n_lines + 7 + 2   ! PANES
         n_lines = n_lines + 10 + 2  ! GIT
         n_lines = n_lines + 5 + 2   ! FILE
+        n_lines = n_lines + 6 + 2   ! LSP
 
         allocate(lines(n_lines))
         i = 1
@@ -238,6 +239,16 @@ contains
         lines(i) = "  ctrl-s              save"; i = i + 1
         lines(i) = "  ctrl-q              quit"; i = i + 1
         lines(i) = "  ctrl-/ or ctrl-?    show this help"; i = i + 1
+        lines(i) = ""; i = i + 1
+
+        ! LSP (Language Server Protocol)
+        lines(i) = "LSP (Language Server Protocol)"; i = i + 1
+        lines(i) = "  ctrl-space          code completion"; i = i + 1
+        lines(i) = "  ctrl-h              hover information"; i = i + 1
+        lines(i) = "  F12                 go to definition"; i = i + 1
+        lines(i) = "  shift-F12           find all references"; i = i + 1
+        lines(i) = "  alt-, (alt-comma)   jump back (navigation history)"; i = i + 1
+        lines(i) = "  ctrl-shift-d        toggle diagnostics panel"; i = i + 1
         lines(i) = ""; i = i + 1
 
         n_lines = i - 1

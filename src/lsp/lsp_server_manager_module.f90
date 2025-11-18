@@ -15,8 +15,8 @@ module lsp_server_manager_module
     public :: process_server_messages
     public :: register_callback
     public :: get_language_for_file, start_lsp_for_file
-    public :: notify_file_opened, notify_file_changed, notify_file_closed
-    public :: request_completion, request_hover
+    public :: notify_file_opened, notify_file_changed, notify_file_saved, notify_file_closed
+    public :: request_completion, request_hover, request_definition, request_references
     public :: set_diagnostics_handler
 
     ! Language server configuration
@@ -553,11 +553,17 @@ contains
         type(lsp_server_t), intent(inout) :: server
         type(lsp_message_t), intent(in) :: msg
 
+        ! Debug: log all notifications
+        write(error_unit, '(A,A)') "[LSP DEBUG] Received notification: ", msg%method
+
         select case(msg%method)
         case("textDocument/publishDiagnostics")
+            write(error_unit, '(A)') "[LSP DEBUG] Processing publishDiagnostics"
             ! Forward to diagnostics handler if set
             if (associated(manager%diagnostics_handler)) then
                 call manager%diagnostics_handler(msg)
+            else
+                write(error_unit, '(A)') "[LSP DEBUG] No diagnostics handler set!"
             end if
         case("window/showMessage")
             ! TODO: Show message to user
@@ -726,20 +732,55 @@ contains
     end subroutine notify_file_opened
 
     ! Send textDocument/didChange notification
-    subroutine notify_file_changed(manager, server_index, filename, content)
+    subroutine notify_file_changed(manager, server_index, filename, content, version)
         use lsp_protocol_module, only: create_did_change_notification
         type(lsp_manager_t), intent(inout) :: manager
         integer, intent(in) :: server_index
         character(len=*), intent(in) :: filename
         character(len=*), intent(in) :: content
+        integer, intent(in), optional :: version
         type(lsp_message_t) :: msg
+        integer :: doc_version
 
         if (server_index < 1 .or. server_index > manager%num_servers) return
         if (.not. manager%servers(server_index)%initialized) return
 
-        msg = create_did_change_notification(filename, 2, content)
+        ! Use provided version or default to 1
+        doc_version = 1
+        if (present(version)) doc_version = version
+
+        msg = create_did_change_notification(filename, doc_version, content)
         call send_notification(manager%servers(server_index), msg)
     end subroutine notify_file_changed
+
+    ! Send textDocument/didSave notification
+    subroutine notify_file_saved(manager, server_index, filename, content)
+        use lsp_protocol_module, only: create_did_save_notification
+        type(lsp_manager_t), intent(inout) :: manager
+        integer, intent(in) :: server_index
+        character(len=*), intent(in) :: filename
+        character(len=*), intent(in), optional :: content
+        type(lsp_message_t) :: msg
+        character(len=:), allocatable :: file_uri
+
+        if (server_index < 1 .or. server_index > manager%num_servers) return
+        if (.not. manager%servers(server_index)%initialized) return
+
+        ! Convert filename to URI
+        file_uri = 'file://' // trim(filename)
+
+        ! Create and send the notification
+        if (present(content)) then
+            msg = create_did_save_notification(file_uri, content)
+        else
+            msg = create_did_save_notification(file_uri)
+        end if
+
+        call send_notification(manager%servers(server_index), msg)
+
+        ! Debug output
+        write(error_unit, '(A,A)') "[LSP DEBUG] Sent didSave for: ", trim(filename)
+    end subroutine notify_file_saved
 
     ! Send textDocument/didClose notification
     subroutine notify_file_closed(manager, server_index, filename)
@@ -805,6 +846,57 @@ contains
 
         call send_request(manager%servers(server_index), msg, callback)
     end function request_hover
+
+    ! Request definition location at cursor position
+    function request_definition(manager, server_index, filename, line, character, callback) result(request_id)
+        use lsp_protocol_module, only: create_definition_request
+        type(lsp_manager_t), intent(inout) :: manager
+        integer, intent(in) :: server_index
+        character(len=*), intent(in) :: filename
+        integer, intent(in) :: line, character  ! 0-based LSP positions
+        procedure(response_callback), optional :: callback
+        integer :: request_id
+        type(lsp_message_t) :: msg
+        character(len=256) :: uri
+
+        request_id = -1
+        if (server_index < 1 .or. server_index > manager%num_servers) return
+        if (.not. manager%servers(server_index)%initialized) return
+
+        ! Convert filename to URI (simple file:// for now)
+        uri = "file://" // trim(filename)
+
+        msg = create_definition_request(uri, line, character)
+        request_id = msg%id
+
+        call send_request(manager%servers(server_index), msg, callback)
+    end function request_definition
+
+    ! Request references at cursor position
+    function request_references(manager, server_index, filename, line, character, callback) result(request_id)
+        use lsp_protocol_module, only: create_references_request
+        type(lsp_manager_t), intent(inout) :: manager
+        integer, intent(in) :: server_index
+        character(len=*), intent(in) :: filename
+        integer, intent(in) :: line, character  ! 0-based LSP positions
+        procedure(response_callback), optional :: callback
+        integer :: request_id
+        type(lsp_message_t) :: msg
+        character(len=256) :: uri
+
+        request_id = -1
+        if (server_index < 1 .or. server_index > manager%num_servers) return
+        if (.not. manager%servers(server_index)%initialized) return
+
+        ! Convert filename to URI (simple file:// for now)
+        uri = "file://" // trim(filename)
+
+        ! Include declaration and references
+        msg = create_references_request(uri, line, character, .true.)
+        request_id = msg%id
+
+        call send_request(manager%servers(server_index), msg, callback)
+    end function request_references
 
     ! Set the diagnostics notification handler
     subroutine set_diagnostics_handler(manager, handler)

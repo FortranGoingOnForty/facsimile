@@ -8,6 +8,11 @@ module renderer_module
     use file_tree_module
     use file_tree_renderer_module
     use syntax_highlighter_module
+    use diagnostics_module, only: diagnostic_t, get_diagnostics_for_line, &
+                                   get_diagnostic_at_cursor, &
+                                   SEVERITY_ERROR, SEVERITY_WARNING, SEVERITY_INFO, SEVERITY_HINT
+    use diagnostics_panel_module, only: render_diagnostics_panel
+    use references_panel_module, only: render_references_panel
     implicit none
     private
 
@@ -162,17 +167,44 @@ contains
                 ! Render line number if enabled
                 if (show_line_numbers) then
                     if (buffer_line <= line_count) then
-                        ! Format line number, right-aligned
-                        write(line_num_str, '(i5)') buffer_line
+                        ! Check for diagnostics on this line
+                        block
+                            type(diagnostic_t), allocatable :: line_diagnostics(:)
+                            character(len=3) :: diag_marker  ! UTF-8 characters can be up to 3 bytes
+                            character(len=:), allocatable :: diag_color, file_uri
 
-                        ! Highlight current line number
-                        if (buffer_line == editor%cursors(editor%active_cursor)%line) then
-                            call terminal_write(char(27) // '[1;33m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
-                                              // char(27) // '[0m ')
-                        else
-                            call terminal_write(char(27) // '[90m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
-                                              // char(27) // '[0m ')
-                        end if
+                            ! Get file URI for diagnostics lookup
+                            if (allocated(editor%filename)) then
+                                file_uri = 'file://' // editor%filename
+                            else
+                                file_uri = ''
+                            end if
+
+                            ! Get diagnostics for this line
+                            line_diagnostics = get_diagnostics_for_line(editor%diagnostics, file_uri, buffer_line)
+                            call get_diagnostic_marker(line_diagnostics, diag_marker, diag_color)
+
+                            ! Format line number, right-aligned
+                            write(line_num_str, '(i5)') buffer_line
+
+                            ! Display diagnostic marker or line number
+                            if (diag_marker /= ' ') then
+                                ! Show diagnostic marker
+                                call terminal_write(diag_color // diag_marker // ' ' // &
+                                                  adjustl(line_num_str(1:LINE_NUMBER_WIDTH-2)) // &
+                                                  char(27) // '[0m ')
+                            else if (buffer_line == editor%cursors(editor%active_cursor)%line) then
+                                ! Highlight current line number
+                                call terminal_write(char(27) // '[1;33m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
+                                                  // char(27) // '[0m ')
+                            else
+                                call terminal_write(char(27) // '[90m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
+                                                  // char(27) // '[0m ')
+                            end if
+
+                            if (allocated(line_diagnostics)) deallocate(line_diagnostics)
+                            if (allocated(diag_color)) deallocate(diag_color)
+                        end block
                     else
                         ! Empty line number area for lines beyond file
                         call terminal_write(repeat(' ', LINE_NUMBER_WIDTH + 1))
@@ -197,6 +229,19 @@ contains
 
         ! Render status bar
         call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
+
+        ! Render diagnostics panel if visible
+        if (allocated(editor%filename)) then
+            block
+                character(len=:), allocatable :: file_uri
+                file_uri = 'file://' // trim(editor%filename)
+                call render_diagnostics_panel(editor%diagnostics_panel, editor%diagnostics, &
+                                             file_uri, editor%screen_rows, editor%screen_cols)
+            end block
+        end if
+
+        ! Render references panel if visible
+        call render_references_panel(editor%references_panel, 3)
 
         ! Position cursor for panes or regular view
         if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0 .and. &
@@ -423,16 +468,39 @@ contains
                    merge(' [modified]', '           ', buffer%modified), ' '
         end if
 
-        ! Add hint in center - show match mode hint when active, otherwise show help
-        if (show_match_hint .and. present(match_case_sens)) then
-            if (match_case_sens) then
-                status_center = '[Cc] alt-c:toggle'
-            else
-                status_center = '[cc] alt-c:toggle'
+        ! Add hint in center - show diagnostic, match mode hint, or help
+        block
+            type(diagnostic_t), allocatable :: line_diagnostics(:)
+            character(len=256) :: diag_msg
+            character(len=:), allocatable :: file_uri
+
+            ! Check for diagnostics at cursor position
+            if (allocated(editor%filename)) then
+                file_uri = 'file://' // trim(editor%filename)
+                line_diagnostics = get_diagnostics_for_line(editor%diagnostics, file_uri, cursor%line)
             end if
-        else
-            status_center = 'ctrl-/:help'
-        end if
+
+            if (allocated(line_diagnostics) .and. size(line_diagnostics) > 0) then
+                ! Show first diagnostic message (highest severity)
+                diag_msg = line_diagnostics(1)%message
+                ! Truncate if too long
+                if (len_trim(diag_msg) > 50) then
+                    status_center = trim(diag_msg(1:47)) // '...'
+                else
+                    status_center = trim(diag_msg)
+                end if
+            else if (show_match_hint .and. present(match_case_sens)) then
+                if (match_case_sens) then
+                    status_center = '[Cc] alt-c:toggle'
+                else
+                    status_center = '[cc] alt-c:toggle'
+                end if
+            else
+                status_center = 'ctrl-/:help'
+            end if
+
+            if (allocated(line_diagnostics)) deallocate(line_diagnostics)
+        end block
 
         if (size(editor%cursors) > 1) then
             write(status_right, '(a,i0,a,a,i0,a,i0,a)') '[', size(editor%cursors), ' cursors] ', &
@@ -736,6 +804,19 @@ contains
 
         ! Render status bar (full width)
         call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
+
+        ! Render diagnostics panel if visible
+        if (allocated(editor%filename)) then
+            block
+                character(len=:), allocatable :: file_uri
+                file_uri = 'file://' // trim(editor%filename)
+                call render_diagnostics_panel(editor%diagnostics_panel, editor%diagnostics, &
+                                             file_uri, editor%screen_rows, editor%screen_cols)
+            end block
+        end if
+
+        ! Render references panel if visible
+        call render_references_panel(editor%references_panel, 3)
 
         ! Position cursor in editor pane (use appropriate method based on pane count)
         if (size(editor%tabs(editor%active_tab_index)%panes) > 1) then
@@ -1596,5 +1677,42 @@ contains
             col = col + len(tab_label) + 1  ! +1 for space between tabs
         end do
     end subroutine render_tab_bar
+
+    ! Get diagnostic marker and color for a line
+    subroutine get_diagnostic_marker(diagnostics, marker, color)
+        type(diagnostic_t), intent(in) :: diagnostics(:)
+        character(len=3), intent(out) :: marker  ! UTF-8 characters can be up to 3 bytes
+        character(len=:), allocatable, intent(out) :: color
+        integer :: i, max_severity
+
+        marker = ' '
+        color = ''
+
+        if (size(diagnostics) == 0) return
+
+        ! Find highest severity diagnostic
+        max_severity = SEVERITY_HINT
+        do i = 1, size(diagnostics)
+            if (diagnostics(i)%severity < max_severity) then
+                max_severity = diagnostics(i)%severity
+            end if
+        end do
+
+        ! Set marker and color based on severity
+        select case(max_severity)
+        case(SEVERITY_ERROR)
+            marker = '●'  ! Filled circle for errors
+            color = char(27) // '[31m'  ! Red
+        case(SEVERITY_WARNING)
+            marker = '▲'  ! Triangle for warnings
+            color = char(27) // '[33m'  ! Yellow
+        case(SEVERITY_INFO)
+            marker = '◆'  ! Diamond for info
+            color = char(27) // '[36m'  ! Cyan
+        case(SEVERITY_HINT)
+            marker = '○'  ! Empty circle for hints
+            color = char(27) // '[90m'  ! Gray
+        end select
+    end subroutine get_diagnostic_marker
 
 end module renderer_module

@@ -12,6 +12,14 @@ module editor_state_module
                                     cleanup_hover_tooltip
     use diagnostics_module, only: diagnostics_store_t, init_diagnostics_store, &
                                   cleanup_diagnostics_store
+    use diagnostics_panel_module, only: diagnostics_panel_t, init_diagnostics_panel, &
+                                       cleanup_diagnostics_panel
+    use references_panel_module, only: references_panel_t, init_references_panel, &
+                                      cleanup_references_panel
+    use document_sync_module, only: document_sync_t, init_document_sync, &
+                                    cleanup_document_sync
+    use jump_stack_module, only: jump_stack_t, init_jump_stack, &
+                                 cleanup_jump_stack
     implicit none
     private
 
@@ -80,6 +88,7 @@ module editor_state_module
 
         ! LSP support
         integer :: lsp_server_index = 0  ! Index of LSP server handling this file
+        type(document_sync_t) :: document_sync   ! Document synchronization for LSP
     end type tab_t
 
     ! Main editor state
@@ -107,6 +116,11 @@ module editor_state_module
         type(completion_popup_t) :: completion_popup
         type(hover_tooltip_t) :: hover_tooltip
         type(diagnostics_store_t) :: diagnostics
+        type(diagnostics_panel_t) :: diagnostics_panel
+        type(references_panel_t) :: references_panel
+
+        ! Navigation
+        type(jump_stack_t) :: jump_stack
     end type editor_state_t
 
 contains
@@ -144,6 +158,15 @@ contains
 
         ! Initialize diagnostics store
         call init_diagnostics_store(editor%diagnostics)
+
+        ! Initialize diagnostics panel
+        call init_diagnostics_panel(editor%diagnostics_panel)
+
+        ! Initialize references panel
+        call init_references_panel(editor%references_panel)
+
+        ! Initialize jump stack
+        call init_jump_stack(editor%jump_stack)
     end subroutine init_editor
 
     subroutine cleanup_editor(editor)
@@ -173,6 +196,15 @@ contains
 
         ! Cleanup diagnostics store
         call cleanup_diagnostics_store(editor%diagnostics)
+
+        ! Cleanup diagnostics panel
+        call cleanup_diagnostics_panel(editor%diagnostics_panel)
+
+        ! Cleanup references panel
+        call cleanup_references_panel(editor%references_panel)
+
+        ! Cleanup jump stack
+        call cleanup_jump_stack(editor%jump_stack)
     end subroutine cleanup_editor
 
     ! Helper to cleanup a single tab
@@ -192,6 +224,9 @@ contains
         end if
 
         call cleanup_buffer(tab%buffer)
+
+        ! Cleanup document sync
+        call cleanup_document_sync(tab%document_sync)
     end subroutine cleanup_tab
 
     ! Create a new tab with the given filename
@@ -258,6 +293,16 @@ contains
 
         ! Start LSP server for this file if applicable
         temp_tabs(new_index)%lsp_server_index = start_lsp_for_file(editor%lsp_manager, filename)
+
+        ! Initialize document sync for LSP if we have a server
+        if (temp_tabs(new_index)%lsp_server_index > 0) then
+            block
+                character(len=:), allocatable :: file_uri
+                file_uri = 'file://' // trim(filename)
+                call init_document_sync(temp_tabs(new_index)%document_sync, &
+                                      file_uri, temp_tabs(new_index)%lsp_server_index)
+            end block
+        end if
 
         ! Replace tabs array
         call move_alloc(temp_tabs, editor%tabs)

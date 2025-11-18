@@ -23,13 +23,26 @@ module command_handler_module
     use text_prompt_module, only: show_text_prompt, show_yes_no_prompt
     use fortress_navigator_module, only: open_fortress_navigator
     use binary_prompt_module, only: binary_file_prompt
-    use lsp_server_manager_module, only: request_completion, request_hover
+    use lsp_server_manager_module, only: request_completion, request_hover, request_definition, &
+                                         request_references
     use completion_popup_module, only: show_completion_popup, hide_completion_popup, &
                                         handle_completion_response, navigate_completion_up, &
                                         navigate_completion_down, get_selected_completion, &
                                         is_completion_visible
     use hover_tooltip_module, only: show_hover_tooltip, hide_hover_tooltip, &
                                      handle_hover_response, is_hover_visible
+    use diagnostics_panel_module, only: toggle_panel => toggle_diagnostics_panel, &
+                                        is_diagnostics_panel_visible, &
+                                        diagnostics_panel_handle_key
+    use references_panel_module, only: toggle_references_panel, &
+                                      is_references_panel_visible, &
+                                      references_panel_handle_key, &
+                                      get_selected_reference_location, &
+                                      hide_references_panel, &
+                                      show_references_panel, &
+                                      set_references, reference_location_t
+    use jump_stack_module, only: push_jump_location, pop_jump_location, &
+                                 is_jump_stack_empty
     implicit none
     private
 
@@ -42,6 +55,10 @@ module command_handler_module
     character(len=:), allocatable :: search_pattern  ! For ctrl-d functionality
     logical :: match_case_sensitive = .true.  ! Case sensitivity for ctrl-d match mode
     logical :: last_action_was_edit = .false.
+
+    ! Module-level storage for LSP callbacks
+    type(editor_state_t), allocatable, save :: saved_editor_for_callback
+
 
 contains
 
@@ -136,6 +153,20 @@ contains
             if (is_hover_visible(editor%hover_tooltip)) then
                 call hide_hover_tooltip(editor%hover_tooltip)
                 return
+            end if
+
+            ! If diagnostics panel is visible, hide it
+            if (is_diagnostics_panel_visible(editor%diagnostics_panel)) then
+                if (diagnostics_panel_handle_key(editor%diagnostics_panel, trim(key_str))) then
+                    return
+                end if
+            end if
+
+            ! If references panel is visible, hide it
+            if (is_references_panel_visible(editor%references_panel)) then
+                if (references_panel_handle_key(editor%references_panel, trim(key_str))) then
+                    return
+                end if
             end if
 
             ! ESC - Clear selections and return to single cursor mode
@@ -242,6 +273,20 @@ contains
                 return
             end if
 
+            ! If diagnostics panel is visible, navigate it
+            if (is_diagnostics_panel_visible(editor%diagnostics_panel)) then
+                if (diagnostics_panel_handle_key(editor%diagnostics_panel, trim(key_str))) then
+                    return
+                end if
+            end if
+
+            ! If references panel is visible, navigate it
+            if (is_references_panel_visible(editor%references_panel)) then
+                if (references_panel_handle_key(editor%references_panel, trim(key_str))) then
+                    return
+                end if
+            end if
+
             if (size(editor%cursors) > 1) then
                 ! Move all cursors
                 do i = 1, size(editor%cursors)
@@ -260,6 +305,20 @@ contains
             if (is_completion_visible(editor%completion_popup)) then
                 call navigate_completion_down(editor%completion_popup)
                 return
+            end if
+
+            ! If diagnostics panel is visible, navigate it
+            if (is_diagnostics_panel_visible(editor%diagnostics_panel)) then
+                if (diagnostics_panel_handle_key(editor%diagnostics_panel, trim(key_str))) then
+                    return
+                end if
+            end if
+
+            ! If references panel is visible, navigate it
+            if (is_references_panel_visible(editor%references_panel)) then
+                if (references_panel_handle_key(editor%references_panel, trim(key_str))) then
+                    return
+                end if
             end if
 
             if (size(editor%cursors) > 1) then
@@ -572,6 +631,27 @@ contains
             is_edit_action = .true.
 
         case('enter')
+            ! If references panel is visible, jump to selected reference
+            if (is_references_panel_visible(editor%references_panel)) then
+                block
+                    character(len=:), allocatable :: uri
+                    integer(int32) :: line, col
+
+                    if (get_selected_reference_location(editor%references_panel, uri, line, col)) then
+                        ! Convert URI to file path
+                        if (uri(1:7) == "file://") then
+                            ! Jump to the reference location
+                            ! TODO: Handle cross-file navigation
+                            editor%cursors(editor%active_cursor)%line = line
+                            editor%cursors(editor%active_cursor)%column = col
+                            call update_viewport(editor)
+                            call hide_references_panel(editor%references_panel)
+                        end if
+                    end if
+                end block
+                return
+            end if
+
             ! If completion popup is visible, insert selected completion
             if (is_completion_visible(editor%completion_popup)) then
                 block
@@ -987,6 +1067,100 @@ contains
                 end if
             end if
 
+        case('f12')
+            ! Go to definition
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                    ! Save current location to jump stack
+                    if (allocated(editor%filename)) then
+                        call push_jump_location(editor%jump_stack, &
+                            trim(editor%filename), &
+                            editor%cursors(editor%active_cursor)%line, &
+                            editor%cursors(editor%active_cursor)%column)
+                    end if
+
+                    ! Request definition at current cursor position
+                    block
+                        integer :: request_id, lsp_line, lsp_char
+                        lsp_line = editor%cursors(editor%active_cursor)%line - 1
+                        lsp_char = editor%cursors(editor%active_cursor)%column - 1
+
+                        request_id = request_definition(editor%lsp_manager, &
+                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            editor%tabs(editor%active_tab_index)%filename, &
+                            lsp_line, lsp_char)
+
+                        if (request_id > 0) then
+                            ! Response will be handled by callback
+                            call terminal_move_cursor(editor%screen_rows, 1)
+                            call terminal_write('Searching for definition...                ')
+                        end if
+                    end block
+                end if
+            end if
+
+        case('shift-f12')
+            ! Find all references
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                    ! Request references at current cursor position
+                    block
+                        integer :: request_id, lsp_line, lsp_char
+                        lsp_line = editor%cursors(editor%active_cursor)%line - 1
+                        lsp_char = editor%cursors(editor%active_cursor)%column - 1
+
+                        ! Save editor state for callback
+                        if (.not. allocated(saved_editor_for_callback)) then
+                            allocate(saved_editor_for_callback)
+                        end if
+                        saved_editor_for_callback = editor
+
+                        request_id = request_references(editor%lsp_manager, &
+                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            editor%tabs(editor%active_tab_index)%filename, &
+                            lsp_line, lsp_char, handle_references_response_wrapper)
+
+                        if (request_id > 0) then
+                            ! Response will be handled by callback
+                            call terminal_move_cursor(editor%screen_rows, 1)
+                            call terminal_write('Searching for references...                ')
+                            ! Show panel (will be populated when response arrives)
+                            call show_references_panel(editor%references_panel, editor%screen_cols, editor%screen_rows)
+                        end if
+                    end block
+                end if
+            end if
+
+        case('alt-comma')
+            ! Jump back in navigation history (Alt+,)
+            if (.not. is_jump_stack_empty(editor%jump_stack)) then
+                block
+                    character(len=:), allocatable :: jump_filename
+                    integer(int32) :: jump_line, jump_column
+                    logical :: success
+
+                    success = pop_jump_location(editor%jump_stack, jump_filename, jump_line, jump_column)
+                    if (success) then
+                        ! Check if we need to open a different file
+                        if (allocated(editor%filename)) then
+                            if (trim(jump_filename) /= trim(editor%filename)) then
+                                ! TODO: Open the file
+                                call terminal_move_cursor(editor%screen_rows, 1)
+                                call terminal_write('Opening: ' // trim(jump_filename))
+                                ! For now, just jump if same file
+                            end if
+                        end if
+
+                        ! Jump to the location
+                        editor%cursors(editor%active_cursor)%line = jump_line
+                        editor%cursors(editor%active_cursor)%column = jump_column
+                        editor%cursors(editor%active_cursor)%desired_column = jump_column
+                        call sync_editor_to_pane(editor)
+                        call update_viewport(editor)
+                    end if
+                end block
+            end if
+
         case("ctrl-'", "ctrl-apostrophe", "alt-'")
             ! Cycle quotes: " -> ' -> `
             ! ctrl-': Doesn't work (terminals send plain apostrophe)
@@ -1008,6 +1182,10 @@ contains
             call select_next_match(editor, buffer)
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
+
+        case('ctrl-shift-d')
+            ! Toggle diagnostics panel
+            call toggle_diagnostics_panel(editor)
 
         case('alt-c')
             ! Toggle case sensitivity for match mode (ctrl-d)
@@ -1105,6 +1283,11 @@ contains
 
         ! Update edit action state
         last_action_was_edit = is_edit_action
+
+        ! Notify LSP of document changes if buffer was modified
+        if (is_edit_action) then
+            call notify_buffer_change(editor, buffer)
+        end if
     end subroutine handle_key_command
 
     subroutine move_cursor_up(cursor, buffer)
@@ -2429,6 +2612,8 @@ contains
 
     subroutine save_file(editor, buffer)
         use text_prompt_module, only: show_text_prompt
+        use lsp_server_manager_module, only: notify_file_saved
+        use text_buffer_module, only: buffer_to_string
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         integer :: ios, tab_idx
@@ -2484,6 +2669,19 @@ contains
 
         if (ios == 0) then
             buffer%modified = .false.
+
+            ! Send LSP didSave notification if LSP is active
+            if (allocated(editor%tabs) .and. editor%active_tab_index > 0) then
+                tab_idx = editor%active_tab_index
+                if (tab_idx <= size(editor%tabs)) then
+                    if (editor%tabs(tab_idx)%lsp_server_index > 0) then
+                        call notify_file_saved(editor%lsp_manager, &
+                            editor%tabs(tab_idx)%lsp_server_index, &
+                            trim(editor%filename), buffer_to_string(buffer))
+                    end if
+                end if
+            end if
+
             return
         end if
 
@@ -2516,6 +2714,18 @@ contains
             buffer%modified = .false.
             call terminal_move_cursor(editor%screen_rows, 1)
             call terminal_write('File saved with sudo                  ')
+
+            ! Send LSP didSave notification if LSP is active
+            if (allocated(editor%tabs) .and. editor%active_tab_index > 0) then
+                tab_idx = editor%active_tab_index
+                if (tab_idx <= size(editor%tabs)) then
+                    if (editor%tabs(tab_idx)%lsp_server_index > 0) then
+                        call notify_file_saved(editor%lsp_manager, &
+                            editor%tabs(tab_idx)%lsp_server_index, &
+                            trim(editor%filename), buffer_to_string(buffer))
+                    end if
+                end if
+            end if
         else
             ! Clean up temp file
             write(command, '(a,a)') 'rm -f ', trim(temp_filename)
@@ -4468,6 +4678,12 @@ contains
         end if
     end subroutine toggle_fuss_mode
 
+    ! Toggle diagnostics panel
+    subroutine toggle_diagnostics_panel(editor)
+        type(editor_state_t), intent(inout) :: editor
+        call toggle_panel(editor%diagnostics_panel)
+    end subroutine toggle_diagnostics_panel
+
     ! Handle git commit with message prompt
     subroutine handle_git_commit(editor)
         type(editor_state_t), intent(inout) :: editor
@@ -4948,4 +5164,143 @@ contains
         end if
     end subroutine close_tab_without_prompt
 
+    ! Notify LSP server of buffer changes
+    subroutine notify_buffer_change(editor, buffer)
+        use document_sync_module, only: notify_document_change
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(in) :: buffer
+        character(len=:), allocatable :: full_content
+        integer :: i, line_count
+
+        ! Only notify if we have an active tab with LSP support
+        if (editor%active_tab_index < 1 .or. editor%active_tab_index > size(editor%tabs)) return
+        if (editor%tabs(editor%active_tab_index)%lsp_server_index <= 0) return
+
+        ! Build full document content
+        line_count = buffer_get_line_count(buffer)
+        full_content = ''
+        do i = 1, line_count
+            if (i > 1) then
+                full_content = full_content // char(10)  ! LF
+            end if
+            full_content = full_content // buffer_get_line(buffer, i)
+        end do
+
+        ! Notify document sync of the change
+        call notify_document_change(editor%tabs(editor%active_tab_index)%document_sync, &
+                                   full_content)
+    end subroutine notify_buffer_change
+
+    ! TODO: Handle LSP textDocument/definition response
+    ! This needs to be integrated with the main event loop callback system
+    ! The response parsing logic is ready but needs proper callback integration
+
+    ! Wrapper callback that matches the LSP callback signature
+    subroutine handle_references_response_wrapper(request_id, response)
+        use lsp_protocol_module, only: lsp_message_t
+        integer, intent(in) :: request_id
+        type(lsp_message_t), intent(in) :: response
+
+        ! Call the actual handler with saved editor state
+        if (allocated(saved_editor_for_callback)) then
+            call handle_references_response_impl(saved_editor_for_callback, response)
+        end if
+    end subroutine handle_references_response_wrapper
+
+    ! Handle LSP textDocument/references response implementation
+    subroutine handle_references_response_impl(editor, response)
+        use lsp_protocol_module, only: lsp_message_t
+        use json_module, only: json_value_t, json_get_array, json_get_object, &
+                               json_get_string, json_get_number, json_array_size, &
+                               json_get_array_element, json_has_key
+        type(editor_state_t), intent(inout) :: editor
+        type(lsp_message_t), intent(in) :: response
+        type(json_value_t) :: result_array, location_obj, range_obj
+        type(json_value_t) :: start_obj, end_obj
+        type(reference_location_t), allocatable :: references(:)
+        integer :: num_refs, i
+        character(len=:), allocatable :: uri
+        real(8) :: line_real, col_real
+
+        ! The result is directly in response%result for LSP responses
+        result_array = response%result
+        num_refs = json_array_size(result_array)
+
+        if (num_refs == 0) then
+            ! No references found
+            allocate(references(0))
+            call set_references(editor%references_panel, references, 0)
+            return
+        end if
+
+        ! Allocate references array
+        allocate(references(num_refs))
+
+        ! Initialize all fields
+        do i = 1, num_refs
+            references(i)%line = 1
+            references(i)%column = 1
+            references(i)%end_line = 1
+            references(i)%end_column = 1
+        end do
+
+        ! Parse each reference location
+        do i = 1, num_refs
+            location_obj = json_get_array_element(result_array, i - 1)
+
+            ! Get URI
+            uri = json_get_string(location_obj, 'uri', '')
+            if (len(uri) > 0) then
+                allocate(character(len=len(uri)) :: references(i)%uri)
+                references(i)%uri = uri
+
+                ! Extract filename from URI
+                if (len(uri) > 7) then
+                    if (uri(1:7) == "file://") then
+                        allocate(character(len=len(uri)-7) :: references(i)%filename)
+                        references(i)%filename = uri(8:)
+                    end if
+                end if
+            end if
+
+            ! Get range
+            if (json_has_key(location_obj, 'range')) then
+                range_obj = json_get_object(location_obj, 'range')
+
+                ! Get start position
+                if (json_has_key(range_obj, 'start')) then
+                    start_obj = json_get_object(range_obj, 'start')
+                    line_real = json_get_number(start_obj, 'line', 0.0d0)
+                    references(i)%line = int(line_real) + 1  ! Convert from 0-based to 1-based
+                    col_real = json_get_number(start_obj, 'character', 0.0d0)
+                    references(i)%column = int(col_real) + 1  ! Convert from 0-based to 1-based
+                end if
+
+                ! Get end position
+                if (json_has_key(range_obj, 'end')) then
+                    end_obj = json_get_object(range_obj, 'end')
+                    line_real = json_get_number(end_obj, 'line', 0.0d0)
+                    references(i)%end_line = int(line_real) + 1
+                    col_real = json_get_number(end_obj, 'character', 0.0d0)
+                    references(i)%end_column = int(col_real) + 1
+                end if
+            end if
+
+            ! TODO: Load preview text from the file if available
+            allocate(character(len=50) :: references(i)%preview_text)
+            references(i)%preview_text = "..."  ! Placeholder
+        end do
+
+        ! Update the references panel
+        call set_references(editor%references_panel, references, num_refs)
+
+        ! Clean up
+        do i = 1, num_refs
+            if (allocated(references(i)%uri)) deallocate(references(i)%uri)
+            if (allocated(references(i)%filename)) deallocate(references(i)%filename)
+            if (allocated(references(i)%preview_text)) deallocate(references(i)%preview_text)
+        end do
+        deallocate(references)
+
+    end subroutine handle_references_response_impl
 end module command_handler_module
