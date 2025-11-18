@@ -79,6 +79,7 @@ SOURCES = src/version_module.f90 \
           src/lsp/lsp_protocol_module.f90 \
           src/lsp/lsp_server_manager_module.f90 \
           src/lsp/lsp_client_module.f90 \
+          src/lsp/diagnostics_module.f90 \
           src/ui/completion_popup_module.f90 \
           src/ui/hover_tooltip_module.f90 \
           src/editor_state_module.f90 \

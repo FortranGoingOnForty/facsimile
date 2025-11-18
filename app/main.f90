@@ -14,7 +14,10 @@ program facsimile
     use fortress_navigator_module, only: open_fortress_navigator
     use binary_prompt_module, only: binary_file_prompt
     use lsp_server_manager_module, only: notify_file_opened, notify_file_changed, &
-                                         notify_file_closed, process_server_messages
+                                         notify_file_closed, process_server_messages, &
+                                         set_diagnostics_handler
+    use diagnostics_module, only: parse_diagnostics
+    use lsp_protocol_module, only: lsp_message_t
     implicit none
 
     type(editor_state_t) :: editor
@@ -184,6 +187,9 @@ program facsimile
     ! Initialize editor
     call init_editor(editor)
     running = .true.
+
+    ! Set up diagnostics handler for LSP
+    call set_diagnostics_handler(editor%lsp_manager, handle_diagnostics)
 
     ! Initialize terminal early (needed for workspace restoration warnings)
     call terminal_init()
@@ -448,6 +454,16 @@ program facsimile
     end if
 
 contains
+
+    ! Handler for LSP diagnostics notifications
+    subroutine handle_diagnostics(notification)
+        use lsp_protocol_module, only: lsp_message_t
+        use diagnostics_module, only: parse_diagnostics
+        type(lsp_message_t), intent(in) :: notification
+
+        ! Parse and store diagnostics in the editor's diagnostics store
+        call parse_diagnostics(editor%diagnostics, notification)
+    end subroutine handle_diagnostics
 
     subroutine read_file_type(is_directory)
         integer, intent(out) :: is_directory

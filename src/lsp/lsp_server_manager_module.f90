@@ -17,6 +17,7 @@ module lsp_server_manager_module
     public :: get_language_for_file, start_lsp_for_file
     public :: notify_file_opened, notify_file_changed, notify_file_closed
     public :: request_completion, request_hover
+    public :: set_diagnostics_handler
 
     ! Language server configuration
     type :: server_config_t
@@ -63,6 +64,14 @@ module lsp_server_manager_module
         end subroutine response_callback
     end interface
 
+    ! Callback type for diagnostics notifications
+    abstract interface
+        subroutine diagnostics_callback(notification)
+            use lsp_protocol_module, only: lsp_message_t
+            type(lsp_message_t), intent(in) :: notification
+        end subroutine diagnostics_callback
+    end interface
+
     ! Request callback entry
     type :: callback_entry_t
         integer :: request_id
@@ -77,6 +86,7 @@ module lsp_server_manager_module
         integer :: num_configs = 0
         type(callback_entry_t), allocatable :: callbacks(:)
         integer :: num_callbacks = 0
+        procedure(diagnostics_callback), pointer, nopass :: diagnostics_handler => null()
     end type lsp_manager_t
 
     ! C interfaces
@@ -545,7 +555,10 @@ contains
 
         select case(msg%method)
         case("textDocument/publishDiagnostics")
-            ! TODO: Handle diagnostics
+            ! Forward to diagnostics handler if set
+            if (associated(manager%diagnostics_handler)) then
+                call manager%diagnostics_handler(msg)
+            end if
         case("window/showMessage")
             ! TODO: Show message to user
         case("window/logMessage")
@@ -792,5 +805,13 @@ contains
 
         call send_request(manager%servers(server_index), msg, callback)
     end function request_hover
+
+    ! Set the diagnostics notification handler
+    subroutine set_diagnostics_handler(manager, handler)
+        type(lsp_manager_t), intent(inout) :: manager
+        procedure(diagnostics_callback) :: handler
+
+        manager%diagnostics_handler => handler
+    end subroutine set_diagnostics_handler
 
 end module lsp_server_manager_module
