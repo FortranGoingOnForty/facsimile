@@ -86,6 +86,10 @@ SOURCES = src/version_module.f90 \
           src/workspace/workspace_module.f90 \
           src/workspace/backup_module.f90 \
           src/syntax/syntax_highlighter_module.f90 \
+          src/lsp/json_module.f90 \
+          src/lsp/lsp_protocol_module.f90 \
+          src/lsp/lsp_server_manager_module.f90 \
+          src/lsp/lsp_client_module.f90 \
           src/terminal/renderer_module.f90 \
           src/ui/help_display_module.f90 \
           src/ui/text_prompt_module.f90 \
@@ -104,7 +108,8 @@ SOURCES = src/version_module.f90 \
 
 OBJECTS = $(SOURCES:.f90=.o)
 C_SOURCES = src/terminal/termios_wrapper.c \
-            src/utils/regex_wrapper.c
+            src/utils/regex_wrapper.c \
+            src/lsp/lsp_process_wrapper.c
 C_OBJECTS = $(C_SOURCES:.c=.o)
 
 all: $(TARGET)
