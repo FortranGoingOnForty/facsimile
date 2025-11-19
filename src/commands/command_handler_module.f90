@@ -25,7 +25,8 @@ module command_handler_module
     use binary_prompt_module, only: binary_file_prompt
     use lsp_server_manager_module, only: request_completion, request_hover, request_definition, &
                                          request_references, request_code_actions, request_document_symbols, &
-                                         request_signature_help
+                                         request_signature_help, request_rename
+    use rename_prompt_module, only: show_rename_prompt
     use completion_popup_module, only: show_completion_popup, hide_completion_popup, &
                                         handle_completion_response, navigate_completion_up, &
                                         navigate_completion_down, get_selected_completion, &
@@ -144,11 +145,10 @@ contains
         case('ctrl-q')
             should_quit = .true.
 
-        case('ctrl-b', 'ctrl-shift-b', 'f2', 'f3')
+        case('ctrl-b', 'ctrl-shift-b', 'f3')
             ! Toggle fuss mode (file tree)
             ! ctrl-b: Original binding (conflicts with tmux prefix)
             ! ctrl-shift-b: Alternative (tmux may still catch this)
-            ! f2: Alternative function key binding
             ! f3: Tmux/terminal-safe alternative (recommended)
             call toggle_fuss_mode(editor)
 
@@ -1253,6 +1253,61 @@ contains
                             ! Show panel (will be populated when response arrives)
                             call show_references_panel(editor%references_panel, editor%screen_cols, editor%screen_rows)
                         end if
+                    end block
+                end if
+            end if
+
+        case('f2')
+            ! Rename symbol
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                    ! Get word under cursor as old name
+                    block
+                        character(len=:), allocatable :: line, old_name, new_name
+                        integer :: word_start, word_end, lsp_line, lsp_char, request_id
+                        logical :: cancelled
+
+                        line = buffer_get_line(buffer, editor%cursors(editor%active_cursor)%line)
+                        call find_word_boundaries(line, editor%cursors(editor%active_cursor)%column, &
+                            word_start, word_end)
+
+                        if (word_start > 0 .and. word_end >= word_start) then
+                            old_name = line(word_start:word_end)
+
+                            ! Show rename prompt
+                            call show_rename_prompt(editor%screen_rows, old_name, new_name, cancelled)
+
+                            if (.not. cancelled .and. allocated(new_name)) then
+                                ! Send rename request
+                                lsp_line = editor%cursors(editor%active_cursor)%line - 1
+                                lsp_char = editor%cursors(editor%active_cursor)%column - 1
+
+                                ! Save editor state for callback
+                                if (.not. allocated(saved_editor_for_callback)) then
+                                    allocate(saved_editor_for_callback)
+                                end if
+                                saved_editor_for_callback = editor
+
+                                request_id = request_rename(editor%lsp_manager, &
+                                    editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                                    editor%tabs(editor%active_tab_index)%filename, &
+                                    lsp_line, lsp_char, new_name, handle_rename_response_wrapper)
+
+                                if (request_id > 0) then
+                                    call terminal_move_cursor(editor%screen_rows, 1)
+                                    call terminal_write('Renaming symbol...                         ')
+                                end if
+
+                                deallocate(new_name)
+                            end if
+
+                            if (allocated(old_name)) deallocate(old_name)
+                        else
+                            call terminal_move_cursor(editor%screen_rows, 1)
+                            call terminal_write('No symbol under cursor                     ')
+                        end if
+
+                        if (allocated(line)) deallocate(line)
                     end block
                 end if
             end if
@@ -5763,5 +5818,194 @@ contains
             call handle_signature_response(saved_editor_for_callback%signature_tooltip, response)
         end if
     end subroutine handle_signature_response_wrapper
+
+    ! Wrapper callback that matches the LSP callback signature for rename
+    subroutine handle_rename_response_wrapper(request_id, response)
+        use lsp_protocol_module, only: lsp_message_t
+        use json_module, only: json_value_t, json_stringify
+        integer, intent(in) :: request_id
+        type(lsp_message_t), intent(in) :: response
+
+        character(len=:), allocatable :: result_str
+        integer :: changes_applied
+
+        if (.not. allocated(saved_editor_for_callback)) return
+
+        ! Convert result to string for apply_workspace_edit
+        result_str = json_stringify(response%result)
+        if (.not. allocated(result_str) .or. result_str == 'null' .or. len_trim(result_str) == 0) then
+            call terminal_move_cursor(saved_editor_for_callback%screen_rows, 1)
+            call terminal_write('Rename failed or not supported                ')
+            if (allocated(result_str)) deallocate(result_str)
+            return
+        end if
+
+        ! Apply workspace edit
+        call apply_workspace_edit(saved_editor_for_callback, result_str, changes_applied)
+
+        call terminal_move_cursor(saved_editor_for_callback%screen_rows, 1)
+        if (changes_applied > 0) then
+            block
+                character(len=64) :: msg
+                write(msg, '(A,I0,A)') 'Renamed symbol (', changes_applied, ' changes applied)'
+                call terminal_write(trim(msg) // '                    ')
+            end block
+        else
+            call terminal_write('No changes applied                         ')
+        end if
+
+        if (allocated(result_str)) deallocate(result_str)
+    end subroutine handle_rename_response_wrapper
+
+    ! Apply a workspace edit from LSP
+    subroutine apply_workspace_edit(editor, edit_json, changes_applied)
+        use json_module, only: json_parse, json_value_t, json_get_array, json_array_size, &
+                               json_get_array_element, json_get_object, json_get_string, &
+                               json_get_number, json_has_key
+        type(editor_state_t), intent(inout) :: editor
+        character(len=*), intent(in) :: edit_json
+        integer, intent(out) :: changes_applied
+
+        type(json_value_t) :: edit_obj, doc_changes_arr, file_change_obj
+        type(json_value_t) :: text_doc_obj, edits_arr
+        character(len=:), allocatable :: uri
+        integer :: num_files, i
+
+        changes_applied = 0
+
+        ! Parse the edit JSON
+        edit_obj = json_parse(edit_json)
+
+        ! Try to get documentChanges first (newer format)
+        if (json_has_key(edit_obj, 'documentChanges')) then
+            doc_changes_arr = json_get_array(edit_obj, 'documentChanges')
+            num_files = json_array_size(doc_changes_arr)
+
+            do i = 0, num_files - 1  ! 0-based index
+                file_change_obj = json_get_array_element(doc_changes_arr, i)
+
+                ! Get text document URI
+                if (json_has_key(file_change_obj, 'textDocument')) then
+                    text_doc_obj = json_get_object(file_change_obj, 'textDocument')
+                    uri = json_get_string(text_doc_obj, 'uri')
+                end if
+
+                ! Get edits array
+                if (json_has_key(file_change_obj, 'edits') .and. allocated(uri)) then
+                    edits_arr = json_get_array(file_change_obj, 'edits')
+                    call apply_file_edits_obj(editor, uri, edits_arr, changes_applied)
+                    deallocate(uri)
+                end if
+            end do
+            return
+        end if
+
+        ! Fall back to changes format (older format - map of URI to edits)
+        if (json_has_key(edit_obj, 'changes')) then
+            call terminal_move_cursor(editor%screen_rows, 1)
+            call terminal_write('Workspace edit (changes format) not fully supported')
+            return
+        end if
+
+    end subroutine apply_workspace_edit
+
+    ! Apply edits to a specific file (using json_value_t)
+    subroutine apply_file_edits_obj(editor, uri, edits_arr, changes_applied)
+        use json_module, only: json_value_t, json_array_size, json_get_array_element, &
+                               json_get_object, json_get_string, json_get_number, json_has_key
+        type(editor_state_t), intent(inout) :: editor
+        character(len=*), intent(in) :: uri
+        type(json_value_t), intent(in) :: edits_arr
+        integer, intent(inout) :: changes_applied
+
+        type(json_value_t) :: edit_obj, range_obj, start_obj, end_obj
+        character(len=:), allocatable :: filename, new_text
+        integer :: num_edits, i, j, tab_idx
+        integer :: start_line, start_char, end_line, end_char
+
+        ! Convert URI to filename
+        if (len(uri) >= 7 .and. uri(1:7) == 'file://') then
+            filename = uri(8:)
+        else
+            filename = uri
+        end if
+
+        ! Find the tab with this file
+        tab_idx = 0
+        do j = 1, size(editor%tabs)
+            if (allocated(editor%tabs(j)%filename)) then
+                if (trim(editor%tabs(j)%filename) == trim(filename)) then
+                    tab_idx = j
+                    exit
+                end if
+            end if
+        end do
+
+        if (tab_idx == 0) then
+            ! File not open - skip for now
+            if (allocated(filename)) deallocate(filename)
+            return
+        end if
+
+        ! Apply edits in reverse order (to preserve line numbers)
+        num_edits = json_array_size(edits_arr)
+
+        do i = num_edits - 1, 0, -1  ! 0-based index, reverse order
+            edit_obj = json_get_array_element(edits_arr, i)
+
+            ! Get range
+            if (.not. json_has_key(edit_obj, 'range')) cycle
+            range_obj = json_get_object(edit_obj, 'range')
+
+            if (json_has_key(range_obj, 'start') .and. json_has_key(range_obj, 'end')) then
+                start_obj = json_get_object(range_obj, 'start')
+                end_obj = json_get_object(range_obj, 'end')
+
+                start_line = int(json_get_number(start_obj, 'line', 0.0d0)) + 1
+                start_char = int(json_get_number(start_obj, 'character', 0.0d0)) + 1
+                end_line = int(json_get_number(end_obj, 'line', 0.0d0)) + 1
+                end_char = int(json_get_number(end_obj, 'character', 0.0d0)) + 1
+
+                ! Get new text
+                new_text = json_get_string(edit_obj, 'newText')
+
+                if (allocated(new_text)) then
+                    ! Apply the edit to the buffer
+                    call apply_single_edit(editor%tabs(tab_idx)%buffer, &
+                        start_line, start_char, end_line, end_char, new_text)
+                    changes_applied = changes_applied + 1
+                    deallocate(new_text)
+                end if
+            end if
+        end do
+
+        if (allocated(filename)) deallocate(filename)
+    end subroutine apply_file_edits_obj
+
+    ! Apply a single text edit to a buffer
+    subroutine apply_single_edit(buffer, start_line, start_char, end_line, end_char, new_text)
+        type(buffer_t), intent(inout) :: buffer
+        integer, intent(in) :: start_line, start_char, end_line, end_char
+        character(len=*), intent(in) :: new_text
+
+        integer :: start_pos, end_pos, delete_count
+
+        ! Calculate buffer positions
+        start_pos = get_buffer_position(buffer, start_line, start_char)
+        end_pos = get_buffer_position(buffer, end_line, end_char)
+
+        if (start_pos <= 0 .or. end_pos <= 0) return
+
+        ! Delete the old text
+        delete_count = end_pos - start_pos
+        if (delete_count > 0) then
+            call buffer_delete(buffer, start_pos, delete_count)
+        end if
+
+        ! Insert the new text
+        if (len(new_text) > 0) then
+            call buffer_insert(buffer, start_pos, new_text)
+        end if
+    end subroutine apply_single_edit
 
 end module command_handler_module

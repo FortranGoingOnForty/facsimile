@@ -17,7 +17,7 @@ module lsp_server_manager_module
     public :: get_language_for_file, start_lsp_for_file
     public :: notify_file_opened, notify_file_changed, notify_file_saved, notify_file_closed
     public :: request_completion, request_hover, request_definition, request_references, request_code_actions
-    public :: request_document_symbols, request_signature_help
+    public :: request_document_symbols, request_signature_help, request_rename
     public :: set_diagnostics_handler
 
     ! Language server configuration
@@ -981,6 +981,33 @@ contains
 
         call send_request(manager%servers(server_index), msg, callback)
     end function request_signature_help
+
+    ! Request rename
+    function request_rename(manager, server_index, filename, line, character, new_name, callback) result(request_id)
+        use lsp_protocol_module, only: create_rename_request
+        type(lsp_manager_t), intent(inout) :: manager
+        integer, intent(in) :: server_index
+        character(len=*), intent(in) :: filename
+        integer, intent(in) :: line, character  ! 0-based LSP positions
+        character(len=*), intent(in) :: new_name
+        procedure(response_callback), optional :: callback
+        integer :: request_id
+        type(lsp_message_t) :: msg
+        character(len=256) :: uri
+
+        request_id = -1
+        if (server_index < 1 .or. server_index > manager%num_servers) return
+        if (.not. manager%servers(server_index)%initialized) return
+
+        ! Convert filename to URI
+        uri = "file://" // trim(filename)
+
+        ! Create rename request
+        msg = create_rename_request(uri, line, character, new_name)
+        request_id = msg%id
+
+        call send_request(manager%servers(server_index), msg, callback)
+    end function request_rename
 
     ! Set the diagnostics notification handler
     subroutine set_diagnostics_handler(manager, handler)

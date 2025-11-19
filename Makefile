@@ -103,6 +103,7 @@ SOURCES = src/version_module.f90 \
           src/terminal/renderer_module.f90 \
           src/ui/help_display_module.f90 \
           src/ui/text_prompt_module.f90 \
+          src/ui/rename_prompt_module.f90 \
           src/ui/search_prompt_module.f90 \
           src/ui/replace_prompt_module.f90 \
           src/ui/unified_search_module.f90 \
