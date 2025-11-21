@@ -4,13 +4,13 @@ module unified_search_module
     use editor_state_module, only: editor_state_t, cursor_t, sync_editor_to_pane
     use text_buffer_module
     use regex_module
-    use renderer_module, only: render_screen
     implicit none
     private
 
     public :: show_unified_search_prompt
     public :: current_search_pattern, clear_search_pattern
     public :: find_next_match, find_prev_match, center_viewport_on_cursor
+    public :: get_matches_on_line, search_mode_active
 
     ! Module variables for search/replace state
     character(len=:), allocatable :: current_search_pattern
@@ -49,6 +49,13 @@ module unified_search_module
     integer :: history_count = 0
     integer :: history_index = 0  ! Current position when navigating history
 
+    ! Search in selection mode
+    logical :: search_in_selection = .false.
+    integer :: selection_start_line = 1
+    integer :: selection_start_col = 1
+    integer :: selection_end_line = 1
+    integer :: selection_end_col = 1
+
 contains
 
     subroutine show_unified_search_prompt(editor, buffer)
@@ -57,6 +64,7 @@ contains
         character(len=256) :: find_buffer, replace_buffer
         character(len=256) :: prompt
         integer :: find_pos, replace_pos, ch
+        integer :: temp_line, temp_col
         logical :: in_alt_sequence
 
         ! Initialize
@@ -66,6 +74,28 @@ contains
         replace_pos = 0
         active_field = 1  ! Start with find field
         in_alt_sequence = .false.
+
+        ! Check if there's an active selection for search-in-selection mode
+        if (editor%cursors(editor%active_cursor)%has_selection) then
+            search_in_selection = .true.
+            selection_start_line = editor%cursors(editor%active_cursor)%selection_start_line
+            selection_start_col = editor%cursors(editor%active_cursor)%selection_start_col
+            selection_end_line = editor%cursors(editor%active_cursor)%line
+            selection_end_col = editor%cursors(editor%active_cursor)%column
+            ! Ensure start comes before end
+            if (selection_start_line > selection_end_line .or. &
+                (selection_start_line == selection_end_line .and. selection_start_col > selection_end_col)) then
+                ! Swap
+                temp_line = selection_start_line
+                temp_col = selection_start_col
+                selection_start_line = selection_end_line
+                selection_start_col = selection_end_col
+                selection_end_line = temp_line
+                selection_end_col = temp_col
+            end if
+        else
+            search_in_selection = .false.
+        end if
 
         ! If we have existing patterns, load them
         if (allocated(current_search_pattern)) then
@@ -143,6 +173,12 @@ contains
                 else if (ch == iachar('r') .or. ch == iachar('R')) then
                     ! Alt+R - toggle regex mode
                     use_regex = .not. use_regex
+                    call build_unified_prompt(prompt, find_buffer, find_pos, replace_buffer, replace_pos)
+                    call display_prompt(editor, prompt, find_pos, replace_pos)
+                    in_alt_sequence = .false.
+                else if (ch == iachar('s') .or. ch == iachar('S')) then
+                    ! Alt+S - toggle search in selection
+                    search_in_selection = .not. search_in_selection
                     call build_unified_prompt(prompt, find_buffer, find_pos, replace_buffer, replace_pos)
                     call display_prompt(editor, prompt, find_pos, replace_pos)
                     in_alt_sequence = .false.
@@ -312,6 +348,11 @@ contains
         else
             options = trim(options) // '[rr]'
         end if
+        if (search_in_selection) then
+            options = trim(options) // '[Ss]'
+        else
+            options = trim(options) // '[ss]'
+        end if
 
         ! Add match count if available
         if (allocated(current_search_pattern) .and. total_matches > 0) then
@@ -440,11 +481,11 @@ contains
             close(99)
 
             call center_viewport_on_cursor(editor)
-            call render_screen(buffer, editor)
+            ! Note: render_screen should be called by the caller
 
-            ! DEBUG: Check after render
+            ! DEBUG: Check after centering
             open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
-            write(99, '(A,L1)') 'SEARCH: after render_screen, has_sel=', &
+            write(99, '(A,L1)') 'SEARCH: after center_viewport, has_sel=', &
                 editor%cursors(editor%active_cursor)%has_selection
             close(99)
         end if
@@ -493,7 +534,7 @@ contains
             call sync_editor_to_pane(editor)
 
             call center_viewport_on_cursor(editor)
-            call render_screen(buffer, editor)
+            ! Note: render_screen should be called by the caller
         end if
     end subroutine search_forward
 
@@ -567,8 +608,7 @@ contains
             ! Re-count matches after replacement
             call count_all_matches(buffer, current_search_pattern)
 
-            ! Render to show the replacement with selection
-            call render_screen(buffer, editor)
+            ! Note: render_screen should be called by the caller
         end if
     end subroutine replace_current_and_advance
 
@@ -805,6 +845,28 @@ contains
     end subroutine clear_search_pattern
 
     ! Search helper functions
+    ! Check if a position is within the search selection bounds
+    function is_in_selection_bounds(line_num, col_num) result(in_bounds)
+        integer, intent(in) :: line_num, col_num
+        logical :: in_bounds
+
+        if (.not. search_in_selection) then
+            in_bounds = .true.
+            return
+        end if
+
+        ! Check if position is within selection
+        if (line_num < selection_start_line .or. line_num > selection_end_line) then
+            in_bounds = .false.
+        else if (line_num == selection_start_line .and. col_num < selection_start_col) then
+            in_bounds = .false.
+        else if (line_num == selection_end_line .and. col_num > selection_end_col) then
+            in_bounds = .false.
+        else
+            in_bounds = .true.
+        end if
+    end function is_in_selection_bounds
+
     subroutine find_next_match(buffer, pattern, start_line, start_col, found, found_line, found_col)
         type(buffer_t), intent(in) :: buffer
         character(len=*), intent(in) :: pattern
@@ -814,6 +876,7 @@ contains
         character(len=:), allocatable :: line
         integer :: line_count, current_line, pos, search_col
         integer :: match_len
+        integer :: end_line
 
         found = .false.
         found_line = 0
@@ -821,8 +884,15 @@ contains
         line_count = buffer_get_line_count(buffer)
         last_match_length = 0
 
-        ! Search from current position to end
-        do current_line = start_line, line_count
+        ! Determine search range
+        if (search_in_selection) then
+            end_line = selection_end_line
+        else
+            end_line = line_count
+        end if
+
+        ! Search from current position to end (of selection or file)
+        do current_line = start_line, end_line
             line = buffer_get_line(buffer, current_line)
             if (current_line == start_line) then
                 search_col = start_col + 1
@@ -838,6 +908,11 @@ contains
                 end if
                 if (pos > 0) then
                     found_col = search_col + pos - 1
+                    ! Check if match is within selection bounds
+                    if (search_in_selection .and. .not. is_in_selection_bounds(current_line, found_col)) then
+                        if (allocated(line)) deallocate(line)
+                        cycle
+                    end if
                     if (whole_word) then
                         if (.not. is_whole_word_match(line, found_col, match_len)) then
                             if (allocated(line)) deallocate(line)
@@ -855,7 +930,9 @@ contains
             if (allocated(line)) deallocate(line)
         end do
 
-        ! Wrap around to beginning
+        ! Wrap around to beginning (skip if searching in selection)
+        if (search_in_selection) return
+
         do current_line = 1, start_line
             line = buffer_get_line(buffer, current_line)
             if (current_line == start_line) then
@@ -906,6 +983,7 @@ contains
         character(len=:), allocatable :: line
         integer :: line_count, current_line, pos, last_pos, check_col
         integer :: match_len, last_match_len
+        integer :: begin_line
 
         found = .false.
         found_line = 0
@@ -913,8 +991,15 @@ contains
         line_count = buffer_get_line_count(buffer)
         last_match_length = 0
 
+        ! Determine search range
+        if (search_in_selection) then
+            begin_line = selection_start_line
+        else
+            begin_line = 1
+        end if
+
         ! Search backward from current position
-        do current_line = start_line, 1, -1
+        do current_line = start_line, begin_line, -1
             line = buffer_get_line(buffer, current_line)
             if (current_line == start_line) then
                 check_col = min(start_col, len(line))
@@ -949,6 +1034,11 @@ contains
             end do
 
             if (last_pos > 0) then
+                ! Check if match is within selection bounds
+                if (search_in_selection .and. .not. is_in_selection_bounds(current_line, last_pos)) then
+                    if (allocated(line)) deallocate(line)
+                    cycle
+                end if
                 found = .true.
                 found_line = current_line
                 found_col = last_pos
@@ -1060,11 +1150,21 @@ contains
         character(len=:), allocatable :: line
         integer :: line_count, current_line, pos, col, match_count
         integer :: match_len
+        integer :: start_line, end_line
 
         match_count = 0
         line_count = buffer_get_line_count(buffer)
 
-        do current_line = 1, line_count
+        ! Determine search range
+        if (search_in_selection) then
+            start_line = selection_start_line
+            end_line = selection_end_line
+        else
+            start_line = 1
+            end_line = line_count
+        end if
+
+        do current_line = start_line, end_line
             line = buffer_get_line(buffer, current_line)
             col = 1
             do while (col <= len(line))
@@ -1076,6 +1176,11 @@ contains
                 end if
                 if (pos > 0) then
                     pos = col + pos - 1
+                    ! Check if match is within selection bounds
+                    if (search_in_selection .and. .not. is_in_selection_bounds(current_line, pos)) then
+                        col = pos + 1
+                        cycle
+                    end if
                     if (whole_word) then
                         if (is_whole_word_match(line, pos, match_len)) then
                             match_count = match_count + 1
@@ -1102,11 +1207,21 @@ contains
         character(len=:), allocatable :: line
         integer :: line_count, current_line, pos, col, match_count
         integer :: match_len
+        integer :: start_line, end_line
 
         match_count = 0
         line_count = buffer_get_line_count(buffer)
 
-        do current_line = 1, line_count
+        ! Determine search range
+        if (search_in_selection) then
+            start_line = selection_start_line
+            end_line = selection_end_line
+        else
+            start_line = 1
+            end_line = line_count
+        end if
+
+        do current_line = start_line, end_line
             line = buffer_get_line(buffer, current_line)
             col = 1
             do while (col <= len(line))
@@ -1118,6 +1233,11 @@ contains
                 end if
                 if (pos > 0) then
                     pos = col + pos - 1
+                    ! Check if match is within selection bounds
+                    if (search_in_selection .and. .not. is_in_selection_bounds(current_line, pos)) then
+                        col = pos + 1
+                        cycle
+                    end if
                     if (whole_word) then
                         if (is_whole_word_match(line, pos, match_len)) then
                             match_count = match_count + 1
@@ -1210,5 +1330,56 @@ contains
             pos = 0
         end if
     end subroutine navigate_history_down
+
+    ! Get all match positions on a given line
+    ! Returns pairs of (start_col, end_col) for each match
+    subroutine get_matches_on_line(line, line_num, matches, num_matches)
+        character(len=*), intent(in) :: line
+        integer, intent(in) :: line_num
+        integer, intent(out) :: matches(:,:)  ! Array of (start, end) pairs
+        integer, intent(out) :: num_matches
+        integer :: col, pos, match_len
+        integer :: max_matches
+
+        num_matches = 0
+        max_matches = size(matches, 2)  ! Second dimension is number of match slots
+
+        ! Only highlight if search is active and we have a pattern
+        if (.not. search_mode_active .or. .not. allocated(current_search_pattern)) return
+        if (len_trim(current_search_pattern) == 0) return
+
+        ! Find all matches on this line
+        col = 1
+        do while (col <= len(line) .and. num_matches < max_matches)
+            if (use_regex) then
+                call find_regex_in_line(line(col:), compiled_regex_id, pos, match_len)
+            else
+                call find_pattern_in_line(line(col:), current_search_pattern, pos)
+                match_len = len(current_search_pattern)
+            end if
+
+            if (pos > 0) then
+                pos = col + pos - 1  ! Adjust to line position
+
+                ! Check bounds and whole word if needed
+                if (search_in_selection .and. .not. is_in_selection_bounds(line_num, pos)) then
+                    col = pos + 1
+                    cycle
+                end if
+                if (whole_word .and. .not. is_whole_word_match(line, pos, match_len)) then
+                    col = pos + 1
+                    cycle
+                end if
+
+                ! Add match
+                num_matches = num_matches + 1
+                matches(1, num_matches) = pos
+                matches(2, num_matches) = pos + match_len - 1
+                col = pos + 1
+            else
+                exit
+            end if
+        end do
+    end subroutine get_matches_on_line
 
 end module unified_search_module

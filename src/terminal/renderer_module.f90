@@ -13,6 +13,7 @@ module renderer_module
                                    SEVERITY_ERROR, SEVERITY_WARNING, SEVERITY_INFO, SEVERITY_HINT
     use diagnostics_panel_module, only: render_diagnostics_panel
     use references_panel_module, only: render_references_panel
+    use unified_search_module, only: get_matches_on_line, search_mode_active
     implicit none
     private
 
@@ -263,13 +264,22 @@ contains
         character(len=:), allocatable :: line
         integer :: i, col, line_len, token_idx
         integer :: sel_start_line, sel_start_col, sel_end_line, sel_end_col
-        logical :: in_selection, is_bracket_match, is_current_line
+        logical :: in_selection, is_bracket_match, is_current_line, is_search_match
         character :: ch
         type(token_t), allocatable :: tokens(:)
         character(len=:), allocatable :: token_color
+        integer :: search_matches(2, 50)  ! Up to 50 matches per line (start, end pairs)
+        integer :: num_search_matches, match_idx
 
         line = buffer_get_line(buffer, line_num)
         line_len = len(line)
+
+        ! Get all search matches on this line
+        if (search_mode_active) then
+            call get_matches_on_line(line, line_num, search_matches, num_search_matches)
+        else
+            num_search_matches = 0
+        end if
 
         ! Get syntax tokens for this line
         if (syntax_highlighter%enabled) then
@@ -342,6 +352,15 @@ contains
                 is_bracket_match = .true.
             end if
 
+            ! Check if this position is part of a search match
+            is_search_match = .false.
+            do match_idx = 1, num_search_matches
+                if (col >= search_matches(1, match_idx) .and. col <= search_matches(2, match_idx)) then
+                    is_search_match = .true.
+                    exit
+                end if
+            end do
+
             ! Find which token this column belongs to
             token_color = ""
             if (syntax_highlighter%enabled) then
@@ -361,11 +380,18 @@ contains
             end if
 
             if (in_selection) then
-                ! Highlight selected text with reverse video
+                ! Highlight selected text with reverse video (highest priority)
                 call terminal_write(char(27) // '[7m' // ch // char(27) // '[0m')
             else if (is_bracket_match) then
                 ! Highlight matching brackets with cyan background
                 call terminal_write(char(27) // '[46m' // ch // char(27) // '[0m')
+            else if (is_search_match) then
+                ! Highlight search matches with yellow background
+                if (len(token_color) > 0) then
+                    call terminal_write(token_color // char(27) // '[43m' // ch // char(27) // '[0m')
+                else
+                    call terminal_write(char(27) // '[43m' // ch // char(27) // '[0m')
+                end if
             else if (is_current_line) then
                 ! Subtle background for current line with syntax color
                 if (len(token_color) > 0) then

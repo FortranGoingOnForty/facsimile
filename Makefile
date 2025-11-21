@@ -101,13 +101,13 @@ SOURCES = src/version_module.f90 \
           src/workspace/workspace_module.f90 \
           src/workspace/backup_module.f90 \
           src/syntax/syntax_highlighter_module.f90 \
-          src/terminal/renderer_module.f90 \
           src/ui/help_display_module.f90 \
           src/ui/text_prompt_module.f90 \
           src/ui/rename_prompt_module.f90 \
           src/ui/search_prompt_module.f90 \
-          src/ui/replace_prompt_module.f90 \
           src/ui/unified_search_module.f90 \
+          src/terminal/renderer_module.f90 \
+          src/ui/replace_prompt_module.f90 \
           src/ui/goto_prompt_module.f90 \
           src/ui/save_prompt_module.f90 \
           src/ui/binary_prompt_module.f90 \
