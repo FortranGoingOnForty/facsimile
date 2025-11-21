@@ -25,7 +25,7 @@ module command_handler_module
     use binary_prompt_module, only: binary_file_prompt
     use lsp_server_manager_module, only: request_completion, request_hover, request_definition, &
                                          request_references, request_code_actions, request_document_symbols, &
-                                         request_signature_help, request_rename
+                                         request_signature_help, request_formatting, request_rename
     use rename_prompt_module, only: show_rename_prompt
     use completion_popup_module, only: show_completion_popup, hide_completion_popup, &
                                         handle_completion_response, navigate_completion_up, &
@@ -1308,6 +1308,33 @@ contains
                         end if
 
                         if (allocated(line)) deallocate(line)
+                    end block
+                end if
+            end if
+
+        case('shift-alt-f')
+            ! Format document
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                    block
+                        integer :: request_id
+
+                        ! Save editor state for callback
+                        if (.not. allocated(saved_editor_for_callback)) then
+                            allocate(saved_editor_for_callback)
+                        end if
+                        saved_editor_for_callback = editor
+
+                        ! Request formatting with 4 spaces (configurable later)
+                        request_id = request_formatting(editor%lsp_manager, &
+                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            editor%tabs(editor%active_tab_index)%filename, &
+                            4, .true., handle_formatting_response_wrapper)
+
+                        if (request_id > 0) then
+                            call terminal_move_cursor(editor%screen_rows, 1)
+                            call terminal_write('Formatting document...                     ')
+                        end if
                     end block
                 end if
             end if
@@ -5873,6 +5900,76 @@ contains
 
         if (allocated(result_str)) deallocate(result_str)
     end subroutine handle_rename_response_wrapper
+
+    ! Wrapper callback for formatting response
+    subroutine handle_formatting_response_wrapper(request_id, response)
+        use lsp_protocol_module, only: lsp_message_t
+        use json_module, only: json_value_t, json_array_size, json_get_array_element, &
+                               json_get_object, json_get_string, json_get_number, json_has_key
+        integer, intent(in) :: request_id
+        type(lsp_message_t), intent(in) :: response
+
+        type(json_value_t) :: edits_array, edit_obj, range_obj, start_obj, end_obj
+        character(len=:), allocatable :: new_text
+        integer :: num_edits, i, tab_idx
+        integer :: start_line, start_char, end_line, end_char
+        integer :: changes_applied
+
+        if (.not. allocated(saved_editor_for_callback)) return
+
+        tab_idx = saved_editor_for_callback%active_tab_index
+        if (tab_idx < 1 .or. tab_idx > size(saved_editor_for_callback%tabs)) return
+
+        ! The result is an array of TextEdit objects
+        edits_array = response%result
+        num_edits = json_array_size(edits_array)
+
+        if (num_edits == 0) then
+            call terminal_move_cursor(saved_editor_for_callback%screen_rows, 1)
+            call terminal_write('No formatting changes needed                ')
+            return
+        end if
+
+        changes_applied = 0
+
+        ! Apply edits in reverse order (to preserve positions)
+        do i = num_edits - 1, 0, -1
+            edit_obj = json_get_array_element(edits_array, i)
+
+            if (.not. json_has_key(edit_obj, 'range')) cycle
+            range_obj = json_get_object(edit_obj, 'range')
+
+            if (json_has_key(range_obj, 'start') .and. json_has_key(range_obj, 'end')) then
+                start_obj = json_get_object(range_obj, 'start')
+                end_obj = json_get_object(range_obj, 'end')
+
+                start_line = int(json_get_number(start_obj, 'line', 0.0d0)) + 1
+                start_char = int(json_get_number(start_obj, 'character', 0.0d0)) + 1
+                end_line = int(json_get_number(end_obj, 'line', 0.0d0)) + 1
+                end_char = int(json_get_number(end_obj, 'character', 0.0d0)) + 1
+
+                new_text = json_get_string(edit_obj, 'newText')
+
+                if (allocated(new_text)) then
+                    call apply_single_edit(saved_editor_for_callback%tabs(tab_idx)%buffer, &
+                        start_line, start_char, end_line, end_char, new_text)
+                    changes_applied = changes_applied + 1
+                    deallocate(new_text)
+                end if
+            end if
+        end do
+
+        call terminal_move_cursor(saved_editor_for_callback%screen_rows, 1)
+        if (changes_applied > 0) then
+            block
+                character(len=64) :: msg
+                write(msg, '(A,I0,A)') 'Formatted (', changes_applied, ' edits applied)'
+                call terminal_write(trim(msg) // '                    ')
+            end block
+        else
+            call terminal_write('No formatting changes applied               ')
+        end if
+    end subroutine handle_formatting_response_wrapper
 
     ! Apply a workspace edit from LSP
     subroutine apply_workspace_edit(editor, edit_json, changes_applied)
