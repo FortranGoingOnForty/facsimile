@@ -10,6 +10,7 @@ program facsimile
     use workspace_module
     use backup_module
     use save_prompt_module
+    use command_palette_module, only: register_command
     use welcome_menu_module, only: show_welcome_menu
     use fortress_navigator_module, only: open_fortress_navigator
     use binary_prompt_module, only: binary_file_prompt
@@ -190,6 +191,9 @@ program facsimile
 
     ! Set up diagnostics handler for LSP
     call set_diagnostics_handler(editor%lsp_manager, handle_diagnostics)
+
+    ! Register all commands for command palette
+    call register_all_commands()
 
     ! Initialize terminal early (needed for workspace restoration warnings)
     call terminal_init()
@@ -922,5 +926,54 @@ contains
         call terminal_write('Press any key to continue...')
         call get_key_input(key_input, status)
     end subroutine show_backup_diff
+
+    ! Register all available commands for the command palette
+    subroutine register_all_commands()
+        ! File operations
+        call register_command('Save File', 'save', 'Ctrl+S', 'File')
+        call register_command('Save All', 'save-all', 'Ctrl+Shift+S', 'File')
+        call register_command('Quit', 'quit', 'Ctrl+Q', 'File')
+        call register_command('Open File', 'open', 'Ctrl+O', 'File')
+        call register_command('Toggle File Tree', 'toggle-tree', 'F3', 'File')
+
+        ! Edit operations
+        call register_command('Copy', 'copy', 'Ctrl+C', 'Edit')
+        call register_command('Paste', 'paste', 'Ctrl+V', 'Edit')
+        call register_command('Cut', 'cut', 'Ctrl+X', 'Edit')
+        call register_command('Undo', 'undo', 'Ctrl+Z', 'Edit')
+        call register_command('Redo', 'redo', 'Ctrl+Y', 'Edit')
+
+        ! Search operations
+        call register_command('Find', 'find', 'Ctrl+F', 'Search')
+        call register_command('Replace', 'replace', 'Ctrl+H', 'Search')
+        call register_command('Find Next', 'find-next', 'Ctrl+G', 'Search')
+        call register_command('Find Previous', 'find-prev', 'Shift+Ctrl+G', 'Search')
+
+        ! Navigation
+        call register_command('Go to Line', 'goto-line', 'Ctrl+G', 'Navigation')
+        call register_command('Go to Definition', 'goto-def', 'F12', 'Navigation')
+        call register_command('Find References', 'find-refs', 'Shift+F12', 'Navigation')
+        call register_command('Jump Back', 'jump-back', 'Alt+,', 'Navigation')
+        call register_command('Go to Symbol', 'goto-symbol', 'Ctrl+Shift+O', 'Navigation')
+
+        ! LSP features
+        call register_command('Code Actions', 'code-actions', 'Ctrl+.', 'LSP')
+        call register_command('Rename Symbol', 'rename', 'F2', 'LSP')
+        call register_command('Show Diagnostics', 'diagnostics', 'Ctrl+Shift+D', 'LSP')
+        call register_command('Show Hover Info', 'hover', 'Ctrl+K Ctrl+I', 'LSP')
+
+        ! View
+        call register_command('Split Vertical', 'split-v', 'Ctrl+\\', 'View')
+        call register_command('Split Horizontal', 'split-h', 'Ctrl+Shift+\\', 'View')
+        call register_command('Close Pane', 'close-pane', 'Ctrl+W', 'View')
+        call register_command('Navigate Pane Left', 'pane-left', 'Ctrl+H', 'View')
+        call register_command('Navigate Pane Right', 'pane-right', 'Ctrl+L', 'View')
+        call register_command('Navigate Pane Up', 'pane-up', 'Ctrl+K', 'View')
+        call register_command('Navigate Pane Down', 'pane-down', 'Ctrl+J', 'View')
+
+        ! Help
+        call register_command('Show Help', 'help', '?', 'Help')
+        call register_command('Command Palette', 'palette', 'Ctrl+Shift+P', 'Help')
+    end subroutine register_all_commands
 
 end program facsimile

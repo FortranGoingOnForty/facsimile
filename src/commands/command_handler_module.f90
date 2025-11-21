@@ -1342,6 +1342,23 @@ contains
                 end if
             end if
 
+        case('ctrl-shift-p')
+            ! Command palette
+            block
+                use command_palette_module, only: show_command_palette_interactive
+                character(len=:), allocatable :: cmd_id
+
+                cmd_id = show_command_palette_interactive(editor%command_palette, editor%screen_rows)
+
+                if (allocated(cmd_id) .and. len_trim(cmd_id) > 0) then
+                    ! Execute the command by re-processing as a key
+                    call execute_palette_command(editor, buffer, cmd_id, should_quit)
+                end if
+
+                ! Redraw screen after palette
+                call render_screen(buffer, editor)
+            end block
+
         case('alt-comma')
             ! Jump back in navigation history (Alt+,)
             if (.not. is_jump_stack_empty(editor%jump_stack)) then
@@ -6007,5 +6024,19 @@ contains
             call buffer_insert(buffer, start_pos, new_text)
         end if
     end subroutine apply_single_edit
+
+    ! Execute a command from the command palette
+    subroutine execute_palette_command(editor, buffer, cmd_id, should_quit)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=*), intent(in) :: cmd_id
+        logical, intent(out) :: should_quit
+
+        ! For now, just display the selected command
+        ! TODO: Implement full command execution in next iteration
+        call terminal_move_cursor(editor%screen_rows, 1)
+        call terminal_write('Selected: ' // trim(cmd_id) // '                    ')
+        should_quit = .false.
+    end subroutine execute_palette_command
 
 end module command_handler_module
