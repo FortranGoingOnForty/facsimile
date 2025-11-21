@@ -6,6 +6,7 @@ This directory contains tests for the Language Server Protocol (LSP) integration
 
 ### Language-Specific Samples
 - `sample.c` - C/C++ test file with completion and hover test points
+- `sample_errors.c` - C file with intentional syntax errors for testing diagnostics
 - `sample_python.py` - Python test file with class/module completion tests
 - `sample_rust.rs` - Rust test file with struct and trait tests
 - `sample_typescript.ts` - TypeScript test file with interface and generic tests
@@ -13,6 +14,12 @@ This directory contains tests for the Language Server Protocol (LSP) integration
 ### Unit Tests
 - `test_json.f90` - Tests the JSON parser implementation
 - `test_lsp_init.f90` - Tests LSP server initialization and communication
+
+### Integration Tests (Expect Scripts)
+- `test_initial_diagnostics.exp` - Tests initial diagnostics when opening a file
+- `test_realtime_diagnostics.exp` - Tests real-time diagnostic updates
+- `test_didsave_diagnostics.exp` - Tests diagnostics after save (Ctrl+S)
+- `test_diagnostics_debug.exp` - Debug version with verbose output
 
 ## Running Tests
 
@@ -58,8 +65,13 @@ For LSP to work, you need the corresponding language servers installed:
 - ✅ Automatic server startup when opening supported files
 - ✅ Server initialization handshake with capability detection
 - ✅ textDocument/didOpen notifications
+- ✅ textDocument/didChange notifications with debouncing (500ms)
+- ✅ textDocument/didSave notifications on file save
 - ✅ Code completion (`Ctrl+Space`) with popup UI
 - ✅ Hover information (`Ctrl+H`) with tooltip display
+- ✅ Diagnostics display with error/warning/info/hint markers
+- ✅ Diagnostics panel (`Ctrl+Shift+D`) showing all issues
+- ✅ Real-time document synchronization
 - ✅ Multi-language support (C/C++, Python, Rust, Go, TypeScript, Fortran)
 - ✅ JSON-RPC message handling
 - ✅ Response callback system
@@ -69,15 +81,19 @@ For LSP to work, you need the corresponding language servers installed:
 |--------|-----|-------------|
 | Code Completion | `Ctrl+Space` | Show completion popup at cursor |
 | Hover Info | `Ctrl+H` | Show type/doc tooltip at cursor |
+| Diagnostics Panel | `Ctrl+Shift+D` | Toggle diagnostics panel |
+| Save File | `Ctrl+S` | Save file (triggers LSP didSave) |
 | Navigate Popup | `↑`/`↓` | Move through completion items |
+| Navigate Panel | `j`/`k` | Move through diagnostics in panel |
+| Jump to Diagnostic | `Enter` | Go to selected diagnostic location |
 | Select Item | `Enter` | Insert selected completion |
-| Dismiss Popup | `Escape` | Close any popup/tooltip |
+| Dismiss Popup | `Escape` | Close any popup/tooltip/panel |
 
 ## Planned Features
-- [ ] textDocument/didChange notifications for real-time updates
-- [ ] Diagnostics display with error/warning markers
 - [ ] Go to definition (`Ctrl+]`)
-- [ ] Find references
-- [ ] Code actions and quick fixes
-- [ ] Rename symbol
-- [ ] Document symbols outline
+- [ ] Find references (`Shift+F12`)
+- [ ] Code actions and quick fixes (`Ctrl+.`)
+- [ ] Rename symbol (`F2`)
+- [ ] Document symbols outline (`Ctrl+Shift+O`)
+- [ ] Signature help
+- [ ] Document formatting

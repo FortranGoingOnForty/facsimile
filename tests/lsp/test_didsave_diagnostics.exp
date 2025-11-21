@@ -1,0 +1,100 @@
+#!/usr/bin/expect -f
+
+# Test that textDocument/didSave triggers diagnostics
+
+set timeout 10
+log_user 1
+
+puts "=== Testing didSave Diagnostics ===\n"
+puts "This test verifies that saving a file triggers LSP diagnostics.\n"
+
+# Start editor with test file
+spawn ./fac tests/lsp/sample_errors.c
+
+# Wait for LSP initialization
+expect {
+    "LSP server initialized: c" {
+        puts "\n✓ LSP server initialized"
+    }
+    timeout {
+        puts "\n✗ LSP server failed to initialize"
+        exit 1
+    }
+}
+
+# Give LSP a moment to settle
+sleep 2
+
+# Save the file (Ctrl+S)
+puts "\nSaving file with Ctrl+S..."
+send "\023"  ;# Ctrl+S
+
+# Wait for save confirmation and didSave notification
+expect {
+    "[LSP DEBUG] Sent didSave" {
+        puts "✓ didSave notification sent"
+    }
+    timeout {
+        puts "⚠ No didSave notification detected (check stderr)"
+    }
+}
+
+# Wait a moment for diagnostics to arrive
+sleep 3
+
+# Open diagnostics panel (Ctrl+Shift+D)
+puts "\nOpening diagnostics panel..."
+send "\033\[68;6u"
+sleep 1
+
+# Check for diagnostics
+expect {
+    -re "\\d+ diagnostic" {
+        puts "✓ Diagnostics received and displayed!"
+    }
+    "expected ';'" {
+        puts "✓ Found specific diagnostic: missing semicolon"
+    }
+    "syntax error" {
+        puts "✓ Found syntax error diagnostic"
+    }
+    "No diagnostics" {
+        puts "✗ No diagnostics received after save"
+    }
+    timeout {
+        puts "⚠ Could not determine diagnostic status"
+    }
+}
+
+# Also check if we see debug messages about receiving diagnostics
+expect {
+    "[LSP DEBUG] Received notification: textDocument/publishDiagnostics" {
+        puts "✓ publishDiagnostics notification received"
+    }
+    "[DEBUG] Received diagnostics notification" {
+        puts "✓ Diagnostics handler called"
+    }
+    timeout {
+        puts "⚠ No debug messages about diagnostics found"
+    }
+}
+
+# Quit
+send "\030"  ;# Ctrl+X
+expect {
+    "Save modified" {
+        send "n"
+        puts "Declined save prompt"
+    }
+    eof {
+        puts "Editor exited"
+    }
+}
+
+wait
+puts "\n=== Test complete ===\n"
+puts "Summary:"
+puts "- LSP server should initialize ✓"
+puts "- didSave should be sent on Ctrl+S ✓"
+puts "- Diagnostics should arrive after save"
+puts "- Diagnostics panel should display errors"

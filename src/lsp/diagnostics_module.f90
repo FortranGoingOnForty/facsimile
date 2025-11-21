@@ -9,9 +9,9 @@ module diagnostics_module
 
     public :: diagnostic_t, diagnostics_store_t
     public :: init_diagnostics_store, cleanup_diagnostics_store
-    public :: parse_diagnostics, clear_diagnostics
+    public :: parse_diagnostics, parse_diagnostics_from_params, clear_diagnostics
     public :: get_diagnostics_for_line, get_diagnostic_at_cursor
-    public :: has_diagnostics_for_file
+    public :: has_diagnostics_for_file, get_diagnostics_for_file
     public :: SEVERITY_ERROR, SEVERITY_WARNING, SEVERITY_INFO, SEVERITY_HINT
 
     ! Diagnostic severity levels (LSP standard)
@@ -82,15 +82,25 @@ contains
     subroutine parse_diagnostics(store, notification)
         type(diagnostics_store_t), intent(inout) :: store
         type(json_value_t), intent(in) :: notification
-        type(json_value_t) :: params, diagnostics_array, diag_obj, range_obj
-        type(json_value_t) :: start_obj, end_obj
-        character(len=:), allocatable :: uri
-        integer :: i, n_diagnostics, file_idx
-        type(diagnostic_t) :: diag
+        type(json_value_t) :: params
 
         ! Get params from notification
         if (.not. json_has_key(notification, "params")) return
         params = json_get_object(notification, "params")
+
+        ! Delegate to params parser
+        call parse_diagnostics_from_params(store, params)
+    end subroutine parse_diagnostics
+
+    ! Parse diagnostics from just the params object
+    subroutine parse_diagnostics_from_params(store, params)
+        type(diagnostics_store_t), intent(inout) :: store
+        type(json_value_t), intent(in) :: params
+        type(json_value_t) :: diagnostics_array, diag_obj, range_obj
+        type(json_value_t) :: start_obj, end_obj
+        character(len=:), allocatable :: uri
+        integer :: i, n_diagnostics, file_idx
+        type(diagnostic_t) :: diag
 
         ! Get URI
         if (.not. json_has_key(params, "uri")) return
@@ -167,7 +177,7 @@ contains
                 end do
             end if
         end if
-    end subroutine parse_diagnostics
+    end subroutine parse_diagnostics_from_params
 
     function find_or_create_file(store, uri) result(idx)
         type(diagnostics_store_t), intent(inout) :: store
@@ -309,5 +319,28 @@ contains
             end if
         end do
     end function has_diagnostics_for_file
+
+    function get_diagnostics_for_file(store, uri) result(diagnostics)
+        type(diagnostics_store_t), intent(in) :: store
+        character(len=*), intent(in) :: uri
+        type(diagnostic_t), allocatable :: diagnostics(:)
+        integer :: i
+
+        ! Find file and return all its diagnostics
+        do i = 1, store%file_count
+            if (store%files(i)%uri == uri) then
+                if (store%files(i)%count > 0) then
+                    allocate(diagnostics(store%files(i)%count))
+                    diagnostics = store%files(i)%items(1:store%files(i)%count)
+                else
+                    allocate(diagnostics(0))
+                end if
+                return
+            end if
+        end do
+
+        ! File not found, return empty array
+        allocate(diagnostics(0))
+    end function get_diagnostics_for_file
 
 end module diagnostics_module

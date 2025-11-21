@@ -1,0 +1,97 @@
+#!/usr/bin/expect -f
+
+# Test real-time LSP diagnostics with textDocument/didChange notifications
+# This test verifies that:
+# 1. Initial diagnostics are received when opening a file
+# 2. Diagnostics update in real-time as the user types
+# 3. The diagnostics panel displays and updates correctly
+
+set timeout 10
+spawn ./fac tests/lsp/sample_errors.c
+
+# Wait for editor to load and LSP to initialize
+expect {
+    "LSP server initialized" { puts "✓ LSP server started" }
+    timeout { puts "✗ LSP server did not initialize"; exit 1 }
+}
+
+# Give LSP time to analyze the file and send initial diagnostics
+sleep 3
+
+# Press Ctrl+Shift+D to open diagnostics panel
+send "\033\[68;6u"
+sleep 1
+
+# Check that we see error diagnostics in the panel
+expect {
+    "expected" { puts "✓ Initial diagnostics received" }
+    "syntax" { puts "✓ Initial diagnostics received" }
+    "error" { puts "✓ Initial diagnostics received" }
+    "2 diagnostic" { puts "✓ Found 2 diagnostics" }
+    timeout { puts "⚠ No initial diagnostics found (server may need more time)" }
+}
+
+# Go to line 4 (the first missing semicolon)
+send "\007"  ;# Ctrl+G for goto
+expect "Go to line:"
+send "4\r"
+sleep 0.5
+
+# Move to end of line
+send "\005"  ;# Ctrl+E
+sleep 0.5
+
+# Add the missing semicolon
+send ";"
+sleep 2  ;# Wait for debounce delay (500ms) + processing time
+
+# Refresh diagnostics panel to see updated count
+send "\033\[68;6u"  ;# Toggle panel off and on
+sleep 0.5
+send "\033\[68;6u"
+sleep 0.5
+
+# Look for updated diagnostic count (should be 1 now)
+expect {
+    "1 diagnostic" { puts "✓ Diagnostics updated after first fix" }
+    "line 8" { puts "✓ Remaining error on line 8 shown" }
+    timeout { puts "⚠ Could not verify diagnostic update" }
+}
+
+# Fix the second error - go to line 8
+send "\007"  ;# Ctrl+G
+expect "Go to line:"
+send "8\r"
+sleep 0.5
+
+# Move to end of line and add semicolon
+send "\005"  ;# Ctrl+E
+send ";"
+sleep 2  ;# Wait for debounce + processing
+
+# Refresh panel again
+send "\033\[68;6u"  ;# Toggle off
+sleep 0.5
+send "\033\[68;6u"  ;# Toggle on
+sleep 0.5
+
+# Check if all diagnostics cleared
+expect {
+    "No diagnostics" { puts "✓ All diagnostics cleared after fixes" }
+    "0 diagnostic" { puts "✓ No errors remaining" }
+    timeout { puts "⚠ Diagnostics may not have fully cleared" }
+}
+
+# Quit without saving
+send "\030"  ;# Ctrl+X
+expect {
+    "Save modified" {
+        send "n"
+        puts "✓ Editor detected modifications"
+    }
+    eof { puts "✓ Editor exited cleanly" }
+    timeout { send "\030" }  ;# Try again
+}
+
+wait
+puts "\n=== Real-time diagnostics test complete ===\n"

@@ -357,6 +357,9 @@ program facsimile
         ! Process any LSP messages
         call process_server_messages(editor%lsp_manager)
 
+        ! Flush any pending document changes to LSP
+        call flush_pending_document_changes(editor)
+
         ! Get input
         call get_key_input(key_input, status)
 
@@ -458,12 +461,36 @@ contains
     ! Handler for LSP diagnostics notifications
     subroutine handle_diagnostics(notification)
         use lsp_protocol_module, only: lsp_message_t
-        use diagnostics_module, only: parse_diagnostics
+        use diagnostics_module, only: parse_diagnostics_from_params
+        use terminal_io_module, only: terminal_write
         type(lsp_message_t), intent(in) :: notification
+        character(len=256) :: debug_msg
+
+        ! Debug: Log when diagnostics are received
+        write(debug_msg, '(A)') "[DEBUG] Received diagnostics notification"
+        call terminal_write(debug_msg)  ! Debug output enabled
 
         ! Parse and store diagnostics in the editor's diagnostics store
-        call parse_diagnostics(editor%diagnostics, notification)
+        ! Pass just the params field since lsp_message_t already extracted it
+        call parse_diagnostics_from_params(editor%diagnostics, notification%params)
     end subroutine handle_diagnostics
+
+    ! Flush pending document changes for all tabs
+    subroutine flush_pending_document_changes(editor)
+        use document_sync_module, only: flush_pending_changes
+        type(editor_state_t), intent(inout) :: editor
+        integer :: i
+
+        ! Check all tabs for pending changes
+        if (allocated(editor%tabs)) then
+            do i = 1, size(editor%tabs)
+                if (editor%tabs(i)%lsp_server_index > 0) then
+                    call flush_pending_changes(editor%tabs(i)%document_sync, &
+                                              editor%lsp_manager, .false.)
+                end if
+            end do
+        end if
+    end subroutine flush_pending_document_changes
 
     subroutine read_file_type(is_directory)
         integer, intent(out) :: is_directory

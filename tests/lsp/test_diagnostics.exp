@@ -1,0 +1,91 @@
+#!/usr/bin/expect -f
+# Test LSP diagnostics display in fac editor
+set timeout 5
+log_user 1
+
+puts "\n=== Testing LSP Diagnostics Display ==="
+puts "Opening diagnostics_test.c with known errors..."
+
+set test_file "tests/lsp/diagnostics_test.c"
+
+spawn ./fac $test_file
+
+# Wait for editor to start and LSP to initialize
+sleep 2
+
+puts "\n--- Checking for diagnostic markers in gutter ---"
+
+# Look for error markers (●) on lines with errors
+expect {
+    -re "●.*10" {
+        puts "✓ Error marker found on line 10 (missing semicolon)"
+        exp_continue
+    }
+    -re "▲.*16" {
+        puts "✓ Warning marker found on line 16 (type mismatch)"
+        exp_continue
+    }
+    timeout {
+        puts "! Timeout waiting for diagnostic markers"
+    }
+}
+
+puts "\n--- Testing status bar diagnostic messages ---"
+
+# Navigate to line with error (line 10)
+# Send Ctrl+G for goto
+send "\007"
+expect "Go to line:"
+send "10\r"
+
+# Wait for cursor to move and status bar to update
+sleep 0.5
+
+# Check if diagnostic message appears in status bar
+expect {
+    -re "expected.*';'" {
+        puts "✓ Diagnostic message shown in status bar for missing semicolon"
+    }
+    -re "semicolon" {
+        puts "✓ Diagnostic message shown in status bar"
+    }
+    timeout {
+        puts "✗ No diagnostic message in status bar"
+    }
+}
+
+# Navigate to line with undefined variable (line 13)
+send "\033\[B"  ;# Down arrow
+send "\033\[B"  ;# Down arrow
+send "\033\[B"  ;# Down arrow
+
+sleep 0.5
+
+expect {
+    -re "undeclared|undefined.*'y'" {
+        puts "✓ Diagnostic for undefined variable shown"
+    }
+    timeout {
+        puts "✗ Undefined variable diagnostic not shown"
+    }
+}
+
+puts "\n--- Test complete, quitting editor ---"
+
+# Quit
+send "q"
+expect {
+    "Save changes?" {
+        send "n"
+        exp_continue
+    }
+    eof {
+        puts "Editor exited"
+    }
+}
+
+puts "\n=== Diagnostics Test Complete ===\n"
+puts "Summary:"
+puts "- Diagnostic markers: Check gutter for ● (errors) and ▲ (warnings)"
+puts "- Status bar: Shows diagnostic message when cursor is on error line"
+puts "- Next step: Implement diagnostics panel (Ctrl+E) to list all issues\n"
