@@ -18,6 +18,7 @@ module lsp_server_manager_module
     public :: notify_file_opened, notify_file_changed, notify_file_saved, notify_file_closed
     public :: request_completion, request_hover, request_definition, request_references, request_code_actions
     public :: request_document_symbols, request_signature_help, request_formatting, request_rename
+    public :: request_workspace_symbols
     public :: set_diagnostics_handler
 
     ! Language server configuration
@@ -1035,6 +1036,28 @@ contains
 
         call send_request(manager%servers(server_index), msg, callback)
     end function request_rename
+
+    ! Request workspace symbols
+    function request_workspace_symbols(manager, server_index, query, callback) result(request_id)
+        use lsp_protocol_module, only: create_workspace_symbols_request
+        type(lsp_manager_t), intent(inout) :: manager
+        integer, intent(in) :: server_index
+        character(len=*), intent(in) :: query
+        procedure(response_callback), optional :: callback
+        integer :: request_id
+        type(lsp_message_t) :: msg
+
+        request_id = -1
+        if (server_index < 1 .or. server_index > manager%num_servers) return
+        if (.not. manager%servers(server_index)%initialized) return
+        if (.not. manager%servers(server_index)%supports_workspace_symbols) return
+
+        ! Create workspace symbols request
+        msg = create_workspace_symbols_request(query)
+        request_id = msg%id
+
+        call send_request(manager%servers(server_index), msg, callback)
+    end function request_workspace_symbols
 
     ! Set the diagnostics notification handler
     subroutine set_diagnostics_handler(manager, handler)

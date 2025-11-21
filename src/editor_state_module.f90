@@ -24,6 +24,8 @@ module editor_state_module
                                         cleanup_signature_tooltip
     use command_palette_module, only: command_palette_t, init_command_palette, &
                                        cleanup_command_palette
+    use workspace_symbols_panel_module, only: workspace_symbols_panel_t, init_workspace_symbols_panel, &
+                                               cleanup_workspace_symbols_panel
     use document_sync_module, only: document_sync_t, init_document_sync, &
                                     cleanup_document_sync
     use jump_stack_module, only: jump_stack_t, init_jump_stack, &
@@ -130,6 +132,7 @@ module editor_state_module
         type(symbols_panel_t) :: symbols_panel
         type(signature_tooltip_t) :: signature_tooltip
         type(command_palette_t) :: command_palette
+        type(workspace_symbols_panel_t) :: workspace_symbols_panel
 
         ! Navigation
         type(jump_stack_t) :: jump_stack
@@ -189,6 +192,9 @@ contains
         ! Initialize command palette
         call init_command_palette(editor%command_palette)
 
+        ! Initialize workspace symbols panel
+        call init_workspace_symbols_panel(editor%workspace_symbols_panel)
+
         ! Initialize jump stack
         call init_jump_stack(editor%jump_stack)
     end subroutine init_editor
@@ -238,6 +244,9 @@ contains
 
         ! Cleanup command palette
         call cleanup_command_palette(editor%command_palette)
+
+        ! Cleanup workspace symbols panel
+        call cleanup_workspace_symbols_panel(editor%workspace_symbols_panel)
 
         ! Cleanup jump stack
         call cleanup_jump_stack(editor%jump_stack)

@@ -1386,6 +1386,93 @@ contains
                 call render_screen(buffer, editor)
             end block
 
+        case('ctrl-shift-t')
+            ! Workspace symbols (fuzzy search across project)
+            if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
+                block
+                    use workspace_symbols_panel_module, only: show_workspace_symbols_panel, &
+                                                               render_workspace_symbols_panel, &
+                                                               workspace_symbols_panel_handle_key, &
+                                                               hide_workspace_symbols_panel, &
+                                                               get_selected_symbol, &
+                                                               workspace_symbol_t
+                    use input_handler_module, only: get_key_input
+                    use lsp_server_manager_module, only: request_workspace_symbols
+                    integer :: request_id, status
+                    character(len=32) :: key_input
+                    logical :: handled
+                    type(workspace_symbol_t) :: selected_symbol
+
+                    ! Show panel
+                    call show_workspace_symbols_panel(editor%workspace_symbols_panel)
+
+                    ! Send initial empty query to get all symbols
+                    if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                        request_id = request_workspace_symbols(editor%lsp_manager, &
+                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            '', handle_workspace_symbols_response_wrapper)
+                    end if
+
+                    call render_workspace_symbols_panel(editor%workspace_symbols_panel, editor%screen_rows)
+
+                    ! Interactive loop
+                    do
+                        call get_key_input(key_input, status)
+                        if (status /= 0) cycle
+
+                        ! Handle special keys
+                        if (key_input == 'enter') then
+                            selected_symbol = get_selected_symbol(editor%workspace_symbols_panel)
+                            if (allocated(selected_symbol%file_uri) .and. len_trim(selected_symbol%file_uri) > 0) then
+                                ! Navigate to the symbol location
+                                call navigate_to_workspace_symbol(editor, buffer, selected_symbol, should_quit)
+                            end if
+                            call hide_workspace_symbols_panel(editor%workspace_symbols_panel)
+                            call render_screen(buffer, editor)
+                            exit
+                        else if (key_input == 'esc') then
+                            call hide_workspace_symbols_panel(editor%workspace_symbols_panel)
+                            call render_screen(buffer, editor)
+                            exit
+                        else if (key_input == 'backspace') then
+                            if (editor%workspace_symbols_panel%search_pos > 0) then
+                                editor%workspace_symbols_panel%search_query(editor%workspace_symbols_panel%search_pos:editor%workspace_symbols_panel%search_pos) = ' '
+                                editor%workspace_symbols_panel%search_pos = editor%workspace_symbols_panel%search_pos - 1
+                                ! Send new query to LSP
+                                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                                    request_id = request_workspace_symbols(editor%lsp_manager, &
+                                        editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                                        trim(editor%workspace_symbols_panel%search_query(1:editor%workspace_symbols_panel%search_pos)), &
+                                        handle_workspace_symbols_response_wrapper)
+                                end if
+                            end if
+                        else
+                            ! Try navigation keys
+                            call workspace_symbols_panel_handle_key(editor%workspace_symbols_panel, key_input, handled)
+                            if (.not. handled) then
+                                ! Regular character - add to search
+                                if (len_trim(key_input) == 1) then
+                                    if (iachar(key_input(1:1)) >= 32 .and. iachar(key_input(1:1)) < 127 .and. &
+                                        editor%workspace_symbols_panel%search_pos < 255) then
+                                        editor%workspace_symbols_panel%search_pos = editor%workspace_symbols_panel%search_pos + 1
+                                        editor%workspace_symbols_panel%search_query(editor%workspace_symbols_panel%search_pos:editor%workspace_symbols_panel%search_pos) = key_input(1:1)
+                                        ! Send new query to LSP
+                                        if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                                            request_id = request_workspace_symbols(editor%lsp_manager, &
+                                                editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                                                trim(editor%workspace_symbols_panel%search_query(1:editor%workspace_symbols_panel%search_pos)), &
+                                                handle_workspace_symbols_response_wrapper)
+                                        end if
+                                    end if
+                                end if
+                            end if
+                        end if
+
+                        call render_workspace_symbols_panel(editor%workspace_symbols_panel, editor%screen_rows)
+                    end do
+                end block
+            end if
+
         case('alt-comma')
             ! Jump back in navigation history (Alt+,)
             if (.not. is_jump_stack_empty(editor%jump_stack)) then
@@ -6135,5 +6222,149 @@ contains
         call terminal_write('Selected: ' // trim(cmd_id) // '                    ')
         should_quit = .false.
     end subroutine execute_palette_command
+
+    ! Handle workspace symbols LSP response
+    subroutine handle_workspace_symbols_response_wrapper(request_id, response)
+        use lsp_protocol_module, only: lsp_message_t
+        use json_module
+        use workspace_symbols_panel_module, only: workspace_symbol_t, set_workspace_symbols
+        integer, intent(in) :: request_id
+        type(lsp_message_t), intent(in) :: response
+        type(json_value_t) :: result_array, symbol_obj, location_obj, range_obj, start_obj
+        integer :: num_symbols, i
+        type(workspace_symbol_t), allocatable :: symbols(:)
+        character(len=:), allocatable :: name, kind_str, container, uri
+        real(8) :: line_num, char_num, kind_num
+
+        num_symbols = json_array_size(response%result)
+        if (num_symbols == 0) return
+        allocate(symbols(num_symbols))
+
+        do i = 0, num_symbols - 1
+            symbol_obj = json_get_array_element(response%result, i)
+
+            ! Get name
+            name = json_get_string(symbol_obj, 'name', '')
+            if (allocated(name)) then
+                symbols(i+1)%name = name
+            end if
+
+            ! Get kind (as number) and convert to string
+            kind_num = json_get_number(symbol_obj, 'kind', 0.0d0)
+            symbols(i+1)%kind_name = symbol_kind_to_string(int(kind_num))
+
+            ! Get container name (optional)
+            container = json_get_string(symbol_obj, 'containerName', '')
+            if (allocated(container)) then
+                symbols(i+1)%container_name = container
+            end if
+
+            ! Get location
+            location_obj = json_get_object(symbol_obj, 'location')
+            uri = json_get_string(location_obj, 'uri', '')
+            if (allocated(uri) .and. len_trim(uri) > 0) then
+                symbols(i+1)%file_uri = uri
+
+                ! Get range -> start -> line/character
+                range_obj = json_get_object(location_obj, 'range')
+                start_obj = json_get_object(range_obj, 'start')
+                line_num = json_get_number(start_obj, 'line', 0.0d0)
+                char_num = json_get_number(start_obj, 'character', 0.0d0)
+                symbols(i+1)%line = int(line_num)
+                symbols(i+1)%character = int(char_num)
+            end if
+        end do
+
+        ! Update the panel
+        if (allocated(saved_editor_for_callback)) then
+            call set_workspace_symbols(saved_editor_for_callback%workspace_symbols_panel, symbols, num_symbols)
+        end if
+
+        if (allocated(symbols)) deallocate(symbols)
+    end subroutine handle_workspace_symbols_response_wrapper
+
+    ! Helper to convert LSP symbol kind number to string
+    function symbol_kind_to_string(kind) result(kind_str)
+        integer, intent(in) :: kind
+        character(len=:), allocatable :: kind_str
+
+        select case(kind)
+        case(1); kind_str = "File"
+        case(2); kind_str = "Module"
+        case(3); kind_str = "Namespace"
+        case(4); kind_str = "Package"
+        case(5); kind_str = "Class"
+        case(6); kind_str = "Method"
+        case(7); kind_str = "Property"
+        case(8); kind_str = "Field"
+        case(9); kind_str = "Constructor"
+        case(10); kind_str = "Enum"
+        case(11); kind_str = "Interface"
+        case(12); kind_str = "Function"
+        case(13); kind_str = "Variable"
+        case(14); kind_str = "Constant"
+        case(15); kind_str = "String"
+        case(16); kind_str = "Number"
+        case(17); kind_str = "Boolean"
+        case(18); kind_str = "Array"
+        case default; kind_str = "Unknown"
+        end select
+    end function symbol_kind_to_string
+
+    ! Navigate to a workspace symbol
+    subroutine navigate_to_workspace_symbol(editor, buffer, symbol, should_quit)
+        use workspace_symbols_panel_module, only: workspace_symbol_t
+        use jump_stack_module, only: push_jump_location
+        use editor_state_module, only: switch_to_tab
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        type(workspace_symbol_t), intent(in) :: symbol
+        logical, intent(out) :: should_quit
+        character(len=:), allocatable :: filepath
+        integer :: i
+
+        should_quit = .false.
+
+        ! Convert file:// URI to filepath
+        if (index(symbol%file_uri, "file://") == 1) then
+            filepath = symbol%file_uri(8:)  ! Remove "file://"
+        else
+            filepath = symbol%file_uri
+        end if
+
+        ! Push current location to jump stack
+        if (allocated(editor%filename)) then
+            call push_jump_location(editor%jump_stack, editor%filename, &
+                editor%cursors(editor%active_cursor)%line, &
+                editor%cursors(editor%active_cursor)%column)
+        end if
+
+        ! Check if file is already open in a tab
+        do i = 1, size(editor%tabs)
+            if (allocated(editor%tabs(i)%filename)) then
+                if (trim(editor%tabs(i)%filename) == trim(filepath)) then
+                    call switch_to_tab(editor, i)
+                    ! Jump to the symbol's position
+                    editor%cursors(editor%active_cursor)%line = symbol%line + 1  ! LSP is 0-based
+                    editor%cursors(editor%active_cursor)%column = symbol%character + 1
+                    editor%cursors(editor%active_cursor)%desired_column = symbol%character + 1
+                    editor%viewport_line = max(1, symbol%line + 1 - editor%screen_rows / 2)
+                    return
+                end if
+            end if
+        end do
+
+        ! File not open - for now, just navigate in current file if it's the same
+        ! TODO: Implement opening file in new tab when file differs
+        if (allocated(editor%filename)) then
+            if (trim(editor%filename) == trim(filepath)) then
+                ! Same file - just navigate
+                editor%cursors(editor%active_cursor)%line = symbol%line + 1  ! LSP is 0-based
+                editor%cursors(editor%active_cursor)%column = symbol%character + 1
+                editor%cursors(editor%active_cursor)%desired_column = symbol%character + 1
+                editor%viewport_line = max(1, symbol%line + 1 - editor%screen_rows / 2)
+            end if
+        end if
+    end subroutine navigate_to_workspace_symbol
 
 end module command_handler_module

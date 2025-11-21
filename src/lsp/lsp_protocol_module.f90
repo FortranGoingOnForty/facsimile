@@ -22,6 +22,7 @@ module lsp_protocol_module
     public :: create_signature_help_request
     public :: create_formatting_request
     public :: create_rename_request
+    public :: create_workspace_symbols_request
     public :: parse_lsp_message
     public :: format_json_rpc
 
@@ -487,6 +488,22 @@ contains
 
         msg%params = params
     end function create_rename_request
+
+    function create_workspace_symbols_request(query) result(msg)
+        character(len=*), intent(in) :: query
+        type(lsp_message_t) :: msg
+        type(json_value_t) :: params
+
+        msg%jsonrpc = "2.0"
+        msg%id = get_next_request_id()
+        msg%method = "workspace/symbol"
+        msg%is_request = .true.
+
+        params = json_create_object()
+        call json_add_string(params, "query", query)
+
+        msg%params = params
+    end function create_workspace_symbols_request
 
     function format_json_rpc(msg) result(formatted)
         type(lsp_message_t), intent(in) :: msg
