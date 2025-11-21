@@ -43,6 +43,12 @@ module unified_search_module
     ! Field focus (1 = find, 2 = replace)
     integer :: active_field = 1
 
+    ! Search history
+    integer, parameter :: MAX_HISTORY = 20
+    character(len=256), dimension(MAX_HISTORY) :: search_history
+    integer :: history_count = 0
+    integer :: history_index = 0  ! Current position when navigating history
+
 contains
 
     subroutine show_unified_search_prompt(editor, buffer)
@@ -94,7 +100,7 @@ contains
                     search_mode_active = .false.
                     exit
                 else if (ch == iachar('[')) then
-                    ! Could be mouse event ESC [ < ... - consume and ignore
+                    ! Arrow keys or mouse events
                     ch = terminal_read_char()
                     if (ch == iachar('<')) then
                         ! Mouse event - consume until 'M' or 'm'
@@ -104,6 +110,20 @@ contains
                         end do
                         in_alt_sequence = .false.
                         cycle
+                    else if (ch == iachar('A')) then
+                        ! Up arrow - navigate history backward (older)
+                        if (active_field == 1) then  ! Only in find field
+                            call navigate_history_up(find_buffer, find_pos)
+                            call build_unified_prompt(prompt, find_buffer, find_pos, replace_buffer, replace_pos)
+                            call display_prompt(editor, prompt, find_pos, replace_pos)
+                        end if
+                    else if (ch == iachar('B')) then
+                        ! Down arrow - navigate history forward (newer)
+                        if (active_field == 1) then  ! Only in find field
+                            call navigate_history_down(find_buffer, find_pos)
+                            call build_unified_prompt(prompt, find_buffer, find_pos, replace_buffer, replace_pos)
+                            call display_prompt(editor, prompt, find_pos, replace_pos)
+                        end if
                     end if
                     ! Not a mouse event, fall through
                     in_alt_sequence = .false.
@@ -148,6 +168,9 @@ contains
                     if (allocated(current_search_pattern)) deallocate(current_search_pattern)
                     allocate(character(len=find_pos) :: current_search_pattern)
                     current_search_pattern = find_buffer(1:find_pos)
+
+                    ! Add to search history
+                    call add_to_search_history(current_search_pattern)
 
                     ! Check if search parameters changed - if so, reset search mode
                     if (search_mode_active) then
@@ -1129,5 +1152,63 @@ contains
         viewport_height = editor%screen_rows - 2
         editor%viewport_line = max(1, cursor_line - viewport_height / 2)
     end subroutine center_viewport_on_cursor
+
+    ! Add pattern to search history (avoiding duplicates)
+    subroutine add_to_search_history(pattern)
+        character(len=*), intent(in) :: pattern
+        integer :: i
+
+        if (len_trim(pattern) == 0) return
+
+        ! Check if already in history (at position 1 = most recent)
+        if (history_count > 0) then
+            if (trim(search_history(1)) == trim(pattern)) return
+        end if
+
+        ! Shift existing history down
+        do i = min(history_count, MAX_HISTORY - 1), 1, -1
+            search_history(i + 1) = search_history(i)
+        end do
+
+        ! Add new pattern at top
+        search_history(1) = pattern
+        history_count = min(history_count + 1, MAX_HISTORY)
+        history_index = 0  ! Reset navigation position
+    end subroutine add_to_search_history
+
+    ! Navigate history up (to older entries)
+    subroutine navigate_history_up(buffer, pos)
+        character(len=*), intent(inout) :: buffer
+        integer, intent(inout) :: pos
+
+        if (history_count == 0) return
+
+        ! Move to next older entry
+        if (history_index < history_count) then
+            history_index = history_index + 1
+            buffer = search_history(history_index)
+            pos = len_trim(buffer)
+        end if
+    end subroutine navigate_history_up
+
+    ! Navigate history down (to newer entries)
+    subroutine navigate_history_down(buffer, pos)
+        character(len=*), intent(inout) :: buffer
+        integer, intent(inout) :: pos
+
+        if (history_count == 0) return
+
+        if (history_index > 1) then
+            ! Move to next newer entry
+            history_index = history_index - 1
+            buffer = search_history(history_index)
+            pos = len_trim(buffer)
+        else if (history_index == 1) then
+            ! Clear to allow new search
+            history_index = 0
+            buffer = ''
+            pos = 0
+        end if
+    end subroutine navigate_history_down
 
 end module unified_search_module
