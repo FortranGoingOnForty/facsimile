@@ -6315,7 +6315,8 @@ contains
     subroutine navigate_to_workspace_symbol(editor, buffer, symbol, should_quit)
         use workspace_symbols_panel_module, only: workspace_symbol_t
         use jump_stack_module, only: push_jump_location
-        use editor_state_module, only: switch_to_tab
+        use editor_state_module, only: switch_to_tab, create_tab, sync_pane_to_editor, sync_editor_to_pane
+        use text_buffer_module, only: buffer_load_file, copy_buffer
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         type(workspace_symbol_t), intent(in) :: symbol
@@ -6354,17 +6355,44 @@ contains
             end if
         end do
 
-        ! File not open - for now, just navigate in current file if it's the same
-        ! TODO: Implement opening file in new tab when file differs
-        if (allocated(editor%filename)) then
-            if (trim(editor%filename) == trim(filepath)) then
-                ! Same file - just navigate
+        ! File not open - create a new tab and load the file
+        call create_tab(editor, filepath)
+
+        ! Load file content into the new tab's buffer
+        block
+            integer :: status, new_tab_idx
+
+            new_tab_idx = size(editor%tabs)  ! The tab we just created
+
+            call buffer_load_file(editor%tabs(new_tab_idx)%buffer, filepath, status)
+
+            if (status == 0) then
+                ! File loaded successfully
+                ! Copy buffer to the pane's buffer
+                if (allocated(editor%tabs(new_tab_idx)%panes)) then
+                    call copy_buffer(editor%tabs(new_tab_idx)%panes(1)%buffer, editor%tabs(new_tab_idx)%buffer)
+                end if
+
+                ! Switch to the new tab
+                call switch_to_tab(editor, new_tab_idx)
+
+                ! Sync the pane to editor state (this updates editor%cursors, etc.)
+                call sync_pane_to_editor(editor, new_tab_idx, 1)
+
+                ! Navigate to the symbol's position
                 editor%cursors(editor%active_cursor)%line = symbol%line + 1  ! LSP is 0-based
                 editor%cursors(editor%active_cursor)%column = symbol%character + 1
                 editor%cursors(editor%active_cursor)%desired_column = symbol%character + 1
                 editor%viewport_line = max(1, symbol%line + 1 - editor%screen_rows / 2)
+
+                ! Sync editor state back to pane
+                call sync_editor_to_pane(editor)
+            else
+                ! File load failed - could show error message
+                ! For now, just don't navigate
+                continue
             end if
-        end if
+        end block
     end subroutine navigate_to_workspace_symbol
 
 end module command_handler_module
