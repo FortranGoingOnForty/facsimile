@@ -199,17 +199,27 @@
 3. ✅ Go to Definition (F12) (80%)
 4. ✅ Find References (Shift+F12) (100%)
 
-### Phase 2: Essential IDE Features
-5. Code Actions & Quick Fixes
-6. Document Symbols Outline
-7. Signature Help
-8. Rename Symbol
+### Phase 2: Essential IDE Features ✅ (100% Complete!)
+5. ✅ Code Actions & Quick Fixes (Ctrl+.)
+6. ✅ Document Symbols Outline (Ctrl+Shift+O)
+7. ✅ Signature Help (auto-trigger)
+8. ✅ Rename Symbol (F2)
 
-### Phase 3: Editor Polish
-9. Command Palette
-10. Multiple Cursors Enhancement
-11. Search & Replace Improvements
-12. Document Formatting
+### Phase 3: Editor Polish (In Progress)
+9. ✅ Command Palette (Ctrl+Shift+P)
+10. ✅ Multiple Cursors Enhancement (Ctrl+D) - Already complete!
+11. ✅ Search & Replace Improvements (100% Complete!)
+    - ✅ Regex, case-sensitive, whole word toggles
+    - ✅ Replace one/all, match counter
+    - ✅ Search history (up/down arrows)
+    - ✅ Highlight all matches in viewport
+    - ✅ Search in selection
+12. ✅ Document Formatting (Shift+Alt+F)
+
+### Phase 3: Completed! ✅
+13. ✅ Workspace Symbols (Ctrl+Shift+T) - Fuzzy search all symbols across entire project
+14. 🔜 Split Pane Enhancements - Synchronized scrolling, diff view (Moved to trunk)
+15. 🔜 Snippet System - Code templates with tab stops (Consider separate branch)
 
 ### Phase 4: Advanced Features
 13. Snippet System
@@ -230,6 +240,25 @@
 - [ ] Memory usage: <50MB for typical usage
 - [ ] Test coverage: >80% for core modules
 - [ ] Documentation: Complete for all user-facing features
+
+## 📚 Documentation
+
+**Complete LSP documentation now available!**
+
+- **[LSP_GUIDE.md](docs/LSP_GUIDE.md)** - Comprehensive guide to all LSP features
+  - What is LSP and why use it?
+  - How to install and configure language servers
+  - Detailed explanation of every LSP feature
+  - Language-specific setup (Python, JavaScript, Rust, Fortran, Go, C/C++, etc.)
+  - Troubleshooting common issues
+  - Tips and tricks for power users
+
+- **[KEYBINDINGS.md](docs/KEYBINDINGS.md)** - Complete keyboard shortcuts reference
+  - All LSP keybindings
+  - File operations, editing, navigation
+  - Search/replace, tabs/windows
+  - Panel navigation and special modes
+  - Quick reference for most useful combos
 
 ## 📝 Notes
 
