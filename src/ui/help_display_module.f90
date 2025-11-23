@@ -248,7 +248,11 @@ contains
         lines(i) = "  F12                 go to definition"; i = i + 1
         lines(i) = "  shift-F12           find all references"; i = i + 1
         lines(i) = "  alt-, (alt-comma)   jump back (navigation history)"; i = i + 1
-        lines(i) = "  ctrl-shift-d        toggle diagnostics panel"; i = i + 1
+        lines(i) = "  F2                  rename symbol"; i = i + 1
+        lines(i) = "  F4                  document symbols (outline)"; i = i + 1
+        lines(i) = "  F6                  workspace symbols (search project)"; i = i + 1
+        lines(i) = "  F8                  toggle diagnostics panel (errors)"; i = i + 1
+        lines(i) = "  ctrl-p              command palette"; i = i + 1
         lines(i) = ""; i = i + 1
 
         n_lines = i - 1

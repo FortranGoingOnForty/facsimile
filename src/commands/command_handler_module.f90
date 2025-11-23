@@ -119,6 +119,14 @@ contains
         line_count = buffer_get_line_count(buffer)
         is_edit_action = .false.
 
+        ! DEBUG: Log ALL keys to file only (not screen to avoid overwriting status messages)
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '[KEY] "' // trim(key_str) // '"'
+            close(debug_unit)
+        end block
+
         ! Ignore empty key strings (from terminal position reports, etc)
         if (len_trim(key_str) == 0 .and. key_str(1:1) /= ' ') then
             return
@@ -132,10 +140,16 @@ contains
             match_case_sensitive = .true.  ! Reset to default
         end if
 
-        ! Route input when in fuss mode (except ctrl-b/ctrl-shift-b/F2/F3 and ctrl-q which work in both modes)
+        ! Route input when in fuss mode (except ctrl-b/ctrl-shift-b/F-keys/Alt-keys/ctrl-q which work in both modes)
         if (editor%fuss_mode_active .and. trim(key_str) /= 'ctrl-b' .and. &
             trim(key_str) /= 'ctrl-shift-b' .and. trim(key_str) /= 'f2' .and. &
-            trim(key_str) /= 'f3' .and. trim(key_str) /= 'ctrl-q') then
+            trim(key_str) /= 'f3' .and. trim(key_str) /= 'f4' .and. &
+            trim(key_str) /= 'f6' .and. trim(key_str) /= 'f8' .and. &
+            trim(key_str) /= 'f12' .and. trim(key_str) /= 'shift-f12' .and. &
+            trim(key_str) /= 'alt-g' .and. trim(key_str) /= 'alt-o' .and. &
+            trim(key_str) /= 'alt-p' .and. trim(key_str) /= 'alt-e' .and. &
+            trim(key_str) /= 'alt-r' .and. trim(key_str) /= 'ctrl-\\' .and. &
+            trim(key_str) /= 'ctrl-q') then
             call handle_fuss_input(key_str, editor, buffer)
             return
         end if
@@ -1193,8 +1207,20 @@ contains
                 end if
             end if
 
-        case('f12')
-            ! Go to definition
+        case('f12', 'ctrl-\\', 'alt-g')
+            ! Go to definition (F12, Ctrl+\, or Alt+G)
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') '>>> INSIDE F12/ALT-G HANDLER <<<'
+                write(debug_unit, '(A,I0)') 'active_tab_index = ', editor%active_tab_index
+                write(debug_unit, '(A,I0)') 'size(tabs) = ', size(editor%tabs)
+                if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                    write(debug_unit, '(A,I0)') 'lsp_server_index = ', editor%tabs(editor%active_tab_index)%lsp_server_index
+                end if
+                close(debug_unit)
+            end block
+            call terminal_move_cursor(editor%screen_rows, 1)
             if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
                 if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
                     ! Save current location to jump stack
@@ -1211,22 +1237,40 @@ contains
                         lsp_line = editor%cursors(editor%active_cursor)%line - 1
                         lsp_char = editor%cursors(editor%active_cursor)%column - 1
 
+                        ! Save editor state for callback
+                        if (.not. allocated(saved_editor_for_callback)) then
+                            allocate(saved_editor_for_callback)
+                        end if
+                        saved_editor_for_callback = editor
+
                         request_id = request_definition(editor%lsp_manager, &
                             editor%tabs(editor%active_tab_index)%lsp_server_index, &
                             editor%tabs(editor%active_tab_index)%filename, &
-                            lsp_line, lsp_char)
+                            lsp_line, lsp_char, handle_definition_response_wrapper)
+
+                        block
+                            integer :: debug_unit
+                            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                            write(debug_unit, '(A,I0)') 'request_definition returned request_id = ', request_id
+                            close(debug_unit)
+                        end block
 
                         if (request_id > 0) then
                             ! Response will be handled by callback
-                            call terminal_move_cursor(editor%screen_rows, 1)
                             call terminal_write('Searching for definition...                ')
+                        else
+                            call terminal_write('[F12] LSP request failed                    ')
                         end if
                     end block
+                else
+                    call terminal_write('[F12] No LSP server for this file           ')
                 end if
+            else
+                call terminal_write('[F12] No active tab                         ')
             end if
 
-        case('shift-f12')
-            ! Find all references
+        case('shift-f12', 'alt-r')
+            ! Find all references (Shift+F12 or Alt+R)
             if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
                 if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
                     ! Request references at current cursor position
@@ -1339,8 +1383,14 @@ contains
                 end if
             end if
 
-        case('ctrl-shift-o')
-            ! Document symbols outline
+        case('f4', 'alt-o')
+            ! Document symbols outline (F4 or Alt+O)
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') '>>> INSIDE F4/ALT-O HANDLER <<<'
+                close(debug_unit)
+            end block
             if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
                 if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
                     ! Request document symbols
@@ -1369,8 +1419,9 @@ contains
                 end if
             end if
 
-        case('ctrl-shift-p')
-            ! Command palette
+        case('ctrl-p')
+            ! Command palette (Ctrl+P - VSCode standard)
+            ! Note: ctrl-shift-p doesn't work - terminals can't distinguish ctrl-p from ctrl-shift-p
             block
                 use command_palette_module, only: show_command_palette_interactive
                 character(len=:), allocatable :: cmd_id
@@ -1386,7 +1437,8 @@ contains
                 call render_screen(buffer, editor)
             end block
 
-        case('ctrl-shift-t')
+        case('f6', 'alt-p')
+            ! Workspace symbols (F6 or Alt+P for project)
             ! Workspace symbols (fuzzy search across project)
             if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
                 block
@@ -1525,9 +1577,22 @@ contains
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
-        case('ctrl-shift-d')
-            ! Toggle diagnostics panel
+        case('f8', 'alt-e')
+            ! Toggle diagnostics panel (F8 or Alt+E for errors)
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') '>>> INSIDE F8/ALT-E HANDLER <<<'
+                write(debug_unit, '(A)') 'Calling toggle_diagnostics_panel...'
+                close(debug_unit)
+            end block
             call toggle_diagnostics_panel(editor)
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') 'toggle_diagnostics_panel returned'
+                close(debug_unit)
+            end block
 
         case('alt-c')
             ! Toggle case sensitivity for match mode (ctrl-d)
@@ -1604,6 +1669,12 @@ contains
             end if
 
         case default
+            ! DEBUG: Show unhandled function keys
+            if (index(key_str, 'f') == 1 .or. index(key_str, 'shift-f') == 1) then
+                call terminal_move_cursor(editor%screen_rows, 1)
+                call terminal_write('[DEBUG] Unhandled key: ' // trim(key_str) // '                ')
+            end if
+
             ! Check for mouse events
             if (index(key_str, 'mouse-') == 1) then
                 call handle_mouse_event_action(key_str, editor, buffer)
@@ -6394,5 +6465,125 @@ contains
             end if
         end block
     end subroutine navigate_to_workspace_symbol
+
+    ! ==================================================
+    ! LSP Definition Response Handler
+    ! ==================================================
+
+    ! Wrapper callback for go to definition
+    subroutine handle_definition_response_wrapper(request_id, response)
+        use lsp_protocol_module, only: lsp_message_t
+        integer, intent(in) :: request_id
+        type(lsp_message_t), intent(in) :: response
+
+        ! Call actual handler with saved editor state
+        if (allocated(saved_editor_for_callback)) then
+            call handle_definition_response_impl(saved_editor_for_callback, response)
+        end if
+    end subroutine handle_definition_response_wrapper
+
+    ! Handle LSP textDocument/definition response
+    subroutine handle_definition_response_impl(editor, response)
+        use lsp_protocol_module, only: lsp_message_t
+        use json_module, only: json_value_t, json_get_object, json_get_string, &
+                               json_get_number, json_array_size, json_get_array_element, &
+                               json_has_key
+        type(editor_state_t), intent(inout) :: editor
+        type(lsp_message_t), intent(in) :: response
+        type(json_value_t) :: location_obj, range_obj, start_obj
+        character(len=:), allocatable :: uri, filepath
+        real(8) :: line_real, col_real
+        integer :: target_line, target_col, i, num_locations
+        logical :: found_file
+
+        ! Log response for debugging
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> DEFINITION RESPONSE RECEIVED <<<'
+            close(debug_unit)
+        end block
+
+        ! Try to treat result as array first
+        num_locations = json_array_size(response%result)
+
+        if (num_locations > 0) then
+            ! Array of locations - take first one
+            location_obj = json_get_array_element(response%result, 0)
+        else if (json_has_key(response%result, "uri")) then
+            ! Single location object
+            location_obj = response%result
+        else
+            ! No definition found
+            call terminal_move_cursor(editor%screen_rows, 1)
+            call terminal_write('No definition found                           ')
+            return
+        end if
+
+        ! Extract URI
+        uri = json_get_string(location_obj, 'uri', '')
+        if (len(uri) == 0) then
+            call terminal_move_cursor(editor%screen_rows, 1)
+            call terminal_write('Invalid definition response                   ')
+            return
+        end if
+
+        ! Convert URI to filepath (remove file:// prefix)
+        if (len(uri) > 7 .and. uri(1:7) == 'file://') then
+            filepath = uri(8:)
+        else
+            filepath = uri
+        end if
+
+        ! Get range
+        range_obj = json_get_object(location_obj, 'range')
+        start_obj = json_get_object(range_obj, 'start')
+
+        line_real = json_get_number(start_obj, 'line', 0.0d0)
+        col_real = json_get_number(start_obj, 'character', 0.0d0)
+
+        ! Convert from 0-based LSP to 1-based editor coordinates
+        target_line = int(line_real) + 1
+        target_col = int(col_real) + 1
+
+        ! Log details
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') 'File: ' // trim(filepath)
+            write(debug_unit, '(A,I0,A,I0)') 'Position: line=', target_line, ', col=', target_col
+            close(debug_unit)
+        end block
+
+        ! Check if the file is already open in a tab
+        found_file = .false.
+        do i = 1, size(editor%tabs)
+            if (allocated(editor%tabs(i)%filename)) then
+                if (trim(editor%tabs(i)%filename) == trim(filepath)) then
+                    ! Switch to this tab
+                    editor%active_tab_index = i
+                    found_file = .true.
+                    exit
+                end if
+            end if
+        end do
+
+        ! If file not found in tabs, report location
+        if (.not. found_file) then
+            call terminal_move_cursor(editor%screen_rows, 1)
+            call terminal_write('Found in: ' // trim(filepath) // '                ')
+            return
+        end if
+
+        ! Jump to the line and column in current tab
+        editor%cursors(editor%active_cursor)%line = target_line
+        editor%cursors(editor%active_cursor)%column = target_col
+
+        ! Center viewport on target
+        editor%viewport_line = max(1, target_line - editor%screen_rows / 2)
+
+        call terminal_move_cursor(editor%screen_rows, 1)
+        call terminal_write('Jumped to definition                          ')
+    end subroutine handle_definition_response_impl
 
 end module command_handler_module

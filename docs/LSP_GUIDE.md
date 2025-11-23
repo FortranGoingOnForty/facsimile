@@ -96,7 +96,7 @@ That's it! If you have `pylsp` installed, `fac` will automatically:
 ### Step 3: Try It Out
 
 1. **See errors**: Look for `E` (error) or `W` (warning) in the left gutter
-2. **View all diagnostics**: Press `Ctrl+Shift+D` to open the diagnostics panel
+2. **View all diagnostics**: Press `F8` to open the diagnostics panel
 3. **Jump to definition**: Put cursor on a function name and press `F12`
 4. **Find references**: Press `Shift+F12` to see everywhere a symbol is used
 5. **Rename**: Press `F2` to rename a variable across all files
@@ -114,7 +114,7 @@ That's it! If you have `pylsp` installed, `fac` will automatically:
 - Errors appear with `E` in the gutter (red)
 - Warnings appear with `W` in the gutter (yellow)
 - Put your cursor on a line with an error to see the message in the status bar
-- Press `Ctrl+Shift+D` to open the **Diagnostics Panel** showing all issues
+- Press `F8` to open the **Diagnostics Panel** showing all issues
 
 **Example:**
 ```python
@@ -125,7 +125,7 @@ def greet(name):
 ```
 
 **Keybinding:**
-- `Ctrl+Shift+D` - Open/close diagnostics panel
+- `F8` or `Ctrl+Shift+D` - Open/close diagnostics panel
 - `j`/`k` or `↑`/`↓` - Navigate issues in panel
 - `Enter` - Jump to selected issue
 - `Esc` - Close panel
@@ -155,7 +155,7 @@ def calculate_total(items):  # ← You land here
 ```
 
 **Keybindings:**
-- `F12` - Go to definition
+- `F12` or `Ctrl+\` - Go to definition
 - `Alt+,` - Jump back (navigate backward in jump history)
 
 **Cross-file navigation:** If the definition is in another file, `fac` automatically opens it in a new tab!
@@ -186,7 +186,7 @@ References to 'calculate_total':
 ```
 
 **Keybindings:**
-- `Shift+F12` - Find all references
+- `Shift+F12` or `Ctrl+Shift+R` - Find all references
 - `j`/`k` or `↑`/`↓` - Navigate references
 - `Enter` - Jump to selected reference
 - `Esc` - Close panel
@@ -275,12 +275,12 @@ total = calculate(10, 20)
 
 ---
 
-### 6. Document Symbols Outline (Ctrl+Shift+O)
+### 6. Document Symbols Outline (F4)
 
 **What it does:** See an outline of all functions, classes, and variables in the current file.
 
 **How to use:**
-1. Press `Ctrl+Shift+O` to open the symbols panel
+1. Press `F4` to open the symbols panel
 2. Type to filter symbols (fuzzy search)
 3. Press `Enter` to jump to a symbol
 
@@ -297,7 +297,7 @@ Document Symbols:
 ```
 
 **Keybindings:**
-- `Ctrl+Shift+O` - Open document symbols panel
+- `F4` or `Ctrl+Shift+O` - Open document symbols panel
 - Type to search (fuzzy matching)
 - `j`/`k` or `↑`/`↓` - Navigate symbols
 - `Enter` - Jump to selected symbol
@@ -305,12 +305,12 @@ Document Symbols:
 
 ---
 
-### 7. Workspace Symbols (Ctrl+Shift+T)
+### 7. Workspace Symbols (F6)
 
 **What it does:** Search for any symbol across your **entire project** (all files).
 
 **How to use:**
-1. Press `Ctrl+Shift+T` to open workspace symbols
+1. Press `F6` to open workspace symbols
 2. Type part of a symbol name (fuzzy search)
 3. Navigate and press `Enter` to jump to it
 
@@ -331,7 +331,7 @@ Workspace Symbols:
 - `calctot` matches `calculate_total` (consecutive)
 
 **Keybindings:**
-- `Ctrl+Shift+T` - Open workspace symbols
+- `F6` or `Ctrl+Shift+T` - Open workspace symbols
 - Type to search across all files
 - `j`/`k` or `↑`/`↓` - Navigate results
 - `Enter` - Jump to symbol (opens file if needed)
@@ -414,12 +414,12 @@ def greet(name, age):
 
 ---
 
-### 10. Command Palette (Ctrl+Shift+P)
+### 10. Command Palette (Ctrl+P)
 
 **What it does:** Quick access to all LSP commands without remembering keybindings.
 
 **How to use:**
-1. Press `Ctrl+Shift+P`
+1. Press `Ctrl+P`
 2. Type to search commands (fuzzy search)
 3. Press `Enter` to execute
 
@@ -439,7 +439,7 @@ Command Palette:
 ```
 
 **Keybindings:**
-- `Ctrl+Shift+P` - Open command palette
+- `Ctrl+P` - Open command palette
 - Type to search commands
 - `Enter` - Execute selected command
 - `Esc` - Close palette
@@ -705,14 +705,14 @@ After using F12 to jump to a definition:
 ### 2. Combine Search Features
 
 - `Ctrl+F` - Search text in current file
-- `Ctrl+Shift+O` - Search symbols in current file
-- `Ctrl+Shift+T` - Search symbols across project
+- `F4` - Search symbols in current file
+- `F6` - Search symbols across project
 - `Shift+F12` - Find all usages of current symbol
 
 ### 3. Fix Errors Faster
 
 When you see an error:
-1. Press `Ctrl+Shift+D` to see all errors
+1. Press `F8` to see all errors
 2. Navigate to each error
 3. Press `Ctrl+.` to see quick fixes
 4. Apply fixes with `Enter`
@@ -737,15 +737,15 @@ Many language servers support format-on-save:
 
 | Feature | Keybinding | What It Does |
 |---------|-----------|--------------|
-| **Diagnostics Panel** | `Ctrl+Shift+D` | Show all errors/warnings |
-| **Go to Definition** | `F12` | Jump to where symbol is defined |
-| **Find References** | `Shift+F12` | Find all usages of symbol |
+| **Diagnostics Panel** | `F8` or `Ctrl+Shift+D` | Show all errors/warnings |
+| **Go to Definition** | `F12` or `Ctrl+\` | Jump to where symbol is defined |
+| **Find References** | `Shift+F12` or `Ctrl+Shift+R` | Find all usages of symbol |
 | **Code Actions** | `Ctrl+.` | Quick fixes and refactorings |
 | **Rename Symbol** | `F2` | Rename across entire project |
-| **Document Symbols** | `Ctrl+Shift+O` | Outline of current file |
-| **Workspace Symbols** | `Ctrl+Shift+T` | Search symbols across project |
+| **Document Symbols** | `F4` or `Ctrl+Shift+O` | Outline of current file |
+| **Workspace Symbols** | `F6` or `Ctrl+Shift+T` | Search symbols across project |
 | **Format Document** | `Shift+Alt+F` | Auto-format code |
-| **Command Palette** | `Ctrl+Shift+P` | Access all commands |
+| **Command Palette** | `Ctrl+P` | Access all commands |
 | **Jump Back** | `Alt+,` | Return to previous location |
 
 ---
@@ -779,7 +779,7 @@ Now that you understand LSP in `fac`:
 
 1. **Install language servers** for your languages
 2. **Practice the keybindings** - they'll become second nature
-3. **Explore your codebase** with `Ctrl+Shift+T` and `F12`
+3. **Explore your codebase** with `F6` and `F12`
 4. **Let LSP catch errors** before you run your code
 5. **Refactor confidently** with `F2` and `Ctrl+.`
 

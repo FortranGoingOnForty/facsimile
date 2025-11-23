@@ -8,13 +8,14 @@ Complete keyboard shortcut reference for `fac` editor.
 
 | Keybinding | Command | Description |
 |------------|---------|-------------|
-| `F12` | Go to Definition | Jump to where a symbol is defined |
-| `Shift+F12` | Find References | Find all usages of a symbol |
+| `F12` or `Ctrl+\` | Go to Definition | Jump to where a symbol is defined |
+| `Shift+F12` or `Ctrl+Shift+R` | Find References | Find all usages of a symbol |
 | `F2` | Rename Symbol | Rename symbol across entire project |
 | `Ctrl+.` | Code Actions | Quick fixes and refactorings |
-| `Ctrl+Shift+D` | Diagnostics Panel | Show all errors and warnings |
-| `Ctrl+Shift+O` | Document Symbols | Navigate symbols in current file |
-| `Ctrl+Shift+T` | Workspace Symbols | Search symbols across all files |
+| `F8` or `Ctrl+Shift+D` | Diagnostics Panel | Show all errors and warnings |
+| `F4` or `Ctrl+Shift+O` | Document Symbols | Navigate symbols in current file |
+| `F6` or `Ctrl+Shift+T` | Workspace Symbols | Search symbols across all files |
+| `Ctrl+P` | Command Palette | Search and execute any command |
 | `Shift+Alt+F` | Format Document | Auto-format current file |
 | `Alt+,` | Jump Back | Return to previous location (jump stack) |
 
@@ -77,7 +78,7 @@ Complete keyboard shortcut reference for `fac` editor.
 | `Ctrl+T` | New Tab | Create new empty tab |
 | `Ctrl+W` | Close Tab | Close current tab |
 | `Ctrl+Tab` | Next Tab | Switch to next tab |
-| `Ctrl+Shift+Tab` | Previous Tab | Switch to previous tab |
+| `F6ab` | Previous Tab | Switch to previous tab |
 | `Alt+1` to `Alt+9` | Jump to Tab | Switch to specific tab number |
 | `Ctrl+\` | Split Vertical | Split current pane vertically |
 | `Ctrl+Shift+\` | Split Horizontal | Split current pane horizontally |
@@ -127,7 +128,7 @@ Complete keyboard shortcut reference for `fac` editor.
 
 | Keybinding | Command | Description |
 |------------|---------|-------------|
-| `Ctrl+Shift+P` | Command Palette | Search and execute any command |
+| `Ctrl+P` | Command Palette | Search and execute any command |
 | `Ctrl+?` or `F1` | Help | Show help screen |
 | `Ctrl+Shift+F` | File Tree | Toggle file explorer (Fortress mode) |
 | `Esc` | Cancel/Close | Close panels, cancel operations |
@@ -218,14 +219,14 @@ Active when `Ctrl+Shift+F` is pressed:
 ### Keybinding Conflicts
 - Some keybindings may conflict with terminal emulator shortcuts
 - If a key doesn't work, check your terminal's keyboard settings
-- Common conflicts: `Ctrl+Shift+T` (new terminal tab), `Ctrl+W` (close terminal tab)
+- Common conflicts: `F6` (new terminal tab), `Ctrl+W` (close terminal tab)
 
 ### Customization
 - Keybindings are currently hardcoded
 - Future versions will support custom keybindings
 
 ### Discovering Commands
-- Use `Ctrl+Shift+P` (Command Palette) to see all available commands
+- Use `Ctrl+P` (Command Palette) to see all available commands
 - Commands show their keybindings in the palette
 
 ### Vim Users
@@ -242,13 +243,13 @@ Some vim-style keybindings work:
 ## 🚀 Most Useful Combos
 
 **Exploring code:**
-1. `Ctrl+Shift+T` - Find any symbol in project
+1. `F6` - Find any symbol in project
 2. `F12` - Jump to definition
 3. `Shift+F12` - See all usages
 4. `Alt+,` - Jump back
 
 **Fixing errors:**
-1. `Ctrl+Shift+D` - See all errors
+1. `F8` - See all errors
 2. Navigate to error
 3. `Ctrl+.` - Apply quick fix
 4. `Ctrl+S` - Save

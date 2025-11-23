@@ -54,15 +54,15 @@ module syntax_highlighter_module
     end type syntax_highlighter_t
 
     ! Color mapping (ANSI escape codes)
-    character(len=16), parameter :: COLOR_KEYWORD = char(27) // '[1;34m'     ! Bold Blue
-    character(len=16), parameter :: COLOR_STRING = char(27) // '[32m'        ! Green
-    character(len=16), parameter :: COLOR_NUMBER = char(27) // '[35m'        ! Magenta
-    character(len=16), parameter :: COLOR_COMMENT = char(27) // '[90m'       ! Gray
-    character(len=16), parameter :: COLOR_OPERATOR = char(27) // '[33m'      ! Yellow
-    character(len=16), parameter :: COLOR_TYPE = char(27) // '[36m'          ! Cyan
-    character(len=16), parameter :: COLOR_FUNCTION = char(27) // '[1;36m'    ! Bold Cyan
-    character(len=16), parameter :: COLOR_PREPROC = char(27) // '[95m'       ! Light Magenta
-    character(len=16), parameter :: COLOR_RESET = char(27) // '[0m'
+    character(len=*), parameter :: COLOR_KEYWORD = char(27) // '[1;34m'     ! Bold Blue
+    character(len=*), parameter :: COLOR_STRING = char(27) // '[32m'        ! Green
+    character(len=*), parameter :: COLOR_NUMBER = char(27) // '[35m'        ! Magenta
+    character(len=*), parameter :: COLOR_COMMENT = char(27) // '[90m'       ! Gray
+    character(len=*), parameter :: COLOR_OPERATOR = char(27) // '[33m'      ! Yellow
+    character(len=*), parameter :: COLOR_TYPE = char(27) // '[36m'          ! Cyan
+    character(len=*), parameter :: COLOR_FUNCTION = char(27) // '[1;36m'    ! Bold Cyan
+    character(len=*), parameter :: COLOR_PREPROC = char(27) // '[95m'       ! Light Magenta
+    character(len=*), parameter :: COLOR_RESET = char(27) // '[0m'
 
 contains
 

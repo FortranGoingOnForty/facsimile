@@ -325,21 +325,24 @@ contains
         server%process_id = -1
     end subroutine stop_server
 
-    subroutine send_request(server, msg, callback)
-        type(lsp_server_t), intent(inout) :: server
+    subroutine send_request(manager, server_index, msg, callback)
+        type(lsp_manager_t), intent(inout) :: manager
+        integer, intent(in) :: server_index
         type(lsp_message_t), intent(in) :: msg
         procedure(response_callback), optional :: callback
         character(len=:), allocatable :: json_msg
 
-        if (.not. server%initialized .and. .not. server%initializing) return
+        if (server_index < 1 .or. server_index > manager%num_servers) return
+        if (.not. manager%servers(server_index)%initialized .and. &
+            .not. manager%servers(server_index)%initializing) return
 
         json_msg = format_json_rpc(msg)
-        call send_raw_message(server, json_msg)
+        call send_raw_message(manager%servers(server_index), json_msg)
 
         ! Track request and register callback
-        call track_request(server, msg%id)
+        call track_request(manager%servers(server_index), msg%id)
         if (present(callback)) then
-            ! TODO: Register callback in manager
+            call register_callback(manager, msg%id, callback)
         end if
     end subroutine send_request
 
@@ -825,7 +828,7 @@ contains
         msg = create_completion_request(trim(uri), line, character)
         request_id = msg%id
 
-        call send_request(manager%servers(server_index), msg, callback)
+        call send_request(manager, server_index, msg, callback)
     end function request_completion
 
     ! Request hover information at cursor position
@@ -850,7 +853,7 @@ contains
         msg = create_hover_request(trim(uri), line, character)
         request_id = msg%id
 
-        call send_request(manager%servers(server_index), msg, callback)
+        call send_request(manager, server_index, msg, callback)
     end function request_hover
 
     ! Request definition location at cursor position
@@ -875,7 +878,7 @@ contains
         msg = create_definition_request(uri, line, character)
         request_id = msg%id
 
-        call send_request(manager%servers(server_index), msg, callback)
+        call send_request(manager, server_index, msg, callback)
     end function request_definition
 
     ! Request references at cursor position
@@ -901,7 +904,7 @@ contains
         msg = create_references_request(uri, line, character, .true.)
         request_id = msg%id
 
-        call send_request(manager%servers(server_index), msg, callback)
+        call send_request(manager, server_index, msg, callback)
     end function request_references
 
     ! Request code actions for a range
@@ -929,7 +932,7 @@ contains
         msg = create_code_action_request(uri, start_line, start_char, end_line, end_char)
         request_id = msg%id
 
-        call send_request(manager%servers(server_index), msg, callback)
+        call send_request(manager, server_index, msg, callback)
     end function request_code_actions
 
     ! Request document symbols
@@ -954,7 +957,7 @@ contains
         msg = create_document_symbols_request(uri)
         request_id = msg%id
 
-        call send_request(manager%servers(server_index), msg, callback)
+        call send_request(manager, server_index, msg, callback)
     end function request_document_symbols
 
     ! Request signature help
@@ -980,7 +983,7 @@ contains
         msg = create_signature_help_request(uri, line, character)
         request_id = msg%id
 
-        call send_request(manager%servers(server_index), msg, callback)
+        call send_request(manager, server_index, msg, callback)
     end function request_signature_help
 
     ! Request formatting
@@ -1007,7 +1010,7 @@ contains
         msg = create_formatting_request(uri, tab_size, insert_spaces)
         request_id = msg%id
 
-        call send_request(manager%servers(server_index), msg, callback)
+        call send_request(manager, server_index, msg, callback)
     end function request_formatting
 
     ! Request rename
@@ -1034,7 +1037,7 @@ contains
         msg = create_rename_request(uri, line, character, new_name)
         request_id = msg%id
 
-        call send_request(manager%servers(server_index), msg, callback)
+        call send_request(manager, server_index, msg, callback)
     end function request_rename
 
     ! Request workspace symbols
@@ -1056,7 +1059,7 @@ contains
         msg = create_workspace_symbols_request(query)
         request_id = msg%id
 
-        call send_request(manager%servers(server_index), msg, callback)
+        call send_request(manager, server_index, msg, callback)
     end function request_workspace_symbols
 
     ! Set the diagnostics notification handler
