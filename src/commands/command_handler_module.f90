@@ -72,7 +72,8 @@ module command_handler_module
     logical :: last_action_was_edit = .false.
 
     ! Module-level storage for LSP callbacks
-    type(editor_state_t), allocatable, save :: saved_editor_for_callback
+    type(editor_state_t), pointer, save :: saved_editor_for_callback => null()
+    type(buffer_t), pointer, save :: saved_buffer_for_callback => null()
 
 
 contains
@@ -106,8 +107,8 @@ contains
 
     subroutine handle_key_command(key_str, editor, buffer, should_quit)
         character(len=*), intent(in) :: key_str
-        type(editor_state_t), intent(inout) :: editor
-        type(buffer_t), intent(inout) :: buffer
+        type(editor_state_t), intent(inout), target :: editor
+        type(buffer_t), intent(inout), target :: buffer
         logical, intent(out) :: should_quit
         integer :: line_count, i, j, insert_line, pane_idx
         logical :: is_edit_action
@@ -1184,11 +1185,7 @@ contains
                         lsp_char = editor%cursors(editor%active_cursor)%column - 1
 
                         ! Save editor state for callback
-                        if (allocated(saved_editor_for_callback)) then
-                            deallocate(saved_editor_for_callback)
-                        end if
-                        allocate(saved_editor_for_callback)
-                        saved_editor_for_callback = editor
+                        saved_editor_for_callback => editor
 
                         request_id = request_code_actions(editor%lsp_manager, &
                             editor%tabs(editor%active_tab_index)%lsp_server_index, &
@@ -1237,11 +1234,9 @@ contains
                         lsp_line = editor%cursors(editor%active_cursor)%line - 1
                         lsp_char = editor%cursors(editor%active_cursor)%column - 1
 
-                        ! Save editor state for callback
-                        if (.not. allocated(saved_editor_for_callback)) then
-                            allocate(saved_editor_for_callback)
-                        end if
-                        saved_editor_for_callback = editor
+                        ! Save editor state and buffer pointers for callback
+                        saved_editor_for_callback => editor
+                        saved_buffer_for_callback => buffer
 
                         request_id = request_definition(editor%lsp_manager, &
                             editor%tabs(editor%active_tab_index)%lsp_server_index, &
@@ -1271,19 +1266,26 @@ contains
 
         case('shift-f12', 'alt-r')
             ! Find all references (Shift+F12 or Alt+R)
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') '>>> INSIDE SHIFT-F12/ALT-R HANDLER <<<'
+                close(debug_unit)
+            end block
             if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
                 if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
                     ! Request references at current cursor position
                     block
+                        use references_panel_module, only: clear_references
                         integer :: request_id, lsp_line, lsp_char
                         lsp_line = editor%cursors(editor%active_cursor)%line - 1
                         lsp_char = editor%cursors(editor%active_cursor)%column - 1
 
+                        ! Clear any existing references so we can detect when new ones arrive
+                        call clear_references(editor%references_panel)
+
                         ! Save editor state for callback
-                        if (.not. allocated(saved_editor_for_callback)) then
-                            allocate(saved_editor_for_callback)
-                        end if
-                        saved_editor_for_callback = editor
+                        saved_editor_for_callback => editor
 
                         request_id = request_references(editor%lsp_manager, &
                             editor%tabs(editor%active_tab_index)%lsp_server_index, &
@@ -1296,6 +1298,76 @@ contains
                             call terminal_write('Searching for references...                ')
                             ! Show panel (will be populated when response arrives)
                             call show_references_panel(editor%references_panel, editor%screen_cols, editor%screen_rows)
+
+                            ! Wait for LSP response to populate panel
+                            block
+                                use lsp_server_manager_module, only: process_server_messages
+                                integer :: poll_count, max_polls
+                                logical :: response_received
+                                integer :: count_rate, count_start, count_end
+                                real :: elapsed_ms
+
+                                max_polls = 50  ! Poll up to 50 times (500ms total)
+                                poll_count = 0
+                                response_received = .false.
+
+                                call system_clock(count_rate=count_rate)
+
+                                do while (poll_count < max_polls .and. .not. response_received)
+                                    ! Process any pending LSP messages
+                                    call process_server_messages(editor%lsp_manager)
+
+                                    ! Check if we got a response (panel populated or explicitly set to 0)
+                                    if (allocated(editor%references_panel%references)) then
+                                        response_received = .true.
+                                    end if
+
+                                    if (.not. response_received) then
+                                        ! Sleep for ~10ms between polls
+                                        call system_clock(count=count_start)
+                                        do
+                                            call system_clock(count=count_end)
+                                            elapsed_ms = real(count_end - count_start) / real(count_rate) * 1000.0
+                                            if (elapsed_ms >= 10.0) exit
+                                        end do
+                                        poll_count = poll_count + 1
+                                    end if
+                                end do
+                            end block
+
+                            ! Interactive loop for references panel (offcanvas mode)
+                            block
+                                use input_handler_module, only: get_key_input
+                                use references_panel_module, only: hide_references_panel, references_panel_handle_key
+                                use renderer_module, only: render_screen_with_lsp_panel
+                                character(len=32) :: key_input
+                                integer :: status
+                                logical :: handled
+
+                                ! Initial render with offcanvas panel
+                                call render_screen_with_lsp_panel(buffer, editor, "references")
+
+                                do
+                                    call get_key_input(key_input, status)
+                                    if (status /= 0) cycle
+
+                                    if (key_input == 'esc') then
+                                        call hide_references_panel(editor%references_panel)
+                                        call render_screen(buffer, editor)
+                                        exit
+                                    else if (key_input == 'enter') then
+                                        ! TODO: Navigate to selected reference
+                                        call hide_references_panel(editor%references_panel)
+                                        call render_screen(buffer, editor)
+                                        exit
+                                    else
+                                        ! Try panel-specific key handling
+                                        handled = references_panel_handle_key(editor%references_panel, key_input)
+                                        ! Re-render with offcanvas panel
+                                        call render_screen_with_lsp_panel(buffer, editor, "references")
+                                    end if
+                                end do
+                            end block
                         end if
                     end block
                 end if
@@ -1327,10 +1399,7 @@ contains
                                 lsp_char = editor%cursors(editor%active_cursor)%column - 1
 
                                 ! Save editor state for callback
-                                if (.not. allocated(saved_editor_for_callback)) then
-                                    allocate(saved_editor_for_callback)
-                                end if
-                                saved_editor_for_callback = editor
+                                saved_editor_for_callback => editor
 
                                 request_id = request_rename(editor%lsp_manager, &
                                     editor%tabs(editor%active_tab_index)%lsp_server_index, &
@@ -1364,10 +1433,7 @@ contains
                         integer :: request_id
 
                         ! Save editor state for callback
-                        if (.not. allocated(saved_editor_for_callback)) then
-                            allocate(saved_editor_for_callback)
-                        end if
-                        saved_editor_for_callback = editor
+                        saved_editor_for_callback => editor
 
                         ! Request formatting with 4 spaces (configurable later)
                         request_id = request_formatting(editor%lsp_manager, &
@@ -1398,10 +1464,7 @@ contains
                         integer :: request_id
 
                         ! Save editor state for callback
-                        if (.not. allocated(saved_editor_for_callback)) then
-                            allocate(saved_editor_for_callback)
-                        end if
-                        saved_editor_for_callback = editor
+                        saved_editor_for_callback => editor
 
                         request_id = request_document_symbols(editor%lsp_manager, &
                             editor%tabs(editor%active_tab_index)%lsp_server_index, &
@@ -1702,10 +1765,7 @@ contains
                                 lsp_char = editor%cursors(editor%active_cursor)%column - 1
 
                                 ! Save editor state for callback
-                                if (.not. allocated(saved_editor_for_callback)) then
-                                    allocate(saved_editor_for_callback)
-                                end if
-                                saved_editor_for_callback = editor
+                                saved_editor_for_callback => editor
 
                                 request_id = request_signature_help(editor%lsp_manager, &
                                     editor%tabs(editor%active_tab_index)%lsp_server_index, &
@@ -5650,8 +5710,15 @@ contains
         integer, intent(in) :: request_id
         type(lsp_message_t), intent(in) :: response
 
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> REFERENCES RESPONSE RECEIVED <<<'
+            close(debug_unit)
+        end block
+
         ! Call the actual handler with saved editor state
-        if (allocated(saved_editor_for_callback)) then
+        if (associated(saved_editor_for_callback)) then
             call handle_references_response_impl(saved_editor_for_callback, response)
         end if
     end subroutine handle_references_response_wrapper
@@ -5760,7 +5827,7 @@ contains
         type(lsp_message_t), intent(in) :: response
 
         ! Call the actual handler with saved editor state
-        if (allocated(saved_editor_for_callback)) then
+        if (associated(saved_editor_for_callback)) then
             call handle_code_actions_response_impl(saved_editor_for_callback, response)
         end if
     end subroutine handle_code_actions_response_wrapper
@@ -5858,8 +5925,15 @@ contains
         integer, intent(in) :: request_id
         type(lsp_message_t), intent(in) :: response
 
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> SYMBOLS RESPONSE RECEIVED <<<'
+            close(debug_unit)
+        end block
+
         ! Call the actual handler with saved editor state
-        if (allocated(saved_editor_for_callback)) then
+        if (associated(saved_editor_for_callback)) then
             call handle_symbols_response_impl(saved_editor_for_callback, response)
         end if
     end subroutine handle_symbols_response_wrapper
@@ -5869,7 +5943,7 @@ contains
         use lsp_protocol_module, only: lsp_message_t
         use json_module, only: json_value_t, json_get_array, json_get_object, &
                                json_get_string, json_get_number, json_array_size, &
-                               json_get_array_element, json_has_key
+                               json_get_array_element, json_has_key, json_stringify
         type(editor_state_t), intent(inout) :: editor
         type(lsp_message_t), intent(in) :: response
         type(json_value_t) :: result_array, symbol_obj, location_obj, range_obj
@@ -5882,6 +5956,26 @@ contains
         ! The result is directly in response%result for LSP responses
         result_array = response%result
         num_symbols = json_array_size(result_array)
+
+        block
+            integer :: debug_unit
+            character(len=:), allocatable :: result_str, error_str
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> SYMBOLS RESPONSE RECEIVED <<<'
+
+            ! Check for error
+            if (json_has_key(response%error, "message")) then
+                error_str = json_get_string(response%error, "message")
+                write(debug_unit, '(A)') 'ERROR: ' // trim(error_str)
+            end if
+
+            write(debug_unit, '(A,I0)') 'num_symbols = ', num_symbols
+            result_str = json_stringify(response%result)
+            if (allocated(result_str)) then
+                write(debug_unit, '(A)') 'Result JSON: ' // result_str(1:min(500,len(result_str)))
+            end if
+            close(debug_unit)
+        end block
 
         if (num_symbols == 0) then
             call clear_symbols(editor%symbols_panel)
@@ -6016,7 +6110,7 @@ contains
         type(lsp_message_t), intent(in) :: response
 
         ! Call the actual handler with saved editor state
-        if (allocated(saved_editor_for_callback)) then
+        if (associated(saved_editor_for_callback)) then
             call handle_signature_response(saved_editor_for_callback%signature_tooltip, response)
         end if
     end subroutine handle_signature_response_wrapper
@@ -6031,7 +6125,7 @@ contains
         character(len=:), allocatable :: result_str
         integer :: changes_applied
 
-        if (.not. allocated(saved_editor_for_callback)) return
+        if (.not. associated(saved_editor_for_callback)) return
 
         ! Convert result to string for apply_workspace_edit
         result_str = json_stringify(response%result)
@@ -6073,7 +6167,7 @@ contains
         integer :: start_line, start_char, end_line, end_char
         integer :: changes_applied
 
-        if (.not. allocated(saved_editor_for_callback)) return
+        if (.not. associated(saved_editor_for_callback)) return
 
         tab_idx = saved_editor_for_callback%active_tab_index
         if (tab_idx < 1 .or. tab_idx > size(saved_editor_for_callback%tabs)) return
@@ -6347,7 +6441,7 @@ contains
         end do
 
         ! Update the panel
-        if (allocated(saved_editor_for_callback)) then
+        if (associated(saved_editor_for_callback)) then
             call set_workspace_symbols(saved_editor_for_callback%workspace_symbols_panel, symbols, num_symbols)
         end if
 
@@ -6477,7 +6571,7 @@ contains
         type(lsp_message_t), intent(in) :: response
 
         ! Call actual handler with saved editor state
-        if (allocated(saved_editor_for_callback)) then
+        if (associated(saved_editor_for_callback)) then
             call handle_definition_response_impl(saved_editor_for_callback, response)
         end if
     end subroutine handle_definition_response_wrapper
@@ -6487,7 +6581,10 @@ contains
         use lsp_protocol_module, only: lsp_message_t
         use json_module, only: json_value_t, json_get_object, json_get_string, &
                                json_get_number, json_array_size, json_get_array_element, &
-                               json_has_key
+                               json_has_key, json_stringify
+        use editor_state_module, only: switch_to_tab, sync_pane_to_editor, sync_editor_to_pane
+        use text_buffer_module, only: buffer_load_file, copy_buffer
+        use renderer_module, only: render_screen
         type(editor_state_t), intent(inout) :: editor
         type(lsp_message_t), intent(in) :: response
         type(json_value_t) :: location_obj, range_obj, start_obj
@@ -6499,13 +6596,35 @@ contains
         ! Log response for debugging
         block
             integer :: debug_unit
+            character(len=:), allocatable :: result_str, error_str
             open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
             write(debug_unit, '(A)') '>>> DEFINITION RESPONSE RECEIVED <<<'
+
+            ! Check for error
+            if (json_has_key(response%error, "message")) then
+                error_str = json_get_string(response%error, "message")
+                write(debug_unit, '(A)') 'ERROR: ' // trim(error_str)
+            end if
+
+            result_str = json_stringify(response%result)
+            if (allocated(result_str)) then
+                write(debug_unit, '(A)') 'Result JSON: ' // result_str(1:min(500,len(result_str)))
+            else
+                write(debug_unit, '(A)') 'Result JSON: (not allocated)'
+            end if
             close(debug_unit)
         end block
 
         ! Try to treat result as array first
         num_locations = json_array_size(response%result)
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A,I0)') 'num_locations = ', num_locations
+            write(debug_unit, '(A,L1)') 'has uri key = ', json_has_key(response%result, "uri")
+            close(debug_unit)
+        end block
 
         if (num_locations > 0) then
             ! Array of locations - take first one
@@ -6515,8 +6634,17 @@ contains
             location_obj = response%result
         else
             ! No definition found
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') '>>> NO DEFINITION FOUND (empty response) <<<'
+                close(debug_unit)
+            end block
             call terminal_move_cursor(editor%screen_rows, 1)
             call terminal_write('No definition found                           ')
+            if (associated(saved_buffer_for_callback)) then
+                call render_screen(saved_buffer_for_callback, editor)
+            end if
             return
         end if
 
@@ -6525,6 +6653,9 @@ contains
         if (len(uri) == 0) then
             call terminal_move_cursor(editor%screen_rows, 1)
             call terminal_write('Invalid definition response                   ')
+            if (associated(saved_buffer_for_callback)) then
+                call render_screen(saved_buffer_for_callback, editor)
+            end if
             return
         end if
 
@@ -6568,14 +6699,58 @@ contains
             end if
         end do
 
-        ! If file not found in tabs, report location
+        ! If file not found in tabs, create a new tab and load it
         if (.not. found_file) then
-            call terminal_move_cursor(editor%screen_rows, 1)
-            call terminal_write('Found in: ' // trim(filepath) // '                ')
+            call create_tab(editor, filepath)
+
+            ! Load file content into the new tab's buffer
+            block
+                integer :: status, new_tab_idx
+
+                new_tab_idx = size(editor%tabs)  ! The tab we just created
+
+                call buffer_load_file(editor%tabs(new_tab_idx)%buffer, filepath, status)
+
+                if (status == 0) then
+                    ! File loaded successfully
+                    ! Copy buffer to the pane's buffer
+                    if (allocated(editor%tabs(new_tab_idx)%panes)) then
+                        call copy_buffer(editor%tabs(new_tab_idx)%panes(1)%buffer, editor%tabs(new_tab_idx)%buffer)
+                    end if
+
+                    ! Switch to the new tab
+                    call switch_to_tab(editor, new_tab_idx)
+
+                    ! Sync the pane to editor state (this updates editor%cursors, etc.)
+                    call sync_pane_to_editor(editor, new_tab_idx, 1)
+
+                    ! Navigate to the definition position
+                    editor%cursors(editor%active_cursor)%line = target_line
+                    editor%cursors(editor%active_cursor)%column = target_col
+                    editor%cursors(editor%active_cursor)%desired_column = target_col
+                    editor%viewport_line = max(1, target_line - editor%screen_rows / 2)
+
+                    ! Sync editor state back to pane
+                    call sync_editor_to_pane(editor)
+
+                    call terminal_move_cursor(editor%screen_rows, 1)
+                    call terminal_write('Jumped to definition in ' // trim(filepath) // '                          ')
+                    if (associated(saved_buffer_for_callback)) then
+                        call render_screen(saved_buffer_for_callback, editor)
+                    end if
+                else
+                    ! File load failed
+                    call terminal_move_cursor(editor%screen_rows, 1)
+                    call terminal_write('Failed to load: ' // trim(filepath) // '                ')
+                    if (associated(saved_buffer_for_callback)) then
+                        call render_screen(saved_buffer_for_callback, editor)
+                    end if
+                end if
+            end block
             return
         end if
 
-        ! Jump to the line and column in current tab
+        ! File already open in tabs - jump to the line and column
         editor%cursors(editor%active_cursor)%line = target_line
         editor%cursors(editor%active_cursor)%column = target_col
 
@@ -6584,6 +6759,9 @@ contains
 
         call terminal_move_cursor(editor%screen_rows, 1)
         call terminal_write('Jumped to definition                          ')
+        if (associated(saved_buffer_for_callback)) then
+            call render_screen(saved_buffer_for_callback, editor)
+        end if
     end subroutine handle_definition_response_impl
 
 end module command_handler_module

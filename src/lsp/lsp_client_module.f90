@@ -236,7 +236,7 @@ contains
                         client%manager%servers(client%documents(i)%server_index)%supports_completion) then
                         msg = create_completion_request(client%documents(i)%uri, &
                                                        line - 1, column - 1)  ! LSP is 0-based
-                        call send_request(client%manager%servers(client%documents(i)%server_index), msg)
+                        call send_request(client%manager, client%documents(i)%server_index, msg)
                         ! TODO: Wait for and process response
                     end if
                 end if
@@ -262,7 +262,7 @@ contains
                         client%manager%servers(client%documents(i)%server_index)%supports_hover) then
                         msg = create_hover_request(client%documents(i)%uri, &
                                                  line - 1, column - 1)  ! LSP is 0-based
-                        call send_request(client%manager%servers(client%documents(i)%server_index), msg)
+                        call send_request(client%manager, client%documents(i)%server_index, msg)
                         ! TODO: Wait for and process response
                     end if
                 end if
@@ -288,7 +288,7 @@ contains
                         client%manager%servers(client%documents(i)%server_index)%supports_definition) then
                         msg = create_definition_request(client%documents(i)%uri, &
                                                        line - 1, column - 1)  ! LSP is 0-based
-                        call send_request(client%manager%servers(client%documents(i)%server_index), msg)
+                        call send_request(client%manager, client%documents(i)%server_index, msg)
                         ! TODO: Wait for and process response
                     end if
                 end if
@@ -318,7 +318,7 @@ contains
                         client%manager%servers(client%documents(i)%server_index)%supports_references) then
                         msg = create_references_request(client%documents(i)%uri, &
                                                        line - 1, column - 1, include_decl)
-                        call send_request(client%manager%servers(client%documents(i)%server_index), msg)
+                        call send_request(client%manager, client%documents(i)%server_index, msg)
                         ! TODO: Wait for and process response
                     end if
                 end if
@@ -342,7 +342,7 @@ contains
                     if (client%manager%servers(client%documents(i)%server_index)%initialized .and. &
                         client%manager%servers(client%documents(i)%server_index)%supports_document_symbols) then
                         msg = create_document_symbols_request(client%documents(i)%uri)
-                        call send_request(client%manager%servers(client%documents(i)%server_index), msg)
+                        call send_request(client%manager, client%documents(i)%server_index, msg)
                         ! TODO: Wait for and process response
                     end if
                 end if
@@ -372,7 +372,7 @@ contains
                     if (client%manager%servers(client%documents(i)%server_index)%initialized .and. &
                         client%manager%servers(client%documents(i)%server_index)%supports_formatting) then
                         msg = create_formatting_request(client%documents(i)%uri, tabs, spaces)
-                        call send_request(client%manager%servers(client%documents(i)%server_index), msg)
+                        call send_request(client%manager, client%documents(i)%server_index, msg)
                         ! TODO: Wait for and process response
                     end if
                 end if
@@ -395,7 +395,7 @@ contains
                         client%manager%servers(client%documents(i)%server_index)%supports_rename) then
                         msg = create_rename_request(client%documents(i)%uri, &
                                                   line - 1, column - 1, new_name)
-                        call send_request(client%manager%servers(client%documents(i)%server_index), msg)
+                        call send_request(client%manager, client%documents(i)%server_index, msg)
                         ! TODO: Wait for and process response
                     end if
                 end if
@@ -423,7 +423,7 @@ contains
                         msg = create_code_action_request(client%documents(i)%uri, &
                                                         start_line - 1, start_col - 1, &
                                                         end_line - 1, end_col - 1)
-                        call send_request(client%manager%servers(client%documents(i)%server_index), msg)
+                        call send_request(client%manager, client%documents(i)%server_index, msg)
                         ! TODO: Wait for and process response
                     end if
                 end if

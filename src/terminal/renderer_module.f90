@@ -20,7 +20,7 @@ module renderer_module
     public :: render_screen, update_viewport, init_renderer, cleanup_renderer
     public :: render_status_bar, render_cursor
     public :: show_line_numbers, LINE_NUMBER_WIDTH
-    public :: render_screen_with_tree
+    public :: render_screen_with_tree, render_screen_with_lsp_panel
     public :: tree_state
 
     ! Configuration
@@ -1740,5 +1740,407 @@ contains
             color = char(27) // '[90m'  ! Gray
         end select
     end subroutine get_diagnostic_marker
+
+    ! Render screen with LSP panel on the right (similar to render_screen_with_tree but for right side)
+    subroutine render_screen_with_lsp_panel(buffer, editor, panel_type, match_mode_active, match_case_sens)
+        use references_panel_module, only: references_panel_t, is_references_panel_visible
+        use symbols_panel_module, only: symbols_panel_t, is_symbols_panel_visible
+        use workspace_symbols_panel_module, only: workspace_symbols_panel_t, is_workspace_symbols_panel_visible
+        type(buffer_t), intent(in) :: buffer
+        type(editor_state_t), intent(inout) :: editor
+        character(len=*), intent(in) :: panel_type  ! "references", "symbols", or "workspace_symbols"
+        logical, intent(in), optional :: match_mode_active
+        logical, intent(in), optional :: match_case_sens
+        integer :: panel_width, editor_end_col, editor_width
+        integer :: separator_col, panel_start_col
+        integer :: row
+
+        call terminal_hide_cursor()
+
+        ! Clear screen first to avoid artifacts
+        do row = 1, editor%screen_rows
+            call terminal_move_cursor(row, 1)
+            call terminal_write(repeat(' ', editor%screen_cols))
+        end do
+
+        ! Calculate split: 60% for editor, 40% for LSP panel
+        panel_width = editor%screen_cols * 40 / 100
+        editor_width = editor%screen_cols - panel_width - 1  ! -1 for separator
+        editor_end_col = editor_width
+        separator_col = editor_width + 1
+        panel_start_col = separator_col + 1
+
+        ! Render tab bar if there are any tabs (positioned in editor pane area)
+        call render_tab_bar(editor, 1, editor_width)
+
+        ! Render editor in left pane (check for multiple panes)
+        call render_editor_area_for_lsp_panel(editor, 1, editor_width)
+
+        ! Render status bar (full width)
+        call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
+
+        ! Render vertical separator (start at row 2 for tab bar)
+        call render_vertical_separator(separator_col, 2, editor%screen_rows - 1)
+
+        ! Render appropriate LSP panel on the right
+        select case (panel_type)
+        case ("references")
+            if (is_references_panel_visible(editor%references_panel)) then
+                call render_lsp_references_panel(editor%references_panel, panel_start_col, panel_width, &
+                                                 2, editor%screen_rows - 1)
+            end if
+        case ("symbols")
+            if (is_symbols_panel_visible(editor%symbols_panel)) then
+                call render_lsp_symbols_panel(editor%symbols_panel, panel_start_col, panel_width, &
+                                              2, editor%screen_rows - 1)
+            end if
+        case ("workspace_symbols")
+            if (is_workspace_symbols_panel_visible(editor%workspace_symbols_panel)) then
+                call render_lsp_workspace_symbols_panel(editor%workspace_symbols_panel, panel_start_col, &
+                                                        panel_width, 2, editor%screen_rows - 1)
+            end if
+        end select
+
+        ! Render cursor
+        call render_cursor_for_lsp_panel(editor, 1, editor_width)
+
+        call terminal_show_cursor()
+    end subroutine render_screen_with_lsp_panel
+
+    ! Helper to render editor area when LSP panel is on right
+    subroutine render_editor_area_for_lsp_panel(editor, start_col, width)
+        use editor_state_module, only: pane_t
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: start_col, width
+        type(pane_t) :: pane
+        integer :: i, tab_idx, n_panes
+        integer :: pane_col, pane_row, pane_width, pane_height
+        integer :: screen_height
+
+        ! Get active tab
+        tab_idx = editor%active_tab_index
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) then
+            return
+        end if
+
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) then
+            return
+        end if
+
+        n_panes = size(editor%tabs(tab_idx)%panes)
+        if (n_panes == 0) return
+
+        screen_height = editor%screen_rows - 2  ! Account for tab bar and status bar
+
+        ! If only one pane, use simple rendering
+        if (n_panes == 1) then
+            call render_editor_pane(editor%tabs(tab_idx)%panes(1)%buffer, editor, start_col, width)
+            return
+        end if
+
+        ! Multiple panes: render each with adjusted coordinates
+        do i = 2, editor%screen_rows - 1
+            call terminal_move_cursor(i, start_col)
+            call terminal_write(repeat(' ', width))
+        end do
+
+        do i = 1, n_panes
+            pane = editor%tabs(tab_idx)%panes(i)
+
+            pane_col = start_col + int(pane%x_start * real(width))
+            if (i < n_panes) then
+                pane_width = int((pane%x_end - pane%x_start) * real(width)) - 1
+            else
+                pane_width = int((pane%x_end - pane%x_start) * real(width))
+            end if
+            pane_row = 2 + int(pane%y_start * real(screen_height))
+            pane_height = int((pane%y_end - pane%y_start) * real(screen_height))
+
+            editor%tabs(tab_idx)%panes(i)%screen_col = pane_col
+            editor%tabs(tab_idx)%panes(i)%screen_row = pane_row
+            editor%tabs(tab_idx)%panes(i)%screen_width = pane_width
+            editor%tabs(tab_idx)%panes(i)%screen_height = pane_height
+
+            call render_single_pane(editor, i, pane_col, pane_row, pane_width, pane_height)
+
+            if (i < n_panes) then
+                call render_pane_separator(pane_col + pane_width, pane_row, pane_height)
+            end if
+        end do
+    end subroutine render_editor_area_for_lsp_panel
+
+    ! Helper to render cursor when LSP panel is visible
+    subroutine render_cursor_for_lsp_panel(editor, start_col, width)
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: start_col, width
+        integer :: tab_idx, n_panes
+
+        tab_idx = editor%active_tab_index
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+
+        n_panes = size(editor%tabs(tab_idx)%panes)
+        if (n_panes == 0) return
+
+        if (n_panes > 1) then
+            call render_cursor_for_panes_in_lsp_view(editor, start_col, width)
+        else
+            call render_cursor_in_pane(editor, start_col, width)
+        end if
+    end subroutine render_cursor_for_lsp_panel
+
+    ! Helper to render cursor for multiple panes when LSP panel is visible
+    subroutine render_cursor_for_panes_in_lsp_view(editor, start_col, width)
+        use editor_state_module, only: pane_t
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: start_col, width
+        integer :: tab_idx, active_pane, i
+        type(pane_t) :: pane
+        integer :: screen_row, screen_col
+
+        tab_idx = editor%active_tab_index
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+
+        active_pane = editor%tabs(tab_idx)%active_pane_index
+        if (active_pane < 1 .or. active_pane > size(editor%tabs(tab_idx)%panes)) return
+
+        pane = editor%tabs(tab_idx)%panes(active_pane)
+
+        ! Calculate cursor position relative to pane
+        screen_row = pane%screen_row + (editor%cursors(editor%active_cursor)%line - pane%viewport_line)
+        screen_col = pane%screen_col + (editor%cursors(editor%active_cursor)%column - 1)
+
+        if (screen_row >= pane%screen_row .and. &
+            screen_row < pane%screen_row + pane%screen_height .and. &
+            screen_col >= pane%screen_col .and. &
+            screen_col < pane%screen_col + pane%screen_width) then
+            call terminal_move_cursor(screen_row, screen_col)
+        end if
+    end subroutine render_cursor_for_panes_in_lsp_view
+
+    ! Render references panel in offcanvas mode (right side, full height)
+    subroutine render_lsp_references_panel(panel, start_col, width, start_row, end_row)
+        use references_panel_module, only: references_panel_t
+        type(references_panel_t), intent(in) :: panel
+        integer, intent(in) :: start_col, width, start_row, end_row
+        integer :: row, i, visible_index, max_visible
+        character(len=256) :: line
+        character(len=100) :: header, location_str
+        character(len=:), allocatable :: display_text, filename_display
+        character(len=1), parameter :: ESC = achar(27)
+
+        ! Clear panel area
+        do row = start_row, end_row
+            call terminal_move_cursor(row, start_col)
+            call terminal_write(repeat(' ', width))
+        end do
+
+        row = start_row
+
+        ! Header with symbol name
+        call terminal_move_cursor(row, start_col)
+        call terminal_write(ESC // '[48;5;237m')  ! Dark background
+
+        if (allocated(panel%symbol_name)) then
+            write(header, '(A,A,A,I0,A)') " References: ", trim(panel%symbol_name), &
+                " (", panel%num_references, ") "
+        else
+            write(header, '(A,I0,A)') " References (", panel%num_references, ") "
+        end if
+
+        ! Truncate header if too long
+        if (len_trim(header) > width) then
+            header = header(1:width-3) // "..."
+        end if
+
+        call terminal_write(ESC // '[1m' // trim(header))
+        ! Pad rest of header line
+        if (len_trim(header) < width) then
+            call terminal_write(repeat(' ', width - len_trim(header)))
+        end if
+        call terminal_write(ESC // '[0m')
+        row = row + 1
+
+        ! Separator
+        call terminal_move_cursor(row, start_col)
+        call terminal_write(ESC // '[48;5;237m' // repeat("─", width) // ESC // '[0m')
+        row = row + 1
+
+        ! Legend
+        call terminal_move_cursor(row, start_col)
+        call terminal_write(ESC // '[90mj/k:nav  enter:jump  esc:close' // ESC // '[0m')
+        row = row + 1
+
+        ! Separator
+        call terminal_move_cursor(row, start_col)
+        call terminal_write(ESC // '[90m' // repeat("─", width) // ESC // '[0m')
+        row = row + 1
+
+        ! Calculate max visible items
+        max_visible = end_row - row + 1
+
+        ! Display references
+        if (panel%num_references == 0) then
+            call terminal_move_cursor(row, start_col)
+            call terminal_write(ESC // '[48;5;235m' // ESC // '[90m')
+            call terminal_write(" No references found")
+            if (20 < width) then
+                call terminal_write(repeat(' ', width - 20))
+            end if
+            call terminal_write(ESC // '[0m')
+        else
+            do i = 1, min(max_visible, panel%num_references - panel%scroll_offset)
+                visible_index = panel%scroll_offset + i
+                if (visible_index > panel%num_references) exit
+
+                call terminal_move_cursor(row, start_col)
+
+                ! Highlight selected item
+                if (visible_index == panel%selected_index) then
+                    call terminal_write(ESC // '[48;5;240m')  ! Highlight background
+                else
+                    call terminal_write(ESC // '[48;5;235m')  ! Normal background
+                end if
+
+                ! Format location string
+                if (allocated(panel%references(visible_index)%filename)) then
+                    ! Extract just the filename from full path
+                    filename_display = get_basename_str(panel%references(visible_index)%filename)
+                    write(location_str, '(A,A,I0,A,I0)') &
+                        trim(filename_display), &
+                        ":", panel%references(visible_index)%line, &
+                        ":", panel%references(visible_index)%column
+                else
+                    write(location_str, '(I0,A,I0)') &
+                        panel%references(visible_index)%line, &
+                        ":", panel%references(visible_index)%column
+                end if
+
+                ! Build line with location and preview
+                line = " " // trim(adjustl(location_str))
+
+                ! Add preview text if available
+                if (allocated(panel%references(visible_index)%preview_text)) then
+                    display_text = trim(panel%references(visible_index)%preview_text)
+                    if (len(line) + len(display_text) + 2 < width) then
+                        line = trim(line) // " " // display_text
+                    else if (len(line) + 5 < width) then
+                        line = trim(line) // " " // display_text(1:width-len(line)-4) // "..."
+                    end if
+                end if
+
+                ! Write line and pad to width
+                call terminal_write(trim(line))
+                if (len_trim(line) < width) then
+                    call terminal_write(repeat(' ', width - len_trim(line)))
+                end if
+                call terminal_write(ESC // '[0m')
+
+                row = row + 1
+                if (row > end_row) exit
+            end do
+        end if
+    end subroutine render_lsp_references_panel
+
+    ! Render symbols panel in offcanvas mode (right side, full height)
+    subroutine render_lsp_symbols_panel(panel, start_col, width, start_row, end_row)
+        use symbols_panel_module, only: symbols_panel_t
+        type(symbols_panel_t), intent(in) :: panel
+        integer, intent(in) :: start_col, width, start_row, end_row
+        integer :: row
+        character(len=1), parameter :: ESC = achar(27)
+
+        ! Clear panel area
+        do row = start_row, end_row
+            call terminal_move_cursor(row, start_col)
+            call terminal_write(repeat(' ', width))
+        end do
+
+        row = start_row
+
+        ! Header
+        call terminal_move_cursor(row, start_col)
+        call terminal_write(ESC // '[48;5;237m' // ESC // '[1m Document Symbols ')
+        if (19 < width) then
+            call terminal_write(repeat(' ', width - 19))
+        end if
+        call terminal_write(ESC // '[0m')
+        row = row + 1
+
+        ! Separator
+        call terminal_move_cursor(row, start_col)
+        call terminal_write(ESC // '[48;5;237m' // repeat("─", width) // ESC // '[0m')
+        row = row + 1
+
+        ! Legend
+        call terminal_move_cursor(row, start_col)
+        call terminal_write(ESC // '[90mj/k:nav  enter:jump  esc:close' // ESC // '[0m')
+        row = row + 1
+
+        ! TODO: Actually render symbols (will delegate to symbols_panel_module logic)
+        call terminal_move_cursor(row, start_col)
+        call terminal_write(ESC // '[90m(symbols panel implementation pending)' // ESC // '[0m')
+    end subroutine render_lsp_symbols_panel
+
+    ! Render workspace symbols panel in offcanvas mode (right side, full height)
+    subroutine render_lsp_workspace_symbols_panel(panel, start_col, width, start_row, end_row)
+        use workspace_symbols_panel_module, only: workspace_symbols_panel_t
+        type(workspace_symbols_panel_t), intent(in) :: panel
+        integer, intent(in) :: start_col, width, start_row, end_row
+        integer :: row
+        character(len=1), parameter :: ESC = achar(27)
+
+        ! Clear panel area
+        do row = start_row, end_row
+            call terminal_move_cursor(row, start_col)
+            call terminal_write(repeat(' ', width))
+        end do
+
+        row = start_row
+
+        ! Header
+        call terminal_move_cursor(row, start_col)
+        call terminal_write(ESC // '[48;5;237m' // ESC // '[1m Workspace Symbols ')
+        if (21 < width) then
+            call terminal_write(repeat(' ', width - 21))
+        end if
+        call terminal_write(ESC // '[0m')
+        row = row + 1
+
+        ! Separator
+        call terminal_move_cursor(row, start_col)
+        call terminal_write(ESC // '[48;5;237m' // repeat("─", width) // ESC // '[0m')
+        row = row + 1
+
+        ! Legend
+        call terminal_move_cursor(row, start_col)
+        call terminal_write(ESC // '[90mj/k:nav  enter:jump  esc:close' // ESC // '[0m')
+        row = row + 1
+
+        ! TODO: Actually render workspace symbols (will delegate to workspace_symbols_panel_module logic)
+        call terminal_move_cursor(row, start_col)
+        call terminal_write(ESC // '[90m(workspace symbols panel implementation pending)' // ESC // '[0m')
+    end subroutine render_lsp_workspace_symbols_panel
+
+    ! Helper function to extract basename from path
+    function get_basename_str(path) result(basename)
+        character(len=*), intent(in) :: path
+        character(len=:), allocatable :: basename
+        integer :: i, last_slash
+
+        last_slash = 0
+        do i = len(path), 1, -1
+            if (path(i:i) == '/' .or. path(i:i) == '\') then
+                last_slash = i
+                exit
+            end if
+        end do
+
+        if (last_slash > 0 .and. last_slash < len(path)) then
+            basename = path(last_slash+1:len(path))
+        else
+            basename = path
+        end if
+    end function get_basename_str
 
 end module renderer_module

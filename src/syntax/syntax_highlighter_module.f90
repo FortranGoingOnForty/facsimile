@@ -182,7 +182,7 @@ contains
                 call process_string(highlighter, line, tokens, token_count, i)
 
             ! Check for number
-            else if (is_digit(ch) .or. (ch == '.' .and. i < line_len .and. is_digit(line(i+1:i+1)))) then
+            else if (is_digit(ch) .or. (ch == '.' .and. i + 1 <= line_len .and. is_digit(line(i+1:i+1)))) then
                 call process_number(line, tokens, token_count, i)
 
             ! Check for word (keyword, type, identifier)

@@ -67,6 +67,26 @@ contains
         next_request_id = next_request_id + 1
     end function get_next_request_id
 
+    function make_absolute_path(path) result(abs_path)
+        character(len=*), intent(in) :: path
+        character(len=:), allocatable :: abs_path
+        character(len=4096) :: cwd
+        integer :: status
+
+        ! Check if already absolute
+        if (len_trim(path) > 0 .and. path(1:1) == '/') then
+            abs_path = trim(path)
+        else
+            ! Get current working directory and prepend
+            call getcwd(cwd, status)
+            if (status == 0) then
+                abs_path = trim(cwd) // "/" // trim(path)
+            else
+                abs_path = trim(path)
+            end if
+        end if
+    end function make_absolute_path
+
     function create_initialize_request(process_id, root_path, client_name) result(msg)
         integer, intent(in) :: process_id
         character(len=*), intent(in) :: root_path
@@ -76,16 +96,30 @@ contains
         type(json_value_t) :: text_document, completion, hover
         type(json_value_t) :: definition, references, doc_symbols
         type(json_value_t) :: workspace, formatting
+        character(len=:), allocatable :: abs_root_path
 
         msg%jsonrpc = "2.0"
         msg%id = get_next_request_id()
         msg%method = "initialize"
         msg%is_request = .true.
 
+        ! Convert root_path to absolute path
+        abs_root_path = make_absolute_path(root_path)
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> create_initialize_request <<<'
+            write(debug_unit, '(A)') 'root_path (input): ' // trim(root_path)
+            write(debug_unit, '(A)') 'abs_root_path: ' // abs_root_path
+            write(debug_unit, '(A)') 'rootUri: file://' // abs_root_path
+            close(debug_unit)
+        end block
+
         params = json_create_object()
         call json_add_number(params, "processId", real(process_id, real64))
-        call json_add_string(params, "rootPath", root_path)
-        call json_add_string(params, "rootUri", "file://" // root_path)
+        call json_add_string(params, "rootPath", abs_root_path)
+        call json_add_string(params, "rootUri", "file://" // abs_root_path)
 
         ! Client info
         client_info = json_create_object()
@@ -113,6 +147,7 @@ contains
         ! Definition
         definition = json_create_object()
         call json_add_bool(definition, "dynamicRegistration", .false.)
+        call json_add_bool(definition, "linkSupport", .true.)
         call json_add_object(text_document, "definition", definition)
 
         ! References
@@ -579,7 +614,11 @@ contains
             msg%params = json_get_object(json_obj, "params")
         else if (msg%id >= 0) then
             msg%is_response = .true.
-            msg%result = json_get_object(json_obj, "result")
+            ! Try to get result as array first (for definition, symbols, etc.), then as object
+            msg%result = json_get_array(json_obj, "result")
+            if (msg%result%value_type == JSON_NULL) then
+                msg%result = json_get_object(json_obj, "result")
+            end if
             msg%error = json_get_object(json_obj, "error")
         end if
     end function parse_lsp_message

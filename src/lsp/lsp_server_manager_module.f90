@@ -53,9 +53,19 @@ module lsp_server_manager_module
         integer, allocatable :: pending_requests(:)
         integer :: num_pending = 0
 
+        ! Pending didOpen notifications (queued before initialization)
+        type(pending_didopen_t), allocatable :: pending_didopens(:)
+        integer :: num_pending_didopens = 0
+
         ! Message buffer
         character(len=:), allocatable :: read_buffer
     end type lsp_server_t
+
+    ! Pending didOpen notification
+    type :: pending_didopen_t
+        character(len=:), allocatable :: filename
+        character(len=:), allocatable :: content
+    end type pending_didopen_t
 
     ! Callback type for responses
     abstract interface
@@ -168,8 +178,8 @@ contains
     subroutine load_default_configs(manager)
         type(lsp_manager_t), intent(inout) :: manager
 
-        ! Python
-        call add_config(manager, "python", "pylsp", "*.py")
+        ! Python (using pyright instead of pylsp)
+        call add_config(manager, "python", "pyright-langserver --stdio", "*.py")
 
         ! Rust
         call add_config(manager, "rust", "rust-analyzer", "*.rs")
@@ -190,6 +200,28 @@ contains
 
         ! TODO: Load from config file
     end subroutine load_default_configs
+
+    ! Convert filename to absolute file:// URI
+    function filename_to_uri(filename) result(uri)
+        character(len=*), intent(in) :: filename
+        character(len=:), allocatable :: uri
+        character(len=4096) :: cwd
+        integer :: status
+
+        if (len_trim(filename) > 0 .and. filename(1:1) == '/') then
+            ! Already absolute path
+            uri = "file://" // trim(filename)
+        else
+            ! Relative path - prepend current directory
+            call getcwd(cwd, status)
+            if (status == 0) then
+                uri = "file://" // trim(cwd) // "/" // trim(filename)
+            else
+                ! Fallback if getcwd fails
+                uri = "file://" // trim(filename)
+            end if
+        end if
+    end function filename_to_uri
 
     subroutine add_config(manager, language, command, patterns)
         type(lsp_manager_t), intent(inout) :: manager
@@ -252,6 +284,16 @@ contains
             write(error_unit, '(a,a)') "No LSP server configured for language: ", language
             return
         end if
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> STARTING LSP SERVER <<<'
+            write(debug_unit, '(A)') 'Language: ' // trim(language)
+            write(debug_unit, '(A)') 'Command: ' // trim(command)
+            write(debug_unit, '(A)') 'Root path: ' // trim(root_path)
+            close(debug_unit)
+        end block
 
         ! Expand server array
         allocate(new_servers(manager%num_servers + 1))
@@ -332,18 +374,98 @@ contains
         procedure(response_callback), optional :: callback
         character(len=:), allocatable :: json_msg
 
-        if (server_index < 1 .or. server_index > manager%num_servers) return
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> send_request: START <<<'
+            write(debug_unit, '(A,I0)') 'server_index = ', server_index
+            write(debug_unit, '(A,I0)') 'num_servers = ', manager%num_servers
+            close(debug_unit)
+        end block
+
+        if (server_index < 1 .or. server_index > manager%num_servers) then
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') '>>> send_request: EARLY RETURN - invalid server_index <<<'
+                close(debug_unit)
+            end block
+            return
+        end if
+
         if (.not. manager%servers(server_index)%initialized .and. &
-            .not. manager%servers(server_index)%initializing) return
+            .not. manager%servers(server_index)%initializing) then
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') '>>> send_request: EARLY RETURN - server not initialized <<<'
+                write(debug_unit, '(A,L1)') 'initialized = ', manager%servers(server_index)%initialized
+                write(debug_unit, '(A,L1)') 'initializing = ', manager%servers(server_index)%initializing
+                close(debug_unit)
+            end block
+            return
+        end if
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> send_request: Formatting JSON <<<'
+            close(debug_unit)
+        end block
 
         json_msg = format_json_rpc(msg)
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> send_request: Sending message <<<'
+            write(debug_unit, '(A)') 'JSON (first 500 chars): ' // json_msg(1:min(500,len(json_msg)))
+            close(debug_unit)
+        end block
+
         call send_raw_message(manager%servers(server_index), json_msg)
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> send_request: Tracking request <<<'
+            close(debug_unit)
+        end block
 
         ! Track request and register callback
         call track_request(manager%servers(server_index), msg%id)
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A,L1)') '>>> send_request: callback present = ', present(callback)
+            close(debug_unit)
+        end block
+
         if (present(callback)) then
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') '>>> send_request: Calling register_callback <<<'
+                close(debug_unit)
+            end block
+
             call register_callback(manager, msg%id, callback)
+
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') '>>> send_request: register_callback DONE <<<'
+                close(debug_unit)
+            end block
         end if
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> send_request: DONE <<<'
+            close(debug_unit)
+        end block
     end subroutine send_request
 
     subroutine send_notification(server, msg)
@@ -354,15 +476,52 @@ contains
         if (.not. server%initialized .and. .not. server%initializing) return
 
         json_msg = format_json_rpc(msg)
+
+        ! Debug log for didOpen notifications
+        if (index(msg%method, 'didOpen') > 0) then
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') '>>> Sending didOpen notification <<<'
+                write(debug_unit, '(A)') 'JSON (first 800 chars): ' // json_msg(1:min(800,len(json_msg)))
+                close(debug_unit)
+            end block
+        end if
+
         call send_raw_message(server, json_msg)
     end subroutine send_notification
 
     subroutine send_raw_message(server, message)
         type(lsp_server_t), intent(inout) :: server
         character(len=*), intent(in) :: message
-        integer :: result
+        integer :: result, debug_unit
 
-        if (.not. c_associated(server%handle)) return
+        ! Check if handle is valid
+        block
+            integer :: debug_unit2
+            open(newunit=debug_unit2, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit2, '(A)') '>>> send_raw_message: START <<<'
+            write(debug_unit2, '(A,L1)') 'c_associated(server%handle) = ', c_associated(server%handle)
+            close(debug_unit2)
+        end block
+
+        if (.not. c_associated(server%handle)) then
+            block
+                integer :: debug_unit2
+                open(newunit=debug_unit2, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit2, '(A)') '>>> send_raw_message: EARLY RETURN - handle is NULL <<<'
+                close(debug_unit2)
+            end block
+            return
+        end if
+
+        ! Log outgoing messages for debugging
+        open(newunit=debug_unit, file='/tmp/fac_lsp_out.log', position='append', action='write')
+        write(debug_unit, '(A)') '>>> OUTGOING MESSAGE >>>'
+        write(debug_unit, '(A)') trim(message)
+        write(debug_unit, '(A)') '<<< END MESSAGE <<<'
+        write(debug_unit, '(A)') ''
+        close(debug_unit)
 
         result = lsp_send_message_f(server%handle, message//c_null_char, len(message))
 
@@ -423,6 +582,18 @@ contains
 
             ! Extract and parse message
             message = server%read_buffer(1:message_end)
+
+            ! Log incoming message
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_lsp_in.log', position='append', action='write')
+                write(debug_unit, '(A)') '>>> INCOMING MESSAGE >>>'
+                write(debug_unit, '(A)') trim(message)
+                write(debug_unit, '(A)') '<<< END MESSAGE <<<'
+                write(debug_unit, '(A)') ''
+                close(debug_unit)
+            end block
+
             msg = parse_lsp_message(message)
 
             ! Handle the message
@@ -555,6 +726,44 @@ contains
         server%initializing = .false.
 
         write(error_unit, '(a,a)') "LSP server initialized: ", server%language
+
+        ! Send all queued didOpen notifications
+        if (allocated(server%pending_didopens) .and. server%num_pending_didopens > 0) then
+            block
+                integer :: i, debug_unit
+                type(lsp_message_t) :: didopen_msg
+                character(len=:), allocatable :: lang, file_uri
+
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A,I0,A)') '>>> Flushing ', server%num_pending_didopens, ' queued didOpen notifications <<<'
+                close(debug_unit)
+
+                do i = 1, server%num_pending_didopens
+                    if (allocated(server%pending_didopens(i)%filename) .and. &
+                        allocated(server%pending_didopens(i)%content)) then
+
+                        lang = get_language_for_file(server%pending_didopens(i)%filename)
+                        file_uri = filename_to_uri(server%pending_didopens(i)%filename)
+                        didopen_msg = create_did_open_notification( &
+                            file_uri, lang, 1, &
+                            server%pending_didopens(i)%content)
+
+                        open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                        write(debug_unit, '(A,A)') '  - Sent didOpen for: ', trim(server%pending_didopens(i)%filename)
+                        write(debug_unit, '(A,A)') '  - URI: ', trim(file_uri)
+                        write(debug_unit, '(A,I0)') '  - Content length: ', len(server%pending_didopens(i)%content)
+                        write(debug_unit, '(A,A)') '  - Language: ', trim(lang)
+                        close(debug_unit)
+
+                        call send_notification(server, didopen_msg)
+                    end if
+                end do
+
+                ! Clear the queue
+                deallocate(server%pending_didopens)
+                server%num_pending_didopens = 0
+            end block
+        end if
     end subroutine handle_initialize_response
 
     subroutine handle_notification(manager, server, msg)
@@ -625,17 +834,87 @@ contains
         procedure(response_callback) :: callback
         type(callback_entry_t), allocatable :: new_callbacks(:)
 
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> register_callback: START <<<'
+            write(debug_unit, '(A,I0)') 'request_id = ', request_id
+            write(debug_unit, '(A,I0)') 'num_callbacks = ', manager%num_callbacks
+            close(debug_unit)
+        end block
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> register_callback: Allocating new_callbacks <<<'
+            close(debug_unit)
+        end block
+
         allocate(new_callbacks(manager%num_callbacks + 1))
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> register_callback: Copying old callbacks <<<'
+            close(debug_unit)
+        end block
+
         if (manager%num_callbacks > 0) then
             new_callbacks(1:manager%num_callbacks) = manager%callbacks
         end if
 
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> register_callback: Setting new callback <<<'
+            close(debug_unit)
+        end block
+
         new_callbacks(manager%num_callbacks + 1)%request_id = request_id
         new_callbacks(manager%num_callbacks + 1)%callback => callback
 
-        deallocate(manager%callbacks)
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> register_callback: Deallocating old callbacks <<<'
+            close(debug_unit)
+        end block
+
+        if (allocated(manager%callbacks)) deallocate(manager%callbacks)
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> register_callback: Reallocating manager%callbacks <<<'
+            close(debug_unit)
+        end block
+
+        allocate(manager%callbacks(size(new_callbacks)))
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> register_callback: Copying new_callbacks <<<'
+            close(debug_unit)
+        end block
+
         manager%callbacks = new_callbacks
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> register_callback: Incrementing num_callbacks <<<'
+            close(debug_unit)
+        end block
+
         manager%num_callbacks = manager%num_callbacks + 1
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> register_callback: DONE <<<'
+            close(debug_unit)
+        end block
     end subroutine register_callback
 
     subroutine remove_callback(manager, index)
@@ -731,12 +1010,79 @@ contains
         character(len=*), intent(in) :: content
         type(lsp_message_t) :: msg
         character(len=:), allocatable :: language
+        type(pending_didopen_t), allocatable :: temp_pending(:)
+        integer :: i
 
         if (server_index < 1 .or. server_index > manager%num_servers) return
-        if (.not. manager%servers(server_index)%initialized) return
 
+        ! If server not initialized yet, queue the notification
+        if (.not. manager%servers(server_index)%initialized) then
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') '>>> notify_file_opened: Queuing (server not ready) <<<'
+                write(debug_unit, '(A)') 'File: ' // trim(filename)
+                close(debug_unit)
+            end block
+
+            ! Add to pending queue
+            if (allocated(manager%servers(server_index)%pending_didopens)) then
+                ! Grow array
+                allocate(temp_pending(manager%servers(server_index)%num_pending_didopens + 1))
+                do i = 1, manager%servers(server_index)%num_pending_didopens
+                    temp_pending(i) = manager%servers(server_index)%pending_didopens(i)
+                end do
+                deallocate(manager%servers(server_index)%pending_didopens)
+                allocate(manager%servers(server_index)%pending_didopens(size(temp_pending)))
+                manager%servers(server_index)%pending_didopens = temp_pending
+                deallocate(temp_pending)
+            else
+                allocate(manager%servers(server_index)%pending_didopens(1))
+            end if
+
+            manager%servers(server_index)%num_pending_didopens = &
+                manager%servers(server_index)%num_pending_didopens + 1
+
+            ! Store filename and content
+            allocate(character(len=len(filename)) :: &
+                manager%servers(server_index)%pending_didopens( &
+                    manager%servers(server_index)%num_pending_didopens)%filename)
+            manager%servers(server_index)%pending_didopens( &
+                manager%servers(server_index)%num_pending_didopens)%filename = filename
+
+            allocate(character(len=len(content)) :: &
+                manager%servers(server_index)%pending_didopens( &
+                    manager%servers(server_index)%num_pending_didopens)%content)
+            manager%servers(server_index)%pending_didopens( &
+                manager%servers(server_index)%num_pending_didopens)%content = content
+
+            return
+        end if
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> notify_file_opened: Sending immediately <<<'
+            write(debug_unit, '(A)') 'File: ' // trim(filename)
+            close(debug_unit)
+        end block
+
+        ! Server is ready, send immediately
         language = get_language_for_file(filename)
-        msg = create_did_open_notification(filename, language, 1, content)
+        block
+            character(len=:), allocatable :: file_uri
+            file_uri = filename_to_uri(filename)
+            msg = create_did_open_notification(file_uri, language, 1, content)
+        end block
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> didOpen content length: ' // trim(adjustl(char(len(content))))
+            write(debug_unit, '(A)') '>>> didOpen language: ' // trim(language)
+            close(debug_unit)
+        end block
+
         call send_notification(manager%servers(server_index), msg)
     end subroutine notify_file_opened
 
@@ -776,7 +1122,7 @@ contains
         if (.not. manager%servers(server_index)%initialized) return
 
         ! Convert filename to URI
-        file_uri = 'file://' // trim(filename)
+        file_uri = filename_to_uri(filename)
 
         ! Create and send the notification
         if (present(content)) then
@@ -816,14 +1162,14 @@ contains
         procedure(response_callback), optional :: callback
         integer :: request_id
         type(lsp_message_t) :: msg
-        character(len=256) :: uri
+        character(len=:), allocatable :: uri
 
         request_id = -1
         if (server_index < 1 .or. server_index > manager%num_servers) return
         if (.not. manager%servers(server_index)%initialized) return
 
         ! Convert filename to URI (simple file:// for now)
-        uri = "file://" // trim(filename)
+        uri = filename_to_uri(filename)
 
         msg = create_completion_request(trim(uri), line, character)
         request_id = msg%id
@@ -841,14 +1187,14 @@ contains
         procedure(response_callback), optional :: callback
         integer :: request_id
         type(lsp_message_t) :: msg
-        character(len=256) :: uri
+        character(len=:), allocatable :: uri
 
         request_id = -1
         if (server_index < 1 .or. server_index > manager%num_servers) return
         if (.not. manager%servers(server_index)%initialized) return
 
         ! Convert filename to URI (simple file:// for now)
-        uri = "file://" // trim(filename)
+        uri = filename_to_uri(filename)
 
         msg = create_hover_request(trim(uri), line, character)
         request_id = msg%id
@@ -866,19 +1212,57 @@ contains
         procedure(response_callback), optional :: callback
         integer :: request_id
         type(lsp_message_t) :: msg
-        character(len=256) :: uri
+        character(len=:), allocatable :: uri
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> request_definition: START <<<'
+            close(debug_unit)
+        end block
 
         request_id = -1
         if (server_index < 1 .or. server_index > manager%num_servers) return
         if (.not. manager%servers(server_index)%initialized) return
 
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> request_definition: Creating URI <<<'
+            write(debug_unit, '(A)') 'Filename: ' // trim(filename)
+            close(debug_unit)
+        end block
+
         ! Convert filename to URI (simple file:// for now)
-        uri = "file://" // trim(filename)
+        uri = filename_to_uri(filename)
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> request_definition: Creating request <<<'
+            write(debug_unit, '(A)') 'URI: ' // trim(uri)
+            write(debug_unit, '(A,I0,A,I0)') 'Position: line=', line, ' char=', character
+            close(debug_unit)
+        end block
 
         msg = create_definition_request(uri, line, character)
         request_id = msg%id
 
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> request_definition: Calling send_request <<<'
+            close(debug_unit)
+        end block
+
         call send_request(manager, server_index, msg, callback)
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> request_definition: DONE <<<'
+            close(debug_unit)
+        end block
     end function request_definition
 
     ! Request references at cursor position
@@ -891,14 +1275,14 @@ contains
         procedure(response_callback), optional :: callback
         integer :: request_id
         type(lsp_message_t) :: msg
-        character(len=256) :: uri
+        character(len=:), allocatable :: uri
 
         request_id = -1
         if (server_index < 1 .or. server_index > manager%num_servers) return
         if (.not. manager%servers(server_index)%initialized) return
 
         ! Convert filename to URI (simple file:// for now)
-        uri = "file://" // trim(filename)
+        uri = filename_to_uri(filename)
 
         ! Include declaration and references
         msg = create_references_request(uri, line, character, .true.)
@@ -919,14 +1303,14 @@ contains
         procedure(response_callback), optional :: callback
         integer :: request_id
         type(lsp_message_t) :: msg
-        character(len=256) :: uri
+        character(len=:), allocatable :: uri
 
         request_id = -1
         if (server_index < 1 .or. server_index > manager%num_servers) return
         if (.not. manager%servers(server_index)%initialized) return
 
         ! Convert filename to URI
-        uri = "file://" // trim(filename)
+        uri = filename_to_uri(filename)
 
         ! Create code action request (diagnostics will be added separately if needed)
         msg = create_code_action_request(uri, start_line, start_char, end_line, end_char)
@@ -944,14 +1328,14 @@ contains
         procedure(response_callback), optional :: callback
         integer :: request_id
         type(lsp_message_t) :: msg
-        character(len=256) :: uri
+        character(len=:), allocatable :: uri
 
         request_id = -1
         if (server_index < 1 .or. server_index > manager%num_servers) return
         if (.not. manager%servers(server_index)%initialized) return
 
         ! Convert filename to URI
-        uri = "file://" // trim(filename)
+        uri = filename_to_uri(filename)
 
         ! Create document symbols request
         msg = create_document_symbols_request(uri)
@@ -970,14 +1354,14 @@ contains
         procedure(response_callback), optional :: callback
         integer :: request_id
         type(lsp_message_t) :: msg
-        character(len=256) :: uri
+        character(len=:), allocatable :: uri
 
         request_id = -1
         if (server_index < 1 .or. server_index > manager%num_servers) return
         if (.not. manager%servers(server_index)%initialized) return
 
         ! Convert filename to URI
-        uri = "file://" // trim(filename)
+        uri = filename_to_uri(filename)
 
         ! Create signature help request
         msg = create_signature_help_request(uri, line, character)
@@ -997,14 +1381,14 @@ contains
         procedure(response_callback), optional :: callback
         integer :: request_id
         type(lsp_message_t) :: msg
-        character(len=256) :: uri
+        character(len=:), allocatable :: uri
 
         request_id = -1
         if (server_index < 1 .or. server_index > manager%num_servers) return
         if (.not. manager%servers(server_index)%initialized) return
 
         ! Convert filename to URI
-        uri = "file://" // trim(filename)
+        uri = filename_to_uri(filename)
 
         ! Create formatting request
         msg = create_formatting_request(uri, tab_size, insert_spaces)
@@ -1024,14 +1408,14 @@ contains
         procedure(response_callback), optional :: callback
         integer :: request_id
         type(lsp_message_t) :: msg
-        character(len=256) :: uri
+        character(len=:), allocatable :: uri
 
         request_id = -1
         if (server_index < 1 .or. server_index > manager%num_servers) return
         if (.not. manager%servers(server_index)%initialized) return
 
         ! Convert filename to URI
-        uri = "file://" // trim(filename)
+        uri = filename_to_uri(filename)
 
         ! Create rename request
         msg = create_rename_request(uri, line, character, new_name)

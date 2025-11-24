@@ -105,6 +105,14 @@ contains
             end if
             ch2 = achar(char_code)
 
+            block
+                integer :: debug_unit, ch2_code
+                ch2_code = ichar(ch2)
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A,I0,A)') '>>> ESC[ RECEIVED, ch2=', ch2_code, ' (' // ch2 // ')'
+                close(debug_unit)
+            end block
+
             select case(ch2)
             case('A')
                 key_str = 'up'
@@ -230,9 +238,21 @@ contains
                 end if
             case('2')
                 ! Could be F9-F12 or alternate modified keys
+                block
+                    integer :: debug_unit
+                    open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                    write(debug_unit, '(A)') '>>> ESC[2 SEQUENCE DETECTED <<<'
+                    close(debug_unit)
+                end block
                 char_code = terminal_read_char()
                 if (char_code >= 0) then
                     ch3 = achar(char_code)
+                    block
+                        integer :: debug_unit
+                        open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                        write(debug_unit, '(A)') 'ch3 = ' // ch3
+                        close(debug_unit)
+                    end block
                     if (ch3 == '0' .or. ch3 == '1' .or. ch3 == '3' .or. ch3 == '4') then
                         ! Function keys F9-F12: ESC [ 2 X ~ or ESC [ 2 X ; modifier ~
                         char_code = terminal_read_char()
@@ -249,6 +269,13 @@ contains
                                     key_str = 'f11'
                                 case('4')
                                     key_str = 'f12'
+                                    block
+                                        integer :: debug_unit
+                                        open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                                        write(debug_unit, '(A)') '>>> F12 KEY DETECTED IN INPUT HANDLER <<<'
+                                        write(debug_unit, '(A)') 'key_str set to: ' // trim(key_str)
+                                        close(debug_unit)
+                                    end block
                                 end select
                             else if (ch == ';') then
                                 ! Modified F9-F12: ESC [ 2 X ; modifier ~
