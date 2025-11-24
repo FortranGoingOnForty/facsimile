@@ -6,7 +6,9 @@ program facsimile
     use editor_state_module
     use text_buffer_module
     use renderer_module
-    use command_handler_module
+    use command_handler_module, only: handle_key_command, init_command_handler, cleanup_command_handler, &
+                                      save_initial_state_for_undo, search_pattern, match_case_sensitive, &
+                                      g_lsp_modified_buffer
     use workspace_module
     use backup_module
     use save_prompt_module
@@ -360,6 +362,40 @@ program facsimile
     do while (running)
         ! Process any LSP messages
         call process_server_messages(editor%lsp_manager)
+
+        ! Sync local buffer from tab after LSP processing (in case LSP modified it)
+        block
+            logical :: should_render
+            should_render = .false.
+
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                ! Check if LSP set the modified flag
+                if (g_lsp_modified_buffer) then
+                    should_render = .true.
+                    g_lsp_modified_buffer = .false.
+                end if
+
+                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+
+                ! Also sync to active pane buffer if panes exist (so pane doesn't overwrite LSP changes)
+                if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
+                    size(editor%tabs(editor%active_tab_index)%panes) > 0) then
+                    status = editor%tabs(editor%active_tab_index)%active_pane_index
+                    if (status > 0 .and. status <= size(editor%tabs(editor%active_tab_index)%panes)) then
+                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(status)%buffer, buffer)
+                    end if
+                end if
+            end if
+
+            ! Render immediately if LSP modified the buffer (do this OUTSIDE the if block)
+            if (should_render) then
+                if (editor%fuss_mode_active) then
+                    call render_screen_with_tree(buffer, editor, allocated(search_pattern), match_case_sensitive)
+                else
+                    call render_screen(buffer, editor, allocated(search_pattern), match_case_sensitive)
+                end if
+            end if
+        end block
 
         ! Flush any pending document changes to LSP
         call flush_pending_document_changes(editor)

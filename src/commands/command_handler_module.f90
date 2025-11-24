@@ -6,7 +6,7 @@ module command_handler_module
                                    navigate_to_pane_left, navigate_to_pane_right, navigate_to_pane_up, navigate_to_pane_down, &
                                    sync_editor_to_pane, tab_t
     use text_buffer_module
-    use renderer_module, only: update_viewport, render_screen, tree_state
+    use renderer_module, only: update_viewport, render_screen, render_screen_with_tree, tree_state
     use yank_stack_module
     use clipboard_module
     use help_display_module, only: show_help
@@ -25,7 +25,8 @@ module command_handler_module
     use binary_prompt_module, only: binary_file_prompt
     use lsp_server_manager_module, only: request_completion, request_hover, request_definition, &
                                          request_references, request_code_actions, request_document_symbols, &
-                                         request_signature_help, request_formatting, request_rename
+                                         request_signature_help, request_formatting, request_rename, &
+                                         process_server_messages
     use rename_prompt_module, only: show_rename_prompt
     use completion_popup_module, only: show_completion_popup, hide_completion_popup, &
                                         handle_completion_response, navigate_completion_up, &
@@ -64,6 +65,10 @@ module command_handler_module
     public :: handle_key_command, init_command_handler, cleanup_command_handler
     public :: save_initial_state_for_undo
     public :: search_pattern, match_case_sensitive  ! Exposed for status bar hint
+    public :: g_lsp_modified_buffer  ! Flag for immediate render after LSP edits
+
+    ! Flag to track if LSP modified the buffer (for immediate rendering)
+    logical :: g_lsp_modified_buffer = .false.
 
     type(yank_stack_t) :: yank_stack
     type(undo_stack_t) :: undo_stack
@@ -1375,6 +1380,16 @@ contains
 
         case('f2')
             ! Rename symbol
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') '>>> F2 KEY DETECTED <<<'
+                write(debug_unit, '(A,I0)') 'active_tab_index: ', editor%active_tab_index
+                if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                    write(debug_unit, '(A,I0)') 'lsp_server_index: ', editor%tabs(editor%active_tab_index)%lsp_server_index
+                end if
+                close(debug_unit)
+            end block
             if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
                 if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
                     ! Get word under cursor as old name
@@ -1398,6 +1413,17 @@ contains
                                 lsp_line = editor%cursors(editor%active_cursor)%line - 1
                                 lsp_char = editor%cursors(editor%active_cursor)%column - 1
 
+                                ! Debug logging
+                                block
+                                    integer :: debug_unit
+                                    open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                                    write(debug_unit, '(A)') '>>> SENDING RENAME REQUEST <<<'
+                                    write(debug_unit, '(A)') 'Old name: ' // trim(old_name)
+                                    write(debug_unit, '(A)') 'New name: ' // trim(new_name)
+                                    write(debug_unit, '(A,I0,A,I0)') 'Position: line=', lsp_line, ' char=', lsp_char
+                                    close(debug_unit)
+                                end block
+
                                 ! Save editor state for callback
                                 saved_editor_for_callback => editor
 
@@ -1409,6 +1435,69 @@ contains
                                 if (request_id > 0) then
                                     call terminal_move_cursor(editor%screen_rows, 1)
                                     call terminal_write('Renaming symbol...                         ')
+
+                                    ! Poll for LSP response and render immediately when received
+                                    block
+                                        integer :: poll_count, max_polls, pane_idx, debug_unit
+                                        integer(8) :: start_time, end_time, count_rate, target_time
+                                        max_polls = 100  ! Poll up to 100 times (1 second total)
+
+                                        ! Debug: Start polling
+                                        open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                                        write(debug_unit, '(A)') '>>> STARTING RENAME POLLING <<<'
+                                        close(debug_unit)
+
+                                        do poll_count = 1, max_polls
+                                            ! Process any LSP messages
+                                            call process_server_messages(editor%lsp_manager)
+
+                                            ! Check if rename response modified the buffer
+                                            if (g_lsp_modified_buffer) then
+                                                ! Debug: Flag detected!
+                                                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                                                write(debug_unit, '(A,I0,A)') '>>> FLAG DETECTED at poll ', poll_count, ' - RENDERING NOW <<<'
+                                                close(debug_unit)
+
+                                                ! Sync buffer from tab (LSP modified tab buffer)
+                                                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+
+                                                ! Also sync to active pane buffer if panes exist
+                                                if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
+                                                    size(editor%tabs(editor%active_tab_index)%panes) > 0) then
+                                                    pane_idx = editor%tabs(editor%active_tab_index)%active_pane_index
+                                                    if (pane_idx > 0 .and. pane_idx <= size(editor%tabs(editor%active_tab_index)%panes)) then
+                                                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(pane_idx)%buffer, buffer)
+                                                    end if
+                                                end if
+
+                                                ! Render the updated buffer immediately
+                                                if (editor%fuss_mode_active) then
+                                                    call render_screen_with_tree(buffer, editor, allocated(search_pattern), match_case_sensitive)
+                                                else
+                                                    call render_screen(buffer, editor, allocated(search_pattern), match_case_sensitive)
+                                                end if
+
+                                                ! Reset flag and exit loop
+                                                g_lsp_modified_buffer = .false.
+                                                exit
+                                            end if
+
+                                            ! Delay 10ms between polls using system_clock
+                                            call system_clock(start_time, count_rate)
+                                            target_time = start_time + (count_rate / 100)  ! 10ms
+                                            do
+                                                call system_clock(end_time)
+                                                if (end_time >= target_time) exit
+                                            end do
+                                        end do
+
+                                        ! Debug: Polling finished without detecting flag
+                                        if (.not. g_lsp_modified_buffer) then
+                                            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                                            write(debug_unit, '(A)') '>>> POLLING TIMEOUT - FLAG NEVER SET <<<'
+                                            close(debug_unit)
+                                        end if
+                                    end block
                                 end if
 
                                 deallocate(new_name)
@@ -1656,6 +1745,8 @@ contains
                 write(debug_unit, '(A)') 'toggle_diagnostics_panel returned'
                 close(debug_unit)
             end block
+            ! Re-render screen to show/hide the panel
+            call render_screen(buffer, editor)
 
         case('alt-c')
             ! Toggle case sensitivity for match mode (ctrl-d)
@@ -6124,11 +6215,24 @@ contains
 
         character(len=:), allocatable :: result_str
         integer :: changes_applied
+        integer :: debug_unit
 
         if (.not. associated(saved_editor_for_callback)) return
 
         ! Convert result to string for apply_workspace_edit
         result_str = json_stringify(response%result)
+
+        ! Debug logging
+        open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+        write(debug_unit, '(A)') '>>> RENAME RESPONSE <<<'
+        if (allocated(result_str)) then
+            write(debug_unit, '(A,I0)') 'Result length: ', len(result_str)
+            write(debug_unit, '(A)') 'Result (first 500 chars): ' // result_str(1:min(500, len(result_str)))
+        else
+            write(debug_unit, '(A)') 'Result: NOT ALLOCATED'
+        end if
+        close(debug_unit)
+
         if (.not. allocated(result_str) .or. result_str == 'null' .or. len_trim(result_str) == 0) then
             call terminal_move_cursor(saved_editor_for_callback%screen_rows, 1)
             call terminal_write('Rename failed or not supported                ')
@@ -6138,6 +6242,21 @@ contains
 
         ! Apply workspace edit
         call apply_workspace_edit(saved_editor_for_callback, result_str, changes_applied)
+
+        ! Debug: verify edits were applied
+        if (changes_applied > 0) then
+            block
+                integer :: tab_idx, debug_unit
+                tab_idx = saved_editor_for_callback%active_tab_index
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') '>>> AFTER ALL EDITS APPLIED <<<'
+                write(debug_unit, '(A,I0)') 'Active tab index: ', tab_idx
+                write(debug_unit, '(A,I0)') 'Changes applied: ', changes_applied
+                write(debug_unit, '(A,L1)') 'Buffer modified flag: ', saved_editor_for_callback%tabs(tab_idx)%buffer%modified
+                write(debug_unit, '(A)') 'NOTE: Screen will be rendered by main loop'
+                close(debug_unit)
+            end block
+        end if
 
         call terminal_move_cursor(saved_editor_for_callback%screen_rows, 1)
         if (changes_applied > 0) then
@@ -6263,6 +6382,11 @@ contains
                     deallocate(uri)
                 end if
             end do
+
+            ! Set flag if any edits were applied (documentChanges format)
+            if (changes_applied > 0) then
+                g_lsp_modified_buffer = .true.
+            end if
             return
         end if
 
@@ -6271,6 +6395,11 @@ contains
             call terminal_move_cursor(editor%screen_rows, 1)
             call terminal_write('Workspace edit (changes format) not fully supported')
             return
+        end if
+
+        ! Set flag if any edits were applied
+        if (changes_applied > 0) then
+            g_lsp_modified_buffer = .true.
         end if
 
     end subroutine apply_workspace_edit
@@ -6290,22 +6419,66 @@ contains
         integer :: start_line, start_char, end_line, end_char
 
         ! Convert URI to filename
-        if (len(uri) >= 7 .and. uri(1:7) == 'file://') then
+        if (len(uri) >= 8 .and. uri(1:8) == 'file:///') then
+            filename = uri(8:)  ! Skip "file://" leaving one /
+        else if (len(uri) >= 7 .and. uri(1:7) == 'file://') then
             filename = uri(8:)
         else
             filename = uri
         end if
 
+        ! Debug logging
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> APPLY_FILE_EDITS_OBJ <<<'
+            write(debug_unit, '(A)') 'URI: ' // trim(uri)
+            write(debug_unit, '(A)') 'Extracted filename: ' // trim(filename)
+            write(debug_unit, '(A,I0)') 'Number of tabs: ', size(editor%tabs)
+            close(debug_unit)
+        end block
+
         ! Find the tab with this file
         tab_idx = 0
         do j = 1, size(editor%tabs)
             if (allocated(editor%tabs(j)%filename)) then
+                ! Debug logging for each tab
+                block
+                    integer :: debug_unit
+                    logical :: exact_match, ends_with_match
+                    open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                    write(debug_unit, '(A,I0,A)') 'Tab ', j, ': ' // trim(editor%tabs(j)%filename)
+                    exact_match = trim(editor%tabs(j)%filename) == trim(filename)
+                    ! Check if filename ends with tab filename (for absolute vs relative path matching)
+                    ends_with_match = .false.
+                    if (len(filename) >= len(editor%tabs(j)%filename)) then
+                        ends_with_match = filename(len(filename)-len(editor%tabs(j)%filename)+1:) == editor%tabs(j)%filename
+                    end if
+                    write(debug_unit, '(A,L1)') '  Exact match: ', exact_match
+                    write(debug_unit, '(A,L1)') '  Ends-with match: ', ends_with_match
+                    close(debug_unit)
+                end block
+
+                ! Try exact match first, then check if the absolute path ends with the relative path
                 if (trim(editor%tabs(j)%filename) == trim(filename)) then
                     tab_idx = j
                     exit
+                else if (len(filename) >= len(editor%tabs(j)%filename)) then
+                    ! Check if filename ends with tab filename (handles absolute vs relative paths)
+                    if (filename(len(filename)-len(editor%tabs(j)%filename)+1:) == editor%tabs(j)%filename) then
+                        tab_idx = j
+                        exit
+                    end if
                 end if
             end if
         end do
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A,I0)') 'Found tab_idx: ', tab_idx
+            close(debug_unit)
+        end block
 
         if (tab_idx == 0) then
             ! File not open - skip for now
@@ -6356,22 +6529,75 @@ contains
 
         integer :: start_pos, end_pos, delete_count
 
+        ! Debug logging
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> APPLY_SINGLE_EDIT <<<'
+            write(debug_unit, '(A,I0,A,I0)') 'Start: line=', start_line, ', char=', start_char
+            write(debug_unit, '(A,I0,A,I0)') 'End:   line=', end_line, ', char=', end_char
+            write(debug_unit, '(A)') 'New text: ' // trim(new_text)
+            close(debug_unit)
+        end block
+
         ! Calculate buffer positions
         start_pos = get_buffer_position(buffer, start_line, start_char)
         end_pos = get_buffer_position(buffer, end_line, end_char)
 
-        if (start_pos <= 0 .or. end_pos <= 0) return
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A,I0)') 'Calculated start_pos: ', start_pos
+            write(debug_unit, '(A,I0)') 'Calculated end_pos: ', end_pos
+            close(debug_unit)
+        end block
+
+        if (start_pos <= 0 .or. end_pos <= 0) then
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') 'EARLY RETURN: start_pos or end_pos <= 0'
+                close(debug_unit)
+            end block
+            return
+        end if
 
         ! Delete the old text
         delete_count = end_pos - start_pos
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A,I0)') 'Delete count: ', delete_count
+            close(debug_unit)
+        end block
+
         if (delete_count > 0) then
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A,I0,A,I0)') 'Calling buffer_delete(pos=', start_pos, ', count=', delete_count, ')'
+                close(debug_unit)
+            end block
             call buffer_delete(buffer, start_pos, delete_count)
         end if
 
         ! Insert the new text
         if (len(new_text) > 0) then
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A,I0,A)') 'Calling buffer_insert(pos=', start_pos, ', text="' // trim(new_text) // '")'
+                close(debug_unit)
+            end block
             call buffer_insert(buffer, start_pos, new_text)
         end if
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') 'apply_single_edit COMPLETED'
+            close(debug_unit)
+        end block
     end subroutine apply_single_edit
 
     ! Execute a command from the command palette
