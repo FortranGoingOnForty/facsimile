@@ -43,7 +43,20 @@ contains
 
     subroutine toggle_diagnostics_panel(panel)
         type(diagnostics_panel_t), intent(inout) :: panel
+        integer :: log_unit
+
+        ! Log BEFORE toggle
+        open(newunit=log_unit, file='/tmp/fac_diag_panel.log', position='append', status='unknown')
+        write(log_unit, '(A,L1)') "[TOGGLE] BEFORE toggle, visible: ", panel%visible
+        close(log_unit)
+
         panel%visible = .not. panel%visible
+
+        ! Log AFTER toggle
+        open(newunit=log_unit, file='/tmp/fac_diag_panel.log', position='append', status='unknown')
+        write(log_unit, '(A,L1)') "[TOGGLE] AFTER toggle, visible: ", panel%visible
+        close(log_unit)
+
         if (panel%visible) then
             panel%selected_index = 1
             panel%scroll_offset = 0
@@ -60,6 +73,13 @@ contains
         type(diagnostics_panel_t), intent(inout) :: panel
         type(diagnostics_store_t), intent(in) :: diagnostics_store
         character(len=*), intent(in) :: file_uri
+        integer :: log_unit
+        logical :: file_opened
+
+        ! Debug: Log to file
+        open(newunit=log_unit, file='/tmp/fac_diag_panel.log', position='append', status='unknown')
+        write(log_unit, '(A,A)') "[PANEL] Requesting diagnostics for URI: ", trim(file_uri)
+        write(log_unit, '(A,I0)') "[PANEL] Store has ", diagnostics_store%file_count, " files"
 
         ! Get all diagnostics for current file
         if (allocated(panel%diagnostics)) deallocate(panel%diagnostics)
@@ -70,6 +90,10 @@ contains
         else
             panel%diagnostic_count = 0
         end if
+
+        ! Debug: Log how many diagnostics found
+        write(log_unit, '(A,I0,A)') "[PANEL] Retrieved ", panel%diagnostic_count, " diagnostics"
+        close(log_unit)
 
         ! Reset selection if out of bounds
         if (panel%selected_index > panel%diagnostic_count) then
@@ -84,8 +108,17 @@ contains
         integer, intent(in) :: screen_rows, screen_cols
         integer :: start_col, row, i, visible_items, item_idx
         character(len=256) :: line_buffer
-        character(len=3) :: severity_marker
+        character(len=5) :: severity_marker
         character(len=10) :: severity_color
+        integer :: log_unit
+
+        ! Debug: Log to file at entry
+        open(newunit=log_unit, file='/tmp/fac_diag_panel.log', position='append', status='unknown')
+        write(log_unit, '(A,L1)') "[RENDER] render_diagnostics_panel called, visible: ", panel%visible
+        close(log_unit)
+
+        ! Initialize line_buffer to prevent garbage characters
+        line_buffer = repeat(' ', len(line_buffer))
 
         if (.not. panel%visible) return
 
@@ -101,21 +134,31 @@ contains
         call terminal_move_cursor(row, start_col)
 
         ! Top border with title
-        line_buffer = '╭─ Diagnostics '
-        do i = len_trim(line_buffer) + 1, panel%width - 1
-            line_buffer(i:i) = '─'
-        end do
-        line_buffer(panel%width:panel%width) = '╮'
         call terminal_write(char(27) // '[48;5;236m')  ! Dark background
-        call terminal_write(trim(line_buffer(1:panel%width)))
-        call terminal_write(char(27) // '[0m')
+        write(line_buffer, '(A,I0,A)') ' Diagnostics (', panel%diagnostic_count, ') '
+        call terminal_write(char(27) // '[1m' // trim(line_buffer) // char(27) // '[0m')
+
+        ! Separator
+        row = row + 1
+        call terminal_move_cursor(row, start_col)
+        call terminal_write(char(27) // '[48;5;236m' // repeat("─", panel%width) // char(27) // '[0m')
 
         ! Content area
         visible_items = min(panel%diagnostic_count, screen_rows - 3)
+        row = row + 1
 
-        do i = 1, screen_rows - 2
-            row = i + 1
+        ! Display diagnostics or "No diagnostics" message
+        if (panel%diagnostic_count == 0) then
             call terminal_move_cursor(row, start_col)
+            call terminal_write(char(27) // '[48;5;235m' // char(27) // '[90m')
+            call terminal_write(' No diagnostics found')
+            call terminal_write(char(27) // '[K')  ! Clear to end of line
+            call terminal_write(char(27) // '[0m')
+            return
+        end if
+
+        do i = 1, screen_rows - 3
+            call terminal_move_cursor(row + i - 1, start_col)
 
             if (i <= visible_items) then
                 item_idx = i + panel%scroll_offset
@@ -124,48 +167,39 @@ contains
                     call get_severity_display(panel%diagnostics(item_idx)%severity, &
                                             severity_marker, severity_color)
 
+                    ! Clear line_buffer to prevent leftover characters
+                    line_buffer = repeat(' ', len(line_buffer))
+
                     ! Format diagnostic line
-                    write(line_buffer, '(A1,A3,A,I0,A,I0,A)') &
-                        '│', severity_marker, ' L', &
+                    write(line_buffer, '(A2,A5,A,I0,A,I0,A)') &
+                        ' ', severity_marker, ' L', &
                         panel%diagnostics(item_idx)%range%start_line + 1, ':', &
                         panel%diagnostics(item_idx)%range%start_col + 1, ' '
 
                     ! Add truncated message
                     call append_truncated_message(line_buffer, &
-                        panel%diagnostics(item_idx)%message, panel%width - 2)
+                        panel%diagnostics(item_idx)%message, panel%width)
 
                     ! Highlight if selected
                     if (item_idx == panel%selected_index) then
-                        call terminal_write(char(27) // '[7m')  ! Inverse video
+                        call terminal_write(char(27) // '[48;5;240m')  ! Highlight background
                     else
-                        call terminal_write(char(27) // '[48;5;236m')  ! Dark background
+                        call terminal_write(char(27) // '[48;5;235m')  ! Normal background
                     end if
 
                     ! Write severity color
                     call terminal_write(severity_color)
 
                     ! Write the line
-                    call terminal_write(trim(line_buffer(1:panel%width-1)))
+                    call terminal_write(line_buffer(1:panel%width))
 
-                    ! Right border
-                    call terminal_write(char(27) // '[0m')  ! Reset
-                    call terminal_write(char(27) // '[48;5;236m')
-                    call terminal_write('│')
                     call terminal_write(char(27) // '[0m')
                 else
                     ! Empty line
                     call render_empty_line(start_col, panel%width)
                 end if
             else if (i == screen_rows - 2) then
-                ! Bottom border
-                line_buffer = '╰'
-                do item_idx = 2, panel%width - 1
-                    line_buffer(item_idx:item_idx) = '─'
-                end do
-                line_buffer(panel%width:panel%width) = '╯'
-                call terminal_write(char(27) // '[48;5;236m')
-                call terminal_write(trim(line_buffer(1:panel%width)))
-                call terminal_write(char(27) // '[0m')
+                ! No need for bottom border
             else
                 ! Empty line
                 call render_empty_line(start_col, panel%width)
@@ -186,22 +220,15 @@ contains
 
     subroutine render_empty_line(start_col, width)
         integer, intent(in) :: start_col, width
-        character(len=256) :: spaces
-        integer :: i
 
-        call terminal_write(char(27) // '[48;5;236m')
-        spaces = '│'
-        do i = 2, width - 1
-            spaces(i:i) = ' '
-        end do
-        spaces(width:width) = '│'
-        call terminal_write(trim(spaces(1:width)))
+        call terminal_write(char(27) // '[48;5;235m')  ! Dark background
+        call terminal_write(repeat(' ', width))
         call terminal_write(char(27) // '[0m')
     end subroutine render_empty_line
 
     subroutine get_severity_display(severity, marker, color)
         integer, intent(in) :: severity
-        character(len=3), intent(out) :: marker
+        character(len=5), intent(out) :: marker
         character(len=10), intent(out) :: color
 
         select case(severity)

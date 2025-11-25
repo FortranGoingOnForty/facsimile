@@ -152,6 +152,66 @@ contains
                 call render_all_panes(editor)
                 ! Render status bar after panes
                 call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
+
+                ! Render diagnostics panel if visible (for panes path)
+                if (allocated(editor%filename)) then
+                    block
+                        character(len=:), allocatable :: file_uri, abs_path, cwd
+                        character(len=1024) :: cwd_buffer
+                        integer :: cwd_len
+
+                        ! Get absolute path for file URI
+                        ! Debug logging
+                        block
+                            integer :: debug_unit
+                            open(newunit=debug_unit, file='/tmp/fac_diag_panel.log', position='append', status='unknown')
+                            write(debug_unit, '(A,A)') "[URI] editor%filename = ", trim(editor%filename)
+                            close(debug_unit)
+                        end block
+
+                        if (editor%filename(1:1) == '/') then
+                            ! Already absolute
+                            file_uri = 'file:///' // trim(editor%filename)
+                        else
+                            ! Relative path - get PWD from environment
+                            call get_environment_variable("PWD", cwd_buffer, cwd_len)
+
+                            ! Debug logging
+                            block
+                                integer :: debug_unit
+                                open(newunit=debug_unit, file='/tmp/fac_diag_panel.log', position='append', status='unknown')
+                                write(debug_unit, '(A,I0)') "[URI] PWD length: ", cwd_len
+                                if (cwd_len > 0) then
+                                    write(debug_unit, '(A,A)') "[URI] PWD = ", cwd_buffer(1:cwd_len)
+                                end if
+                                close(debug_unit)
+                            end block
+
+                            if (cwd_len > 0) then
+                                cwd = cwd_buffer(1:cwd_len)
+                                ! PWD already starts with /, so don't add another
+                                file_uri = 'file://' // trim(cwd) // '/' // trim(editor%filename)
+                            else
+                                file_uri = 'file:///' // trim(editor%filename)
+                            end if
+                        end if
+
+                        ! Debug logging
+                        block
+                            integer :: debug_unit
+                            open(newunit=debug_unit, file='/tmp/fac_diag_panel.log', position='append', status='unknown')
+                            write(debug_unit, '(A,A)') "[URI] Final file_uri = ", trim(file_uri)
+                            close(debug_unit)
+                        end block
+
+                        call render_diagnostics_panel(editor%diagnostics_panel, editor%diagnostics, &
+                                                     file_uri, editor%screen_rows, editor%screen_cols)
+                    end block
+                end if
+
+                ! Render references panel if visible (for panes path)
+                call render_references_panel(editor%references_panel, 3)
+
                 ! Position cursor for panes
                 call render_cursor_for_panes(editor)
                 return  ! Exit after rendering panes
@@ -230,6 +290,21 @@ contains
 
         ! Render status bar
         call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
+
+        ! Debug: Log before diagnostics panel check
+        block
+            integer :: debug_unit
+            logical :: fname_allocated
+            fname_allocated = allocated(editor%filename)
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> render_screen: Before diagnostics panel check <<<'
+            write(debug_unit, '(A,L1)') 'allocated(editor%filename) = ', fname_allocated
+            if (fname_allocated) then
+                write(debug_unit, '(A,A)') 'editor%filename = ', trim(editor%filename)
+            end if
+            write(debug_unit, '(A,L1)') 'panel%visible = ', editor%diagnostics_panel%visible
+            close(debug_unit)
+        end block
 
         ! Render diagnostics panel if visible
         if (allocated(editor%filename)) then
@@ -1053,6 +1128,16 @@ contains
         screen_width = editor%screen_cols
         screen_height = editor%screen_rows - 2  ! Account for tab bar (row 1) and status bar (last row)
 
+        ! Reduce width if diagnostics panel is visible
+        if (editor%diagnostics_panel%visible) then
+            screen_width = screen_width - editor%diagnostics_panel%width
+        end if
+
+        ! Reduce width if references panel is visible
+        if (editor%references_panel%visible) then
+            screen_width = screen_width - editor%references_panel%width
+        end if
+
         ! If only one pane, render full screen
         if (n_panes == 1) then
             ! Set screen coordinates for the single pane
@@ -1454,6 +1539,16 @@ contains
         ! Calculate pane screen coordinates
         screen_width = editor%screen_cols
         screen_height = editor%screen_rows - 2  ! Account for tab bar (row 1) and status bar (last row)
+
+        ! Reduce width if diagnostics panel is visible
+        if (editor%diagnostics_panel%visible) then
+            screen_width = screen_width - editor%diagnostics_panel%width
+        end if
+
+        ! Reduce width if references panel is visible
+        if (editor%references_panel%visible) then
+            screen_width = screen_width - editor%references_panel%width
+        end if
 
         pane_col = 1 + int(pane%x_start * real(screen_width))
         pane_width = int((pane%x_end - pane%x_start) * real(screen_width))

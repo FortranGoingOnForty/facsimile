@@ -94,6 +94,7 @@ contains
 
     ! Parse diagnostics from just the params object
     subroutine parse_diagnostics_from_params(store, params)
+        use terminal_io_module, only: terminal_write
         type(diagnostics_store_t), intent(inout) :: store
         type(json_value_t), intent(in) :: params
         type(json_value_t) :: diagnostics_array, diag_obj, range_obj
@@ -101,10 +102,15 @@ contains
         character(len=:), allocatable :: uri
         integer :: i, n_diagnostics, file_idx
         type(diagnostic_t) :: diag
+        character(len=512) :: debug_msg
 
         ! Get URI
         if (.not. json_has_key(params, "uri")) return
         uri = json_get_string(params, "uri")
+
+        ! Debug: Log URI
+        write(debug_msg, '(A,A)') "[DIAG] Parsing diagnostics for URI: ", trim(uri)
+        call terminal_write(debug_msg)
 
         ! Find or create file entry
         file_idx = find_or_create_file(store, uri)
@@ -119,6 +125,10 @@ contains
         if (json_has_key(params, "diagnostics")) then
             diagnostics_array = json_get_array(params, "diagnostics")
             n_diagnostics = json_array_size(diagnostics_array)
+
+            ! Debug: Log number of diagnostics
+            write(debug_msg, '(A,I0,A)') "[DIAG] Found ", n_diagnostics, " diagnostics"
+            call terminal_write(debug_msg)
 
             if (n_diagnostics > 0) then
                 allocate(store%files(file_idx)%items(n_diagnostics))

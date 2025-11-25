@@ -187,10 +187,22 @@ contains
                 end if
             case('1')
                 ! Could be function key (F1-F9) or modified arrow/home/end
+                block
+                    integer :: debug_unit
+                    open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                    write(debug_unit, '(A)') '>>> ESC[1 SEQUENCE DETECTED <<<'
+                    close(debug_unit)
+                end block
                 ! Check next character
                 char_code = terminal_read_char()
                 if (char_code >= 0) then
                     ch3 = achar(char_code)
+                    block
+                        integer :: debug_unit
+                        open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                        write(debug_unit, '(A)') 'ch3 = ' // ch3
+                        close(debug_unit)
+                    end block
                     if (ch3 == '~') then
                         ! F1: ESC [ 1 1 ~ (alternate format)
                         key_str = 'f1'

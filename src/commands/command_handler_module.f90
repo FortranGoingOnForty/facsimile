@@ -133,6 +133,14 @@ contains
             close(debug_unit)
         end block
 
+        ! Debug: Log ALL key strings
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> KEY PRESSED: "' // trim(key_str) // '"'
+            close(debug_unit)
+        end block
+
         ! Ignore empty key strings (from terminal position reports, etc)
         if (len_trim(key_str) == 0 .and. key_str(1:1) /= ' ') then
             return
@@ -1738,15 +1746,22 @@ contains
                 write(debug_unit, '(A)') 'Calling toggle_diagnostics_panel...'
                 close(debug_unit)
             end block
-            call toggle_diagnostics_panel(editor)
+            call toggle_panel(editor%diagnostics_panel)
             block
                 integer :: debug_unit
                 open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
                 write(debug_unit, '(A)') 'toggle_diagnostics_panel returned'
+                write(debug_unit, '(A)') '>>> ABOUT TO CALL render_screen <<<'
                 close(debug_unit)
             end block
             ! Re-render screen to show/hide the panel
             call render_screen(buffer, editor)
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') '>>> render_screen COMPLETED <<<'
+                close(debug_unit)
+            end block
 
         case('alt-c')
             ! Toggle case sensitivity for match mode (ctrl-d)
@@ -5281,7 +5296,20 @@ contains
     ! Toggle diagnostics panel
     subroutine toggle_diagnostics_panel(editor)
         type(editor_state_t), intent(inout) :: editor
+        integer :: debug_unit
+
+        ! Log that wrapper was called
+        open(newunit=debug_unit, file='/tmp/fac_diag_panel.log', position='append', status='unknown')
+        write(debug_unit, '(A)') "[WRAPPER] toggle_diagnostics_panel wrapper called"
+        write(debug_unit, '(A,L1)') "[WRAPPER] Panel visible before call: ", editor%diagnostics_panel%visible
+        close(debug_unit)
+
         call toggle_panel(editor%diagnostics_panel)
+
+        ! Log after calling toggle_panel
+        open(newunit=debug_unit, file='/tmp/fac_diag_panel.log', position='append', status='unknown')
+        write(debug_unit, '(A,L1)') "[WRAPPER] Panel visible after call: ", editor%diagnostics_panel%visible
+        close(debug_unit)
     end subroutine toggle_diagnostics_panel
 
     ! Handle git commit with message prompt
