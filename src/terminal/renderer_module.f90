@@ -156,19 +156,11 @@ contains
                 ! Render diagnostics panel if visible (for panes path)
                 if (allocated(editor%filename)) then
                     block
-                        character(len=:), allocatable :: file_uri, abs_path, cwd
+                        character(len=:), allocatable :: file_uri, cwd
                         character(len=1024) :: cwd_buffer
                         integer :: cwd_len
 
                         ! Get absolute path for file URI
-                        ! Debug logging
-                        block
-                            integer :: debug_unit
-                            open(newunit=debug_unit, file='/tmp/fac_diag_panel.log', position='append', status='unknown')
-                            write(debug_unit, '(A,A)') "[URI] editor%filename = ", trim(editor%filename)
-                            close(debug_unit)
-                        end block
-
                         if (editor%filename(1:1) == '/') then
                             ! Already absolute
                             file_uri = 'file:///' // trim(editor%filename)
@@ -176,33 +168,13 @@ contains
                             ! Relative path - get PWD from environment
                             call get_environment_variable("PWD", cwd_buffer, cwd_len)
 
-                            ! Debug logging
-                            block
-                                integer :: debug_unit
-                                open(newunit=debug_unit, file='/tmp/fac_diag_panel.log', position='append', status='unknown')
-                                write(debug_unit, '(A,I0)') "[URI] PWD length: ", cwd_len
-                                if (cwd_len > 0) then
-                                    write(debug_unit, '(A,A)') "[URI] PWD = ", cwd_buffer(1:cwd_len)
-                                end if
-                                close(debug_unit)
-                            end block
-
                             if (cwd_len > 0) then
                                 cwd = cwd_buffer(1:cwd_len)
-                                ! PWD already starts with /, so don't add another
                                 file_uri = 'file://' // trim(cwd) // '/' // trim(editor%filename)
                             else
                                 file_uri = 'file:///' // trim(editor%filename)
                             end if
                         end if
-
-                        ! Debug logging
-                        block
-                            integer :: debug_unit
-                            open(newunit=debug_unit, file='/tmp/fac_diag_panel.log', position='append', status='unknown')
-                            write(debug_unit, '(A,A)') "[URI] Final file_uri = ", trim(file_uri)
-                            close(debug_unit)
-                        end block
 
                         call render_diagnostics_panel(editor%diagnostics_panel, editor%diagnostics, &
                                                      file_uri, editor%screen_rows, editor%screen_cols)
@@ -228,44 +200,17 @@ contains
                 ! Render line number if enabled
                 if (show_line_numbers) then
                     if (buffer_line <= line_count) then
-                        ! Check for diagnostics on this line
-                        block
-                            type(diagnostic_t), allocatable :: line_diagnostics(:)
-                            character(len=3) :: diag_marker  ! UTF-8 characters can be up to 3 bytes
-                            character(len=:), allocatable :: diag_color, file_uri
+                        ! Format line number, right-aligned
+                        write(line_num_str, '(i5)') buffer_line
 
-                            ! Get file URI for diagnostics lookup
-                            if (allocated(editor%filename)) then
-                                file_uri = 'file://' // editor%filename
-                            else
-                                file_uri = ''
-                            end if
-
-                            ! Get diagnostics for this line
-                            line_diagnostics = get_diagnostics_for_line(editor%diagnostics, file_uri, buffer_line)
-                            call get_diagnostic_marker(line_diagnostics, diag_marker, diag_color)
-
-                            ! Format line number, right-aligned
-                            write(line_num_str, '(i5)') buffer_line
-
-                            ! Display diagnostic marker or line number
-                            if (diag_marker /= ' ') then
-                                ! Show diagnostic marker
-                                call terminal_write(diag_color // diag_marker // ' ' // &
-                                                  adjustl(line_num_str(1:LINE_NUMBER_WIDTH-2)) // &
-                                                  char(27) // '[0m ')
-                            else if (buffer_line == editor%cursors(editor%active_cursor)%line) then
-                                ! Highlight current line number
-                                call terminal_write(char(27) // '[1;33m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
-                                                  // char(27) // '[0m ')
-                            else
-                                call terminal_write(char(27) // '[90m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
-                                                  // char(27) // '[0m ')
-                            end if
-
-                            if (allocated(line_diagnostics)) deallocate(line_diagnostics)
-                            if (allocated(diag_color)) deallocate(diag_color)
-                        end block
+                        if (buffer_line == editor%cursors(editor%active_cursor)%line) then
+                            ! Highlight current line number
+                            call terminal_write(char(27) // '[1;33m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
+                                              // char(27) // '[0m ')
+                        else
+                            call terminal_write(char(27) // '[90m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
+                                              // char(27) // '[0m ')
+                        end if
                     else
                         ! Empty line number area for lines beyond file
                         call terminal_write(repeat(' ', LINE_NUMBER_WIDTH + 1))
@@ -290,21 +235,6 @@ contains
 
         ! Render status bar
         call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
-
-        ! Debug: Log before diagnostics panel check
-        block
-            integer :: debug_unit
-            logical :: fname_allocated
-            fname_allocated = allocated(editor%filename)
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> render_screen: Before diagnostics panel check <<<'
-            write(debug_unit, '(A,L1)') 'allocated(editor%filename) = ', fname_allocated
-            if (fname_allocated) then
-                write(debug_unit, '(A,A)') 'editor%filename = ', trim(editor%filename)
-            end if
-            write(debug_unit, '(A,L1)') 'panel%visible = ', editor%diagnostics_panel%visible
-            close(debug_unit)
-        end block
 
         ! Render diagnostics panel if visible
         if (allocated(editor%filename)) then

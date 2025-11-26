@@ -168,6 +168,13 @@ contains
             return
         end if
 
+        ! Route keys to diagnostics panel when visible (j/k/arrows for navigation)
+        if (is_diagnostics_panel_visible(editor%diagnostics_panel)) then
+            if (diagnostics_panel_handle_key(editor%diagnostics_panel, trim(key_str))) then
+                return
+            end if
+        end if
+
         select case(trim(key_str))
         ! File operations
         case('ctrl-q')
@@ -5296,20 +5303,7 @@ contains
     ! Toggle diagnostics panel
     subroutine toggle_diagnostics_panel(editor)
         type(editor_state_t), intent(inout) :: editor
-        integer :: debug_unit
-
-        ! Log that wrapper was called
-        open(newunit=debug_unit, file='/tmp/fac_diag_panel.log', position='append', status='unknown')
-        write(debug_unit, '(A)') "[WRAPPER] toggle_diagnostics_panel wrapper called"
-        write(debug_unit, '(A,L1)') "[WRAPPER] Panel visible before call: ", editor%diagnostics_panel%visible
-        close(debug_unit)
-
         call toggle_panel(editor%diagnostics_panel)
-
-        ! Log after calling toggle_panel
-        open(newunit=debug_unit, file='/tmp/fac_diag_panel.log', position='append', status='unknown')
-        write(debug_unit, '(A,L1)') "[WRAPPER] Panel visible after call: ", editor%diagnostics_panel%visible
-        close(debug_unit)
     end subroutine toggle_diagnostics_panel
 
     ! Handle git commit with message prompt
