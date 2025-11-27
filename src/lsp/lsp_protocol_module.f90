@@ -170,7 +170,13 @@ contains
         ! Workspace capabilities
         workspace = json_create_object()
         call json_add_bool(workspace, "applyEdit", .true.)
-        call json_add_bool(workspace, "workspaceEdit", .true.)
+        ! workspaceEdit must be an object, not a boolean
+        block
+            type(json_value_t) :: workspace_edit
+            workspace_edit = json_create_object()
+            call json_add_bool(workspace_edit, "documentChanges", .true.)
+            call json_add_object(workspace, "workspaceEdit", workspace_edit)
+        end block
         call json_add_object(capabilities, "workspace", workspace)
 
         call json_add_object(params, "capabilities", capabilities)
@@ -415,7 +421,7 @@ contains
         call json_add_object(range_obj, "end", end_pos)
         call json_add_object(params, "range", range_obj)
 
-        ! Context with diagnostics
+        ! Context with diagnostics and code action kinds
         context = json_create_object()
         if (present(diagnostics)) then
             call json_add_array(context, "diagnostics", diagnostics)
@@ -423,6 +429,9 @@ contains
             empty_array = json_create_array()
             call json_add_array(context, "diagnostics", empty_array)
         end if
+
+        ! Note: We don't filter by 'only' to get all available actions from Ruff
+
         call json_add_object(params, "context", context)
 
         msg%params = params

@@ -26,7 +26,10 @@ module command_handler_module
     use lsp_server_manager_module, only: request_completion, request_hover, request_definition, &
                                          request_references, request_code_actions, request_document_symbols, &
                                          request_signature_help, request_formatting, request_rename, &
-                                         process_server_messages
+                                         process_server_messages, filename_to_uri, &
+                                         get_server_with_capability, &
+                                         CAP_COMPLETION, CAP_DEFINITION, CAP_REFERENCES, CAP_RENAME, &
+                                         CAP_CODE_ACTIONS, CAP_FORMATTING, CAP_HOVER, CAP_DOCUMENT_SYMBOLS
     use rename_prompt_module, only: show_rename_prompt
     use completion_popup_module, only: show_completion_popup, hide_completion_popup, &
                                         handle_completion_response, navigate_completion_up, &
@@ -44,10 +47,10 @@ module command_handler_module
                                       hide_references_panel, &
                                       show_references_panel, &
                                       set_references, reference_location_t
-    use code_actions_menu_module, only: code_actions_menu_t, init_code_actions_menu, &
-                                        cleanup_code_actions_menu, show_code_actions_menu, &
-                                        hide_code_actions_menu, is_code_actions_menu_visible, &
-                                        code_actions_menu_handle_key, set_code_actions, &
+    use code_actions_panel_module, only: code_actions_panel_t, init_code_actions_panel, &
+                                        cleanup_code_actions_panel, show_code_actions_panel, &
+                                        hide_code_actions_panel, is_code_actions_panel_visible, &
+                                        code_actions_panel_handle_key, set_code_actions, &
                                         clear_code_actions, get_selected_action
     use symbols_panel_module, only: symbols_panel_t, document_symbol_t, &
                                     toggle_symbols_panel, is_symbols_panel_visible, &
@@ -59,6 +62,9 @@ module command_handler_module
                                         handle_signature_response
     use jump_stack_module, only: push_jump_location, pop_jump_location, &
                                  is_jump_stack_empty
+    use diagnostics_module, only: get_diagnostics_for_line, get_diagnostics_for_line_by_server, &
+                                  diagnostics_to_json, diagnostic_t
+    use json_module, only: json_value_t
     implicit none
     private
 
@@ -66,9 +72,12 @@ module command_handler_module
     public :: save_initial_state_for_undo
     public :: search_pattern, match_case_sensitive  ! Exposed for status bar hint
     public :: g_lsp_modified_buffer  ! Flag for immediate render after LSP edits
+    public :: g_lsp_ui_changed       ! Flag for immediate render after LSP UI changes
 
     ! Flag to track if LSP modified the buffer (for immediate rendering)
     logical :: g_lsp_modified_buffer = .false.
+    ! Flag to track if LSP changed UI panels (for immediate rendering)
+    logical :: g_lsp_ui_changed = .false.
 
     type(yank_stack_t) :: yank_stack
     type(undo_stack_t) :: undo_stack
@@ -82,6 +91,26 @@ module command_handler_module
 
 
 contains
+
+    ! Helper to get a server index for a specific capability
+    function get_lsp_server_for_cap(editor, capability) result(server_idx)
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(in) :: capability
+        integer :: server_idx
+        integer :: tab_idx
+
+        server_idx = 0
+        tab_idx = editor%active_tab_index
+
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (editor%tabs(tab_idx)%num_lsp_servers < 1) return
+        if (.not. allocated(editor%tabs(tab_idx)%lsp_server_indices)) return
+
+        server_idx = get_server_with_capability(editor%lsp_manager, &
+            editor%tabs(tab_idx)%lsp_server_indices, &
+            editor%tabs(tab_idx)%num_lsp_servers, &
+            capability)
+    end function get_lsp_server_for_cap
 
     subroutine init_command_handler()
         call init_yank_stack(yank_stack)
@@ -125,22 +154,6 @@ contains
         line_count = buffer_get_line_count(buffer)
         is_edit_action = .false.
 
-        ! DEBUG: Log ALL keys to file only (not screen to avoid overwriting status messages)
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '[KEY] "' // trim(key_str) // '"'
-            close(debug_unit)
-        end block
-
-        ! Debug: Log ALL key strings
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> KEY PRESSED: "' // trim(key_str) // '"'
-            close(debug_unit)
-        end block
-
         ! Ignore empty key strings (from terminal position reports, etc)
         if (len_trim(key_str) == 0 .and. key_str(1:1) /= ' ') then
             return
@@ -174,6 +187,14 @@ contains
                 return
             end if
         end if
+
+        ! Debug: log all incoming keys
+        block
+            integer :: dbg
+            open(newunit=dbg, file='/tmp/fac_keys_all.log', position='append', action='write')
+            write(dbg, '(A,A,A)') 'key_str = [', trim(key_str), ']'
+            close(dbg)
+        end block
 
         select case(trim(key_str))
         ! File operations
@@ -219,8 +240,8 @@ contains
             end if
 
             ! If code actions menu is visible, hide it
-            if (is_code_actions_menu_visible(editor%code_actions_menu)) then
-                if (code_actions_menu_handle_key(editor%code_actions_menu, trim(key_str))) then
+            if (is_code_actions_panel_visible(editor%code_actions_panel)) then
+                if (code_actions_panel_handle_key(editor%code_actions_panel, trim(key_str))) then
                     return
                 end if
             end if
@@ -351,8 +372,8 @@ contains
             end if
 
             ! If code actions menu is visible, navigate it
-            if (is_code_actions_menu_visible(editor%code_actions_menu)) then
-                if (code_actions_menu_handle_key(editor%code_actions_menu, trim(key_str))) then
+            if (is_code_actions_panel_visible(editor%code_actions_panel)) then
+                if (code_actions_panel_handle_key(editor%code_actions_panel, trim(key_str))) then
                     return
                 end if
             end if
@@ -399,8 +420,8 @@ contains
             end if
 
             ! If code actions menu is visible, navigate it
-            if (is_code_actions_menu_visible(editor%code_actions_menu)) then
-                if (code_actions_menu_handle_key(editor%code_actions_menu, trim(key_str))) then
+            if (is_code_actions_panel_visible(editor%code_actions_panel)) then
+                if (code_actions_panel_handle_key(editor%code_actions_panel, trim(key_str))) then
                     return
                 end if
             end if
@@ -723,18 +744,59 @@ contains
 
         case('enter')
             ! If code actions menu is visible, apply selected action
-            if (is_code_actions_menu_visible(editor%code_actions_menu)) then
+            if (is_code_actions_panel_visible(editor%code_actions_panel)) then
                 block
-                    character(len=:), allocatable :: action_json
+                    use json_module, only: json_parse, json_value_t, json_get_object, &
+                                           json_has_key, json_stringify
+                    character(len=:), allocatable :: action_json, edit_json
+                    type(json_value_t) :: action_obj, edit_obj
+                    integer :: changes_applied
 
-                    if (get_selected_action(editor%code_actions_menu, action_json)) then
-                        ! TODO: Apply the selected code action
-                        ! This will involve sending workspace/executeCommand or workspace/applyEdit
-                        call terminal_move_cursor(editor%screen_rows, 1)
-                        call terminal_write('Applying code action...                ')
+                    if (get_selected_action(editor%code_actions_panel, action_json)) then
+                        ! Debug: log the action JSON
+                        block
+                            integer :: dbg
+                            open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
+                            write(dbg, '(A)') '=== APPLYING CODE ACTION ==='
+                            write(dbg, '(A)') 'action_json:'
+                            write(dbg, '(A)') action_json(1:min(1000, len(action_json)))
+                            close(dbg)
+                        end block
+
+                        ! Parse the action JSON to extract the edit
+                        action_obj = json_parse(action_json)
+
+                        if (json_has_key(action_obj, 'edit')) then
+                            ! Get the edit object and convert to string for apply_workspace_edit
+                            edit_obj = json_get_object(action_obj, 'edit')
+                            edit_json = json_stringify(edit_obj)
+
+                            ! Debug: log the edit JSON
+                            block
+                                integer :: dbg
+                                open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
+                                write(dbg, '(A)') 'edit_json:'
+                                write(dbg, '(A)') edit_json(1:min(1000, len(edit_json)))
+                                close(dbg)
+                            end block
+
+                            ! Apply the workspace edit
+                            call apply_workspace_edit(editor, edit_json, changes_applied)
+
+                            if (changes_applied > 0) then
+                                call terminal_move_cursor(editor%screen_rows, 1)
+                                call terminal_write('Code action applied                        ')
+                            else
+                                call terminal_move_cursor(editor%screen_rows, 1)
+                                call terminal_write('No changes from code action                ')
+                            end if
+                        else
+                            call terminal_move_cursor(editor%screen_rows, 1)
+                            call terminal_write('Code action has no edit                    ')
+                        end if
 
                         ! Hide menu after selection
-                        call hide_code_actions_menu(editor%code_actions_menu)
+                        call hide_code_actions_panel(editor%code_actions_panel)
                     end if
                 end block
                 return
@@ -1145,8 +1207,10 @@ contains
         ! LSP features
         case('ctrl-space')
             ! Trigger code completion
-            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+            block
+                integer :: completion_server
+                completion_server = get_lsp_server_for_cap(editor, CAP_COMPLETION)
+                if (completion_server > 0) then
                     ! Request completion at current cursor position
                     ! LSP uses 0-based positions
                     block
@@ -1155,7 +1219,7 @@ contains
                         lsp_char = editor%cursors(editor%active_cursor)%column - 1
 
                         request_id = request_completion(editor%lsp_manager, &
-                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            completion_server, &
                             editor%tabs(editor%active_tab_index)%filename, &
                             lsp_line, lsp_char)
 
@@ -1167,12 +1231,14 @@ contains
                         end if
                     end block
                 end if
-            end if
+            end block
 
         case('ctrl-h')
             ! Trigger hover information
-            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+            block
+                integer :: hover_server
+                hover_server = get_lsp_server_for_cap(editor, CAP_HOVER)
+                if (hover_server > 0) then
                     ! Request hover at current cursor position
                     block
                         integer :: request_id, lsp_line, lsp_char
@@ -1180,7 +1246,7 @@ contains
                         lsp_char = editor%cursors(editor%active_cursor)%column - 1
 
                         request_id = request_hover(editor%lsp_manager, &
-                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            hover_server, &
                             editor%tabs(editor%active_tab_index)%filename, &
                             lsp_line, lsp_char)
 
@@ -1192,54 +1258,102 @@ contains
                         end if
                     end block
                 end if
-            end if
+            end block
 
-        case('ctrl-.')
-            ! Trigger code actions
-            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
-                    ! Request code actions at current cursor position
-                    block
-                        integer :: request_id, lsp_line, lsp_char
-                        lsp_line = editor%cursors(editor%active_cursor)%line - 1
-                        lsp_char = editor%cursors(editor%active_cursor)%column - 1
+        case('f10', 'alt-.')
+            ! Trigger code actions (F10 or Alt+.) - toggle behavior
+            block
+                integer :: dbg
+                open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
+                write(dbg, '(A)') '=== F10/ALT-. KEY DETECTED ==='
+                write(dbg, '(A,L1)') 'panel visible = ', is_code_actions_panel_visible(editor%code_actions_panel)
+                close(dbg)
+            end block
+            ! If panel is already visible, close it
+            if (is_code_actions_panel_visible(editor%code_actions_panel)) then
+                call hide_code_actions_panel(editor%code_actions_panel)
+            else
+                block
+                    integer :: code_actions_server
+                    code_actions_server = get_lsp_server_for_cap(editor, CAP_CODE_ACTIONS)
+                    if (code_actions_server > 0) then
+                        ! Request code actions for the current line
+                        block
+                            integer :: request_id, lsp_line, dbg
+                            character(len=:), allocatable :: file_uri
+                            type(diagnostic_t), allocatable :: line_diags(:)
+                            type(json_value_t) :: diags_json
 
-                        ! Save editor state for callback
-                        saved_editor_for_callback => editor
+                            lsp_line = editor%cursors(editor%active_cursor)%line - 1
 
-                        request_id = request_code_actions(editor%lsp_manager, &
-                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            ! Save editor state for callback
+                            saved_editor_for_callback => editor
+
+                            ! Get diagnostics for this line FROM THIS SERVER to include in request
+                            ! This is critical for multi-LSP: Ruff should only see Ruff's diagnostics
+                            file_uri = filename_to_uri(editor%tabs(editor%active_tab_index)%filename)
+
+                            open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
+                            write(dbg, '(A,A)') 'file_uri = ', trim(file_uri)
+                            write(dbg, '(A,I0)') 'cursor line (1-based) = ', editor%cursors(editor%active_cursor)%line
+                            write(dbg, '(A,I0)') 'lsp_line (0-based) = ', lsp_line
+                            write(dbg, '(A,I0)') 'code_actions_server = ', code_actions_server
+                            close(dbg)
+
+                            line_diags = get_diagnostics_for_line_by_server(editor%diagnostics, file_uri, &
+                                editor%cursors(editor%active_cursor)%line, code_actions_server)
+
+                            open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
+                            write(dbg, '(A,I0)') 'Found diagnostics on line: ', size(line_diags)
+                            close(dbg)
+
+                            ! Convert diagnostics to JSON for request
+                            diags_json = diagnostics_to_json(line_diags)
+
+                            ! Debug: log the diagnostics JSON
+                            block
+                                use json_module, only: json_stringify
+                                character(len=:), allocatable :: diags_str
+                                diags_str = json_stringify(diags_json)
+                                open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
+                                write(dbg, '(A)') 'Diagnostics JSON being sent:'
+                                write(dbg, '(A)') diags_str
+                                close(dbg)
+                            end block
+
+                            ! Request code actions for entire line with diagnostics context
+                            request_id = request_code_actions(editor%lsp_manager, &
+                                code_actions_server, &
                             editor%tabs(editor%active_tab_index)%filename, &
-                            lsp_line, lsp_char, &
-                            lsp_line, lsp_char, &
-                            handle_code_actions_response_wrapper)
+                            lsp_line, 0, &
+                            lsp_line, 999, &
+                            handle_code_actions_response_wrapper, &
+                            diags_json)
 
-                        if (request_id > 0) then
-                            ! Show menu placeholder (will populate when response arrives)
-                            call show_code_actions_menu(editor%code_actions_menu, &
-                                editor%cursors(editor%active_cursor)%line - editor%viewport_line + 2, &
-                                editor%cursors(editor%active_cursor)%column - editor%viewport_column + 1)
-                        end if
-                    end block
-                end if
+                            open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
+                            write(dbg, '(A,I0)') 'request_id = ', request_id
+                            close(dbg)
+                            ! Panel will be shown when response arrives in handle_code_actions_response_impl
+                        end block
+                    end if
+                end block
             end if
 
         case('f12', 'ctrl-\\', 'alt-g')
             ! Go to definition (F12, Ctrl+\, or Alt+G)
             block
-                integer :: debug_unit
+                integer :: debug_unit, def_server
                 open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
                 write(debug_unit, '(A)') '>>> INSIDE F12/ALT-G HANDLER <<<'
                 write(debug_unit, '(A,I0)') 'active_tab_index = ', editor%active_tab_index
                 write(debug_unit, '(A,I0)') 'size(tabs) = ', size(editor%tabs)
-                if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-                    write(debug_unit, '(A,I0)') 'lsp_server_index = ', editor%tabs(editor%active_tab_index)%lsp_server_index
-                end if
                 close(debug_unit)
             end block
             call terminal_move_cursor(editor%screen_rows, 1)
-            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+            block
+                integer :: def_server
+                def_server = get_lsp_server_for_cap(editor, CAP_DEFINITION)
+                if (def_server > 0) then
                     ! Save current location to jump stack
                     if (allocated(editor%filename)) then
                         call push_jump_location(editor%jump_stack, &
@@ -1259,7 +1373,7 @@ contains
                         saved_buffer_for_callback => buffer
 
                         request_id = request_definition(editor%lsp_manager, &
-                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            def_server, &
                             editor%tabs(editor%active_tab_index)%filename, &
                             lsp_line, lsp_char, handle_definition_response_wrapper)
 
@@ -1278,11 +1392,9 @@ contains
                         end if
                     end block
                 else
-                    call terminal_write('[F12] No LSP server for this file           ')
+                    call terminal_write('[F12] No LSP server with definition support ')
                 end if
-            else
-                call terminal_write('[F12] No active tab                         ')
-            end if
+            end block
 
         case('shift-f12', 'alt-r')
             ! Find all references (Shift+F12 or Alt+R)
@@ -1292,8 +1404,10 @@ contains
                 write(debug_unit, '(A)') '>>> INSIDE SHIFT-F12/ALT-R HANDLER <<<'
                 close(debug_unit)
             end block
-            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+            block
+                integer :: refs_server
+                refs_server = get_lsp_server_for_cap(editor, CAP_REFERENCES)
+                if (refs_server > 0) then
                     ! Request references at current cursor position
                     block
                         use references_panel_module, only: clear_references
@@ -1308,7 +1422,7 @@ contains
                         saved_editor_for_callback => editor
 
                         request_id = request_references(editor%lsp_manager, &
-                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            refs_server, &
                             editor%tabs(editor%active_tab_index)%filename, &
                             lsp_line, lsp_char, handle_references_response_wrapper)
 
@@ -1391,7 +1505,7 @@ contains
                         end if
                     end block
                 end if
-            end if
+            end block
 
         case('f2')
             ! Rename symbol
@@ -1400,13 +1514,12 @@ contains
                 open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
                 write(debug_unit, '(A)') '>>> F2 KEY DETECTED <<<'
                 write(debug_unit, '(A,I0)') 'active_tab_index: ', editor%active_tab_index
-                if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-                    write(debug_unit, '(A,I0)') 'lsp_server_index: ', editor%tabs(editor%active_tab_index)%lsp_server_index
-                end if
                 close(debug_unit)
             end block
-            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+            block
+                integer :: rename_server
+                rename_server = get_lsp_server_for_cap(editor, CAP_RENAME)
+                if (rename_server > 0) then
                     ! Get word under cursor as old name
                     block
                         character(len=:), allocatable :: line, old_name, new_name
@@ -1443,7 +1556,7 @@ contains
                                 saved_editor_for_callback => editor
 
                                 request_id = request_rename(editor%lsp_manager, &
-                                    editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                                    rename_server, &
                                     editor%tabs(editor%active_tab_index)%filename, &
                                     lsp_line, lsp_char, new_name, handle_rename_response_wrapper)
 
@@ -1526,13 +1639,18 @@ contains
 
                         if (allocated(line)) deallocate(line)
                     end block
+                else
+                    call terminal_move_cursor(editor%screen_rows, 1)
+                    call terminal_write('[F2] No LSP server with rename support      ')
                 end if
-            end if
+            end block
 
         case('shift-alt-f')
             ! Format document
-            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+            block
+                integer :: format_server
+                format_server = get_lsp_server_for_cap(editor, CAP_FORMATTING)
+                if (format_server > 0) then
                     block
                         integer :: request_id
 
@@ -1541,7 +1659,7 @@ contains
 
                         ! Request formatting with 4 spaces (configurable later)
                         request_id = request_formatting(editor%lsp_manager, &
-                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            format_server, &
                             editor%tabs(editor%active_tab_index)%filename, &
                             4, .true., handle_formatting_response_wrapper)
 
@@ -1551,7 +1669,7 @@ contains
                         end if
                     end block
                 end if
-            end if
+            end block
 
         case('f4', 'alt-o')
             ! Document symbols outline (F4 or Alt+O)
@@ -1561,8 +1679,10 @@ contains
                 write(debug_unit, '(A)') '>>> INSIDE F4/ALT-O HANDLER <<<'
                 close(debug_unit)
             end block
-            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+            block
+                integer :: symbols_server
+                symbols_server = get_lsp_server_for_cap(editor, CAP_DOCUMENT_SYMBOLS)
+                if (symbols_server > 0) then
                     ! Request document symbols
                     block
                         integer :: request_id
@@ -1571,7 +1691,7 @@ contains
                         saved_editor_for_callback => editor
 
                         request_id = request_document_symbols(editor%lsp_manager, &
-                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            symbols_server, &
                             editor%tabs(editor%active_tab_index)%filename, &
                             handle_symbols_response_wrapper)
 
@@ -1584,7 +1704,7 @@ contains
                         end if
                     end block
                 end if
-            end if
+            end block
 
         case('ctrl-p')
             ! Command palette (Ctrl+P - VSCode standard)
@@ -1616,8 +1736,9 @@ contains
                                                                get_selected_symbol, &
                                                                workspace_symbol_t
                     use input_handler_module, only: get_key_input
-                    use lsp_server_manager_module, only: request_workspace_symbols
-                    integer :: request_id, status
+                    use lsp_server_manager_module, only: request_workspace_symbols, &
+                        CAP_WORKSPACE_SYMBOLS_USE => CAP_WORKSPACE_SYMBOLS
+                    integer :: request_id, status, ws_server
                     character(len=32) :: key_input
                     logical :: handled
                     type(workspace_symbol_t) :: selected_symbol
@@ -1625,11 +1746,13 @@ contains
                     ! Show panel
                     call show_workspace_symbols_panel(editor%workspace_symbols_panel)
 
+                    ! Get server with workspace symbols capability
+                    ws_server = get_lsp_server_for_cap(editor, CAP_WORKSPACE_SYMBOLS_USE)
+
                     ! Send initial empty query to get all symbols
-                    if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                    if (ws_server > 0) then
                         request_id = request_workspace_symbols(editor%lsp_manager, &
-                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
-                            '', handle_workspace_symbols_response_wrapper)
+                            ws_server, '', handle_workspace_symbols_response_wrapper)
                     end if
 
                     call render_workspace_symbols_panel(editor%workspace_symbols_panel, editor%screen_rows)
@@ -1658,9 +1781,9 @@ contains
                                 editor%workspace_symbols_panel%search_query(editor%workspace_symbols_panel%search_pos:editor%workspace_symbols_panel%search_pos) = ' '
                                 editor%workspace_symbols_panel%search_pos = editor%workspace_symbols_panel%search_pos - 1
                                 ! Send new query to LSP
-                                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                                if (ws_server > 0) then
                                     request_id = request_workspace_symbols(editor%lsp_manager, &
-                                        editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                                        ws_server, &
                                         trim(editor%workspace_symbols_panel%search_query(1:editor%workspace_symbols_panel%search_pos)), &
                                         handle_workspace_symbols_response_wrapper)
                                 end if
@@ -1676,9 +1799,9 @@ contains
                                         editor%workspace_symbols_panel%search_pos = editor%workspace_symbols_panel%search_pos + 1
                                         editor%workspace_symbols_panel%search_query(editor%workspace_symbols_panel%search_pos:editor%workspace_symbols_panel%search_pos) = key_input(1:1)
                                         ! Send new query to LSP
-                                        if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                                        if (ws_server > 0) then
                                             request_id = request_workspace_symbols(editor%lsp_manager, &
-                                                editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                                                ws_server, &
                                                 trim(editor%workspace_symbols_panel%search_query(1:editor%workspace_symbols_panel%search_pos)), &
                                                 handle_workspace_symbols_response_wrapper)
                                         end if
@@ -1870,8 +1993,10 @@ contains
 
                 ! Auto-trigger signature help on '(' or ','
                 if (key_str(1:1) == '(' .or. key_str(1:1) == ',') then
-                    if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-                        if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                    block
+                        integer :: sig_server
+                        sig_server = get_lsp_server_for_cap(editor, CAP_COMPLETION)  ! Signature help typically comes from completion provider
+                        if (sig_server > 0) then
                             block
                                 integer :: request_id, lsp_line, lsp_char
                                 lsp_line = editor%cursors(editor%active_cursor)%line - 1
@@ -1881,7 +2006,7 @@ contains
                                 saved_editor_for_callback => editor
 
                                 request_id = request_signature_help(editor%lsp_manager, &
-                                    editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                                    sig_server, &
                                     editor%tabs(editor%active_tab_index)%filename, &
                                     lsp_line, lsp_char, handle_signature_response_wrapper)
 
@@ -1893,7 +2018,7 @@ contains
                                 end if
                             end block
                         end if
-                    end if
+                    end block
                 end if
 
                 ! Hide signature help on ')'
@@ -3292,14 +3417,19 @@ contains
         if (ios == 0) then
             buffer%modified = .false.
 
-            ! Send LSP didSave notification if LSP is active
+            ! Send LSP didSave notification to ALL active servers
             if (allocated(editor%tabs) .and. editor%active_tab_index > 0) then
                 tab_idx = editor%active_tab_index
                 if (tab_idx <= size(editor%tabs)) then
-                    if (editor%tabs(tab_idx)%lsp_server_index > 0) then
-                        call notify_file_saved(editor%lsp_manager, &
-                            editor%tabs(tab_idx)%lsp_server_index, &
-                            trim(editor%filename), buffer_to_string(buffer))
+                    if (editor%tabs(tab_idx)%num_lsp_servers > 0) then
+                        block
+                            integer :: srv_i
+                            do srv_i = 1, editor%tabs(tab_idx)%num_lsp_servers
+                                call notify_file_saved(editor%lsp_manager, &
+                                    editor%tabs(tab_idx)%lsp_server_indices(srv_i), &
+                                    trim(editor%filename), buffer_to_string(buffer))
+                            end do
+                        end block
                     end if
                 end if
             end if
@@ -3337,14 +3467,19 @@ contains
             call terminal_move_cursor(editor%screen_rows, 1)
             call terminal_write('File saved with sudo                  ')
 
-            ! Send LSP didSave notification if LSP is active
+            ! Send LSP didSave notification to ALL active servers
             if (allocated(editor%tabs) .and. editor%active_tab_index > 0) then
                 tab_idx = editor%active_tab_index
                 if (tab_idx <= size(editor%tabs)) then
-                    if (editor%tabs(tab_idx)%lsp_server_index > 0) then
-                        call notify_file_saved(editor%lsp_manager, &
-                            editor%tabs(tab_idx)%lsp_server_index, &
-                            trim(editor%filename), buffer_to_string(buffer))
+                    if (editor%tabs(tab_idx)%num_lsp_servers > 0) then
+                        block
+                            integer :: srv_i
+                            do srv_i = 1, editor%tabs(tab_idx)%num_lsp_servers
+                                call notify_file_saved(editor%lsp_manager, &
+                                    editor%tabs(tab_idx)%lsp_server_indices(srv_i), &
+                                    trim(editor%filename), buffer_to_string(buffer))
+                            end do
+                        end block
                     end if
                 end if
             end if
@@ -5796,7 +5931,7 @@ contains
 
         ! Only notify if we have an active tab with LSP support
         if (editor%active_tab_index < 1 .or. editor%active_tab_index > size(editor%tabs)) return
-        if (editor%tabs(editor%active_tab_index)%lsp_server_index <= 0) return
+        if (editor%tabs(editor%active_tab_index)%num_lsp_servers < 1) return
 
         ! Build full document content
         line_count = buffer_get_line_count(buffer)
@@ -5951,23 +6086,34 @@ contains
         use json_module, only: json_value_t, json_get_array, json_get_object, &
                                json_get_string, json_get_bool, json_array_size, &
                                json_get_array_element, json_has_key, json_stringify
-        use code_actions_menu_module, only: code_action_t
+        use code_actions_panel_module, only: code_action_t
         type(editor_state_t), intent(inout) :: editor
         type(lsp_message_t), intent(in) :: response
         type(json_value_t) :: result_array, action_obj, edit_obj
         type(code_action_t), allocatable :: actions(:)
-        integer :: num_actions, i
-        character(len=:), allocatable :: title, kind, action_json
+        integer :: num_actions, i, dbg
+        character(len=:), allocatable :: title, kind, action_json, result_str
         logical :: is_preferred
+
+        ! Debug: Log that callback was invoked
+        open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
+        write(dbg, '(A)') '=== CODE ACTIONS RESPONSE RECEIVED ==='
+        write(dbg, '(A,I0)') 'response%id = ', response%id
+        result_str = json_stringify(response%result)
+        write(dbg, '(A)') 'response%result (first 500 chars):'
+        write(dbg, '(A)') result_str(1:min(500, len(result_str)))
+        close(dbg)
 
         ! The result is directly in response%result for LSP responses
         result_array = response%result
         num_actions = json_array_size(result_array)
 
+        open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
+        write(dbg, '(A,I0)') 'num_actions from json_array_size = ', num_actions
+        close(dbg)
+
         if (num_actions == 0) then
-            call hide_code_actions_menu(editor%code_actions_menu)
-            call terminal_move_cursor(editor%screen_rows, 1)
-            call terminal_write('No code actions available at this position                ')
+            ! No actions available - don't show panel
             return
         end if
 
@@ -5975,7 +6121,8 @@ contains
         allocate(actions(num_actions))
 
         do i = 1, num_actions
-            action_obj = json_get_array_element(result_array, i)
+            ! json_get_array_element expects 0-based index
+            action_obj = json_get_array_element(result_array, i - 1)
 
             ! Get title (required)
             if (json_has_key(action_obj, 'title')) then
@@ -6007,20 +6154,10 @@ contains
             actions(i)%action_json = action_json
         end do
 
-        ! Update the code actions menu
-        call set_code_actions(editor%code_actions_menu, actions, num_actions)
-
-        ! Show success message
-        call terminal_move_cursor(editor%screen_rows, 1)
-        if (num_actions == 1) then
-            call terminal_write('1 code action available                ')
-        else
-            block
-                character(len=50) :: msg
-                write(msg, '(I0,A)') num_actions, ' code actions available                '
-                call terminal_write(trim(msg))
-            end block
-        end if
+        ! Update the code actions panel and show it
+        call set_code_actions(editor%code_actions_panel, actions, num_actions)
+        call show_code_actions_panel(editor%code_actions_panel)
+        g_lsp_ui_changed = .true.  ! Trigger re-render
 
         ! Clean up
         do i = 1, num_actions
@@ -6102,7 +6239,8 @@ contains
 
         ! Parse each symbol
         do i = 1, num_symbols
-            symbol_obj = json_get_array_element(result_array, i)
+            ! json_get_array_element expects 0-based index
+            symbol_obj = json_get_array_element(result_array, i - 1)
 
             ! Get symbol name (required)
             if (json_has_key(symbol_obj, 'name')) then
@@ -6380,6 +6518,15 @@ contains
 
         changes_applied = 0
 
+        ! Debug logging
+        block
+            integer :: dbg
+            open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
+            write(dbg, '(A)') '=== apply_workspace_edit called ==='
+            write(dbg, '(A,I0)') 'edit_json length = ', len(edit_json)
+            close(dbg)
+        end block
+
         ! Parse the edit JSON
         edit_obj = json_parse(edit_json)
 
@@ -6388,6 +6535,13 @@ contains
             doc_changes_arr = json_get_array(edit_obj, 'documentChanges')
             num_files = json_array_size(doc_changes_arr)
 
+            block
+                integer :: dbg
+                open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
+                write(dbg, '(A,I0)') 'Found documentChanges, num_files = ', num_files
+                close(dbg)
+            end block
+
             do i = 0, num_files - 1  ! 0-based index
                 file_change_obj = json_get_array_element(doc_changes_arr, i)
 
@@ -6395,11 +6549,33 @@ contains
                 if (json_has_key(file_change_obj, 'textDocument')) then
                     text_doc_obj = json_get_object(file_change_obj, 'textDocument')
                     uri = json_get_string(text_doc_obj, 'uri')
+
+                    block
+                        integer :: dbg
+                        open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
+                        write(dbg, '(A,I0)') 'Processing file ', i
+                        if (allocated(uri)) then
+                            write(dbg, '(A,A)') 'uri = ', trim(uri)
+                        else
+                            write(dbg, '(A)') 'uri NOT allocated'
+                        end if
+                        write(dbg, '(A,L1)') 'has edits key = ', json_has_key(file_change_obj, 'edits')
+                        close(dbg)
+                    end block
                 end if
 
                 ! Get edits array
                 if (json_has_key(file_change_obj, 'edits') .and. allocated(uri)) then
                     edits_arr = json_get_array(file_change_obj, 'edits')
+
+                    block
+                        integer :: dbg, num_edits
+                        num_edits = json_array_size(edits_arr)
+                        open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
+                        write(dbg, '(A,I0)') 'num_edits = ', num_edits
+                        close(dbg)
+                    end block
+
                     call apply_file_edits_obj(editor, uri, edits_arr, changes_applied)
                     deallocate(uri)
                 end if

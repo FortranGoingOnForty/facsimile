@@ -8,7 +8,7 @@ program facsimile
     use renderer_module
     use command_handler_module, only: handle_key_command, init_command_handler, cleanup_command_handler, &
                                       save_initial_state_for_undo, search_pattern, match_case_sensitive, &
-                                      g_lsp_modified_buffer
+                                      g_lsp_modified_buffer, g_lsp_ui_changed
     use workspace_module
     use backup_module
     use save_prompt_module
@@ -19,7 +19,6 @@ program facsimile
     use lsp_server_manager_module, only: notify_file_opened, notify_file_changed, &
                                          notify_file_closed, process_server_messages, &
                                          set_diagnostics_handler
-    use diagnostics_module, only: parse_diagnostics
     use lsp_protocol_module, only: lsp_message_t
     implicit none
 
@@ -299,12 +298,17 @@ program facsimile
             allocate(character(len=len_trim(filename)) :: editor%filename)
             editor%filename = trim(filename)
 
-            ! Send LSP didOpen notification if LSP server is active
+            ! Send LSP didOpen notification to ALL active servers
             if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
-                    call notify_file_opened(editor%lsp_manager, &
-                        editor%tabs(editor%active_tab_index)%lsp_server_index, &
-                        trim(filename), buffer_to_string(buffer))
+                if (editor%tabs(editor%active_tab_index)%num_lsp_servers > 0) then
+                    block
+                        integer :: srv_i
+                        do srv_i = 1, editor%tabs(editor%active_tab_index)%num_lsp_servers
+                            call notify_file_opened(editor%lsp_manager, &
+                                editor%tabs(editor%active_tab_index)%lsp_server_indices(srv_i), &
+                                trim(filename), buffer_to_string(buffer))
+                        end do
+                    end block
                 end if
             end if
         else if (status == -2) then
@@ -367,6 +371,12 @@ program facsimile
         block
             logical :: should_render
             should_render = .false.
+
+            ! Check if LSP set the UI changed flag (e.g., code actions panel shown)
+            if (g_lsp_ui_changed) then
+                should_render = .true.
+                g_lsp_ui_changed = .false.
+            end if
 
             if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
                 ! Check if LSP set the modified flag
@@ -498,21 +508,22 @@ program facsimile
 
 contains
 
-    ! Handler for LSP diagnostics notifications
-    subroutine handle_diagnostics(notification)
+    ! Handler for LSP diagnostics notifications (with server attribution)
+    subroutine handle_diagnostics(notification, server_index)
         use lsp_protocol_module, only: lsp_message_t
-        use diagnostics_module, only: parse_diagnostics_from_params
+        use diagnostics_module, only: parse_diagnostics_from_params_with_server
         use terminal_io_module, only: terminal_write
         type(lsp_message_t), intent(in) :: notification
+        integer, intent(in) :: server_index
         character(len=256) :: debug_msg
 
         ! Debug: Log when diagnostics are received
-        write(debug_msg, '(A)') "[DEBUG] Received diagnostics notification"
+        write(debug_msg, '(A,I0)') "[DEBUG] Received diagnostics from server ", server_index
         call terminal_write(debug_msg)  ! Debug output enabled
 
-        ! Parse and store diagnostics in the editor's diagnostics store
-        ! Pass just the params field since lsp_message_t already extracted it
-        call parse_diagnostics_from_params(editor%diagnostics, notification%params)
+        ! Parse and store diagnostics with server attribution (for multi-LSP)
+        ! This keeps diagnostics from different servers separate
+        call parse_diagnostics_from_params_with_server(editor%diagnostics, notification%params, server_index)
     end subroutine handle_diagnostics
 
     ! Flush pending document changes for all tabs
@@ -524,7 +535,7 @@ contains
         ! Check all tabs for pending changes
         if (allocated(editor%tabs)) then
             do i = 1, size(editor%tabs)
-                if (editor%tabs(i)%lsp_server_index > 0) then
+                if (editor%tabs(i)%num_lsp_servers > 0) then
                     call flush_pending_changes(editor%tabs(i)%document_sync, &
                                               editor%lsp_manager, .false.)
                 end if

@@ -15,28 +15,49 @@ module lsp_server_manager_module
     public :: process_server_messages
     public :: register_callback
     public :: get_language_for_file, start_lsp_for_file
+    public :: start_all_lsp_servers_for_file  ! NEW: multi-server support
+    public :: get_server_with_capability       ! NEW: capability-based routing
     public :: notify_file_opened, notify_file_changed, notify_file_saved, notify_file_closed
     public :: request_completion, request_hover, request_definition, request_references, request_code_actions
     public :: request_document_symbols, request_signature_help, request_formatting, request_rename
     public :: request_workspace_symbols
     public :: set_diagnostics_handler
+    public :: filename_to_uri
+
+    ! Capability constants for routing requests to the right server
+    integer, parameter, public :: CAP_COMPLETION = 1
+    integer, parameter, public :: CAP_DEFINITION = 2
+    integer, parameter, public :: CAP_REFERENCES = 3
+    integer, parameter, public :: CAP_RENAME = 4
+    integer, parameter, public :: CAP_CODE_ACTIONS = 5
+    integer, parameter, public :: CAP_FORMATTING = 6
+    integer, parameter, public :: CAP_DIAGNOSTICS = 7
+    integer, parameter, public :: CAP_HOVER = 8
+    integer, parameter, public :: CAP_DOCUMENT_SYMBOLS = 9
+    integer, parameter, public :: CAP_WORKSPACE_SYMBOLS = 10
+    integer, parameter, public :: NUM_CAPABILITIES = 10
 
     ! Language server configuration
     type :: server_config_t
         character(len=:), allocatable :: language
+        character(len=:), allocatable :: name        ! Server name (e.g., "pyright", "ruff")
         character(len=:), allocatable :: command
         character(len=:), allocatable :: file_patterns
+        logical :: capabilities(10) = .false.        ! Which features this server provides
     end type server_config_t
 
     ! Language server instance
     type :: lsp_server_t
         type(c_ptr) :: handle = c_null_ptr
         character(len=:), allocatable :: language
+        character(len=:), allocatable :: name       ! Server name (e.g., "pyright", "ruff")
         character(len=:), allocatable :: command
         character(len=:), allocatable :: root_path
         logical :: initialized = .false.
         logical :: initializing = .false.
         integer :: process_id = -1
+        integer :: config_index = 0                 ! Index into configs array
+        integer :: init_request_id = 0              ! Request ID of initialize request
 
         ! Capabilities
         logical :: supports_completion = .false.
@@ -76,11 +97,12 @@ module lsp_server_manager_module
         end subroutine response_callback
     end interface
 
-    ! Callback type for diagnostics notifications
+    ! Callback type for diagnostics notifications (includes server_index for multi-LSP)
     abstract interface
-        subroutine diagnostics_callback(notification)
+        subroutine diagnostics_callback(notification, server_index)
             use lsp_protocol_module, only: lsp_message_t
             type(lsp_message_t), intent(in) :: notification
+            integer, intent(in) :: server_index
         end subroutine diagnostics_callback
     end interface
 
@@ -177,26 +199,90 @@ contains
 
     subroutine load_default_configs(manager)
         type(lsp_manager_t), intent(inout) :: manager
+        logical :: caps(NUM_CAPABILITIES)
 
-        ! Python (using pyright instead of pylsp)
-        call add_config(manager, "python", "pyright-langserver --stdio", "*.py")
+        ! Python - Pyright for semantic features (rename, definition, references, completion, hover)
+        caps = .false.
+        caps(CAP_COMPLETION) = .true.
+        caps(CAP_DEFINITION) = .true.
+        caps(CAP_REFERENCES) = .true.
+        caps(CAP_RENAME) = .true.
+        caps(CAP_HOVER) = .true.
+        caps(CAP_DIAGNOSTICS) = .true.
+        caps(CAP_DOCUMENT_SYMBOLS) = .true.
+        caps(CAP_WORKSPACE_SYMBOLS) = .true.
+        call add_config(manager, "python", "pyright", "pyright-langserver --stdio", "*.py", caps)
+
+        ! Python - Ruff for linting and code actions
+        caps = .false.
+        caps(CAP_CODE_ACTIONS) = .true.
+        caps(CAP_FORMATTING) = .true.
+        caps(CAP_DIAGNOSTICS) = .true.
+        call add_config(manager, "python", "ruff", "ruff server", "*.py", caps)
 
         ! Rust
-        call add_config(manager, "rust", "rust-analyzer", "*.rs")
+        caps = .false.
+        caps(CAP_COMPLETION) = .true.
+        caps(CAP_DEFINITION) = .true.
+        caps(CAP_REFERENCES) = .true.
+        caps(CAP_RENAME) = .true.
+        caps(CAP_CODE_ACTIONS) = .true.
+        caps(CAP_HOVER) = .true.
+        caps(CAP_DIAGNOSTICS) = .true.
+        caps(CAP_DOCUMENT_SYMBOLS) = .true.
+        caps(CAP_FORMATTING) = .true.
+        call add_config(manager, "rust", "rust-analyzer", "rust-analyzer", "*.rs", caps)
 
         ! C/C++
-        call add_config(manager, "c", "clangd", "*.c,*.h")
-        call add_config(manager, "cpp", "clangd", "*.cpp,*.cc,*.cxx,*.hpp,*.hxx")
+        caps = .false.
+        caps(CAP_COMPLETION) = .true.
+        caps(CAP_DEFINITION) = .true.
+        caps(CAP_REFERENCES) = .true.
+        caps(CAP_RENAME) = .true.
+        caps(CAP_CODE_ACTIONS) = .true.
+        caps(CAP_HOVER) = .true.
+        caps(CAP_DIAGNOSTICS) = .true.
+        caps(CAP_DOCUMENT_SYMBOLS) = .true.
+        caps(CAP_FORMATTING) = .true.
+        call add_config(manager, "c", "clangd", "clangd", "*.c,*.h", caps)
+        call add_config(manager, "cpp", "clangd", "clangd", "*.cpp,*.cc,*.cxx,*.hpp,*.hxx", caps)
 
         ! Go
-        call add_config(manager, "go", "gopls", "*.go")
+        caps = .false.
+        caps(CAP_COMPLETION) = .true.
+        caps(CAP_DEFINITION) = .true.
+        caps(CAP_REFERENCES) = .true.
+        caps(CAP_RENAME) = .true.
+        caps(CAP_CODE_ACTIONS) = .true.
+        caps(CAP_HOVER) = .true.
+        caps(CAP_DIAGNOSTICS) = .true.
+        caps(CAP_DOCUMENT_SYMBOLS) = .true.
+        caps(CAP_FORMATTING) = .true.
+        call add_config(manager, "go", "gopls", "gopls", "*.go", caps)
 
         ! TypeScript/JavaScript
-        call add_config(manager, "typescript", "typescript-language-server --stdio", "*.ts,*.tsx")
-        call add_config(manager, "javascript", "typescript-language-server --stdio", "*.js,*.jsx")
+        caps = .false.
+        caps(CAP_COMPLETION) = .true.
+        caps(CAP_DEFINITION) = .true.
+        caps(CAP_REFERENCES) = .true.
+        caps(CAP_RENAME) = .true.
+        caps(CAP_CODE_ACTIONS) = .true.
+        caps(CAP_HOVER) = .true.
+        caps(CAP_DIAGNOSTICS) = .true.
+        caps(CAP_DOCUMENT_SYMBOLS) = .true.
+        caps(CAP_FORMATTING) = .true.
+        call add_config(manager, "typescript", "ts-server", "typescript-language-server --stdio", "*.ts,*.tsx", caps)
+        call add_config(manager, "javascript", "ts-server", "typescript-language-server --stdio", "*.js,*.jsx", caps)
 
         ! Fortran
-        call add_config(manager, "fortran", "fortls", "*.f90,*.f95,*.f03,*.f08")
+        caps = .false.
+        caps(CAP_COMPLETION) = .true.
+        caps(CAP_DEFINITION) = .true.
+        caps(CAP_REFERENCES) = .true.
+        caps(CAP_HOVER) = .true.
+        caps(CAP_DIAGNOSTICS) = .true.
+        caps(CAP_DOCUMENT_SYMBOLS) = .true.
+        call add_config(manager, "fortran", "fortls", "fortls", "*.f90,*.f95,*.f03,*.f08", caps)
 
         ! TODO: Load from config file
     end subroutine load_default_configs
@@ -223,9 +309,10 @@ contains
         end if
     end function filename_to_uri
 
-    subroutine add_config(manager, language, command, patterns)
+    subroutine add_config(manager, language, name, command, patterns, capabilities)
         type(lsp_manager_t), intent(inout) :: manager
-        character(len=*), intent(in) :: language, command, patterns
+        character(len=*), intent(in) :: language, name, command, patterns
+        logical, intent(in) :: capabilities(NUM_CAPABILITIES)
         type(server_config_t), allocatable :: new_configs(:)
 
         allocate(new_configs(manager%num_configs + 1))
@@ -234,8 +321,10 @@ contains
         end if
 
         new_configs(manager%num_configs + 1)%language = language
+        new_configs(manager%num_configs + 1)%name = name
         new_configs(manager%num_configs + 1)%command = command
         new_configs(manager%num_configs + 1)%file_patterns = patterns
+        new_configs(manager%num_configs + 1)%capabilities = capabilities
 
         deallocate(manager%configs)
         manager%configs = new_configs
@@ -342,6 +431,9 @@ contains
 
         ! Create initialization request
         msg = create_initialize_request(server%process_id, server%root_path, "fac")
+
+        ! Store the request ID so we can match the response
+        server%init_request_id = msg%id
 
         ! Send it
         json_msg = format_json_rpc(msg)
@@ -650,7 +742,7 @@ contains
         call untrack_request(server, msg%id)
 
         ! Special handling for initialization response
-        if (server%initializing .and. msg%id == 1) then
+        if (server%initializing .and. msg%id == server%init_request_id) then
             call handle_initialize_response(server, msg)
             return
         end if
@@ -770,16 +862,29 @@ contains
         type(lsp_manager_t), intent(inout) :: manager
         type(lsp_server_t), intent(inout) :: server
         type(lsp_message_t), intent(in) :: msg
+        integer :: srv_idx, i
 
         ! Debug: log all notifications
         write(error_unit, '(A,A)') "[LSP DEBUG] Received notification: ", msg%method
 
+        ! Find the server index for this server
+        srv_idx = 0
+        do i = 1, manager%num_servers
+            if (allocated(manager%servers(i)%name) .and. allocated(server%name)) then
+                if (manager%servers(i)%name == server%name .and. &
+                    manager%servers(i)%root_path == server%root_path) then
+                    srv_idx = i
+                    exit
+                end if
+            end if
+        end do
+
         select case(msg%method)
         case("textDocument/publishDiagnostics")
-            write(error_unit, '(A)') "[LSP DEBUG] Processing publishDiagnostics"
-            ! Forward to diagnostics handler if set
+            write(error_unit, '(A,I0)') "[LSP DEBUG] Processing publishDiagnostics from server ", srv_idx
+            ! Forward to diagnostics handler if set (with server index)
             if (associated(manager%diagnostics_handler)) then
-                call manager%diagnostics_handler(msg)
+                call manager%diagnostics_handler(msg, srv_idx)
             else
                 write(error_unit, '(A)') "[LSP DEBUG] No diagnostics handler set!"
             end if
@@ -1000,6 +1105,163 @@ contains
         ! Get or start server for this language
         server_index = get_or_start_server(manager, language, trim(workspace_path))
     end function start_lsp_for_file
+
+    ! Start ALL LSP servers that match a file (multi-server support)
+    subroutine start_all_lsp_servers_for_file(manager, filename, server_indices, num_servers)
+        type(lsp_manager_t), intent(inout) :: manager
+        character(len=*), intent(in) :: filename
+        integer, allocatable, intent(out) :: server_indices(:)
+        integer, intent(out) :: num_servers
+        character(len=:), allocatable :: language
+        character(len=256) :: workspace_path
+        integer :: slash_pos, i, idx
+        integer :: temp_indices(20)  ! Max 20 servers per file
+
+        num_servers = 0
+        allocate(server_indices(0))
+
+        ! Get language from file extension
+        language = get_language_for_file(filename)
+        if (language == "") return
+
+        ! Extract workspace path from filename
+        slash_pos = index(filename, '/', back=.true.)
+        if (slash_pos > 0) then
+            workspace_path = filename(1:slash_pos-1)
+        else
+            workspace_path = "."
+        end if
+
+        ! Find ALL configs that match this language and start servers
+        do i = 1, manager%num_configs
+            if (manager%configs(i)%language == language) then
+                ! Start or get server for this config
+                idx = get_or_start_server_by_config(manager, i, trim(workspace_path))
+                if (idx > 0 .and. num_servers < 20) then
+                    num_servers = num_servers + 1
+                    temp_indices(num_servers) = idx
+                end if
+            end if
+        end do
+
+        ! Copy to output array
+        if (num_servers > 0) then
+            deallocate(server_indices)
+            allocate(server_indices(num_servers))
+            server_indices = temp_indices(1:num_servers)
+        end if
+    end subroutine start_all_lsp_servers_for_file
+
+    ! Get or start server for a specific config index
+    function get_or_start_server_by_config(manager, config_index, root_path) result(server_index)
+        type(lsp_manager_t), intent(inout) :: manager
+        integer, intent(in) :: config_index
+        character(len=*), intent(in) :: root_path
+        integer :: server_index
+        integer :: i
+
+        server_index = 0
+        if (config_index < 1 .or. config_index > manager%num_configs) return
+
+        ! Check if server already exists for this config and root
+        do i = 1, manager%num_servers
+            if (manager%servers(i)%config_index == config_index .and. &
+                manager%servers(i)%root_path == root_path) then
+                server_index = i
+                return
+            end if
+        end do
+
+        ! Start new server
+        server_index = start_new_server_from_config(manager, config_index, root_path)
+    end function get_or_start_server_by_config
+
+    ! Start a new server from a specific config
+    function start_new_server_from_config(manager, config_index, root_path) result(server_index)
+        type(lsp_manager_t), intent(inout) :: manager
+        integer, intent(in) :: config_index
+        character(len=*), intent(in) :: root_path
+        integer :: server_index
+        type(lsp_server_t), allocatable :: new_servers(:)
+        character(len=:), allocatable :: command
+
+        server_index = 0
+        if (config_index < 1 .or. config_index > manager%num_configs) return
+
+        command = manager%configs(config_index)%command
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> STARTING LSP SERVER (from config) <<<'
+            write(debug_unit, '(A)') 'Name: ' // trim(manager%configs(config_index)%name)
+            write(debug_unit, '(A)') 'Language: ' // trim(manager%configs(config_index)%language)
+            write(debug_unit, '(A)') 'Command: ' // trim(command)
+            write(debug_unit, '(A)') 'Root path: ' // trim(root_path)
+            close(debug_unit)
+        end block
+
+        ! Expand server array
+        allocate(new_servers(manager%num_servers + 1))
+        if (manager%num_servers > 0) then
+            new_servers(1:manager%num_servers) = manager%servers
+        end if
+
+        ! Initialize new server
+        new_servers(manager%num_servers + 1)%language = manager%configs(config_index)%language
+        new_servers(manager%num_servers + 1)%name = manager%configs(config_index)%name
+        new_servers(manager%num_servers + 1)%command = command
+        new_servers(manager%num_servers + 1)%root_path = root_path
+        new_servers(manager%num_servers + 1)%config_index = config_index
+        new_servers(manager%num_servers + 1)%initialized = .false.
+        new_servers(manager%num_servers + 1)%initializing = .false.
+        allocate(new_servers(manager%num_servers + 1)%pending_requests(100))
+        new_servers(manager%num_servers + 1)%num_pending = 0
+        new_servers(manager%num_servers + 1)%read_buffer = ""
+
+        ! Start the server process
+        call lsp_start_server_f(command//c_null_char, len(command), &
+                               new_servers(manager%num_servers + 1)%handle)
+
+        if (c_associated(new_servers(manager%num_servers + 1)%handle)) then
+            new_servers(manager%num_servers + 1)%process_id = &
+                lsp_get_pid_f(new_servers(manager%num_servers + 1)%handle)
+
+            deallocate(manager%servers)
+            manager%servers = new_servers
+            manager%num_servers = manager%num_servers + 1
+            server_index = manager%num_servers
+
+            ! Send initialization request
+            call initialize_server(manager%servers(server_index))
+        else
+            write(error_unit, '(a,a)') "Failed to start LSP server: ", command
+        end if
+    end function start_new_server_from_config
+
+    ! Get the first server from a list of indices that has a specific capability
+    function get_server_with_capability(manager, server_indices, num_servers, capability) result(server_index)
+        type(lsp_manager_t), intent(in) :: manager
+        integer, intent(in) :: server_indices(:)
+        integer, intent(in) :: num_servers
+        integer, intent(in) :: capability
+        integer :: server_index
+        integer :: i, cfg_idx
+
+        server_index = 0
+
+        do i = 1, num_servers
+            if (server_indices(i) > 0 .and. server_indices(i) <= manager%num_servers) then
+                cfg_idx = manager%servers(server_indices(i))%config_index
+                if (cfg_idx > 0 .and. cfg_idx <= manager%num_configs) then
+                    if (manager%configs(cfg_idx)%capabilities(capability)) then
+                        server_index = server_indices(i)
+                        return
+                    end if
+                end if
+            end if
+        end do
+    end function get_server_with_capability
 
     ! Send textDocument/didOpen notification
     subroutine notify_file_opened(manager, server_index, filename, content)
@@ -1293,27 +1555,43 @@ contains
 
     ! Request code actions for a range
     function request_code_actions(manager, server_index, filename, start_line, start_char, &
-                                 end_line, end_char, callback) result(request_id)
+                                 end_line, end_char, callback, diagnostics_json) result(request_id)
         use lsp_protocol_module, only: create_code_action_request
-        use json_module, only: json_create_array
+        use json_module, only: json_create_array, json_value_t
         type(lsp_manager_t), intent(inout) :: manager
         integer, intent(in) :: server_index
         character(len=*), intent(in) :: filename
         integer, intent(in) :: start_line, start_char, end_line, end_char  ! 0-based LSP positions
         procedure(response_callback), optional :: callback
+        type(json_value_t), intent(in), optional :: diagnostics_json
         integer :: request_id
         type(lsp_message_t) :: msg
         character(len=:), allocatable :: uri
+        integer :: dbg
 
         request_id = -1
+
+        ! Debug logging
+        open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
+        write(dbg, '(A,I0)') 'request_code_actions: server_index = ', server_index
+        write(dbg, '(A,I0)') 'request_code_actions: num_servers = ', manager%num_servers
+        if (server_index >= 1 .and. server_index <= manager%num_servers) then
+            write(dbg, '(A,L1)') 'request_code_actions: initialized = ', manager%servers(server_index)%initialized
+        end if
+        close(dbg)
+
         if (server_index < 1 .or. server_index > manager%num_servers) return
         if (.not. manager%servers(server_index)%initialized) return
 
         ! Convert filename to URI
         uri = filename_to_uri(filename)
 
-        ! Create code action request (diagnostics will be added separately if needed)
-        msg = create_code_action_request(uri, start_line, start_char, end_line, end_char)
+        ! Create code action request with diagnostics context
+        if (present(diagnostics_json)) then
+            msg = create_code_action_request(uri, start_line, start_char, end_line, end_char, diagnostics_json)
+        else
+            msg = create_code_action_request(uri, start_line, start_char, end_line, end_char)
+        end if
         request_id = msg%id
 
         call send_request(manager, server_index, msg, callback)

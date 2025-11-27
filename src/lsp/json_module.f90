@@ -6,13 +6,13 @@ module json_module
 
     public :: json_value_t, json_object_t, json_array_t
     public :: json_parse, json_stringify
-    public :: json_create_object, json_create_array
+    public :: json_create_object, json_create_array, json_create_string
     public :: json_add_string, json_add_number, json_add_bool, json_add_null
     public :: json_add_object, json_add_array
     public :: json_get_string, json_get_number, json_get_bool
     public :: json_get_object, json_get_array
     public :: json_has_key
-    public :: json_array_size, json_get_array_element
+    public :: json_array_size, json_get_array_element, json_array_add_element
     public :: JSON_NULL, JSON_BOOL, JSON_NUMBER, JSON_STRING, JSON_ARRAY, JSON_OBJECT
 
     ! JSON value types
@@ -67,6 +67,14 @@ contains
         allocate(arr%array_value%elements(0))
         arr%array_value%count = 0
     end function json_create_array
+
+    function json_create_string(value) result(str)
+        character(len=*), intent(in) :: value
+        type(json_value_t) :: str
+
+        str%value_type = JSON_STRING
+        str%string_value = value
+    end function json_create_string
 
     subroutine json_add_string(obj, key, value)
         type(json_value_t), intent(inout) :: obj

@@ -3,7 +3,8 @@ module editor_state_module
     use text_buffer_module, only: buffer_t, copy_buffer, init_buffer
     use lsp_server_manager_module, only: lsp_manager_t, init_lsp_manager, cleanup_lsp_manager, &
                                          get_or_start_server, process_server_messages, &
-                                         start_lsp_for_file, notify_file_opened, &
+                                         start_lsp_for_file, start_all_lsp_servers_for_file, &
+                                         get_server_with_capability, notify_file_opened, &
                                          notify_file_changed, notify_file_closed, &
                                          request_completion, request_hover
     use completion_popup_module, only: completion_popup_t, init_completion_popup, &
@@ -16,8 +17,8 @@ module editor_state_module
                                        cleanup_diagnostics_panel
     use references_panel_module, only: references_panel_t, init_references_panel, &
                                       cleanup_references_panel
-    use code_actions_menu_module, only: code_actions_menu_t, init_code_actions_menu, &
-                                        cleanup_code_actions_menu
+    use code_actions_panel_module, only: code_actions_panel_t, init_code_actions_panel, &
+                                        cleanup_code_actions_panel
     use symbols_panel_module, only: symbols_panel_t, init_symbols_panel, &
                                      cleanup_symbols_panel
     use signature_tooltip_module, only: signature_tooltip_t, init_signature_tooltip, &
@@ -96,9 +97,10 @@ module editor_state_module
         logical :: modified = .false.
         logical :: is_orphan = .false.  ! True if file is outside workspace (uses absolute path)
 
-        ! LSP support
-        integer :: lsp_server_index = 0  ! Index of LSP server handling this file
-        type(document_sync_t) :: document_sync   ! Document synchronization for LSP
+        ! LSP support - multiple servers per file
+        integer, allocatable :: lsp_server_indices(:)  ! Indices of LSP servers handling this file
+        integer :: num_lsp_servers = 0                 ! Number of active LSP servers
+        type(document_sync_t) :: document_sync         ! Document synchronization for LSP
     end type tab_t
 
     ! Main editor state
@@ -128,7 +130,7 @@ module editor_state_module
         type(diagnostics_store_t) :: diagnostics
         type(diagnostics_panel_t) :: diagnostics_panel
         type(references_panel_t) :: references_panel
-        type(code_actions_menu_t) :: code_actions_menu
+        type(code_actions_panel_t) :: code_actions_panel
         type(symbols_panel_t) :: symbols_panel
         type(signature_tooltip_t) :: signature_tooltip
         type(command_palette_t) :: command_palette
@@ -181,7 +183,7 @@ contains
         call init_references_panel(editor%references_panel)
 
         ! Initialize code actions menu
-        call init_code_actions_menu(editor%code_actions_menu)
+        call init_code_actions_panel(editor%code_actions_panel)
 
         ! Initialize symbols panel
         call init_symbols_panel(editor%symbols_panel)
@@ -234,7 +236,7 @@ contains
         call cleanup_references_panel(editor%references_panel)
 
         ! Cleanup code actions menu
-        call cleanup_code_actions_menu(editor%code_actions_menu)
+        call cleanup_code_actions_panel(editor%code_actions_panel)
 
         ! Cleanup symbols panel
         call cleanup_symbols_panel(editor%symbols_panel)
@@ -269,6 +271,10 @@ contains
         end if
 
         call cleanup_buffer(tab%buffer)
+
+        ! Cleanup LSP server indices
+        if (allocated(tab%lsp_server_indices)) deallocate(tab%lsp_server_indices)
+        tab%num_lsp_servers = 0
 
         ! Cleanup document sync
         call cleanup_document_sync(tab%document_sync)
@@ -336,16 +342,19 @@ contains
         temp_tabs(new_index)%active_pane_index = 1
         temp_tabs(new_index)%modified = .false.
 
-        ! Start LSP server for this file if applicable
-        temp_tabs(new_index)%lsp_server_index = start_lsp_for_file(editor%lsp_manager, filename)
+        ! Start ALL LSP servers for this file (multi-server support)
+        call start_all_lsp_servers_for_file(editor%lsp_manager, filename, &
+                                           temp_tabs(new_index)%lsp_server_indices, &
+                                           temp_tabs(new_index)%num_lsp_servers)
 
-        ! Initialize document sync for LSP if we have a server
-        if (temp_tabs(new_index)%lsp_server_index > 0) then
+        ! Initialize document sync for LSP if we have servers
+        if (temp_tabs(new_index)%num_lsp_servers > 0) then
             block
                 character(len=:), allocatable :: file_uri
                 file_uri = 'file://' // trim(filename)
+                ! Use first server for document sync (primary server)
                 call init_document_sync(temp_tabs(new_index)%document_sync, &
-                                      file_uri, temp_tabs(new_index)%lsp_server_index)
+                                      file_uri, temp_tabs(new_index)%lsp_server_indices(1))
             end block
         end if
 
