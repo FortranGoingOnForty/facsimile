@@ -4,7 +4,7 @@ module diagnostics_module
                            json_get_number, json_get_object, &
                            json_get_array, json_array_size, &
                            json_get_array_element, json_has_key, &
-                           json_stringify
+                           json_stringify, json_get_value
     implicit none
     private
 
@@ -321,13 +321,9 @@ contains
                     diag%code = ""
                 end if
 
-                ! Parse data (contains Ruff quickfixes)
+                ! Parse data field (stores raw JSON for quickfixes like Ruff)
                 if (json_has_key(diag_obj, "data")) then
-                    block
-                        type(json_value_t) :: data_obj
-                        data_obj = json_get_object(diag_obj, "data")
-                        diag%data = json_stringify(data_obj)
-                    end block
+                    diag%data = json_stringify(json_get_value(diag_obj, "data"))
                 else
                     diag%data = ""
                 end if
@@ -594,21 +590,27 @@ contains
                 call json_add_string(diag_obj, "message", "")
             end if
 
-            ! Add source if present
-            if (allocated(diagnostics(i)%source) .and. len_trim(diagnostics(i)%source) > 0) then
-                call json_add_string(diag_obj, "source", diagnostics(i)%source)
+            ! Add source if present (use nested if to ensure short-circuit evaluation)
+            if (allocated(diagnostics(i)%source)) then
+                if (len_trim(diagnostics(i)%source) > 0) then
+                    call json_add_string(diag_obj, "source", diagnostics(i)%source)
+                end if
             end if
 
-            ! Add code if present
-            if (allocated(diagnostics(i)%code) .and. len_trim(diagnostics(i)%code) > 0) then
-                call json_add_string(diag_obj, "code", diagnostics(i)%code)
+            ! Add code if present (use nested if to ensure short-circuit evaluation)
+            if (allocated(diagnostics(i)%code)) then
+                if (len_trim(diagnostics(i)%code) > 0) then
+                    call json_add_string(diag_obj, "code", diagnostics(i)%code)
+                end if
             end if
 
-            ! TODO: Add data field for Ruff quickfixes (disabled - needs debugging)
-            ! if (allocated(diagnostics(i)%data) .and. len_trim(diagnostics(i)%data) > 0) then
-            !     data_obj = json_parse(diagnostics(i)%data)
-            !     call json_add_object(diag_obj, "data", data_obj)
-            ! end if
+            ! Add data field if present (required for Ruff quickfixes, LSP-agnostic)
+            if (allocated(diagnostics(i)%data)) then
+                if (len_trim(diagnostics(i)%data) > 0) then
+                    data_obj = json_parse(diagnostics(i)%data)
+                    call json_add_object(diag_obj, "data", data_obj)
+                end if
+            end if
 
             call json_array_add_element(json_array, diag_obj)
         end do

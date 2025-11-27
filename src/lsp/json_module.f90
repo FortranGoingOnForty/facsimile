@@ -10,7 +10,7 @@ module json_module
     public :: json_add_string, json_add_number, json_add_bool, json_add_null
     public :: json_add_object, json_add_array
     public :: json_get_string, json_get_number, json_get_bool
-    public :: json_get_object, json_get_array
+    public :: json_get_object, json_get_array, json_get_value
     public :: json_has_key
     public :: json_array_size, json_get_array_element, json_array_add_element
     public :: JSON_NULL, JSON_BOOL, JSON_NUMBER, JSON_STRING, JSON_ARRAY, JSON_OBJECT
@@ -496,6 +496,26 @@ contains
             end if
         end do
     end function json_get_array
+
+    ! Get any JSON value by key (regardless of type) - for LSP data field
+    function json_get_value(obj, key) result(value)
+        type(json_value_t), intent(in) :: obj
+        character(len=*), intent(in) :: key
+        type(json_value_t) :: value
+        integer :: i
+
+        value%value_type = JSON_NULL
+
+        if (obj%value_type /= JSON_OBJECT) return
+        if (.not. associated(obj%object_value)) return
+
+        do i = 1, obj%object_value%count
+            if (obj%object_value%pairs(i)%key == key) then
+                value = obj%object_value%pairs(i)%value
+                return
+            end if
+        end do
+    end function json_get_value
 
     ! Simple JSON parser (basic implementation)
     function json_parse(str) result(value)
