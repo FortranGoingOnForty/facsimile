@@ -281,19 +281,19 @@ contains
 
         select case(severity)
         case(SEVERITY_ERROR)
-            marker = ' [E] '
+            marker = '●'
             color = char(27) // '[31m'  ! Red
         case(SEVERITY_WARNING)
-            marker = ' [W] '
+            marker = '▲'
             color = char(27) // '[33m'  ! Yellow
         case(SEVERITY_INFO)
-            marker = ' [I] '
+            marker = '◆'
             color = char(27) // '[36m'  ! Cyan
         case(SEVERITY_HINT)
-            marker = ' [H] '
+            marker = '○'
             color = char(27) // '[90m'  ! Gray
         case default
-            marker = '     '
+            marker = ' '
             color = ''
         end select
     end subroutine get_severity_display
