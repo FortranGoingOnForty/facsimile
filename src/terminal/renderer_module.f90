@@ -23,6 +23,7 @@ module renderer_module
     public :: show_line_numbers, LINE_NUMBER_WIDTH
     public :: render_screen_with_tree, render_screen_with_lsp_panel
     public :: tree_state
+    public :: update_syntax_highlighter
 
     ! Configuration
     logical :: show_line_numbers = .true.
@@ -50,6 +51,7 @@ module renderer_module
 
     ! Syntax highlighting state
     type(syntax_highlighter_t) :: syntax_highlighter
+    character(len=512) :: last_highlighted_filename = ""
 
 contains
 
@@ -70,8 +72,10 @@ contains
         ! Initialize syntax highlighter if filename provided
         if (present(filename)) then
             call init_highlighter(syntax_highlighter, filename)
+            last_highlighted_filename = trim(filename)
         else
             call init_highlighter(syntax_highlighter)
+            last_highlighted_filename = ""
         end if
     end subroutine init_renderer
 
@@ -79,6 +83,19 @@ contains
         if (allocated(screen_buffer%lines)) deallocate(screen_buffer%lines)
         call cleanup_highlighter(syntax_highlighter)
     end subroutine cleanup_renderer
+
+    ! Update syntax highlighter for a new filename/language
+    subroutine update_syntax_highlighter(filename)
+        character(len=*), intent(in) :: filename
+
+        ! Only update if filename has changed
+        if (trim(filename) == trim(last_highlighted_filename)) return
+
+        ! Cleanup old language definition and re-initialize
+        call cleanup_highlighter(syntax_highlighter)
+        call init_highlighter(syntax_highlighter, filename)
+        last_highlighted_filename = trim(filename)
+    end subroutine update_syntax_highlighter
 
     subroutine render_screen(buffer, editor, match_mode_active, match_case_sens)
         type(buffer_t), intent(in) :: buffer
@@ -93,6 +110,11 @@ contains
         character(len=16) :: line_num_str
         logical :: found_match
         type(cursor_t) :: cursor
+
+        ! Auto-update syntax highlighter if filename changed
+        if (allocated(editor%filename)) then
+            call update_syntax_highlighter(editor%filename)
+        end if
 
         call terminal_hide_cursor()
 

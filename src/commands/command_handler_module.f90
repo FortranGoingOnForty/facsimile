@@ -27,7 +27,7 @@ module command_handler_module
                                          request_references, request_code_actions, request_document_symbols, &
                                          request_signature_help, request_formatting, request_rename, &
                                          process_server_messages, filename_to_uri, &
-                                         get_server_with_capability, &
+                                         get_server_with_capability, notify_file_opened, &
                                          CAP_COMPLETION, CAP_DEFINITION, CAP_REFERENCES, CAP_RENAME, &
                                          CAP_CODE_ACTIONS, CAP_FORMATTING, CAP_HOVER, CAP_DOCUMENT_SYMBOLS
     use rename_prompt_module, only: show_rename_prompt
@@ -188,13 +188,30 @@ contains
             end if
         end if
 
-        ! Debug: log all incoming keys
-        block
-            integer :: dbg
-            open(newunit=dbg, file='/tmp/fac_keys_all.log', position='append', action='write')
-            write(dbg, '(A,A,A)') 'key_str = [', trim(key_str), ']'
-            close(dbg)
-        end block
+        ! Route keys to code actions panel when visible
+        if (is_code_actions_panel_visible(editor%code_actions_panel)) then
+            if (code_actions_panel_handle_key(editor%code_actions_panel, trim(key_str))) then
+                ! For Enter, we need to apply the code action here since panel just returns handled=true
+                if (trim(key_str) == 'enter') then
+                    call apply_selected_code_action(editor, buffer)
+                end if
+                return
+            end if
+        end if
+
+        ! Route keys to references panel when visible
+        if (is_references_panel_visible(editor%references_panel)) then
+            if (references_panel_handle_key(editor%references_panel, trim(key_str))) then
+                return
+            end if
+        end if
+
+        ! Route keys to symbols panel when visible
+        if (is_symbols_panel_visible(editor%symbols_panel)) then
+            if (symbols_panel_handle_key(editor%symbols_panel, trim(key_str))) then
+                return
+            end if
+        end if
 
         select case(trim(key_str))
         ! File operations
@@ -225,33 +242,7 @@ contains
                 return
             end if
 
-            ! If diagnostics panel is visible, hide it
-            if (is_diagnostics_panel_visible(editor%diagnostics_panel)) then
-                if (diagnostics_panel_handle_key(editor%diagnostics_panel, trim(key_str))) then
-                    return
-                end if
-            end if
-
-            ! If references panel is visible, hide it
-            if (is_references_panel_visible(editor%references_panel)) then
-                if (references_panel_handle_key(editor%references_panel, trim(key_str))) then
-                    return
-                end if
-            end if
-
-            ! If code actions menu is visible, hide it
-            if (is_code_actions_panel_visible(editor%code_actions_panel)) then
-                if (code_actions_panel_handle_key(editor%code_actions_panel, trim(key_str))) then
-                    return
-                end if
-            end if
-
-            ! If symbols panel is visible, hide it
-            if (is_symbols_panel_visible(editor%symbols_panel)) then
-                if (symbols_panel_handle_key(editor%symbols_panel, trim(key_str))) then
-                    return
-                end if
-            end if
+            ! Other panels (diagnostics, code_actions, references, symbols) are handled in early routing
 
             ! ESC - Clear selections and return to single cursor mode
             if (size(editor%cursors) > 1) then
@@ -357,33 +348,7 @@ contains
                 return
             end if
 
-            ! If diagnostics panel is visible, navigate it
-            if (is_diagnostics_panel_visible(editor%diagnostics_panel)) then
-                if (diagnostics_panel_handle_key(editor%diagnostics_panel, trim(key_str))) then
-                    return
-                end if
-            end if
-
-            ! If references panel is visible, navigate it
-            if (is_references_panel_visible(editor%references_panel)) then
-                if (references_panel_handle_key(editor%references_panel, trim(key_str))) then
-                    return
-                end if
-            end if
-
-            ! If code actions menu is visible, navigate it
-            if (is_code_actions_panel_visible(editor%code_actions_panel)) then
-                if (code_actions_panel_handle_key(editor%code_actions_panel, trim(key_str))) then
-                    return
-                end if
-            end if
-
-            ! If symbols panel is visible, navigate it
-            if (is_symbols_panel_visible(editor%symbols_panel)) then
-                if (symbols_panel_handle_key(editor%symbols_panel, trim(key_str))) then
-                    return
-                end if
-            end if
+            ! Other panels (diagnostics, code_actions, references, symbols) are handled in early routing
 
             if (size(editor%cursors) > 1) then
                 ! Move all cursors
@@ -405,33 +370,7 @@ contains
                 return
             end if
 
-            ! If diagnostics panel is visible, navigate it
-            if (is_diagnostics_panel_visible(editor%diagnostics_panel)) then
-                if (diagnostics_panel_handle_key(editor%diagnostics_panel, trim(key_str))) then
-                    return
-                end if
-            end if
-
-            ! If references panel is visible, navigate it
-            if (is_references_panel_visible(editor%references_panel)) then
-                if (references_panel_handle_key(editor%references_panel, trim(key_str))) then
-                    return
-                end if
-            end if
-
-            ! If code actions menu is visible, navigate it
-            if (is_code_actions_panel_visible(editor%code_actions_panel)) then
-                if (code_actions_panel_handle_key(editor%code_actions_panel, trim(key_str))) then
-                    return
-                end if
-            end if
-
-            ! If symbols panel is visible, navigate it
-            if (is_symbols_panel_visible(editor%symbols_panel)) then
-                if (symbols_panel_handle_key(editor%symbols_panel, trim(key_str))) then
-                    return
-                end if
-            end if
+            ! Other panels (diagnostics, code_actions, references, symbols) are handled in early routing
 
             if (size(editor%cursors) > 1) then
                 ! Move all cursors
@@ -743,71 +682,7 @@ contains
             is_edit_action = .true.
 
         case('enter')
-            ! If code actions menu is visible, apply selected action
-            if (is_code_actions_panel_visible(editor%code_actions_panel)) then
-                block
-                    use json_module, only: json_parse, json_value_t, json_get_object, &
-                                           json_has_key, json_stringify
-                    character(len=:), allocatable :: action_json, edit_json
-                    type(json_value_t) :: action_obj, edit_obj
-                    integer :: changes_applied
-
-                    if (get_selected_action(editor%code_actions_panel, action_json)) then
-                        ! Debug: log the action JSON
-                        block
-                            integer :: dbg
-                            open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
-                            write(dbg, '(A)') '=== APPLYING CODE ACTION ==='
-                            write(dbg, '(A)') 'action_json:'
-                            write(dbg, '(A)') action_json(1:min(1000, len(action_json)))
-                            close(dbg)
-                        end block
-
-                        ! Parse the action JSON to extract the edit
-                        action_obj = json_parse(action_json)
-
-                        if (json_has_key(action_obj, 'edit')) then
-                            ! Get the edit object and convert to string for apply_workspace_edit
-                            edit_obj = json_get_object(action_obj, 'edit')
-                            edit_json = json_stringify(edit_obj)
-
-                            ! Debug: log the edit JSON
-                            block
-                                integer :: dbg
-                                open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
-                                write(dbg, '(A)') 'edit_json:'
-                                write(dbg, '(A)') edit_json(1:min(1000, len(edit_json)))
-                                close(dbg)
-                            end block
-
-                            ! Apply the workspace edit
-                            call apply_workspace_edit(editor, edit_json, changes_applied)
-
-                            if (changes_applied > 0) then
-                                ! Sync modified tab buffer back to the buffer parameter
-                                if (editor%active_tab_index > 0 .and. &
-                                    editor%active_tab_index <= size(editor%tabs)) then
-                                    call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
-                                end if
-                                ! Re-render screen to show the applied changes
-                                call render_screen(buffer, editor)
-                                call terminal_move_cursor(editor%screen_rows, 1)
-                                call terminal_write('Code action applied                        ')
-                            else
-                                call terminal_move_cursor(editor%screen_rows, 1)
-                                call terminal_write('No changes from code action                ')
-                            end if
-                        else
-                            call terminal_move_cursor(editor%screen_rows, 1)
-                            call terminal_write('Code action has no edit                    ')
-                        end if
-
-                        ! Hide menu after selection
-                        call hide_code_actions_panel(editor%code_actions_panel)
-                    end if
-                end block
-                return
-            end if
+            ! Code actions panel is handled in early routing above
 
             ! If symbols panel is visible, jump to selected symbol
             if (is_symbols_panel_visible(editor%symbols_panel)) then
@@ -1269,13 +1144,6 @@ contains
 
         case('f10', 'alt-.')
             ! Trigger code actions (F10 or Alt+.) - toggle behavior
-            block
-                integer :: dbg
-                open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
-                write(dbg, '(A)') '=== F10/ALT-. KEY DETECTED ==='
-                write(dbg, '(A,L1)') 'panel visible = ', is_code_actions_panel_visible(editor%code_actions_panel)
-                close(dbg)
-            end block
             ! If panel is already visible, close it
             if (is_code_actions_panel_visible(editor%code_actions_panel)) then
                 call hide_code_actions_panel(editor%code_actions_panel)
@@ -1286,7 +1154,7 @@ contains
                     if (code_actions_server > 0) then
                         ! Request code actions for the current line
                         block
-                            integer :: request_id, lsp_line, dbg, dbg_i
+                            integer :: request_id, lsp_line
                             character(len=:), allocatable :: file_uri
                             type(diagnostic_t), allocatable :: line_diags(:)
                             type(json_value_t) :: diags_json
@@ -1300,57 +1168,11 @@ contains
                             ! This is critical for multi-LSP: Ruff should only see Ruff's diagnostics
                             file_uri = filename_to_uri(editor%tabs(editor%active_tab_index)%filename)
 
-                            open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
-                            write(dbg, '(A,A)') 'file_uri = ', trim(file_uri)
-                            write(dbg, '(A,I0)') 'cursor line (1-based) = ', editor%cursors(editor%active_cursor)%line
-                            write(dbg, '(A,I0)') 'lsp_line (0-based) = ', lsp_line
-                            write(dbg, '(A,I0)') 'code_actions_server = ', code_actions_server
-                            close(dbg)
-
                             line_diags = get_diagnostics_for_line_by_server(editor%diagnostics, file_uri, &
                                 editor%cursors(editor%active_cursor)%line, code_actions_server)
 
-                            open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
-                            write(dbg, '(A,I0)') 'Found diagnostics on line: ', size(line_diags)
-                            close(dbg)
-
-                            ! Debug: check each diagnostic before calling diagnostics_to_json
-                            open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
-                            write(dbg, '(A)') 'About to check diagnostics...'
-                            do dbg_i = 1, size(line_diags)
-                                write(dbg, '(A,I0)') 'Checking diagnostic ', dbg_i
-                                write(dbg, '(A,L1)') '  message allocated: ', allocated(line_diags(dbg_i)%message)
-                                write(dbg, '(A,L1)') '  source allocated: ', allocated(line_diags(dbg_i)%source)
-                                write(dbg, '(A,L1)') '  code allocated: ', allocated(line_diags(dbg_i)%code)
-                                write(dbg, '(A,L1)') '  data allocated: ', allocated(line_diags(dbg_i)%data)
-                                if (allocated(line_diags(dbg_i)%message)) then
-                                    write(dbg, '(A,I0)') '  message len: ', len(line_diags(dbg_i)%message)
-                                end if
-                            end do
-                            write(dbg, '(A)') 'Diagnostics check complete'
-                            close(dbg)
-
                             ! Convert diagnostics to JSON for request
-                            open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
-                            write(dbg, '(A)') 'Calling diagnostics_to_json...'
-                            close(dbg)
-
                             diags_json = diagnostics_to_json(line_diags)
-
-                            open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
-                            write(dbg, '(A)') 'diagnostics_to_json returned'
-                            close(dbg)
-
-                            ! Debug: log the diagnostics JSON
-                            block
-                                use json_module, only: json_stringify
-                                character(len=:), allocatable :: diags_str
-                                diags_str = json_stringify(diags_json)
-                                open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
-                                write(dbg, '(A)') 'Diagnostics JSON being sent:'
-                                write(dbg, '(A)') diags_str
-                                close(dbg)
-                            end block
 
                             ! Request code actions for entire line with diagnostics context
                             request_id = request_code_actions(editor%lsp_manager, &
@@ -1360,10 +1182,6 @@ contains
                             lsp_line, 999, &
                             handle_code_actions_response_wrapper, &
                             diags_json)
-
-                            open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
-                            write(dbg, '(A,I0)') 'request_id = ', request_id
-                            close(dbg)
                             ! Panel will be shown when response arrives in handle_code_actions_response_impl
                         end block
                     end if
@@ -1372,14 +1190,6 @@ contains
 
         case('f12', 'ctrl-\\', 'alt-g')
             ! Go to definition (F12, Ctrl+\, or Alt+G)
-            block
-                integer :: debug_unit, def_server
-                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                write(debug_unit, '(A)') '>>> INSIDE F12/ALT-G HANDLER <<<'
-                write(debug_unit, '(A,I0)') 'active_tab_index = ', editor%active_tab_index
-                write(debug_unit, '(A,I0)') 'size(tabs) = ', size(editor%tabs)
-                close(debug_unit)
-            end block
             call terminal_move_cursor(editor%screen_rows, 1)
             block
                 integer :: def_server
@@ -1408,13 +1218,6 @@ contains
                             editor%tabs(editor%active_tab_index)%filename, &
                             lsp_line, lsp_char, handle_definition_response_wrapper)
 
-                        block
-                            integer :: debug_unit
-                            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                            write(debug_unit, '(A,I0)') 'request_definition returned request_id = ', request_id
-                            close(debug_unit)
-                        end block
-
                         if (request_id > 0) then
                             ! Response will be handled by callback
                             call terminal_write('Searching for definition...                ')
@@ -1429,12 +1232,6 @@ contains
 
         case('shift-f12', 'alt-r')
             ! Find all references (Shift+F12 or Alt+R)
-            block
-                integer :: debug_unit
-                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                write(debug_unit, '(A)') '>>> INSIDE SHIFT-F12/ALT-R HANDLER <<<'
-                close(debug_unit)
-            end block
             block
                 integer :: refs_server
                 refs_server = get_lsp_server_for_cap(editor, CAP_REFERENCES)
@@ -1541,13 +1338,6 @@ contains
         case('f2')
             ! Rename symbol
             block
-                integer :: debug_unit
-                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                write(debug_unit, '(A)') '>>> F2 KEY DETECTED <<<'
-                write(debug_unit, '(A,I0)') 'active_tab_index: ', editor%active_tab_index
-                close(debug_unit)
-            end block
-            block
                 integer :: rename_server
                 rename_server = get_lsp_server_for_cap(editor, CAP_RENAME)
                 if (rename_server > 0) then
@@ -1572,17 +1362,6 @@ contains
                                 lsp_line = editor%cursors(editor%active_cursor)%line - 1
                                 lsp_char = editor%cursors(editor%active_cursor)%column - 1
 
-                                ! Debug logging
-                                block
-                                    integer :: debug_unit
-                                    open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                                    write(debug_unit, '(A)') '>>> SENDING RENAME REQUEST <<<'
-                                    write(debug_unit, '(A)') 'Old name: ' // trim(old_name)
-                                    write(debug_unit, '(A)') 'New name: ' // trim(new_name)
-                                    write(debug_unit, '(A,I0,A,I0)') 'Position: line=', lsp_line, ' char=', lsp_char
-                                    close(debug_unit)
-                                end block
-
                                 ! Save editor state for callback
                                 saved_editor_for_callback => editor
 
@@ -1597,14 +1376,9 @@ contains
 
                                     ! Poll for LSP response and render immediately when received
                                     block
-                                        integer :: poll_count, max_polls, pane_idx, debug_unit
+                                        integer :: poll_count, max_polls, pane_idx
                                         integer(8) :: start_time, end_time, count_rate, target_time
                                         max_polls = 100  ! Poll up to 100 times (1 second total)
-
-                                        ! Debug: Start polling
-                                        open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                                        write(debug_unit, '(A)') '>>> STARTING RENAME POLLING <<<'
-                                        close(debug_unit)
 
                                         do poll_count = 1, max_polls
                                             ! Process any LSP messages
@@ -1612,11 +1386,6 @@ contains
 
                                             ! Check if rename response modified the buffer
                                             if (g_lsp_modified_buffer) then
-                                                ! Debug: Flag detected!
-                                                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                                                write(debug_unit, '(A,I0,A)') '>>> FLAG DETECTED at poll ', poll_count, ' - RENDERING NOW <<<'
-                                                close(debug_unit)
-
                                                 ! Sync buffer from tab (LSP modified tab buffer)
                                                 call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
 
@@ -1649,13 +1418,6 @@ contains
                                                 if (end_time >= target_time) exit
                                             end do
                                         end do
-
-                                        ! Debug: Polling finished without detecting flag
-                                        if (.not. g_lsp_modified_buffer) then
-                                            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                                            write(debug_unit, '(A)') '>>> POLLING TIMEOUT - FLAG NEVER SET <<<'
-                                            close(debug_unit)
-                                        end if
                                     end block
                                 end if
 
@@ -1704,12 +1466,6 @@ contains
 
         case('f4', 'alt-o')
             ! Document symbols outline (F4 or Alt+O)
-            block
-                integer :: debug_unit
-                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                write(debug_unit, '(A)') '>>> INSIDE F4/ALT-O HANDLER <<<'
-                close(debug_unit)
-            end block
             block
                 integer :: symbols_server
                 symbols_server = get_lsp_server_for_cap(editor, CAP_DOCUMENT_SYMBOLS)
@@ -1900,29 +1656,9 @@ contains
 
         case('f8', 'alt-e')
             ! Toggle diagnostics panel (F8 or Alt+E for errors)
-            block
-                integer :: debug_unit
-                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                write(debug_unit, '(A)') '>>> INSIDE F8/ALT-E HANDLER <<<'
-                write(debug_unit, '(A)') 'Calling toggle_diagnostics_panel...'
-                close(debug_unit)
-            end block
             call toggle_panel(editor%diagnostics_panel)
-            block
-                integer :: debug_unit
-                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                write(debug_unit, '(A)') 'toggle_diagnostics_panel returned'
-                write(debug_unit, '(A)') '>>> ABOUT TO CALL render_screen <<<'
-                close(debug_unit)
-            end block
             ! Re-render screen to show/hide the panel
             call render_screen(buffer, editor)
-            block
-                integer :: debug_unit
-                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                write(debug_unit, '(A)') '>>> render_screen COMPLETED <<<'
-                close(debug_unit)
-            end block
 
         case('alt-c')
             ! Toggle case sensitivity for match mode (ctrl-d)
@@ -1999,12 +1735,6 @@ contains
             end if
 
         case default
-            ! DEBUG: Show unhandled function keys
-            if (index(key_str, 'f') == 1 .or. index(key_str, 'shift-f') == 1) then
-                call terminal_move_cursor(editor%screen_rows, 1)
-                call terminal_write('[DEBUG] Unhandled key: ' // trim(key_str) // '                ')
-            end if
-
             ! Check for mouse events
             if (index(key_str, 'mouse-') == 1) then
                 call handle_mouse_event_action(key_str, editor, buffer)
@@ -5238,6 +4968,18 @@ contains
                 allocate(character(len=len_trim(full_path)) :: editor%filename)
                 editor%filename = full_path
 
+                ! Send LSP didOpen notification to ALL active servers
+                if (editor%tabs(editor%active_tab_index)%num_lsp_servers > 0) then
+                    block
+                        integer :: srv_i
+                        do srv_i = 1, editor%tabs(editor%active_tab_index)%num_lsp_servers
+                            call notify_file_opened(editor%lsp_manager, &
+                                editor%tabs(editor%active_tab_index)%lsp_server_indices(srv_i), &
+                                full_path, buffer_to_string(editor%tabs(editor%active_tab_index)%buffer))
+                        end do
+                    end block
+                end if
+
                 ! Reset cursor to top of file
                 editor%cursors(editor%active_cursor)%line = 1
                 editor%cursors(editor%active_cursor)%column = 1
@@ -5989,13 +5731,6 @@ contains
         integer, intent(in) :: request_id
         type(lsp_message_t), intent(in) :: response
 
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> REFERENCES RESPONSE RECEIVED <<<'
-            close(debug_unit)
-        end block
-
         ! Call the actual handler with saved editor state
         if (associated(saved_editor_for_callback)) then
             call handle_references_response_impl(saved_editor_for_callback, response)
@@ -6122,26 +5857,13 @@ contains
         type(lsp_message_t), intent(in) :: response
         type(json_value_t) :: result_array, action_obj, edit_obj
         type(code_action_t), allocatable :: actions(:)
-        integer :: num_actions, i, dbg
-        character(len=:), allocatable :: title, kind, action_json, result_str
+        integer :: num_actions, i
+        character(len=:), allocatable :: title, kind, action_json
         logical :: is_preferred
-
-        ! Debug: Log that callback was invoked
-        open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
-        write(dbg, '(A)') '=== CODE ACTIONS RESPONSE RECEIVED ==='
-        write(dbg, '(A,I0)') 'response%id = ', response%id
-        result_str = json_stringify(response%result)
-        write(dbg, '(A)') 'response%result (first 500 chars):'
-        write(dbg, '(A)') result_str(1:min(500, len(result_str)))
-        close(dbg)
 
         ! The result is directly in response%result for LSP responses
         result_array = response%result
         num_actions = json_array_size(result_array)
-
-        open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
-        write(dbg, '(A,I0)') 'num_actions from json_array_size = ', num_actions
-        close(dbg)
 
         if (num_actions == 0) then
             ! No actions available - don't show panel
@@ -6206,13 +5928,6 @@ contains
         integer, intent(in) :: request_id
         type(lsp_message_t), intent(in) :: response
 
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> SYMBOLS RESPONSE RECEIVED <<<'
-            close(debug_unit)
-        end block
-
         ! Call the actual handler with saved editor state
         if (associated(saved_editor_for_callback)) then
             call handle_symbols_response_impl(saved_editor_for_callback, response)
@@ -6237,26 +5952,6 @@ contains
         ! The result is directly in response%result for LSP responses
         result_array = response%result
         num_symbols = json_array_size(result_array)
-
-        block
-            integer :: debug_unit
-            character(len=:), allocatable :: result_str, error_str
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> SYMBOLS RESPONSE RECEIVED <<<'
-
-            ! Check for error
-            if (json_has_key(response%error, "message")) then
-                error_str = json_get_string(response%error, "message")
-                write(debug_unit, '(A)') 'ERROR: ' // trim(error_str)
-            end if
-
-            write(debug_unit, '(A,I0)') 'num_symbols = ', num_symbols
-            result_str = json_stringify(response%result)
-            if (allocated(result_str)) then
-                write(debug_unit, '(A)') 'Result JSON: ' // result_str(1:min(500,len(result_str)))
-            end if
-            close(debug_unit)
-        end block
 
         if (num_symbols == 0) then
             call clear_symbols(editor%symbols_panel)
@@ -6406,23 +6101,11 @@ contains
 
         character(len=:), allocatable :: result_str
         integer :: changes_applied
-        integer :: debug_unit
 
         if (.not. associated(saved_editor_for_callback)) return
 
         ! Convert result to string for apply_workspace_edit
         result_str = json_stringify(response%result)
-
-        ! Debug logging
-        open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-        write(debug_unit, '(A)') '>>> RENAME RESPONSE <<<'
-        if (allocated(result_str)) then
-            write(debug_unit, '(A,I0)') 'Result length: ', len(result_str)
-            write(debug_unit, '(A)') 'Result (first 500 chars): ' // result_str(1:min(500, len(result_str)))
-        else
-            write(debug_unit, '(A)') 'Result: NOT ALLOCATED'
-        end if
-        close(debug_unit)
 
         if (.not. allocated(result_str) .or. result_str == 'null' .or. len_trim(result_str) == 0) then
             call terminal_move_cursor(saved_editor_for_callback%screen_rows, 1)
@@ -6433,21 +6116,6 @@ contains
 
         ! Apply workspace edit
         call apply_workspace_edit(saved_editor_for_callback, result_str, changes_applied)
-
-        ! Debug: verify edits were applied
-        if (changes_applied > 0) then
-            block
-                integer :: tab_idx, debug_unit
-                tab_idx = saved_editor_for_callback%active_tab_index
-                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                write(debug_unit, '(A)') '>>> AFTER ALL EDITS APPLIED <<<'
-                write(debug_unit, '(A,I0)') 'Active tab index: ', tab_idx
-                write(debug_unit, '(A,I0)') 'Changes applied: ', changes_applied
-                write(debug_unit, '(A,L1)') 'Buffer modified flag: ', saved_editor_for_callback%tabs(tab_idx)%buffer%modified
-                write(debug_unit, '(A)') 'NOTE: Screen will be rendered by main loop'
-                close(debug_unit)
-            end block
-        end if
 
         call terminal_move_cursor(saved_editor_for_callback%screen_rows, 1)
         if (changes_applied > 0) then
@@ -6533,6 +6201,52 @@ contains
         end if
     end subroutine handle_formatting_response_wrapper
 
+    ! Apply the selected code action from the panel
+    subroutine apply_selected_code_action(editor, buffer)
+        use json_module, only: json_parse, json_value_t, json_get_object, &
+                               json_has_key, json_stringify
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: action_json, edit_json
+        type(json_value_t) :: action_obj, edit_obj
+        integer :: changes_applied
+
+        if (get_selected_action(editor%code_actions_panel, action_json)) then
+            ! Parse the action JSON to extract the edit
+            action_obj = json_parse(action_json)
+
+            if (json_has_key(action_obj, 'edit')) then
+                ! Get the edit object and convert to string for apply_workspace_edit
+                edit_obj = json_get_object(action_obj, 'edit')
+                edit_json = json_stringify(edit_obj)
+
+                ! Apply the workspace edit
+                call apply_workspace_edit(editor, edit_json, changes_applied)
+
+                if (changes_applied > 0) then
+                    ! Sync modified tab buffer back to the buffer parameter
+                    if (editor%active_tab_index > 0 .and. &
+                        editor%active_tab_index <= size(editor%tabs)) then
+                        call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+                    end if
+                    ! Re-render screen to show the applied changes
+                    call render_screen(buffer, editor)
+                    call terminal_move_cursor(editor%screen_rows, 1)
+                    call terminal_write('Code action applied                        ')
+                else
+                    call terminal_move_cursor(editor%screen_rows, 1)
+                    call terminal_write('No changes from code action                ')
+                end if
+            else
+                call terminal_move_cursor(editor%screen_rows, 1)
+                call terminal_write('Code action has no edit                    ')
+            end if
+
+            ! Hide menu after selection
+            call hide_code_actions_panel(editor%code_actions_panel)
+        end if
+    end subroutine apply_selected_code_action
+
     ! Apply a workspace edit from LSP
     subroutine apply_workspace_edit(editor, edit_json, changes_applied)
         use json_module, only: json_parse, json_value_t, json_get_array, json_array_size, &
@@ -6549,15 +6263,6 @@ contains
 
         changes_applied = 0
 
-        ! Debug logging
-        block
-            integer :: dbg
-            open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
-            write(dbg, '(A)') '=== apply_workspace_edit called ==='
-            write(dbg, '(A,I0)') 'edit_json length = ', len(edit_json)
-            close(dbg)
-        end block
-
         ! Parse the edit JSON
         edit_obj = json_parse(edit_json)
 
@@ -6566,13 +6271,6 @@ contains
             doc_changes_arr = json_get_array(edit_obj, 'documentChanges')
             num_files = json_array_size(doc_changes_arr)
 
-            block
-                integer :: dbg
-                open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
-                write(dbg, '(A,I0)') 'Found documentChanges, num_files = ', num_files
-                close(dbg)
-            end block
-
             do i = 0, num_files - 1  ! 0-based index
                 file_change_obj = json_get_array_element(doc_changes_arr, i)
 
@@ -6580,33 +6278,11 @@ contains
                 if (json_has_key(file_change_obj, 'textDocument')) then
                     text_doc_obj = json_get_object(file_change_obj, 'textDocument')
                     uri = json_get_string(text_doc_obj, 'uri')
-
-                    block
-                        integer :: dbg
-                        open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
-                        write(dbg, '(A,I0)') 'Processing file ', i
-                        if (allocated(uri)) then
-                            write(dbg, '(A,A)') 'uri = ', trim(uri)
-                        else
-                            write(dbg, '(A)') 'uri NOT allocated'
-                        end if
-                        write(dbg, '(A,L1)') 'has edits key = ', json_has_key(file_change_obj, 'edits')
-                        close(dbg)
-                    end block
                 end if
 
                 ! Get edits array
                 if (json_has_key(file_change_obj, 'edits') .and. allocated(uri)) then
                     edits_arr = json_get_array(file_change_obj, 'edits')
-
-                    block
-                        integer :: dbg, num_edits
-                        num_edits = json_array_size(edits_arr)
-                        open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
-                        write(dbg, '(A,I0)') 'num_edits = ', num_edits
-                        close(dbg)
-                    end block
-
                     call apply_file_edits_obj(editor, uri, edits_arr, changes_applied)
                     deallocate(uri)
                 end if
@@ -6656,38 +6332,10 @@ contains
             filename = uri
         end if
 
-        ! Debug logging
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> APPLY_FILE_EDITS_OBJ <<<'
-            write(debug_unit, '(A)') 'URI: ' // trim(uri)
-            write(debug_unit, '(A)') 'Extracted filename: ' // trim(filename)
-            write(debug_unit, '(A,I0)') 'Number of tabs: ', size(editor%tabs)
-            close(debug_unit)
-        end block
-
         ! Find the tab with this file
         tab_idx = 0
         do j = 1, size(editor%tabs)
             if (allocated(editor%tabs(j)%filename)) then
-                ! Debug logging for each tab
-                block
-                    integer :: debug_unit
-                    logical :: exact_match, ends_with_match
-                    open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                    write(debug_unit, '(A,I0,A)') 'Tab ', j, ': ' // trim(editor%tabs(j)%filename)
-                    exact_match = trim(editor%tabs(j)%filename) == trim(filename)
-                    ! Check if filename ends with tab filename (for absolute vs relative path matching)
-                    ends_with_match = .false.
-                    if (len(filename) >= len(editor%tabs(j)%filename)) then
-                        ends_with_match = filename(len(filename)-len(editor%tabs(j)%filename)+1:) == editor%tabs(j)%filename
-                    end if
-                    write(debug_unit, '(A,L1)') '  Exact match: ', exact_match
-                    write(debug_unit, '(A,L1)') '  Ends-with match: ', ends_with_match
-                    close(debug_unit)
-                end block
-
                 ! Try exact match first, then check if the absolute path ends with the relative path
                 if (trim(editor%tabs(j)%filename) == trim(filename)) then
                     tab_idx = j
@@ -6701,13 +6349,6 @@ contains
                 end if
             end if
         end do
-
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A,I0)') 'Found tab_idx: ', tab_idx
-            close(debug_unit)
-        end block
 
         if (tab_idx == 0) then
             ! File not open - skip for now
@@ -6758,75 +6399,22 @@ contains
 
         integer :: start_pos, end_pos, delete_count
 
-        ! Debug logging
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> APPLY_SINGLE_EDIT <<<'
-            write(debug_unit, '(A,I0,A,I0)') 'Start: line=', start_line, ', char=', start_char
-            write(debug_unit, '(A,I0,A,I0)') 'End:   line=', end_line, ', char=', end_char
-            write(debug_unit, '(A)') 'New text: ' // trim(new_text)
-            close(debug_unit)
-        end block
-
         ! Calculate buffer positions
         start_pos = get_buffer_position(buffer, start_line, start_char)
         end_pos = get_buffer_position(buffer, end_line, end_char)
 
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A,I0)') 'Calculated start_pos: ', start_pos
-            write(debug_unit, '(A,I0)') 'Calculated end_pos: ', end_pos
-            close(debug_unit)
-        end block
-
-        if (start_pos <= 0 .or. end_pos <= 0) then
-            block
-                integer :: debug_unit
-                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                write(debug_unit, '(A)') 'EARLY RETURN: start_pos or end_pos <= 0'
-                close(debug_unit)
-            end block
-            return
-        end if
+        if (start_pos <= 0 .or. end_pos <= 0) return
 
         ! Delete the old text
         delete_count = end_pos - start_pos
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A,I0)') 'Delete count: ', delete_count
-            close(debug_unit)
-        end block
-
         if (delete_count > 0) then
-            block
-                integer :: debug_unit
-                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                write(debug_unit, '(A,I0,A,I0)') 'Calling buffer_delete(pos=', start_pos, ', count=', delete_count, ')'
-                close(debug_unit)
-            end block
             call buffer_delete(buffer, start_pos, delete_count)
         end if
 
         ! Insert the new text
         if (len(new_text) > 0) then
-            block
-                integer :: debug_unit
-                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                write(debug_unit, '(A,I0,A)') 'Calling buffer_insert(pos=', start_pos, ', text="' // trim(new_text) // '")'
-                close(debug_unit)
-            end block
             call buffer_insert(buffer, start_pos, new_text)
         end if
-
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') 'apply_single_edit COMPLETED'
-            close(debug_unit)
-        end block
     end subroutine apply_single_edit
 
     ! Execute a command from the command palette
@@ -7048,38 +6636,8 @@ contains
         integer :: target_line, target_col, i, num_locations
         logical :: found_file
 
-        ! Log response for debugging
-        block
-            integer :: debug_unit
-            character(len=:), allocatable :: result_str, error_str
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> DEFINITION RESPONSE RECEIVED <<<'
-
-            ! Check for error
-            if (json_has_key(response%error, "message")) then
-                error_str = json_get_string(response%error, "message")
-                write(debug_unit, '(A)') 'ERROR: ' // trim(error_str)
-            end if
-
-            result_str = json_stringify(response%result)
-            if (allocated(result_str)) then
-                write(debug_unit, '(A)') 'Result JSON: ' // result_str(1:min(500,len(result_str)))
-            else
-                write(debug_unit, '(A)') 'Result JSON: (not allocated)'
-            end if
-            close(debug_unit)
-        end block
-
         ! Try to treat result as array first
         num_locations = json_array_size(response%result)
-
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A,I0)') 'num_locations = ', num_locations
-            write(debug_unit, '(A,L1)') 'has uri key = ', json_has_key(response%result, "uri")
-            close(debug_unit)
-        end block
 
         if (num_locations > 0) then
             ! Array of locations - take first one
@@ -7089,12 +6647,6 @@ contains
             location_obj = response%result
         else
             ! No definition found
-            block
-                integer :: debug_unit
-                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                write(debug_unit, '(A)') '>>> NO DEFINITION FOUND (empty response) <<<'
-                close(debug_unit)
-            end block
             call terminal_move_cursor(editor%screen_rows, 1)
             call terminal_write('No definition found                           ')
             if (associated(saved_buffer_for_callback)) then
@@ -7132,23 +6684,31 @@ contains
         target_line = int(line_real) + 1
         target_col = int(col_real) + 1
 
-        ! Log details
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') 'File: ' // trim(filepath)
-            write(debug_unit, '(A,I0,A,I0)') 'Position: line=', target_line, ', col=', target_col
-            close(debug_unit)
-        end block
-
         ! Check if the file is already open in a tab
         found_file = .false.
         do i = 1, size(editor%tabs)
             if (allocated(editor%tabs(i)%filename)) then
+                ! Check for exact match or suffix match (handles relative vs absolute paths)
                 if (trim(editor%tabs(i)%filename) == trim(filepath)) then
-                    ! Switch to this tab
-                    editor%active_tab_index = i
                     found_file = .true.
+                else if (len_trim(filepath) > len_trim(editor%tabs(i)%filename)) then
+                    ! Check if filepath ends with tab filename
+                    if (filepath(len_trim(filepath)-len_trim(editor%tabs(i)%filename)+1:) == &
+                        trim(editor%tabs(i)%filename)) then
+                        found_file = .true.
+                    end if
+                else if (len_trim(editor%tabs(i)%filename) > len_trim(filepath)) then
+                    ! Check if tab filename ends with filepath
+                    if (editor%tabs(i)%filename(len_trim(editor%tabs(i)%filename)-len_trim(filepath)+1:) == &
+                        trim(filepath)) then
+                        found_file = .true.
+                    end if
+                end if
+
+                if (found_file) then
+                    ! Properly switch to this tab
+                    call switch_to_tab(editor, i)
+                    call sync_pane_to_editor(editor, i, editor%tabs(i)%active_pane_index)
                     exit
                 end if
             end if
@@ -7171,6 +6731,19 @@ contains
                     ! Copy buffer to the pane's buffer
                     if (allocated(editor%tabs(new_tab_idx)%panes)) then
                         call copy_buffer(editor%tabs(new_tab_idx)%panes(1)%buffer, editor%tabs(new_tab_idx)%buffer)
+                    end if
+
+                    ! Send LSP didOpen notification to all active servers for this tab
+                    if (editor%tabs(new_tab_idx)%num_lsp_servers > 0) then
+                        block
+                            use text_buffer_module, only: buffer_to_string
+                            integer :: srv_i
+                            do srv_i = 1, editor%tabs(new_tab_idx)%num_lsp_servers
+                                call notify_file_opened(editor%lsp_manager, &
+                                    editor%tabs(new_tab_idx)%lsp_server_indices(srv_i), &
+                                    filepath, buffer_to_string(editor%tabs(new_tab_idx)%buffer))
+                            end do
+                        end block
                     end if
 
                     ! Switch to the new tab
@@ -7208,9 +6781,13 @@ contains
         ! File already open in tabs - jump to the line and column
         editor%cursors(editor%active_cursor)%line = target_line
         editor%cursors(editor%active_cursor)%column = target_col
+        editor%cursors(editor%active_cursor)%desired_column = target_col
 
         ! Center viewport on target
         editor%viewport_line = max(1, target_line - editor%screen_rows / 2)
+
+        ! Sync cursor changes back to pane
+        call sync_editor_to_pane(editor)
 
         call terminal_move_cursor(editor%screen_rows, 1)
         call terminal_write('Jumped to definition                          ')

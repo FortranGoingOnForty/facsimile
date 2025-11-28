@@ -4,7 +4,8 @@
 module workspace_module
     use iso_c_binding, only: c_int
     use editor_state_module, only: editor_state_t, create_tab, sync_pane_to_editor
-    use text_buffer_module, only: buffer_t, init_buffer
+    use text_buffer_module, only: buffer_t, init_buffer, buffer_to_string
+    use lsp_server_manager_module, only: notify_file_opened
     use recents_module, only: recents_add_or_update
     implicit none
     private
@@ -622,6 +623,18 @@ contains
 
                             call buffer_load_file(editor%tabs(tab_idx)%buffer, trim(full_path), load_status)
                             write(0, '(A,I0)') '[DEBUG RESTORE WS] Buffer loaded, status: ', load_status
+
+                            ! Send LSP didOpen notification for restored tabs
+                            if (load_status == 0 .and. editor%tabs(tab_idx)%num_lsp_servers > 0) then
+                                block
+                                    integer :: srv_i
+                                    do srv_i = 1, editor%tabs(tab_idx)%num_lsp_servers
+                                        call notify_file_opened(editor%lsp_manager, &
+                                            editor%tabs(tab_idx)%lsp_server_indices(srv_i), &
+                                            trim(full_path), buffer_to_string(editor%tabs(tab_idx)%buffer))
+                                    end do
+                                end block
+                            end if
 
                             ! Set cursor and viewport in first pane
                             if (allocated(editor%tabs(tab_idx)%panes) .and. size(editor%tabs(tab_idx)%panes) > 0) then
