@@ -240,7 +240,8 @@ contains
 
         ! Parse each signature
         do i = 1, num_signatures
-            sig_obj = json_get_array_element(signatures_array, i)
+            ! json_get_array_element expects 0-based index
+            sig_obj = json_get_array_element(signatures_array, i - 1)
 
             ! Get label (required)
             if (json_has_key(sig_obj, 'label')) then
@@ -268,7 +269,8 @@ contains
                     tooltip%signatures(i)%num_parameters = num_params
 
                     do j = 1, num_params
-                        param_obj = json_get_array_element(params_array, j)
+                        ! json_get_array_element expects 0-based index
+                        param_obj = json_get_array_element(params_array, j - 1)
 
                         ! Get parameter label
                         if (json_has_key(param_obj, 'label')) then

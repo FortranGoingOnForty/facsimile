@@ -346,6 +346,44 @@ contains
         end do
     end function escape_string
 
+    ! Unescape JSON string escape sequences (inverse of escape_string)
+    function unescape_string(str) result(unescaped)
+        character(len=*), intent(in) :: str
+        character(len=:), allocatable :: unescaped
+        integer :: i, n
+
+        unescaped = ""
+        n = len(str)
+        i = 1
+        do while (i <= n)
+            if (str(i:i) == '\' .and. i < n) then
+                select case(str(i+1:i+1))
+                case('"')
+                    unescaped = unescaped // '"'
+                case('\')
+                    unescaped = unescaped // '\'
+                case('b')
+                    unescaped = unescaped // char(8)   ! backspace
+                case('f')
+                    unescaped = unescaped // char(12)  ! form feed
+                case('n')
+                    unescaped = unescaped // char(10)  ! newline
+                case('r')
+                    unescaped = unescaped // char(13)  ! carriage return
+                case('t')
+                    unescaped = unescaped // char(9)   ! tab
+                case default
+                    ! Unknown escape, keep as-is
+                    unescaped = unescaped // str(i:i+1)
+                end select
+                i = i + 2
+            else
+                unescaped = unescaped // str(i:i)
+                i = i + 1
+            end if
+        end do
+    end function unescape_string
+
     function number_to_string(num) result(str)
         real(real64), intent(in) :: num
         character(len=:), allocatable :: str
@@ -719,7 +757,8 @@ contains
             if (str(pos:pos) == '\' .and. pos < len(str)) then
                 pos = pos + 2  ! skip escaped character
             else if (str(pos:pos) == '"') then
-                value%string_value = str(start_pos:pos-1)
+                ! Unescape the string (convert \n to newline, etc.)
+                value%string_value = unescape_string(str(start_pos:pos-1))
                 pos = pos + 1  ! skip closing '"'
                 return
             else
@@ -727,7 +766,7 @@ contains
             end if
         end do
 
-        value%string_value = str(start_pos:)
+        value%string_value = unescape_string(str(start_pos:))
     end function parse_string
 
     function parse_number(str, pos) result(value)

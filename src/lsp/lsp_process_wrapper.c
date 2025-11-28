@@ -55,7 +55,7 @@ lsp_process_t* lsp_start_server(const char* command) {
         close(stdout_pipe[1]);
         close(stderr_pipe[1]);
 
-        // Execute the command
+        // Execute the command - use sh for simplicity
         execl("/bin/sh", "sh", "-c", command, NULL);
 
         // If we get here, exec failed
@@ -69,14 +69,26 @@ lsp_process_t* lsp_start_server(const char* command) {
     proc->stdout_fd = stdout_pipe[0];
     proc->stderr_fd = stderr_pipe[0];
 
+    // Debug log
+    {
+        FILE* dbg = fopen("/tmp/fac_lsp_read.log", "a");
+        if (dbg) {
+            fprintf(dbg, "Started LSP server: pid=%d, stdin_fd=%d, stdout_fd=%d, cmd=%s\n",
+                    pid, proc->stdin_fd, proc->stdout_fd, command);
+            fclose(dbg);
+        }
+    }
+
     // Close unused pipe ends
     close(stdin_pipe[0]);
     close(stdout_pipe[1]);
     close(stderr_pipe[1]);
 
-    // Make stdout non-blocking
+    // Make stdout and stderr non-blocking
     int flags = fcntl(proc->stdout_fd, F_GETFL, 0);
     fcntl(proc->stdout_fd, F_SETFL, flags | O_NONBLOCK);
+    flags = fcntl(proc->stderr_fd, F_GETFL, 0);
+    fcntl(proc->stderr_fd, F_SETFL, flags | O_NONBLOCK);
 
     return proc;
 }
@@ -85,7 +97,36 @@ lsp_process_t* lsp_start_server(const char* command) {
 int lsp_send_message(lsp_process_t* proc, const char* message, int len) {
     if (!proc || proc->stdin_fd < 0) return -1;
 
+    // Debug log
+    {
+        FILE* dbg = fopen("/tmp/fac_lsp_read.log", "a");
+        if (dbg) {
+            fprintf(dbg, "lsp_send_message: len=%d, stdin_fd=%d, pid=%d\n", len, proc->stdin_fd, proc->pid);
+            fprintf(dbg, "  message (first 200 chars): %.200s\n", message);
+            fclose(dbg);
+        }
+    }
+
     ssize_t written = write(proc->stdin_fd, message, (size_t)len);
+
+    // Debug log result
+    {
+        FILE* dbg = fopen("/tmp/fac_lsp_read.log", "a");
+        if (dbg) {
+            fprintf(dbg, "  write() returned: %zd, errno=%d\n", written, errno);
+            // Check stderr for errors
+            if (proc->stderr_fd >= 0) {
+                char stderr_buf[512];
+                ssize_t err_bytes = read(proc->stderr_fd, stderr_buf, sizeof(stderr_buf) - 1);
+                if (err_bytes > 0) {
+                    stderr_buf[err_bytes] = '\0';
+                    fprintf(dbg, "  STDERR: %s\n", stderr_buf);
+                }
+            }
+            fclose(dbg);
+        }
+    }
+
     if (written < 0) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
             return -1;
@@ -98,9 +139,35 @@ int lsp_send_message(lsp_process_t* proc, const char* message, int len) {
 
 // Read data from LSP server (non-blocking)
 int lsp_read_message(lsp_process_t* proc, char* buffer, int max_len) {
+    static int read_call_count = 0;
+    read_call_count++;
+
     if (!proc || proc->stdout_fd < 0) return -1;
 
     ssize_t bytes_read = read(proc->stdout_fd, buffer, (size_t)(max_len - 1));
+
+    // Debug: log every 100th call or when data is read
+    if (bytes_read > 0 || read_call_count % 100 == 0) {
+        FILE* dbg = fopen("/tmp/fac_lsp_read.log", "a");
+        if (dbg) {
+            fprintf(dbg, "read call %d: bytes_read=%zd, pid=%d\n",
+                    read_call_count, bytes_read, proc->pid);
+            if (bytes_read > 0) {
+                fprintf(dbg, "  data: %.100s...\n", buffer);
+            }
+            // Check stderr
+            if (proc->stderr_fd >= 0) {
+                char stderr_buf[1024];
+                ssize_t err_bytes = read(proc->stderr_fd, stderr_buf, sizeof(stderr_buf) - 1);
+                if (err_bytes > 0) {
+                    stderr_buf[err_bytes] = '\0';
+                    fprintf(dbg, "  STDERR: %s\n", stderr_buf);
+                }
+            }
+            fclose(dbg);
+        }
+    }
+
     if (bytes_read < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             return 0;  // No data available

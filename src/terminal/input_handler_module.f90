@@ -421,6 +421,9 @@ contains
         else if (ch1 == ']') then
             ! Alt+] for jump to matching bracket
             key_str = "alt-]"
+        else if (ch1 == '.') then
+            ! Alt+. for code actions
+            key_str = "alt-."
         end if
 
     end subroutine handle_escape_sequence
