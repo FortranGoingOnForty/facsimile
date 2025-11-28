@@ -784,6 +784,13 @@ contains
                             call apply_workspace_edit(editor, edit_json, changes_applied)
 
                             if (changes_applied > 0) then
+                                ! Sync modified tab buffer back to the buffer parameter
+                                if (editor%active_tab_index > 0 .and. &
+                                    editor%active_tab_index <= size(editor%tabs)) then
+                                    call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+                                end if
+                                ! Re-render screen to show the applied changes
+                                call render_screen(buffer, editor)
                                 call terminal_move_cursor(editor%screen_rows, 1)
                                 call terminal_write('Code action applied                        ')
                             else
@@ -1279,7 +1286,7 @@ contains
                     if (code_actions_server > 0) then
                         ! Request code actions for the current line
                         block
-                            integer :: request_id, lsp_line, dbg
+                            integer :: request_id, lsp_line, dbg, dbg_i
                             character(len=:), allocatable :: file_uri
                             type(diagnostic_t), allocatable :: line_diags(:)
                             type(json_value_t) :: diags_json
@@ -1307,8 +1314,32 @@ contains
                             write(dbg, '(A,I0)') 'Found diagnostics on line: ', size(line_diags)
                             close(dbg)
 
+                            ! Debug: check each diagnostic before calling diagnostics_to_json
+                            open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
+                            write(dbg, '(A)') 'About to check diagnostics...'
+                            do dbg_i = 1, size(line_diags)
+                                write(dbg, '(A,I0)') 'Checking diagnostic ', dbg_i
+                                write(dbg, '(A,L1)') '  message allocated: ', allocated(line_diags(dbg_i)%message)
+                                write(dbg, '(A,L1)') '  source allocated: ', allocated(line_diags(dbg_i)%source)
+                                write(dbg, '(A,L1)') '  code allocated: ', allocated(line_diags(dbg_i)%code)
+                                write(dbg, '(A,L1)') '  data allocated: ', allocated(line_diags(dbg_i)%data)
+                                if (allocated(line_diags(dbg_i)%message)) then
+                                    write(dbg, '(A,I0)') '  message len: ', len(line_diags(dbg_i)%message)
+                                end if
+                            end do
+                            write(dbg, '(A)') 'Diagnostics check complete'
+                            close(dbg)
+
                             ! Convert diagnostics to JSON for request
+                            open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
+                            write(dbg, '(A)') 'Calling diagnostics_to_json...'
+                            close(dbg)
+
                             diags_json = diagnostics_to_json(line_diags)
+
+                            open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
+                            write(dbg, '(A)') 'diagnostics_to_json returned'
+                            close(dbg)
 
                             ! Debug: log the diagnostics JSON
                             block
