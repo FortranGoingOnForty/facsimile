@@ -1,6 +1,6 @@
 # Test file with errors that generate long diagnostic messages
 
-from typing import Dict, List, Optional, Union, Callable
+from typing import Callable, Dict, List, Optional, Union
 
 # Type mismatch with long type names
 def process_data(

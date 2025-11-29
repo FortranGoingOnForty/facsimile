@@ -23,18 +23,6 @@ contains
         ! Show the text prompt
         call show_text_prompt(trim(prompt_text), input_text, cancelled, screen_rows)
 
-        ! Debug logging
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> RENAME PROMPT RETURNED <<<'
-            write(debug_unit, '(A,L1)') 'Cancelled: ', cancelled
-            write(debug_unit, '(A)') 'Input text: "' // trim(input_text) // '"'
-            write(debug_unit, '(A)') 'Old name: "' // trim(old_name) // '"'
-            write(debug_unit, '(A,I0)') 'Input length: ', len_trim(input_text)
-            close(debug_unit)
-        end block
-
         if (.not. cancelled) then
             if (len_trim(input_text) > 0 .and. trim(input_text) /= trim(old_name)) then
                 allocate(character(len=len_trim(input_text)) :: new_name)
@@ -43,19 +31,6 @@ contains
                 cancelled = .true.
             end if
         end if
-
-        ! Debug logging after check
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A,L1)') 'Final cancelled: ', cancelled
-            if (allocated(new_name)) then
-                write(debug_unit, '(A)') 'New name allocated: "' // trim(new_name) // '"'
-            else
-                write(debug_unit, '(A)') 'New name NOT allocated'
-            end if
-            close(debug_unit)
-        end block
     end subroutine show_rename_prompt
 
 end module rename_prompt_module

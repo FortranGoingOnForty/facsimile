@@ -375,16 +375,6 @@ contains
             return
         end if
 
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> STARTING LSP SERVER <<<'
-            write(debug_unit, '(A)') 'Language: ' // trim(language)
-            write(debug_unit, '(A)') 'Command: ' // trim(command)
-            write(debug_unit, '(A)') 'Root path: ' // trim(root_path)
-            close(debug_unit)
-        end block
-
         ! Expand server array
         allocate(new_servers(manager%num_servers + 1))
         if (manager%num_servers > 0) then
@@ -467,98 +457,20 @@ contains
         procedure(response_callback), optional :: callback
         character(len=:), allocatable :: json_msg
 
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> send_request: START <<<'
-            write(debug_unit, '(A,I0)') 'server_index = ', server_index
-            write(debug_unit, '(A,I0)') 'num_servers = ', manager%num_servers
-            close(debug_unit)
-        end block
-
-        if (server_index < 1 .or. server_index > manager%num_servers) then
-            block
-                integer :: debug_unit
-                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                write(debug_unit, '(A)') '>>> send_request: EARLY RETURN - invalid server_index <<<'
-                close(debug_unit)
-            end block
-            return
-        end if
+        if (server_index < 1 .or. server_index > manager%num_servers) return
 
         if (.not. manager%servers(server_index)%initialized .and. &
-            .not. manager%servers(server_index)%initializing) then
-            block
-                integer :: debug_unit
-                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                write(debug_unit, '(A)') '>>> send_request: EARLY RETURN - server not initialized <<<'
-                write(debug_unit, '(A,L1)') 'initialized = ', manager%servers(server_index)%initialized
-                write(debug_unit, '(A,L1)') 'initializing = ', manager%servers(server_index)%initializing
-                close(debug_unit)
-            end block
-            return
-        end if
-
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> send_request: Formatting JSON <<<'
-            close(debug_unit)
-        end block
+            .not. manager%servers(server_index)%initializing) return
 
         json_msg = format_json_rpc(msg)
-
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> send_request: Sending message <<<'
-            write(debug_unit, '(A)') 'JSON (first 500 chars): ' // json_msg(1:min(500,len(json_msg)))
-            close(debug_unit)
-        end block
-
         call send_raw_message(manager%servers(server_index), json_msg)
-
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> send_request: Tracking request <<<'
-            close(debug_unit)
-        end block
 
         ! Track request and register callback
         call track_request(manager%servers(server_index), msg%id)
 
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A,L1)') '>>> send_request: callback present = ', present(callback)
-            close(debug_unit)
-        end block
-
         if (present(callback)) then
-            block
-                integer :: debug_unit
-                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                write(debug_unit, '(A)') '>>> send_request: Calling register_callback <<<'
-                close(debug_unit)
-            end block
-
             call register_callback(manager, msg%id, callback)
-
-            block
-                integer :: debug_unit
-                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                write(debug_unit, '(A)') '>>> send_request: register_callback DONE <<<'
-                close(debug_unit)
-            end block
         end if
-
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> send_request: DONE <<<'
-            close(debug_unit)
-        end block
     end subroutine send_request
 
     subroutine send_notification(server, msg)
@@ -569,52 +481,15 @@ contains
         if (.not. server%initialized .and. .not. server%initializing) return
 
         json_msg = format_json_rpc(msg)
-
-        ! Debug log for didOpen notifications
-        if (index(msg%method, 'didOpen') > 0) then
-            block
-                integer :: debug_unit
-                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                write(debug_unit, '(A)') '>>> Sending didOpen notification <<<'
-                write(debug_unit, '(A)') 'JSON (first 800 chars): ' // json_msg(1:min(800,len(json_msg)))
-                close(debug_unit)
-            end block
-        end if
-
         call send_raw_message(server, json_msg)
     end subroutine send_notification
 
     subroutine send_raw_message(server, message)
         type(lsp_server_t), intent(inout) :: server
         character(len=*), intent(in) :: message
-        integer :: result, debug_unit
+        integer :: result
 
-        ! Check if handle is valid
-        block
-            integer :: debug_unit2
-            open(newunit=debug_unit2, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit2, '(A)') '>>> send_raw_message: START <<<'
-            write(debug_unit2, '(A,L1)') 'c_associated(server%handle) = ', c_associated(server%handle)
-            close(debug_unit2)
-        end block
-
-        if (.not. c_associated(server%handle)) then
-            block
-                integer :: debug_unit2
-                open(newunit=debug_unit2, file='/tmp/fac_keys.log', position='append', action='write')
-                write(debug_unit2, '(A)') '>>> send_raw_message: EARLY RETURN - handle is NULL <<<'
-                close(debug_unit2)
-            end block
-            return
-        end if
-
-        ! Log outgoing messages for debugging
-        open(newunit=debug_unit, file='/tmp/fac_lsp_out.log', position='append', action='write')
-        write(debug_unit, '(A)') '>>> OUTGOING MESSAGE >>>'
-        write(debug_unit, '(A)') trim(message)
-        write(debug_unit, '(A)') '<<< END MESSAGE <<<'
-        write(debug_unit, '(A)') ''
-        close(debug_unit)
+        if (.not. c_associated(server%handle)) return
 
         result = lsp_send_message_f(server%handle, message//c_null_char, len(message))
 
@@ -675,18 +550,6 @@ contains
 
             ! Extract and parse message
             message = server%read_buffer(1:message_end)
-
-            ! Log incoming message
-            block
-                integer :: debug_unit
-                open(newunit=debug_unit, file='/tmp/fac_lsp_in.log', position='append', action='write')
-                write(debug_unit, '(A)') '>>> INCOMING MESSAGE >>>'
-                write(debug_unit, '(A)') trim(message)
-                write(debug_unit, '(A)') '<<< END MESSAGE <<<'
-                write(debug_unit, '(A)') ''
-                close(debug_unit)
-            end block
-
             msg = parse_lsp_message(message)
 
             ! Handle the message
@@ -818,18 +681,12 @@ contains
         server%initialized = .true.
         server%initializing = .false.
 
-        write(error_unit, '(a,a)') "LSP server initialized: ", server%language
-
         ! Send all queued didOpen notifications
         if (allocated(server%pending_didopens) .and. server%num_pending_didopens > 0) then
             block
-                integer :: i, debug_unit
+                integer :: i
                 type(lsp_message_t) :: didopen_msg
                 character(len=:), allocatable :: lang, file_uri
-
-                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                write(debug_unit, '(A,I0,A)') '>>> Flushing ', server%num_pending_didopens, ' queued didOpen notifications <<<'
-                close(debug_unit)
 
                 do i = 1, server%num_pending_didopens
                     if (allocated(server%pending_didopens(i)%filename) .and. &
@@ -840,14 +697,6 @@ contains
                         didopen_msg = create_did_open_notification( &
                             file_uri, lang, 1, &
                             server%pending_didopens(i)%content)
-
-                        open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                        write(debug_unit, '(A,A)') '  - Sent didOpen for: ', trim(server%pending_didopens(i)%filename)
-                        write(debug_unit, '(A,A)') '  - URI: ', trim(file_uri)
-                        write(debug_unit, '(A,I0)') '  - Content length: ', len(server%pending_didopens(i)%content)
-                        write(debug_unit, '(A,A)') '  - Language: ', trim(lang)
-                        close(debug_unit)
-
                         call send_notification(server, didopen_msg)
                     end if
                 end do
@@ -865,9 +714,6 @@ contains
         type(lsp_message_t), intent(in) :: msg
         integer :: srv_idx, i
 
-        ! Debug: log all notifications
-        write(error_unit, '(A,A)') "[LSP DEBUG] Received notification: ", msg%method
-
         ! Find the server index for this server
         srv_idx = 0
         do i = 1, manager%num_servers
@@ -882,12 +728,9 @@ contains
 
         select case(msg%method)
         case("textDocument/publishDiagnostics")
-            write(error_unit, '(A,I0)') "[LSP DEBUG] Processing publishDiagnostics from server ", srv_idx
             ! Forward to diagnostics handler if set (with server index)
             if (associated(manager%diagnostics_handler)) then
                 call manager%diagnostics_handler(msg, srv_idx)
-            else
-                write(error_unit, '(A)') "[LSP DEBUG] No diagnostics handler set!"
             end if
         case("window/showMessage")
             ! TODO: Show message to user
@@ -940,87 +783,19 @@ contains
         procedure(response_callback) :: callback
         type(callback_entry_t), allocatable :: new_callbacks(:)
 
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> register_callback: START <<<'
-            write(debug_unit, '(A,I0)') 'request_id = ', request_id
-            write(debug_unit, '(A,I0)') 'num_callbacks = ', manager%num_callbacks
-            close(debug_unit)
-        end block
-
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> register_callback: Allocating new_callbacks <<<'
-            close(debug_unit)
-        end block
-
         allocate(new_callbacks(manager%num_callbacks + 1))
-
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> register_callback: Copying old callbacks <<<'
-            close(debug_unit)
-        end block
 
         if (manager%num_callbacks > 0) then
             new_callbacks(1:manager%num_callbacks) = manager%callbacks
         end if
 
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> register_callback: Setting new callback <<<'
-            close(debug_unit)
-        end block
-
         new_callbacks(manager%num_callbacks + 1)%request_id = request_id
         new_callbacks(manager%num_callbacks + 1)%callback => callback
 
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> register_callback: Deallocating old callbacks <<<'
-            close(debug_unit)
-        end block
-
         if (allocated(manager%callbacks)) deallocate(manager%callbacks)
-
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> register_callback: Reallocating manager%callbacks <<<'
-            close(debug_unit)
-        end block
-
         allocate(manager%callbacks(size(new_callbacks)))
-
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> register_callback: Copying new_callbacks <<<'
-            close(debug_unit)
-        end block
-
         manager%callbacks = new_callbacks
-
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> register_callback: Incrementing num_callbacks <<<'
-            close(debug_unit)
-        end block
-
         manager%num_callbacks = manager%num_callbacks + 1
-
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> register_callback: DONE <<<'
-            close(debug_unit)
-        end block
     end subroutine register_callback
 
     subroutine remove_callback(manager, index)
@@ -1191,17 +966,6 @@ contains
 
         command = manager%configs(config_index)%command
 
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> STARTING LSP SERVER (from config) <<<'
-            write(debug_unit, '(A)') 'Name: ' // trim(manager%configs(config_index)%name)
-            write(debug_unit, '(A)') 'Language: ' // trim(manager%configs(config_index)%language)
-            write(debug_unit, '(A)') 'Command: ' // trim(command)
-            write(debug_unit, '(A)') 'Root path: ' // trim(root_path)
-            close(debug_unit)
-        end block
-
         ! Expand server array
         allocate(new_servers(manager%num_servers + 1))
         if (manager%num_servers > 0) then
@@ -1280,14 +1044,6 @@ contains
 
         ! If server not initialized yet, queue the notification
         if (.not. manager%servers(server_index)%initialized) then
-            block
-                integer :: debug_unit
-                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-                write(debug_unit, '(A)') '>>> notify_file_opened: Queuing (server not ready) <<<'
-                write(debug_unit, '(A)') 'File: ' // trim(filename)
-                close(debug_unit)
-            end block
-
             ! Add to pending queue
             if (allocated(manager%servers(server_index)%pending_didopens)) then
                 ! Grow array
@@ -1322,28 +1078,12 @@ contains
             return
         end if
 
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> notify_file_opened: Sending immediately <<<'
-            write(debug_unit, '(A)') 'File: ' // trim(filename)
-            close(debug_unit)
-        end block
-
         ! Server is ready, send immediately
         language = get_language_for_file(filename)
         block
             character(len=:), allocatable :: file_uri
             file_uri = filename_to_uri(filename)
             msg = create_did_open_notification(file_uri, language, 1, content)
-        end block
-
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> didOpen content length: ' // trim(adjustl(char(len(content))))
-            write(debug_unit, '(A)') '>>> didOpen language: ' // trim(language)
-            close(debug_unit)
         end block
 
         call send_notification(manager%servers(server_index), msg)
@@ -1359,6 +1099,16 @@ contains
         integer, intent(in), optional :: version
         type(lsp_message_t) :: msg
         integer :: doc_version
+        integer :: debug_unit
+
+        ! Debug logging
+        open(newunit=debug_unit, file='/tmp/fac_didchange_debug.log', status='unknown', &
+             position='append', action='write')
+        write(debug_unit, '(A,I2,A)') 'notify_file_changed called for server ', server_index, ':'
+        write(debug_unit, '(A,A)') '  URI: ', trim(filename)
+        write(debug_unit, '(A,I8)') '  Content length: ', len(content)
+        write(debug_unit, '(A)') '---'
+        close(debug_unit)
 
         if (server_index < 1 .or. server_index > manager%num_servers) return
         if (.not. manager%servers(server_index)%initialized) return
@@ -1395,9 +1145,6 @@ contains
         end if
 
         call send_notification(manager%servers(server_index), msg)
-
-        ! Debug output
-        write(error_unit, '(A,A)') "[LSP DEBUG] Sent didSave for: ", trim(filename)
     end subroutine notify_file_saved
 
     ! Send textDocument/didClose notification
@@ -1477,55 +1224,14 @@ contains
         type(lsp_message_t) :: msg
         character(len=:), allocatable :: uri
 
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> request_definition: START <<<'
-            close(debug_unit)
-        end block
-
         request_id = -1
         if (server_index < 1 .or. server_index > manager%num_servers) return
         if (.not. manager%servers(server_index)%initialized) return
 
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> request_definition: Creating URI <<<'
-            write(debug_unit, '(A)') 'Filename: ' // trim(filename)
-            close(debug_unit)
-        end block
-
-        ! Convert filename to URI (simple file:// for now)
         uri = filename_to_uri(filename)
-
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> request_definition: Creating request <<<'
-            write(debug_unit, '(A)') 'URI: ' // trim(uri)
-            write(debug_unit, '(A,I0,A,I0)') 'Position: line=', line, ' char=', character
-            close(debug_unit)
-        end block
-
         msg = create_definition_request(uri, line, character)
         request_id = msg%id
-
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> request_definition: Calling send_request <<<'
-            close(debug_unit)
-        end block
-
         call send_request(manager, server_index, msg, callback)
-
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> request_definition: DONE <<<'
-            close(debug_unit)
-        end block
     end function request_definition
 
     ! Request references at cursor position
@@ -1568,18 +1274,8 @@ contains
         integer :: request_id
         type(lsp_message_t) :: msg
         character(len=:), allocatable :: uri
-        integer :: dbg
 
         request_id = -1
-
-        ! Debug logging
-        open(newunit=dbg, file='/tmp/fac_code_actions.log', position='append', action='write')
-        write(dbg, '(A,I0)') 'request_code_actions: server_index = ', server_index
-        write(dbg, '(A,I0)') 'request_code_actions: num_servers = ', manager%num_servers
-        if (server_index >= 1 .and. server_index <= manager%num_servers) then
-            write(dbg, '(A,L1)') 'request_code_actions: initialized = ', manager%servers(server_index)%initialized
-        end if
-        close(dbg)
 
         if (server_index < 1 .or. server_index > manager%num_servers) return
         if (.not. manager%servers(server_index)%initialized) return

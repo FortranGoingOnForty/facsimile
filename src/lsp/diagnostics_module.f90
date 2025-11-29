@@ -108,15 +108,10 @@ contains
         character(len=:), allocatable :: uri
         integer :: i, n_diagnostics, file_idx
         type(diagnostic_t) :: diag
-        character(len=512) :: debug_msg
 
         ! Get URI
         if (.not. json_has_key(params, "uri")) return
         uri = json_get_string(params, "uri")
-
-        ! Debug: Log URI
-        write(debug_msg, '(A,A)') "[DIAG] Parsing diagnostics for URI: ", trim(uri)
-        call terminal_write(debug_msg)
 
         ! Find or create file entry
         file_idx = find_or_create_file(store, uri)
@@ -131,10 +126,6 @@ contains
         if (json_has_key(params, "diagnostics")) then
             diagnostics_array = json_get_array(params, "diagnostics")
             n_diagnostics = json_array_size(diagnostics_array)
-
-            ! Debug: Log number of diagnostics
-            write(debug_msg, '(A,I0,A)') "[DIAG] Found ", n_diagnostics, " diagnostics"
-            call terminal_write(debug_msg)
 
             if (n_diagnostics > 0) then
                 allocate(store%files(file_idx)%items(n_diagnostics))
@@ -208,16 +199,11 @@ contains
         character(len=:), allocatable :: uri
         integer :: i, n_diagnostics, file_idx, old_count, new_count, j
         type(diagnostic_t) :: diag
-        type(diagnostic_t), allocatable :: old_items(:), new_items(:)
-        character(len=512) :: debug_msg
+        type(diagnostic_t), allocatable :: old_items(:)
 
         ! Get URI
         if (.not. json_has_key(params, "uri")) return
         uri = json_get_string(params, "uri")
-
-        ! Debug: Log URI
-        write(debug_msg, '(A,A,A,I0)') "[DIAG] Parsing diagnostics for URI: ", trim(uri), " from server ", server_index
-        call terminal_write(debug_msg)
 
         ! Find or create file entry
         file_idx = find_or_create_file(store, uri)
@@ -254,10 +240,6 @@ contains
             diagnostics_array = json_get_array(params, "diagnostics")
             n_diagnostics = json_array_size(diagnostics_array)
         end if
-
-        ! Debug: Log number of diagnostics
-        write(debug_msg, '(A,I0,A,I0,A)') "[DIAG] Found ", n_diagnostics, " new + ", old_count, " existing diagnostics"
-        call terminal_write(debug_msg)
 
         ! Allocate combined array
         new_count = old_count + n_diagnostics

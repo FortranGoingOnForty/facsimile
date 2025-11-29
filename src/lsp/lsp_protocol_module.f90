@@ -106,16 +106,6 @@ contains
         ! Convert root_path to absolute path
         abs_root_path = make_absolute_path(root_path)
 
-        block
-            integer :: debug_unit
-            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
-            write(debug_unit, '(A)') '>>> create_initialize_request <<<'
-            write(debug_unit, '(A)') 'root_path (input): ' // trim(root_path)
-            write(debug_unit, '(A)') 'abs_root_path: ' // abs_root_path
-            write(debug_unit, '(A)') 'rootUri: file://' // abs_root_path
-            close(debug_unit)
-        end block
-
         params = json_create_object()
         call json_add_number(params, "processId", real(process_id, real64))
         call json_add_string(params, "rootPath", abs_root_path)
@@ -238,7 +228,7 @@ contains
         changes = json_create_array()
         change = json_create_object()
         call json_add_string(change, "text", text)
-        ! TODO: Add change to array
+        call json_array_add_element(changes, change)
         call json_add_array(params, "contentChanges", changes)
 
         msg%params = params

@@ -1386,15 +1386,15 @@ contains
 
                                             ! Check if rename response modified the buffer
                                             if (g_lsp_modified_buffer) then
-                                                ! Sync buffer from tab (LSP modified tab buffer)
-                                                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
-
-                                                ! Also sync to active pane buffer if panes exist
+                                                ! LSP now modifies pane buffer directly, sync FROM pane TO local buffer and tab
                                                 if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
                                                     size(editor%tabs(editor%active_tab_index)%panes) > 0) then
                                                     pane_idx = editor%tabs(editor%active_tab_index)%active_pane_index
                                                     if (pane_idx > 0 .and. pane_idx <= size(editor%tabs(editor%active_tab_index)%panes)) then
-                                                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(pane_idx)%buffer, buffer)
+                                                        ! Copy FROM pane buffer TO local buffer (for rendering)
+                                                        call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%panes(pane_idx)%buffer)
+                                                        ! Also sync to tab buffer (to keep them consistent)
+                                                        call copy_buffer(editor%tabs(editor%active_tab_index)%buffer, buffer)
                                                     end if
                                                 end if
 
@@ -6313,14 +6313,16 @@ contains
     subroutine apply_file_edits_obj(editor, uri, edits_arr, changes_applied)
         use json_module, only: json_value_t, json_array_size, json_get_array_element, &
                                json_get_object, json_get_string, json_get_number, json_has_key
+        use text_buffer_module, only: buffer_to_string
+        use lsp_server_manager_module, only: notify_file_changed
         type(editor_state_t), intent(inout) :: editor
         character(len=*), intent(in) :: uri
         type(json_value_t), intent(in) :: edits_arr
         integer, intent(inout) :: changes_applied
 
         type(json_value_t) :: edit_obj, range_obj, start_obj, end_obj
-        character(len=:), allocatable :: filename, new_text
-        integer :: num_edits, i, j, tab_idx
+        character(len=:), allocatable :: filename, new_text, buffer_content
+        integer :: num_edits, i, j, tab_idx, server_idx, pane_idx
         integer :: start_line, start_char, end_line, end_char
 
         ! Convert URI to filename
@@ -6356,6 +6358,25 @@ contains
             return
         end if
 
+        ! Get the active pane for this tab (panes contain the actual buffers)
+        pane_idx = editor%tabs(tab_idx)%active_pane_index
+        if (pane_idx < 1 .or. .not. allocated(editor%tabs(tab_idx)%panes)) then
+            pane_idx = 1  ! Default to first pane
+        end if
+        if (pane_idx > size(editor%tabs(tab_idx)%panes)) then
+            if (allocated(filename)) deallocate(filename)
+            return
+        end if
+
+        ! Debug: log tab_idx finding
+        open(newunit=server_idx, file='/tmp/fac_tab_debug.log', status='unknown', &
+             position='append', action='write')
+        write(server_idx, '(A,I3,A,I3)') 'Found tab_idx=', tab_idx, ' pane_idx=', pane_idx
+        write(server_idx, '(A,A)') 'Extracted filename: ', trim(filename)
+        write(server_idx, '(A,A)') 'Tab filename: ', trim(editor%tabs(tab_idx)%filename)
+        write(server_idx, '(A)') '---'
+        close(server_idx)
+
         ! Apply edits in reverse order (to preserve line numbers)
         num_edits = json_array_size(edits_arr)
 
@@ -6379,14 +6400,52 @@ contains
                 new_text = json_get_string(edit_obj, 'newText')
 
                 if (allocated(new_text)) then
-                    ! Apply the edit to the buffer
-                    call apply_single_edit(editor%tabs(tab_idx)%buffer, &
+                    ! Apply the edit to the pane buffer (not tab buffer!)
+                    call apply_single_edit(editor%tabs(tab_idx)%panes(pane_idx)%buffer, &
                         start_line, start_char, end_line, end_char, new_text)
                     changes_applied = changes_applied + 1
+
+                    ! Debug: check buffer size after edit
+                    block
+                        character(len=:), allocatable :: check_content
+                        integer :: check_unit
+                        check_content = buffer_to_string(editor%tabs(tab_idx)%panes(pane_idx)%buffer)
+                        open(newunit=check_unit, file='/tmp/fac_after_edit.log', status='unknown', &
+                             position='append', action='write')
+                        write(check_unit, '(A,I8)') 'After edit, buffer len: ', len(check_content)
+                        close(check_unit)
+                        if (allocated(check_content)) deallocate(check_content)
+                    end block
+
                     deallocate(new_text)
                 end if
             end if
         end do
+
+        ! Sync the changed document back to all LSP servers
+        if (changes_applied > 0) then
+            buffer_content = buffer_to_string(editor%tabs(tab_idx)%panes(pane_idx)%buffer)
+            if (allocated(buffer_content)) then
+                ! Debug: log what we're about to sync
+                open(newunit=server_idx, file='/tmp/fac_sync_debug.log', status='unknown', &
+                     position='append', action='write')
+                write(server_idx, '(A,I4)') 'Sync after changes_applied=', changes_applied
+                write(server_idx, '(A,I8)') 'Buffer content length: ', len(buffer_content)
+                write(server_idx, '(A,A)') 'First 100 chars: ', buffer_content(1:min(100,len(buffer_content)))
+                write(server_idx, '(A)') '---'
+                close(server_idx)
+
+                ! Notify all active LSP servers about the document change
+                ! Use the absolute path from the URI (filename variable) not the tab's relative path
+                do server_idx = 1, editor%lsp_manager%num_servers
+                    if (editor%lsp_manager%servers(server_idx)%initialized) then
+                        call notify_file_changed(editor%lsp_manager, server_idx, &
+                            'file://' // filename, buffer_content)
+                    end if
+                end do
+                deallocate(buffer_content)
+            end if
+        end if
 
         if (allocated(filename)) deallocate(filename)
     end subroutine apply_file_edits_obj
@@ -6398,23 +6457,62 @@ contains
         character(len=*), intent(in) :: new_text
 
         integer :: start_pos, end_pos, delete_count
+        integer :: debug_unit
+        character(len=256) :: debug_msg
 
         ! Calculate buffer positions
         start_pos = get_buffer_position(buffer, start_line, start_char)
         end_pos = get_buffer_position(buffer, end_line, end_char)
 
+        ! Debug logging
+        open(newunit=debug_unit, file='/tmp/fac_edit_debug.log', status='unknown', &
+             position='append', action='write')
+        write(debug_msg, '(A,I4,A,I4,A,I4,A,I4)') 'Edit range: line ', start_line, &
+              ' char ', start_char, ' to line ', end_line, ' char ', end_char
+        write(debug_unit, '(A)') trim(debug_msg)
+        write(debug_msg, '(A,I6,A,I6,A,I4)') 'Buffer pos: start=', start_pos, &
+              ' end=', end_pos, ' delete_count=', end_pos - start_pos
+        write(debug_unit, '(A)') trim(debug_msg)
+        write(debug_msg, '(A,I4,A,A,A)') 'New text len=', len(new_text), ' text="', new_text, '"'
+        write(debug_unit, '(A)') trim(debug_msg)
+        write(debug_unit, '(A)') '---'
+        close(debug_unit)
+
         if (start_pos <= 0 .or. end_pos <= 0) return
 
         ! Delete the old text
         delete_count = end_pos - start_pos
+
+        ! Debug: log gap buffer state before operations
+        open(newunit=debug_unit, file='/tmp/fac_gap_debug.log', status='unknown', &
+             position='append', action='write')
+        write(debug_unit, '(A,I6,A,I6,A,I6)') 'BEFORE: gap_start=', buffer%gap_start, &
+              ' gap_end=', buffer%gap_end, ' size=', buffer%size
+        close(debug_unit)
+
         if (delete_count > 0) then
             call buffer_delete(buffer, start_pos, delete_count)
         end if
+
+        ! Debug: log gap buffer state after delete
+        open(newunit=debug_unit, file='/tmp/fac_gap_debug.log', status='unknown', &
+             position='append', action='write')
+        write(debug_unit, '(A,I6,A,I6,A,I6)') 'AFTER DELETE: gap_start=', buffer%gap_start, &
+              ' gap_end=', buffer%gap_end, ' size=', buffer%size
+        close(debug_unit)
 
         ! Insert the new text
         if (len(new_text) > 0) then
             call buffer_insert(buffer, start_pos, new_text)
         end if
+
+        ! Debug: log gap buffer state after insert
+        open(newunit=debug_unit, file='/tmp/fac_gap_debug.log', status='unknown', &
+             position='append', action='write')
+        write(debug_unit, '(A,I6,A,I6,A,I6)') 'AFTER INSERT: gap_start=', buffer%gap_start, &
+              ' gap_end=', buffer%gap_end, ' size=', buffer%size
+        write(debug_unit, '(A)') '---'
+        close(debug_unit)
     end subroutine apply_single_edit
 
     ! Execute a command from the command palette
