@@ -1535,93 +1535,90 @@ contains
             end block
 
         case('f6', 'alt-p')
-            ! Workspace symbols (F6 or Alt+P for project)
-            ! Workspace symbols (fuzzy search across project)
+            ! Workspace symbols (F6 or Alt+P for project) - offcanvas panel with fzf-like filtering
             if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
                 block
                     use workspace_symbols_panel_module, only: show_workspace_symbols_panel, &
                                                                render_workspace_symbols_panel, &
                                                                workspace_symbols_panel_handle_key, &
                                                                hide_workspace_symbols_panel, &
+                                                               is_workspace_symbols_panel_visible, &
                                                                get_selected_symbol, &
+                                                               get_search_query, &
                                                                workspace_symbol_t
                     use input_handler_module, only: get_key_input
                     use lsp_server_manager_module, only: request_workspace_symbols, &
-                        CAP_WORKSPACE_SYMBOLS_USE => CAP_WORKSPACE_SYMBOLS
+                        CAP_WORKSPACE_SYMBOLS_USE => CAP_WORKSPACE_SYMBOLS, &
+                        process_server_messages
                     integer :: request_id, status, ws_server
                     character(len=32) :: key_input
+                    character(len=:), allocatable :: prev_query, curr_query
                     logical :: handled
                     type(workspace_symbol_t) :: selected_symbol
 
-                    ! Show panel
-                    call show_workspace_symbols_panel(editor%workspace_symbols_panel)
+                    ! Toggle behavior - if already visible, hide and return
+                    if (is_workspace_symbols_panel_visible(editor%workspace_symbols_panel)) then
+                        call hide_workspace_symbols_panel(editor%workspace_symbols_panel)
+                        call render_screen(buffer, editor)
+                        return
+                    end if
+
+                    ! Show panel with screen dimensions
+                    call show_workspace_symbols_panel(editor%workspace_symbols_panel, &
+                        editor%screen_cols, editor%screen_rows)
 
                     ! Get server with workspace symbols capability
                     ws_server = get_lsp_server_for_cap(editor, CAP_WORKSPACE_SYMBOLS_USE)
 
-                    ! Send initial empty query to get all symbols
-                    if (ws_server > 0) then
-                        request_id = request_workspace_symbols(editor%lsp_manager, &
-                            ws_server, '', handle_workspace_symbols_response_wrapper)
-                    end if
+                    ! Save editor state for LSP callback
+                    saved_editor_for_callback => editor
 
-                    call render_workspace_symbols_panel(editor%workspace_symbols_panel, editor%screen_rows)
+                    ! Don't send initial empty query - pyright requires at least 1 char
+                    ! Query will be sent when user starts typing
+
+                    prev_query = ''
 
                     ! Interactive loop
-                    do
+                    do while (is_workspace_symbols_panel_visible(editor%workspace_symbols_panel))
+                        ! Process any pending LSP responses
+                        call process_server_messages(editor%lsp_manager)
+
+                        ! Render the panel
+                        call render_workspace_symbols_panel(editor%workspace_symbols_panel, editor%screen_rows)
+
                         call get_key_input(key_input, status)
                         if (status /= 0) cycle
 
-                        ! Handle special keys
-                        if (key_input == 'enter') then
+                        ! Handle enter specially - navigate to symbol
+                        if (trim(key_input) == 'enter') then
                             selected_symbol = get_selected_symbol(editor%workspace_symbols_panel)
                             if (allocated(selected_symbol%file_uri) .and. len_trim(selected_symbol%file_uri) > 0) then
-                                ! Navigate to the symbol location
+                                call navigate_to_workspace_symbol(editor, buffer, selected_symbol, should_quit)
+                            else if (allocated(selected_symbol%file_path) .and. len_trim(selected_symbol%file_path) > 0) then
+                                ! Use file_path if file_uri not set
+                                selected_symbol%file_uri = 'file://' // trim(selected_symbol%file_path)
                                 call navigate_to_workspace_symbol(editor, buffer, selected_symbol, should_quit)
                             end if
                             call hide_workspace_symbols_panel(editor%workspace_symbols_panel)
                             call render_screen(buffer, editor)
                             exit
-                        else if (key_input == 'esc') then
-                            call hide_workspace_symbols_panel(editor%workspace_symbols_panel)
-                            call render_screen(buffer, editor)
-                            exit
-                        else if (key_input == 'backspace') then
-                            if (editor%workspace_symbols_panel%search_pos > 0) then
-                                editor%workspace_symbols_panel%search_query(editor%workspace_symbols_panel%search_pos:editor%workspace_symbols_panel%search_pos) = ' '
-                                editor%workspace_symbols_panel%search_pos = editor%workspace_symbols_panel%search_pos - 1
-                                ! Send new query to LSP
-                                if (ws_server > 0) then
-                                    request_id = request_workspace_symbols(editor%lsp_manager, &
-                                        ws_server, &
-                                        trim(editor%workspace_symbols_panel%search_query(1:editor%workspace_symbols_panel%search_pos)), &
-                                        handle_workspace_symbols_response_wrapper)
-                                end if
-                            end if
-                        else
-                            ! Try navigation keys
-                            call workspace_symbols_panel_handle_key(editor%workspace_symbols_panel, key_input, handled)
-                            if (.not. handled) then
-                                ! Regular character - add to search
-                                if (len_trim(key_input) == 1) then
-                                    if (iachar(key_input(1:1)) >= 32 .and. iachar(key_input(1:1)) < 127 .and. &
-                                        editor%workspace_symbols_panel%search_pos < 255) then
-                                        editor%workspace_symbols_panel%search_pos = editor%workspace_symbols_panel%search_pos + 1
-                                        editor%workspace_symbols_panel%search_query(editor%workspace_symbols_panel%search_pos:editor%workspace_symbols_panel%search_pos) = key_input(1:1)
-                                        ! Send new query to LSP
-                                        if (ws_server > 0) then
-                                            request_id = request_workspace_symbols(editor%lsp_manager, &
-                                                ws_server, &
-                                                trim(editor%workspace_symbols_panel%search_query(1:editor%workspace_symbols_panel%search_pos)), &
-                                                handle_workspace_symbols_response_wrapper)
-                                        end if
-                                    end if
-                                end if
-                            end if
                         end if
 
-                        call render_workspace_symbols_panel(editor%workspace_symbols_panel, editor%screen_rows)
+                        ! Let the panel handle all other keys
+                        handled = workspace_symbols_panel_handle_key(editor%workspace_symbols_panel, trim(key_input))
+
+                        ! Check if query changed - send new LSP request (only if query has content)
+                        if (ws_server > 0) then
+                            curr_query = get_search_query(editor%workspace_symbols_panel)
+                            if (curr_query /= prev_query .and. len_trim(curr_query) > 0) then
+                                request_id = request_workspace_symbols(editor%lsp_manager, &
+                                    ws_server, curr_query, handle_workspace_symbols_response_wrapper)
+                                prev_query = curr_query
+                            end if
+                        end if
                     end do
+
+                    call render_screen(buffer, editor)
                 end block
             end if
 
@@ -6603,7 +6600,7 @@ contains
                 line_num = json_get_number(start_obj, 'line', 0.0d0)
                 char_num = json_get_number(start_obj, 'character', 0.0d0)
                 symbols(i+1)%line = int(line_num)
-                symbols(i+1)%character = int(char_num)
+                symbols(i+1)%column = int(char_num)
             end if
         end do
 
@@ -6679,8 +6676,8 @@ contains
                     call switch_to_tab(editor, i)
                     ! Jump to the symbol's position
                     editor%cursors(editor%active_cursor)%line = symbol%line + 1  ! LSP is 0-based
-                    editor%cursors(editor%active_cursor)%column = symbol%character + 1
-                    editor%cursors(editor%active_cursor)%desired_column = symbol%character + 1
+                    editor%cursors(editor%active_cursor)%column = symbol%column + 1
+                    editor%cursors(editor%active_cursor)%desired_column = symbol%column + 1
                     editor%viewport_line = max(1, symbol%line + 1 - editor%screen_rows / 2)
                     return
                 end if
@@ -6713,8 +6710,8 @@ contains
 
                 ! Navigate to the symbol's position
                 editor%cursors(editor%active_cursor)%line = symbol%line + 1  ! LSP is 0-based
-                editor%cursors(editor%active_cursor)%column = symbol%character + 1
-                editor%cursors(editor%active_cursor)%desired_column = symbol%character + 1
+                editor%cursors(editor%active_cursor)%column = symbol%column + 1
+                editor%cursors(editor%active_cursor)%desired_column = symbol%column + 1
                 editor%viewport_line = max(1, symbol%line + 1 - editor%screen_rows / 2)
 
                 ! Sync editor state back to pane
