@@ -86,7 +86,7 @@ SOURCES = src/version_module.f90 \
           src/ui/hover_tooltip_module.f90 \
           src/ui/diagnostics_panel_module.f90 \
           src/ui/references_panel_module.f90 \
-          src/ui/code_actions_menu_module.f90 \
+          src/ui/code_actions_panel_module.f90 \
           src/ui/symbols_panel_module.f90 \
           src/ui/signature_tooltip_module.f90 \
           src/ui/command_palette_module.f90 \
