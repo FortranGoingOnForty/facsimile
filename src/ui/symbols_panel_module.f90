@@ -155,8 +155,12 @@ contains
             allocate(panel%flat_symbols(flat_count))
             panel%num_flat_symbols = flat_count
 
-            ! Flatten for navigation
-            call flatten_symbols(panel%symbols, num_symbols, panel%flat_symbols, flat_count)
+            ! Flatten for navigation (start at index 1)
+            block
+                integer :: start_idx
+                start_idx = 1
+                call flatten_symbols(panel%symbols, num_symbols, panel%flat_symbols, start_idx)
+            end block
         end if
 
         panel%selected_index = 1
@@ -326,7 +330,11 @@ contains
                 end if
 
                 ! Add icon and name
-                line = trim(line) // icon // " " // trim(panel%flat_symbols(i)%name)
+                if (allocated(panel%flat_symbols(i)%name)) then
+                    line = trim(line) // icon // " " // trim(panel%flat_symbols(i)%name)
+                else
+                    line = trim(line) // icon // " (unnamed)"
+                end if
 
                 ! Add location if room
                 if (panel%show_details .or. i == panel%selected_index) then

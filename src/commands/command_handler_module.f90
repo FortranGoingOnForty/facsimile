@@ -5959,6 +5959,16 @@ contains
         result_array = response%result
         num_symbols = json_array_size(result_array)
 
+        ! Debug: log to file
+        block
+            integer :: dbg_unit
+            open(newunit=dbg_unit, file='/tmp/fac_symbols_debug.log', status='replace', action='write')
+            write(dbg_unit, '(A,I0)') 'result_array%value_type = ', result_array%value_type
+            write(dbg_unit, '(A,L1)') 'result_array%array_value associated = ', associated(result_array%array_value)
+            write(dbg_unit, '(A,I0)') 'num_symbols = ', num_symbols
+            close(dbg_unit)
+        end block
+
         if (num_symbols == 0) then
             call clear_symbols(editor%symbols_panel)
             call terminal_move_cursor(editor%screen_rows, 1)
@@ -5970,17 +5980,31 @@ contains
         allocate(symbols(num_symbols))
 
         ! Parse each symbol
-        do i = 1, num_symbols
-            ! json_get_array_element expects 0-based index
-            symbol_obj = json_get_array_element(result_array, i - 1)
+        block
+            integer :: dbg_unit
+            open(newunit=dbg_unit, file='/tmp/fac_symbols_debug.log', status='old', position='append', action='write')
 
-            ! Get symbol name (required)
-            if (json_has_key(symbol_obj, 'name')) then
-                name = json_get_string(symbol_obj, 'name', '')
-                if (allocated(symbols(i)%name)) deallocate(symbols(i)%name)
-                allocate(character(len=len(name)) :: symbols(i)%name)
-                symbols(i)%name = name
-            end if
+            do i = 1, num_symbols
+                ! json_get_array_element expects 0-based index
+                symbol_obj = json_get_array_element(result_array, i - 1)
+
+                write(dbg_unit, '(A,I0,A,I0)') 'Symbol ', i, ': value_type = ', symbol_obj%value_type
+                write(dbg_unit, '(A,L1)') '  object_value associated = ', associated(symbol_obj%object_value)
+                if (associated(symbol_obj%object_value)) then
+                    write(dbg_unit, '(A,I0)') '  object pair count = ', symbol_obj%object_value%count
+                end if
+                write(dbg_unit, '(A,L1)') '  has_key(name) = ', json_has_key(symbol_obj, 'name')
+
+                ! Get symbol name (required)
+                if (json_has_key(symbol_obj, 'name')) then
+                    name = json_get_string(symbol_obj, 'name', '')
+                    write(dbg_unit, '(A,I0,A,A,A)') '  name len=', len(name), ' value="', trim(name), '"'
+                    if (len(name) > 0) then
+                        if (allocated(symbols(i)%name)) deallocate(symbols(i)%name)
+                        allocate(character(len=len(name)) :: symbols(i)%name)
+                        symbols(i)%name = name
+                    end if
+                end if
 
             ! Get detail (optional)
             if (json_has_key(symbol_obj, 'detail')) then
@@ -6059,7 +6083,10 @@ contains
 
             symbols(i)%depth = 0  ! Top level
             symbols(i)%is_expanded = .true.
-        end do
+            end do
+
+            close(dbg_unit)
+        end block
 
         ! Update the symbols panel
         call set_symbols(editor%symbols_panel, symbols, num_symbols)
