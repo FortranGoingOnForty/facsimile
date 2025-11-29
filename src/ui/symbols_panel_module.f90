@@ -11,6 +11,7 @@ module symbols_panel_module
     public :: set_symbols, clear_symbols
     public :: get_selected_symbol_location
     public :: document_symbol_t
+    public :: render_symbols_panel
 
     ! LSP Symbol kinds
     integer, parameter :: SYMBOL_FILE = 1
@@ -265,26 +266,26 @@ contains
         character(len=256) :: line
         character(len=20) :: location
         character(len=5) :: icon
+        character(len=1), parameter :: ESC = char(27)
 
         if (.not. panel%visible) return
 
-        ! Draw title bar
+        ! Draw title bar with background color
         row = 1
         call terminal_move_cursor(row, panel%panel_start_col)
-        call render_border_top(panel%panel_width)
-
-        row = 2
-        call terminal_move_cursor(row, panel%panel_start_col)
-        line = "│ 📑 Document Symbols"
+        call terminal_write(ESC // '[48;5;237m' // ESC // '[1m')  ! Dark bg, bold
+        line = " Document Symbols"
         if (panel%num_flat_symbols > 0) then
             write(line, '(A,I0,A)') trim(line) // " (", panel%num_flat_symbols, ")"
         end if
-        line = line(1:panel%panel_width-2) // " │"
-        call terminal_write(line(1:panel%panel_width))
+        call terminal_write(line(1:min(len_trim(line), panel%panel_width)))
+        call terminal_write(repeat(" ", max(0, panel%panel_width - len_trim(line))))
+        call terminal_write(ESC // '[0m')
 
-        row = 3
+        ! Draw separator
+        row = 2
         call terminal_move_cursor(row, panel%panel_start_col)
-        call render_separator(panel%panel_width)
+        call terminal_write(ESC // '[48;5;237m' // repeat("-", panel%panel_width) // ESC // '[0m')
 
         ! Calculate visible range
         start_idx = panel%scroll_offset + 1
@@ -296,16 +297,18 @@ contains
                 row = row + 1
                 call terminal_move_cursor(row, panel%panel_start_col)
 
-                ! Highlight selected item
+                ! Background color based on selection
                 if (i == panel%selected_index) then
-                    call terminal_write(char(27) // '[7m')  ! Reverse video
+                    call terminal_write(ESC // '[48;5;240m')  ! Highlight background
+                else
+                    call terminal_write(ESC // '[48;5;235m')  ! Normal background
                 end if
 
                 ! Get symbol icon
                 icon = get_symbol_icon(panel%flat_symbols(i)%kind)
 
                 ! Build line with indentation
-                line = "│"
+                line = " "
                 if (panel%flat_symbols(i)%depth > 0) then
                     line = trim(line) // repeat("  ", panel%flat_symbols(i)%depth)
                 end if
@@ -314,9 +317,9 @@ contains
                 if (allocated(panel%flat_symbols(i)%children) .and. &
                     panel%flat_symbols(i)%num_children > 0) then
                     if (panel%flat_symbols(i)%is_expanded) then
-                        line = trim(line) // "▼ "
+                        line = trim(line) // "v "
                     else
-                        line = trim(line) // "▶ "
+                        line = trim(line) // "> "
                     end if
                 else
                     line = trim(line) // "  "
@@ -328,18 +331,15 @@ contains
                 ! Add location if room
                 if (panel%show_details .or. i == panel%selected_index) then
                     write(location, '(A,I0)') " :", panel%flat_symbols(i)%line
-                    if (len_trim(line) + len_trim(location) < panel%panel_width - 2) then
+                    if (len_trim(line) + len_trim(location) < panel%panel_width - 1) then
                         line = trim(line) // location
                     end if
                 end if
 
-                ! Pad and close
-                line = line(1:panel%panel_width-2) // " │"
-                call terminal_write(line(1:panel%panel_width))
-
-                if (i == panel%selected_index) then
-                    call terminal_write(char(27) // '[0m')  ! Reset
-                end if
+                ! Write line and pad to width
+                call terminal_write(line(1:min(len_trim(line), panel%panel_width)))
+                call terminal_write(repeat(" ", max(0, panel%panel_width - len_trim(line))))
+                call terminal_write(ESC // '[0m')
             end do
 
             ! Fill empty rows
@@ -352,9 +352,11 @@ contains
             ! No symbols message
             row = row + 1
             call terminal_move_cursor(row, panel%panel_start_col)
-            line = "│  No symbols found"
-            line = line(1:panel%panel_width-2) // " │"
-            call terminal_write(line(1:panel%panel_width))
+            call terminal_write(ESC // '[48;5;235m' // ESC // '[90m')
+            line = " No symbols found"
+            call terminal_write(line(1:min(len_trim(line), panel%panel_width)))
+            call terminal_write(repeat(" ", max(0, panel%panel_width - len_trim(line))))
+            call terminal_write(ESC // '[0m')
 
             do while (row < screen_height - 1)
                 row = row + 1
@@ -363,9 +365,13 @@ contains
             end do
         end if
 
-        ! Draw bottom border
+        ! Draw hint bar at bottom
         call terminal_move_cursor(screen_height, panel%panel_start_col)
-        call render_border_bottom(panel%panel_width)
+        call terminal_write(ESC // '[48;5;237m' // ESC // '[90m')
+        line = " j/k:nav  Enter:jump  Esc:close"
+        call terminal_write(line(1:min(len_trim(line), panel%panel_width)))
+        call terminal_write(repeat(" ", max(0, panel%panel_width - len_trim(line))))
+        call terminal_write(ESC // '[0m')
     end subroutine render_symbols_panel
 
     function get_symbol_icon(kind) result(icon)
@@ -374,87 +380,62 @@ contains
 
         select case(kind)
         case(SYMBOL_FILE)
-            icon = "📄"
+            icon = "[F] "
         case(SYMBOL_MODULE)
-            icon = "📦"
+            icon = "[M] "
         case(SYMBOL_NAMESPACE)
-            icon = "🗂"
+            icon = "[N] "
         case(SYMBOL_PACKAGE)
-            icon = "📦"
+            icon = "[P] "
         case(SYMBOL_CLASS)
-            icon = "🏛"
+            icon = "[C] "
         case(SYMBOL_METHOD)
-            icon = "⚡"
+            icon = "m() "
         case(SYMBOL_PROPERTY)
-            icon = "🔧"
+            icon = ".p  "
         case(SYMBOL_FIELD)
-            icon = "📍"
+            icon = ".f  "
         case(SYMBOL_CONSTRUCTOR)
-            icon = "🏗"
+            icon = "new "
         case(SYMBOL_ENUM)
-            icon = "📋"
+            icon = "[E] "
         case(SYMBOL_INTERFACE)
-            icon = "🔌"
+            icon = "[I] "
         case(SYMBOL_FUNCTION)
-            icon = "ƒ"
+            icon = "fn  "
         case(SYMBOL_VARIABLE)
-            icon = "𝑥"
+            icon = "var "
         case(SYMBOL_CONSTANT)
-            icon = "🔒"
+            icon = "const"
         case(SYMBOL_STRING)
-            icon = "📝"
+            icon = "str "
         case(SYMBOL_NUMBER)
-            icon = "#"
+            icon = "num "
         case(SYMBOL_BOOLEAN)
-            icon = "◉"
+            icon = "bool"
         case(SYMBOL_ARRAY)
-            icon = "[]"
+            icon = "[]  "
         case(SYMBOL_OBJECT)
-            icon = "{}"
+            icon = "{}  "
         case(SYMBOL_STRUCT)
-            icon = "▣"
+            icon = "[S] "
         case(SYMBOL_EVENT)
-            icon = "⚡"
+            icon = "evt "
         case(SYMBOL_OPERATOR)
-            icon = "±"
+            icon = "op  "
         case(SYMBOL_TYPEPARAMETER)
-            icon = "𝑇"
+            icon = "<T> "
         case default
-            icon = "•"
+            icon = "-   "
         end select
     end function get_symbol_icon
 
-    subroutine render_border_top(width)
-        integer, intent(in) :: width
-        character(len=256) :: line
-
-        line = "┌" // repeat("─", width - 2) // "┐"
-        call terminal_write(line(1:width))
-    end subroutine render_border_top
-
-    subroutine render_separator(width)
-        integer, intent(in) :: width
-        character(len=256) :: line
-
-        line = "├" // repeat("─", width - 2) // "┤"
-        call terminal_write(line(1:width))
-    end subroutine render_separator
-
     subroutine render_empty_line(width)
         integer, intent(in) :: width
-        character(len=256) :: line
+        character(len=1), parameter :: ESC = char(27)
 
-        line = "│" // repeat(" ", width - 2) // "│"
-        call terminal_write(line(1:width))
+        call terminal_write(ESC // '[48;5;235m' // repeat(" ", width) // ESC // '[0m')
     end subroutine render_empty_line
-
-    subroutine render_border_bottom(width)
-        integer, intent(in) :: width
-        character(len=256) :: line
-
-        line = "└" // repeat("─", width - 2) // "┘"
-        call terminal_write(line(1:width))
-    end subroutine render_border_bottom
 
     function symbols_panel_handle_key(panel, key) result(handled)
         type(symbols_panel_t), intent(inout) :: panel
@@ -521,7 +502,7 @@ contains
             panel%show_details = .not. panel%show_details
             handled = .true.
 
-        case('escape')
+        case('esc', 'escape')
             panel%visible = .false.
             handled = .true.
 

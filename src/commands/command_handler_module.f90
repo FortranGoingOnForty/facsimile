@@ -1465,33 +1465,39 @@ contains
             end block
 
         case('f4', 'alt-o')
-            ! Document symbols outline (F4 or Alt+O)
-            block
-                integer :: symbols_server
-                symbols_server = get_lsp_server_for_cap(editor, CAP_DOCUMENT_SYMBOLS)
-                if (symbols_server > 0) then
-                    ! Request document symbols
-                    block
-                        integer :: request_id
+            ! Document symbols outline (F4 or Alt+O) - toggle behavior
+            if (is_symbols_panel_visible(editor%symbols_panel)) then
+                ! Panel is visible, hide it
+                call hide_symbols_panel(editor%symbols_panel)
+            else
+                ! Panel is hidden, request symbols and show it
+                block
+                    integer :: symbols_server
+                    symbols_server = get_lsp_server_for_cap(editor, CAP_DOCUMENT_SYMBOLS)
+                    if (symbols_server > 0) then
+                        ! Request document symbols
+                        block
+                            integer :: request_id
 
-                        ! Save editor state for callback
-                        saved_editor_for_callback => editor
+                            ! Save editor state for callback
+                            saved_editor_for_callback => editor
 
-                        request_id = request_document_symbols(editor%lsp_manager, &
-                            symbols_server, &
-                            editor%tabs(editor%active_tab_index)%filename, &
-                            handle_symbols_response_wrapper)
+                            request_id = request_document_symbols(editor%lsp_manager, &
+                                symbols_server, &
+                                editor%tabs(editor%active_tab_index)%filename, &
+                                handle_symbols_response_wrapper)
 
-                        if (request_id > 0) then
-                            ! Response will be handled by callback
-                            call terminal_move_cursor(editor%screen_rows, 1)
-                            call terminal_write('Loading document symbols...                ')
-                            ! Show panel (will be populated when response arrives)
-                            call show_symbols_panel(editor%symbols_panel, editor%screen_cols, editor%screen_rows)
-                        end if
-                    end block
-                end if
-            end block
+                            if (request_id > 0) then
+                                ! Response will be handled by callback
+                                call terminal_move_cursor(editor%screen_rows, 1)
+                                call terminal_write('Loading document symbols...                ')
+                                ! Show panel (will be populated when response arrives)
+                                call show_symbols_panel(editor%symbols_panel, editor%screen_cols, editor%screen_rows)
+                            end if
+                        end block
+                    end if
+                end block
+            end if
 
         case('ctrl-p')
             ! Command palette (Ctrl+P - VSCode standard)
@@ -6057,6 +6063,7 @@ contains
 
         ! Update the symbols panel
         call set_symbols(editor%symbols_panel, symbols, num_symbols)
+        g_lsp_ui_changed = .true.  ! Trigger re-render to show symbols
 
         ! Show success message
         call terminal_move_cursor(editor%screen_rows, 1)

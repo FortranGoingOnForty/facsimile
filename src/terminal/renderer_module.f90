@@ -14,6 +14,7 @@ module renderer_module
     use diagnostics_panel_module, only: render_diagnostics_panel
     use references_panel_module, only: render_references_panel
     use code_actions_panel_module, only: render_code_actions_panel
+    use symbols_panel_module, only: render_symbols_panel
     use unified_search_module, only: get_matches_on_line, search_mode_active
     implicit none
     private
@@ -210,6 +211,9 @@ contains
                 ! Render code actions menu if visible (for panes path)
                 call render_code_actions_panel(editor%code_actions_panel, editor%screen_rows, editor%screen_cols)
 
+                ! Render symbols panel if visible (for panes path)
+                call render_symbols_panel(editor%symbols_panel, editor%screen_rows)
+
                 ! Position cursor for panes
                 call render_cursor_for_panes(editor)
                 return  ! Exit after rendering panes
@@ -277,6 +281,9 @@ contains
 
         ! Render code actions menu if visible
         call render_code_actions_panel(editor%code_actions_panel, editor%screen_rows, editor%screen_cols)
+
+        ! Render symbols panel if visible
+        call render_symbols_panel(editor%symbols_panel, editor%screen_rows)
 
         ! Position cursor for panes or regular view
         if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0 .and. &
@@ -880,6 +887,9 @@ contains
 
         ! Render code actions menu if visible
         call render_code_actions_panel(editor%code_actions_panel, editor%screen_rows, editor%screen_cols)
+
+        ! Render symbols panel if visible
+        call render_symbols_panel(editor%symbols_panel, editor%screen_rows)
 
         ! Position cursor in editor pane (use appropriate method based on pane count)
         if (size(editor%tabs(editor%active_tab_index)%panes) > 1) then
