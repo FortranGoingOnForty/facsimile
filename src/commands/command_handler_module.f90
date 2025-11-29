@@ -208,6 +208,23 @@ contains
 
         ! Route keys to symbols panel when visible
         if (is_symbols_panel_visible(editor%symbols_panel)) then
+            ! Handle Enter specially - jump to symbol location
+            if (trim(key_str) == 'enter') then
+                block
+                    use iso_fortran_env, only: int32
+                    integer(int32) :: sym_line, sym_col
+                    if (get_selected_symbol_location(editor%symbols_panel, sym_line, sym_col)) then
+                        ! Jump to the symbol location
+                        editor%cursors(editor%active_cursor)%line = sym_line
+                        editor%cursors(editor%active_cursor)%column = sym_col
+                        ! Center the view on the target line
+                        editor%viewport_line = max(1, sym_line - editor%screen_rows / 2)
+                        ! Hide the panel after jumping
+                        call hide_symbols_panel(editor%symbols_panel)
+                    end if
+                end block
+                return
+            end if
             if (symbols_panel_handle_key(editor%symbols_panel, trim(key_str))) then
                 return
             end if
@@ -5959,16 +5976,6 @@ contains
         result_array = response%result
         num_symbols = json_array_size(result_array)
 
-        ! Debug: log to file
-        block
-            integer :: dbg_unit
-            open(newunit=dbg_unit, file='/tmp/fac_symbols_debug.log', status='replace', action='write')
-            write(dbg_unit, '(A,I0)') 'result_array%value_type = ', result_array%value_type
-            write(dbg_unit, '(A,L1)') 'result_array%array_value associated = ', associated(result_array%array_value)
-            write(dbg_unit, '(A,I0)') 'num_symbols = ', num_symbols
-            close(dbg_unit)
-        end block
-
         if (num_symbols == 0) then
             call clear_symbols(editor%symbols_panel)
             call terminal_move_cursor(editor%screen_rows, 1)
@@ -5980,31 +5987,19 @@ contains
         allocate(symbols(num_symbols))
 
         ! Parse each symbol
-        block
-            integer :: dbg_unit
-            open(newunit=dbg_unit, file='/tmp/fac_symbols_debug.log', status='old', position='append', action='write')
+        do i = 1, num_symbols
+            ! json_get_array_element expects 0-based index
+            symbol_obj = json_get_array_element(result_array, i - 1)
 
-            do i = 1, num_symbols
-                ! json_get_array_element expects 0-based index
-                symbol_obj = json_get_array_element(result_array, i - 1)
-
-                write(dbg_unit, '(A,I0,A,I0)') 'Symbol ', i, ': value_type = ', symbol_obj%value_type
-                write(dbg_unit, '(A,L1)') '  object_value associated = ', associated(symbol_obj%object_value)
-                if (associated(symbol_obj%object_value)) then
-                    write(dbg_unit, '(A,I0)') '  object pair count = ', symbol_obj%object_value%count
+            ! Get symbol name (required)
+            if (json_has_key(symbol_obj, 'name')) then
+                name = json_get_string(symbol_obj, 'name', '')
+                if (len(name) > 0) then
+                    if (allocated(symbols(i)%name)) deallocate(symbols(i)%name)
+                    allocate(character(len=len(name)) :: symbols(i)%name)
+                    symbols(i)%name = name
                 end if
-                write(dbg_unit, '(A,L1)') '  has_key(name) = ', json_has_key(symbol_obj, 'name')
-
-                ! Get symbol name (required)
-                if (json_has_key(symbol_obj, 'name')) then
-                    name = json_get_string(symbol_obj, 'name', '')
-                    write(dbg_unit, '(A,I0,A,A,A)') '  name len=', len(name), ' value="', trim(name), '"'
-                    if (len(name) > 0) then
-                        if (allocated(symbols(i)%name)) deallocate(symbols(i)%name)
-                        allocate(character(len=len(name)) :: symbols(i)%name)
-                        symbols(i)%name = name
-                    end if
-                end if
+            end if
 
             ! Get detail (optional)
             if (json_has_key(symbol_obj, 'detail')) then
@@ -6083,10 +6078,7 @@ contains
 
             symbols(i)%depth = 0  ! Top level
             symbols(i)%is_expanded = .true.
-            end do
-
-            close(dbg_unit)
-        end block
+        end do
 
         ! Update the symbols panel
         call set_symbols(editor%symbols_panel, symbols, num_symbols)

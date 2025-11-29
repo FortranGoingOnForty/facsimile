@@ -455,23 +455,25 @@ contains
 
         select case(trim(key))
         case('j', 'down')
+            ! Always handle to clamp at boundary
+            handled = .true.
             if (panel%selected_index < panel%num_flat_symbols) then
                 panel%selected_index = panel%selected_index + 1
                 ! Adjust scroll if needed
                 if (panel%selected_index > panel%scroll_offset + panel%max_visible) then
                     panel%scroll_offset = panel%selected_index - panel%max_visible
                 end if
-                handled = .true.
             end if
 
         case('k', 'up')
+            ! Always handle to clamp at boundary
+            handled = .true.
             if (panel%selected_index > 1) then
                 panel%selected_index = panel%selected_index - 1
                 ! Adjust scroll if needed
                 if (panel%selected_index <= panel%scroll_offset) then
                     panel%scroll_offset = max(0, panel%selected_index - 1)
                 end if
-                handled = .true.
             end if
 
         case('g')
