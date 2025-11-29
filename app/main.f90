@@ -18,18 +18,19 @@ program facsimile
     use binary_prompt_module, only: binary_file_prompt
     use lsp_server_manager_module, only: notify_file_opened, notify_file_changed, &
                                          notify_file_closed, process_server_messages, &
-                                         set_diagnostics_handler
+                                         set_diagnostics_handler, set_lsp_workspace_root
     use lsp_protocol_module, only: lsp_message_t
     implicit none
 
     type(editor_state_t) :: editor
     type(buffer_t) :: buffer
     character(len=32) :: key_input
-    character(len=512) :: filename, arg, workspace_dir
+    character(len=512) :: filename, arg, workspace_dir, lsp_workspace
     logical :: running, should_quit, is_workspace_mode, workspace_success
     logical :: welcome_cancelled, is_browse, nav_cancelled, is_directory
+    logical :: explicit_lsp_workspace
     character(len=:), allocatable :: selected_path
-    integer :: status, argc, rows, cols
+    integer :: status, argc, rows, cols, i
 
 
     ! Get command line arguments
@@ -37,9 +38,37 @@ program facsimile
     is_workspace_mode = .false.
     workspace_dir = ""
     filename = ""
+    lsp_workspace = ""
+    explicit_lsp_workspace = .false.
 
-    if (argc > 0) then
-        call get_command_argument(1, arg)
+    ! First pass: look for -w/--workspace flag
+    i = 1
+    do while (i <= argc)
+        call get_command_argument(i, arg)
+        if (trim(arg) == '-w' .or. trim(arg) == '--workspace') then
+            if (i < argc) then
+                call get_command_argument(i + 1, lsp_workspace)
+                explicit_lsp_workspace = .true.
+                i = i + 2
+            else
+                write(error_unit, '(A)') 'Error: -w/--workspace requires a directory argument'
+                stop 1
+            end if
+        else
+            i = i + 1
+        end if
+    end do
+
+    ! Second pass: handle other arguments
+    i = 1
+    do while (i <= argc)
+        call get_command_argument(i, arg)
+
+        ! Skip -w and its argument (already processed)
+        if (trim(arg) == '-w' .or. trim(arg) == '--workspace') then
+            i = i + 2
+            cycle
+        end if
 
         ! Handle version flags
         if (trim(arg) == '--version' .or. trim(arg) == '-v') then
@@ -53,6 +82,7 @@ program facsimile
             stop
         end if
 
+        ! This must be the file/directory argument
         ! Check if argument is a directory (workspace mode)
         ! Use test -d which is POSIX compliant (works on Linux, macOS, BSD)
         call execute_command_line("test -d '" // trim(arg) // &
@@ -71,7 +101,10 @@ program facsimile
             end if
             filename = arg
         end if
-    else
+        i = i + 1
+    end do
+
+    if (argc == 0) then
         ! No arguments - launch Fortress welcome menu (Phase 5)
         call terminal_init()
         call show_welcome_menu(selected_path, welcome_cancelled)
@@ -167,6 +200,11 @@ program facsimile
     ! Initialize editor
     call init_editor(editor)
     running = .true.
+
+    ! Set LSP workspace root if explicit -w flag was provided
+    if (explicit_lsp_workspace) then
+        call set_lsp_workspace_root(editor%lsp_manager, trim(lsp_workspace))
+    end if
 
     ! Set up diagnostics handler for LSP
     call set_diagnostics_handler(editor%lsp_manager, handle_diagnostics)
@@ -541,9 +579,12 @@ contains
         write(output_unit, '(A)') ''
         write(output_unit, '(A)') 'Usage:'
         write(output_unit, '(A)') '  fac [filename]       Open a file for editing'
+        write(output_unit, '(A)') '  fac [directory]      Open directory in workspace mode'
         write(output_unit, '(A)') '  fac                  Start with empty buffer'
         write(output_unit, '(A)') '  fac --version, -v    Show version information'
         write(output_unit, '(A)') '  fac --help, -h       Show this help message'
+        write(output_unit, '(A)') '  fac -w <dir> [file]  Set LSP workspace root to <dir>'
+        write(output_unit, '(A)') '  fac --workspace <dir> Same as -w'
         write(output_unit, '(A)') ''
         write(output_unit, '(A)') 'Key Bindings:'
         write(output_unit, '(A)') '  Ctrl-Q               Quit'

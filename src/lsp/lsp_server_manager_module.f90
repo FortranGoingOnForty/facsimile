@@ -9,7 +9,7 @@ module lsp_server_manager_module
 
     public :: lsp_server_t
     public :: lsp_manager_t
-    public :: init_lsp_manager, cleanup_lsp_manager
+    public :: init_lsp_manager, cleanup_lsp_manager, set_lsp_workspace_root
     public :: get_or_start_server, stop_server
     public :: send_request, send_notification
     public :: process_server_messages
@@ -121,6 +121,7 @@ module lsp_server_manager_module
         type(callback_entry_t), allocatable :: callbacks(:)
         integer :: num_callbacks = 0
         procedure(diagnostics_callback), pointer, nopass :: diagnostics_handler => null()
+        character(len=512) :: workspace_root = '.'  ! LSP workspace root (cwd by default)
     end type lsp_manager_t
 
     ! C interfaces
@@ -168,16 +169,39 @@ module lsp_server_manager_module
 
 contains
 
-    subroutine init_lsp_manager(manager)
+    subroutine init_lsp_manager(manager, workspace_root)
         type(lsp_manager_t), intent(out) :: manager
+        character(len=*), intent(in), optional :: workspace_root
+        character(len=512) :: cwd
+        integer :: status
 
         allocate(manager%servers(0))
         allocate(manager%configs(0))
         allocate(manager%callbacks(0))
 
+        ! Set workspace root (default to cwd if not provided)
+        if (present(workspace_root) .and. len_trim(workspace_root) > 0) then
+            manager%workspace_root = trim(workspace_root)
+        else
+            call getcwd(cwd, status)
+            if (status == 0) then
+                manager%workspace_root = trim(cwd)
+            else
+                manager%workspace_root = '.'
+            end if
+        end if
+
         ! Load default server configurations
         call load_default_configs(manager)
     end subroutine init_lsp_manager
+
+    ! Set the workspace root for LSP servers (call before opening files)
+    subroutine set_lsp_workspace_root(manager, workspace_root)
+        type(lsp_manager_t), intent(inout) :: manager
+        character(len=*), intent(in) :: workspace_root
+
+        manager%workspace_root = trim(workspace_root)
+    end subroutine set_lsp_workspace_root
 
     subroutine cleanup_lsp_manager(manager)
         type(lsp_manager_t), intent(inout) :: manager
@@ -861,8 +885,6 @@ contains
         character(len=*), intent(in) :: filename
         integer :: server_index
         character(len=:), allocatable :: language
-        character(len=256) :: workspace_path
-        integer :: slash_pos
 
         server_index = 0
 
@@ -870,16 +892,8 @@ contains
         language = get_language_for_file(filename)
         if (language == "") return
 
-        ! Extract workspace path from filename (directory containing file)
-        slash_pos = index(filename, '/', back=.true.)
-        if (slash_pos > 0) then
-            workspace_path = filename(1:slash_pos-1)
-        else
-            workspace_path = "."
-        end if
-
-        ! Get or start server for this language
-        server_index = get_or_start_server(manager, language, trim(workspace_path))
+        ! Use manager's workspace_root (set during init, defaults to cwd)
+        server_index = get_or_start_server(manager, language, trim(manager%workspace_root))
     end function start_lsp_for_file
 
     ! Start ALL LSP servers that match a file (multi-server support)
@@ -889,8 +903,7 @@ contains
         integer, allocatable, intent(out) :: server_indices(:)
         integer, intent(out) :: num_servers
         character(len=:), allocatable :: language
-        character(len=256) :: workspace_path
-        integer :: slash_pos, i, idx
+        integer :: i, idx
         integer :: temp_indices(20)  ! Max 20 servers per file
 
         num_servers = 0
@@ -900,19 +913,12 @@ contains
         language = get_language_for_file(filename)
         if (language == "") return
 
-        ! Extract workspace path from filename
-        slash_pos = index(filename, '/', back=.true.)
-        if (slash_pos > 0) then
-            workspace_path = filename(1:slash_pos-1)
-        else
-            workspace_path = "."
-        end if
-
+        ! Use manager's workspace_root (set during init, defaults to cwd)
         ! Find ALL configs that match this language and start servers
         do i = 1, manager%num_configs
             if (manager%configs(i)%language == language) then
                 ! Start or get server for this config
-                idx = get_or_start_server_by_config(manager, i, trim(workspace_path))
+                idx = get_or_start_server_by_config(manager, i, trim(manager%workspace_root))
                 if (idx > 0 .and. num_servers < 20) then
                     num_servers = num_servers + 1
                     temp_indices(num_servers) = idx

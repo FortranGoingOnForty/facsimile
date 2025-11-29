@@ -6644,7 +6644,7 @@ contains
     subroutine navigate_to_workspace_symbol(editor, buffer, symbol, should_quit)
         use workspace_symbols_panel_module, only: workspace_symbol_t
         use jump_stack_module, only: push_jump_location
-        use editor_state_module, only: switch_to_tab, create_tab, sync_pane_to_editor, sync_editor_to_pane
+        use editor_state_module, only: switch_to_tab_with_buffer, create_tab, sync_pane_to_editor, sync_editor_to_pane
         use text_buffer_module, only: buffer_load_file, copy_buffer
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
@@ -6669,27 +6669,55 @@ contains
                 editor%cursors(editor%active_cursor)%column)
         end if
 
-        ! Check if file is already open in a tab
+        ! FIRST: Check if symbol is in the currently active tab (just jump, no tab switch)
+        if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+            if (allocated(editor%tabs(editor%active_tab_index)%filename)) then
+                if (paths_match(editor%tabs(editor%active_tab_index)%filename, filepath)) then
+                    ! Same file - just jump to the position
+                    editor%cursors(editor%active_cursor)%line = symbol%line + 1  ! LSP is 0-based
+                    editor%cursors(editor%active_cursor)%column = symbol%column + 1
+                    editor%cursors(editor%active_cursor)%desired_column = symbol%column + 1
+                    editor%viewport_line = max(1, symbol%line + 1 - editor%screen_rows / 2)
+                    call sync_editor_to_pane(editor)
+                    return
+                end if
+            end if
+        end if
+
+        ! SECOND: Check if file is open in another (inactive) tab
         do i = 1, size(editor%tabs)
+            if (i == editor%active_tab_index) cycle  ! Skip active tab, already checked
             if (allocated(editor%tabs(i)%filename)) then
-                if (trim(editor%tabs(i)%filename) == trim(filepath)) then
-                    call switch_to_tab(editor, i)
+                if (paths_match(editor%tabs(i)%filename, filepath)) then
+                    ! Save current buffer and switch to existing tab
+                    call switch_to_tab_with_buffer(editor, i, buffer)
                     ! Jump to the symbol's position
                     editor%cursors(editor%active_cursor)%line = symbol%line + 1  ! LSP is 0-based
                     editor%cursors(editor%active_cursor)%column = symbol%column + 1
                     editor%cursors(editor%active_cursor)%desired_column = symbol%column + 1
                     editor%viewport_line = max(1, symbol%line + 1 - editor%screen_rows / 2)
+                    call sync_editor_to_pane(editor)
                     return
                 end if
             end if
         end do
 
         ! File not open - create a new tab and load the file
-        call create_tab(editor, filepath)
-
-        ! Load file content into the new tab's buffer
         block
-            integer :: status, new_tab_idx
+            integer :: status, new_tab_idx, old_tab_idx, old_pane_idx
+
+            ! CRITICAL: Save current buffer to old tab BEFORE create_tab changes active_tab_index
+            old_tab_idx = editor%active_tab_index
+            if (old_tab_idx > 0 .and. old_tab_idx <= size(editor%tabs)) then
+                old_pane_idx = editor%tabs(old_tab_idx)%active_pane_index
+                if (allocated(editor%tabs(old_tab_idx)%panes) .and. &
+                    old_pane_idx > 0 .and. old_pane_idx <= size(editor%tabs(old_tab_idx)%panes)) then
+                    call copy_buffer(editor%tabs(old_tab_idx)%panes(old_pane_idx)%buffer, buffer)
+                end if
+                call copy_buffer(editor%tabs(old_tab_idx)%buffer, buffer)
+            end if
+
+            call create_tab(editor, filepath)
 
             new_tab_idx = size(editor%tabs)  ! The tab we just created
 
@@ -6702,8 +6730,14 @@ contains
                     call copy_buffer(editor%tabs(new_tab_idx)%panes(1)%buffer, editor%tabs(new_tab_idx)%buffer)
                 end if
 
-                ! Switch to the new tab
-                call switch_to_tab(editor, new_tab_idx)
+                ! Load the new tab's buffer into working buffer (create_tab already switched active_tab_index)
+                call copy_buffer(buffer, editor%tabs(new_tab_idx)%buffer)
+
+                ! Update editor%filename to the new tab's filename
+                if (allocated(editor%filename)) deallocate(editor%filename)
+                allocate(character(len=len(editor%tabs(new_tab_idx)%filename)) :: editor%filename)
+                editor%filename = editor%tabs(new_tab_idx)%filename
+                editor%modified = editor%tabs(new_tab_idx)%modified
 
                 ! Sync the pane to editor state (this updates editor%cursors, etc.)
                 call sync_pane_to_editor(editor, new_tab_idx, 1)
@@ -6723,6 +6757,67 @@ contains
             end if
         end block
     end subroutine navigate_to_workspace_symbol
+
+    ! Helper function to compare file paths (handles relative vs absolute)
+    function paths_match(path1, path2) result(match)
+        character(len=*), intent(in) :: path1, path2
+        logical :: match
+        character(len=:), allocatable :: p1, p2
+
+        match = .false.
+
+        ! Direct comparison first
+        if (trim(path1) == trim(path2)) then
+            match = .true.
+            return
+        end if
+
+        ! Try comparing just the filenames (basename) if one is relative
+        p1 = get_path_basename(path1)
+        p2 = get_path_basename(path2)
+
+        ! If basenames match and one path ends with the other, consider it a match
+        if (trim(p1) == trim(p2)) then
+            ! Check if one path is a suffix of the other
+            if (index(path1, trim(path2)) > 0 .or. index(path2, trim(path1)) > 0) then
+                match = .true.
+                return
+            end if
+            ! Also match if the absolute path ends with the relative path
+            if (len_trim(path1) > len_trim(path2)) then
+                if (path1(len_trim(path1)-len_trim(path2)+1:) == trim(path2)) then
+                    match = .true.
+                    return
+                end if
+            else if (len_trim(path2) > len_trim(path1)) then
+                if (path2(len_trim(path2)-len_trim(path1)+1:) == trim(path1)) then
+                    match = .true.
+                    return
+                end if
+            end if
+        end if
+    end function paths_match
+
+    ! Get basename from a path
+    function get_path_basename(path) result(basename)
+        character(len=*), intent(in) :: path
+        character(len=:), allocatable :: basename
+        integer :: i, last_slash
+
+        last_slash = 0
+        do i = len_trim(path), 1, -1
+            if (path(i:i) == '/') then
+                last_slash = i
+                exit
+            end if
+        end do
+
+        if (last_slash > 0 .and. last_slash < len_trim(path)) then
+            basename = path(last_slash+1:len_trim(path))
+        else
+            basename = trim(path)
+        end if
+    end function get_path_basename
 
     ! ==================================================
     ! LSP Definition Response Handler
