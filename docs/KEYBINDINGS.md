@@ -8,13 +8,13 @@ Complete keyboard shortcut reference for `fac` editor.
 
 | Keybinding | Command | Description |
 |------------|---------|-------------|
-| `F12` or `Ctrl+\` | Go to Definition | Jump to where a symbol is defined |
-| `Shift+F12` or `Ctrl+Shift+R` | Find References | Find all usages of a symbol |
+| `F12` or `Ctrl+\` or `Alt+G` | Go to Definition | Jump to where a symbol is defined |
+| `Shift+F12` or `Alt+R` | Find References | Find all usages of a symbol |
 | `F2` | Rename Symbol | Rename symbol across entire project |
-| `Ctrl+.` | Code Actions | Quick fixes and refactorings |
-| `F8` or `Ctrl+Shift+D` | Diagnostics Panel | Show all errors and warnings |
-| `F4` or `Ctrl+Shift+O` | Document Symbols | Navigate symbols in current file |
-| `F6` or `Ctrl+Shift+T` | Workspace Symbols | Search symbols across all files |
+| `F10` or `Alt+.` | Code Actions | Quick fixes and refactorings |
+| `F8` or `Alt+E` | Diagnostics Panel | Show all errors and warnings |
+| `F4` or `Alt+O` | Document Symbols | Navigate symbols in current file |
+| `F6` or `Alt+P` | Workspace Symbols | Search symbols across all files |
 | `Ctrl+P` | Command Palette | Search and execute any command |
 | `Shift+Alt+F` | Format Document | Auto-format current file |
 | `Alt+,` | Jump Back | Return to previous location (jump stack) |
@@ -76,17 +76,17 @@ Complete keyboard shortcut reference for `fac` editor.
 | Keybinding | Command | Description |
 |------------|---------|-------------|
 | `Ctrl+T` | New Tab | Create new empty tab |
-| `Ctrl+W` | Close Tab | Close current tab |
-| `Ctrl+Tab` | Next Tab | Switch to next tab |
-| `F6ab` | Previous Tab | Switch to previous tab |
-| `Alt+1` to `Alt+9` | Jump to Tab | Switch to specific tab number |
-| `Ctrl+\` | Split Vertical | Split current pane vertically |
-| `Ctrl+Shift+\` | Split Horizontal | Split current pane horizontally |
-| `Ctrl+Shift+W` | Close Pane | Close current pane |
-| `Ctrl+H` | Navigate Left | Move to pane on the left |
-| `Ctrl+L` | Navigate Right | Move to pane on the right |
-| `Ctrl+K` | Navigate Up | Move to pane above |
-| `Ctrl+J` | Navigate Down | Move to pane below |
+| `Ctrl+W` | Close Tab/Pane | Close current pane (then tab if last pane) |
+| `Ctrl+PageDown` or `Ctrl+Alt+Right` | Next Tab | Switch to next tab |
+| `Ctrl+PageUp` or `Ctrl+Alt+Left` | Previous Tab | Switch to previous tab |
+| `Alt+1` to `Alt+9` (or `Ctrl+1` to `Ctrl+9`) | Jump to Tab | Switch to specific tab number |
+| `Alt+V` | Split Vertical | Split current pane vertically |
+| `Alt+S` | Split Horizontal | Split current pane horizontally |
+| `Alt+Q` | Close Pane | Close current pane only |
+| `Alt+H` or `Ctrl+Shift+Left` | Navigate Left | Move to pane on the left |
+| `Alt+L` or `Ctrl+Shift+Right` | Navigate Right | Move to pane on the right |
+| `Alt+K` or `Ctrl+Shift+Up` | Navigate Up | Move to pane above |
+| `Alt+J` or `Ctrl+Shift+Down` | Navigate Down | Move to pane below |
 
 ---
 
@@ -95,19 +95,15 @@ Complete keyboard shortcut reference for `fac` editor.
 | Keybinding | Command | Description |
 |------------|---------|-------------|
 | `↑` `↓` `←` `→` | Move Cursor | Move cursor one character/line |
-| `Ctrl+↑` | Move Line Up | Move current line up |
-| `Ctrl+↓` | Move Line Down | Move current line down |
-| `Home` or `Ctrl+A` | Line Start | Jump to beginning of line |
+| `Alt+↑` | Move Line Up | Move current line up |
+| `Alt+↓` | Move Line Down | Move current line down |
+| `Home` or `Ctrl+A` | Line Start | Jump to beginning of line (smart toggle) |
 | `End` or `Ctrl+E` | Line End | Jump to end of line |
 | `Ctrl+Home` | File Start | Jump to beginning of file |
 | `Ctrl+End` | File End | Jump to end of file |
-| `Page Up` | Scroll Up | Move up one screen |
-| `Page Down` | Scroll Down | Move down one screen |
-| `Ctrl+U` | Half Page Up | Scroll up half screen (vim-style) |
-| `Ctrl+B` | Full Page Up | Scroll up full screen (vim-style) |
-| `Ctrl+D` | Half Page Down | Scroll down half screen (vim-style) |
-| `Ctrl+F` | Full Page Down | Scroll down full screen (vim-style) |
-| `%` | Match Bracket | Jump to matching bracket/paren |
+| `Alt+←` / `Alt+→` | Word Jump | Move cursor by word |
+| `Page Up` / `Page Down` | Page Scroll | Move up/down one screen |
+| `Alt+[` / `Alt+]` | Match Bracket | Jump to matching bracket/paren |
 
 ---
 
@@ -129,8 +125,9 @@ Complete keyboard shortcut reference for `fac` editor.
 | Keybinding | Command | Description |
 |------------|---------|-------------|
 | `Ctrl+P` | Command Palette | Search and execute any command |
-| `Ctrl+?` or `F1` | Help | Show help screen |
-| `Ctrl+Shift+F` | File Tree | Toggle file explorer (Fortress mode) |
+| `Ctrl+?` or `Ctrl+/` | Help | Show help screen |
+| `Ctrl+B` or `F3` | File Tree | Toggle file explorer (Fuss mode) |
+| `Ctrl+L` | Redraw Screen | Clear and redraw the screen |
 | `Esc` | Cancel/Close | Close panels, cancel operations |
 
 ---
@@ -146,19 +143,17 @@ Complete keyboard shortcut reference for `fac` editor.
 
 ---
 
-## 🌲 File Tree (Fortress Mode)
+## 🌲 File Tree (Fuss Mode)
 
 | Keybinding | Command | Description |
 |------------|---------|-------------|
-| `Ctrl+Shift+F` | Toggle Tree | Show/hide file tree |
+| `Ctrl+B` or `F3` | Toggle Tree | Show/hide file tree |
 | **In Tree:** | | |
-| `↑` `↓` or `j` `k` | Navigate | Move selection up/down |
-| `Enter` or `l` | Open/Expand | Open file or expand directory |
-| `h` | Collapse | Collapse current directory |
+| `j` `k` or `↑` `↓` | Navigate | Move to previous/next sibling |
+| `→` / `←` | Enter/Exit | Enter directory or exit to parent |
+| `Enter` or `o` | Open | Open file in editor |
 | `Space` | Toggle Expand | Expand/collapse directory |
-| `/` | Search Files | Filter files by name |
-| `g` | Go to Top | Jump to first item |
-| `G` | Go to Bottom | Jump to last item |
+| `?` | Show Hints | Display fuss mode keybindings |
 | `Esc` | Close Tree | Hide file tree |
 
 ---
@@ -167,7 +162,10 @@ Complete keyboard shortcut reference for `fac` editor.
 
 | Keybinding | Command | Description |
 |------------|---------|-------------|
-| `Ctrl+D` | Add Next Match | Add cursor at next match of selection |
+| `Ctrl+D` | Select Word & Next | Select word under cursor, add cursor at next match |
+| `Alt+Click` | Add/Remove Cursor | Add or remove cursor at mouse position |
+| `Ctrl+Alt+↑` | Add Cursor Above | Add cursor on line above |
+| `Ctrl+Alt+↓` | Add Cursor Below | Add cursor on line below |
 | `Esc` | Single Cursor | Return to single cursor mode |
 | *(while multiple cursors active)* | | |
 | Type normally | Edit All | Type at all cursor positions |
@@ -192,25 +190,32 @@ When any panel is open (Diagnostics, References, Symbols, etc.):
 ## ⚙️ Special Modes
 
 ### Search/Replace Mode
-Active when `Ctrl+F` is pressed:
-- `n` / `Ctrl+N` - Next match
-- `N` / `Ctrl+P` - Previous match
-- `r` - Replace current
-- `a` - Replace all
-- `Ctrl+R` - Toggle regex
-- `Ctrl+C` - Toggle case sensitive
-- `Ctrl+W` - Toggle whole word
-- `Alt+S` - Search in selection
+Active when `Ctrl+F` (search) or `Ctrl+R` (replace) is pressed:
+- `n` - Next match
+- `N` - Previous match
+- `Alt+C` - Toggle case sensitive
+- `Alt+W` - Toggle whole word match
 - `↑` / `↓` - Navigate search history
 - `Esc` - Exit search mode
 
-### Fortress (File Tree) Mode
-Active when `Ctrl+Shift+F` is pressed:
-- `j` / `k` or `↑` / `↓` - Navigate
-- `Enter` or `l` - Open/Expand
-- `h` - Collapse
-- `/` - Filter files
-- `Esc` - Exit Fortress mode
+### Fuss (File Tree) Mode
+Active when `Ctrl+B` or `F3` is pressed:
+- `j` / `k` - Move to previous/next sibling
+- `→` / `←` - Enter directory / exit to parent
+- `Enter` or `o` - Open file
+- `Space` - Toggle expand/collapse
+- `?` - Show hints
+- `Esc` - Exit Fuss mode
+
+**Git operations in Fuss mode:**
+- `a` - Stage file
+- `u` - Unstage file
+- `d` - Diff file
+- `m` - Commit with message
+- `p` - Push to remote
+- `f` - Fetch from remote
+- `l` - Pull from remote
+- `t` - Create and push tag
 
 ---
 
@@ -219,53 +224,55 @@ Active when `Ctrl+Shift+F` is pressed:
 ### Keybinding Conflicts
 - Some keybindings may conflict with terminal emulator shortcuts
 - If a key doesn't work, check your terminal's keyboard settings
-- Common conflicts: `F6` (new terminal tab), `Ctrl+W` (close terminal tab)
+- Common conflicts: F-keys (media controls), `Ctrl+W` (close terminal tab)
+- All LSP features have Alt+key alternatives that work better in terminals
 
-### Customization
-- Keybindings are currently hardcoded
-- Future versions will support custom keybindings
+### Terminal Compatibility
+Most terminal emulators don't pass Ctrl+Shift combinations reliably. That's why `fac` uses Alt+key alternatives:
+- `Alt+E` instead of Ctrl+Shift+D for diagnostics
+- `Alt+O` instead of Ctrl+Shift+O for document symbols
+- `Alt+P` instead of Ctrl+Shift+T for workspace symbols
+- `Alt+R` instead of Ctrl+Shift+R for references
 
 ### Discovering Commands
 - Use `Ctrl+P` (Command Palette) to see all available commands
-- Commands show their keybindings in the palette
+- Press `Ctrl+/` or `Ctrl+?` to see the help screen
 
 ### Vim Users
 Some vim-style keybindings work:
-- `j` / `k` - Up/down in panels
-- `g` / `G` - Top/bottom in file tree
-- `h` / `l` - Collapse/expand in file tree
-- `Ctrl+U` / `Ctrl+D` - Half-page scroll
-- `Ctrl+B` / `Ctrl+F` - Full-page scroll
-- `%` - Match bracket
+- `j` / `k` - Up/down in panels and file tree
+- `Alt+H/J/K/L` - Navigate between panes
+- `o` - Open file in file tree
+- Navigation in Fuss mode is sibling-based like vim's file explorers
 
 ---
 
 ## 🚀 Most Useful Combos
 
 **Exploring code:**
-1. `F6` - Find any symbol in project
-2. `F12` - Jump to definition
-3. `Shift+F12` - See all usages
+1. `F6` or `Alt+P` - Find any symbol in project
+2. `F12` or `Alt+G` - Jump to definition
+3. `Shift+F12` or `Alt+R` - See all usages
 4. `Alt+,` - Jump back
 
 **Fixing errors:**
-1. `F8` - See all errors
-2. Navigate to error
-3. `Ctrl+.` - Apply quick fix
+1. `F8` or `Alt+E` - See all errors
+2. Navigate to error line
+3. `F10` or `Alt+.` - Apply quick fix
 4. `Ctrl+S` - Save
 
 **Refactoring:**
-1. `Shift+F12` - See all references
+1. `Shift+F12` or `Alt+R` - See all references
 2. `F2` - Rename everywhere
 3. `Shift+Alt+F` - Format code
 4. `Ctrl+S` - Save
 
 **Working with multiple files:**
-1. `Ctrl+Shift+F` - Browse file tree
+1. `Ctrl+B` or `F3` - Browse file tree
 2. `Enter` - Open in new tab
-3. `Ctrl+Tab` - Switch between tabs
-4. `Ctrl+\` - Split panes
-5. `Ctrl+H/J/K/L` - Navigate panes
+3. `Ctrl+PageDown/Up` - Switch between tabs
+4. `Alt+V` / `Alt+S` - Split panes vertical/horizontal
+5. `Alt+H/J/K/L` - Navigate panes
 
 ---
 

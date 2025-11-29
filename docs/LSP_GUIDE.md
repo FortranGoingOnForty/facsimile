@@ -125,7 +125,7 @@ def greet(name):
 ```
 
 **Keybinding:**
-- `F8` or `Ctrl+Shift+D` - Open/close diagnostics panel
+- `F8` or `Alt+E` - Open/close diagnostics panel
 - `j`/`k` or `↑`/`↓` - Navigate issues in panel
 - `Enter` - Jump to selected issue
 - `Esc` - Close panel
@@ -155,7 +155,7 @@ def calculate_total(items):  # ← You land here
 ```
 
 **Keybindings:**
-- `F12` or `Ctrl+\` - Go to definition
+- `F12` or `Ctrl+\` or `Alt+G` - Go to definition
 - `Alt+,` - Jump back (navigate backward in jump history)
 
 **Cross-file navigation:** If the definition is in another file, `fac` automatically opens it in a new tab!
@@ -186,20 +186,20 @@ References to 'calculate_total':
 ```
 
 **Keybindings:**
-- `Shift+F12` or `Ctrl+Shift+R` - Find all references
+- `Shift+F12` or `Alt+R` - Find all references
 - `j`/`k` or `↑`/`↓` - Navigate references
 - `Enter` - Jump to selected reference
 - `Esc` - Close panel
 
 ---
 
-### 4. Code Actions & Quick Fixes (Ctrl+.)
+### 4. Code Actions & Quick Fixes (Alt+.)
 
 **What it does:** Get quick fixes for errors and refactoring suggestions.
 
 **How to use:**
-1. Put cursor on an error or piece of code
-2. Press `Ctrl+.`
+1. Put cursor on a line with a diagnostic (error/warning)
+2. Press `F10` or `Alt+.`
 3. Select an action from the menu
 4. Press `Enter` to apply it
 
@@ -227,10 +227,13 @@ import json  # ← Automatically added!
 - Add type hints
 
 **Keybindings:**
-- `Ctrl+.` - Open code actions menu
+- `F10` or `Alt+.` - Open code actions menu
 - `j`/`k` or `↑`/`↓` - Navigate actions
+- `1`-`9` - Quick select action by number
 - `Enter` - Apply selected action
 - `Esc` - Close menu
+
+**Note:** Code actions are context-sensitive. On a line without diagnostics, you'll only see global actions like "Organize imports" and "Fix all". Position cursor on a line with an error/warning to see specific fixes.
 
 ---
 
@@ -297,7 +300,7 @@ Document Symbols:
 ```
 
 **Keybindings:**
-- `F4` or `Ctrl+Shift+O` - Open document symbols panel
+- `F4` or `Alt+O` - Open document symbols panel
 - Type to search (fuzzy matching)
 - `j`/`k` or `↑`/`↓` - Navigate symbols
 - `Enter` - Jump to selected symbol
@@ -331,7 +334,7 @@ Workspace Symbols:
 - `calctot` matches `calculate_total` (consecutive)
 
 **Keybindings:**
-- `F6` or `Ctrl+Shift+T` - Open workspace symbols
+- `F6` or `Alt+P` - Open workspace symbols
 - Type to search across all files
 - `j`/`k` or `↑`/`↓` - Navigate results
 - `Enter` - Jump to symbol (opens file if needed)
@@ -737,16 +740,18 @@ Many language servers support format-on-save:
 
 | Feature | Keybinding | What It Does |
 |---------|-----------|--------------|
-| **Diagnostics Panel** | `F8` or `Ctrl+Shift+D` | Show all errors/warnings |
-| **Go to Definition** | `F12` or `Ctrl+\` | Jump to where symbol is defined |
-| **Find References** | `Shift+F12` or `Ctrl+Shift+R` | Find all usages of symbol |
-| **Code Actions** | `Ctrl+.` | Quick fixes and refactorings |
+| **Diagnostics Panel** | `F8` or `Alt+E` | Show all errors/warnings |
+| **Go to Definition** | `F12` or `Ctrl+\` or `Alt+G` | Jump to where symbol is defined |
+| **Find References** | `Shift+F12` or `Alt+R` | Find all usages of symbol |
+| **Code Actions** | `F10` or `Alt+.` | Quick fixes and refactorings |
 | **Rename Symbol** | `F2` | Rename across entire project |
-| **Document Symbols** | `F4` or `Ctrl+Shift+O` | Outline of current file |
-| **Workspace Symbols** | `F6` or `Ctrl+Shift+T` | Search symbols across project |
+| **Document Symbols** | `F4` or `Alt+O` | Outline of current file |
+| **Workspace Symbols** | `F6` or `Alt+P` | Search symbols across project |
 | **Format Document** | `Shift+Alt+F` | Auto-format code |
 | **Command Palette** | `Ctrl+P` | Access all commands |
 | **Jump Back** | `Alt+,` | Return to previous location |
+
+**Note:** Alt+key combinations work better in terminals than Ctrl+Shift combinations.
 
 ---
 
