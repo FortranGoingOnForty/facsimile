@@ -201,6 +201,28 @@ contains
 
         ! Route keys to references panel when visible
         if (is_references_panel_visible(editor%references_panel)) then
+            ! Handle Enter specially - jump to reference location
+            if (trim(key_str) == 'enter') then
+                block
+                    use iso_fortran_env, only: int32
+                    character(len=:), allocatable :: uri
+                    integer(int32) :: ref_line, ref_col
+
+                    if (get_selected_reference_location(editor%references_panel, uri, ref_line, ref_col)) then
+                        ! Convert URI to file path and navigate
+                        if (len(uri) >= 7 .and. uri(1:7) == "file://") then
+                            ! Jump to the reference location
+                            editor%cursors(editor%active_cursor)%line = ref_line
+                            editor%cursors(editor%active_cursor)%column = ref_col
+                            ! Center the view on the target line
+                            editor%viewport_line = max(1, ref_line - editor%screen_rows / 2)
+                            ! Hide the panel after jumping
+                            call hide_references_panel(editor%references_panel)
+                        end if
+                    end if
+                end block
+                return
+            end if
             if (references_panel_handle_key(editor%references_panel, trim(key_str))) then
                 return
             end if
@@ -1335,7 +1357,22 @@ contains
                                         call render_screen(buffer, editor)
                                         exit
                                     else if (key_input == 'enter') then
-                                        ! TODO: Navigate to selected reference
+                                        ! Navigate to selected reference
+                                        block
+                                            use references_panel_module, only: get_selected_reference_location
+                                            character(len=:), allocatable :: ref_uri
+                                            integer :: ref_line, ref_col
+
+                                            if (get_selected_reference_location(editor%references_panel, ref_uri, ref_line, ref_col)) then
+                                                if (len(ref_uri) >= 7 .and. ref_uri(1:7) == "file://") then
+                                                    ! Jump to the reference location
+                                                    editor%cursors(editor%active_cursor)%line = ref_line
+                                                    editor%cursors(editor%active_cursor)%column = ref_col
+                                                    ! Center the view on the target line
+                                                    editor%viewport_line = max(1, ref_line - editor%screen_rows / 2)
+                                                end if
+                                            end if
+                                        end block
                                         call hide_references_panel(editor%references_panel)
                                         call render_screen(buffer, editor)
                                         exit
