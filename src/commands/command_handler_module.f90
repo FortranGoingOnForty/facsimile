@@ -65,6 +65,12 @@ module command_handler_module
     use diagnostics_module, only: get_diagnostics_for_line, get_diagnostics_for_line_by_server, &
                                   diagnostics_to_json, diagnostic_t
     use json_module, only: json_value_t
+    use lsp_server_installer_panel_module, only: show_lsp_server_installer_panel, &
+                                                  hide_lsp_server_installer_panel, &
+                                                  is_lsp_server_installer_panel_visible, &
+                                                  lsp_server_installer_panel_handle_key, &
+                                                  render_lsp_server_installer_panel, &
+                                                  refresh_server_status
     implicit none
     private
 
@@ -248,6 +254,15 @@ contains
                 return
             end if
             if (symbols_panel_handle_key(editor%symbols_panel, trim(key_str))) then
+                return
+            end if
+        end if
+
+        ! Route keys to LSP server installer panel when visible
+        if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel)) then
+            if (lsp_server_installer_panel_handle_key(editor%lsp_installer_panel, trim(key_str))) then
+                call render_lsp_server_installer_panel(editor%lsp_installer_panel, &
+                    editor%screen_rows, editor%screen_cols)
                 return
             end if
         end if
@@ -1719,6 +1734,15 @@ contains
             ! Re-render screen to show/hide the panel
             call render_screen(buffer, editor)
 
+        case('alt-m')
+            ! Toggle LSP server installer panel (Alt+M for Manager)
+            if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel)) then
+                call hide_lsp_server_installer_panel(editor%lsp_installer_panel)
+            else
+                call show_lsp_server_installer_panel(editor%lsp_installer_panel)
+            end if
+            call render_screen(buffer, editor)
+
         case('alt-c')
             ! Toggle case sensitivity for match mode (ctrl-d)
             ! Only has effect when in active match mode (search_pattern allocated)
@@ -1860,28 +1884,19 @@ contains
     subroutine move_cursor_up(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
-        character(len=:), allocatable :: current_line, target_line
+        character(len=:), allocatable :: target_line
 
         cursor%has_selection = .false.  ! Clear selection
         if (cursor%line > 1) then
-            current_line = buffer_get_line(buffer, cursor%line)
             cursor%line = cursor%line - 1
             target_line = buffer_get_line(buffer, cursor%line)
 
-            ! If on empty line with no goal column established, go to end of target line
-            ! Otherwise, use the goal column
-            if (len(current_line) == 0 .and. cursor%desired_column == 1) then
+            ! Always use goal column, clamped to line bounds (standard editor behavior)
+            cursor%column = cursor%desired_column
+            if (cursor%column > len(target_line) + 1) then
                 cursor%column = len(target_line) + 1
-                cursor%desired_column = cursor%column
-            else
-                ! Use goal column, clamped to line bounds
-                cursor%column = cursor%desired_column
-                if (cursor%column > len(target_line) + 1) then
-                    cursor%column = len(target_line) + 1
-                end if
             end if
 
-            if (allocated(current_line)) deallocate(current_line)
             if (allocated(target_line)) deallocate(target_line)
         end if
     end subroutine move_cursor_up
@@ -1890,28 +1905,19 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: line_count
-        character(len=:), allocatable :: current_line, target_line
+        character(len=:), allocatable :: target_line
 
         cursor%has_selection = .false.  ! Clear selection
         if (cursor%line < line_count) then
-            current_line = buffer_get_line(buffer, cursor%line)
             cursor%line = cursor%line + 1
             target_line = buffer_get_line(buffer, cursor%line)
 
-            ! If on empty line with no goal column established, go to col 1 of target line
-            ! Otherwise, use the goal column
-            if (len(current_line) == 0 .and. cursor%desired_column == 1) then
-                cursor%column = 1
-                ! desired_column stays 1
-            else
-                ! Use goal column, clamped to line bounds
-                cursor%column = cursor%desired_column
-                if (cursor%column > len(target_line) + 1) then
-                    cursor%column = len(target_line) + 1
-                end if
+            ! Always use goal column, clamped to line bounds (standard editor behavior)
+            cursor%column = cursor%desired_column
+            if (cursor%column > len(target_line) + 1) then
+                cursor%column = len(target_line) + 1
             end if
 
-            if (allocated(current_line)) deallocate(current_line)
             if (allocated(target_line)) deallocate(target_line)
         end if
     end subroutine move_cursor_down

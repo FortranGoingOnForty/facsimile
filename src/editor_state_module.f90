@@ -31,6 +31,9 @@ module editor_state_module
                                     cleanup_document_sync
     use jump_stack_module, only: jump_stack_t, init_jump_stack, &
                                  cleanup_jump_stack
+    use lsp_server_installer_panel_module, only: lsp_server_installer_panel_t, &
+                                                  init_lsp_server_installer_panel, &
+                                                  cleanup_lsp_server_installer_panel
     implicit none
     private
 
@@ -135,6 +138,7 @@ module editor_state_module
         type(signature_tooltip_t) :: signature_tooltip
         type(command_palette_t) :: command_palette
         type(workspace_symbols_panel_t) :: workspace_symbols_panel
+        type(lsp_server_installer_panel_t) :: lsp_installer_panel
 
         ! Navigation
         type(jump_stack_t) :: jump_stack
@@ -199,6 +203,9 @@ contains
 
         ! Initialize jump stack
         call init_jump_stack(editor%jump_stack)
+
+        ! Initialize LSP server installer panel
+        call init_lsp_server_installer_panel(editor%lsp_installer_panel)
     end subroutine init_editor
 
     subroutine cleanup_editor(editor)
@@ -252,6 +259,9 @@ contains
 
         ! Cleanup jump stack
         call cleanup_jump_stack(editor%jump_stack)
+
+        ! Cleanup LSP server installer panel
+        call cleanup_lsp_server_installer_panel(editor%lsp_installer_panel)
     end subroutine cleanup_editor
 
     ! Helper to cleanup a single tab

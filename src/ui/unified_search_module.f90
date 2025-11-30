@@ -4,7 +4,6 @@ module unified_search_module
     use editor_state_module, only: editor_state_t, cursor_t, sync_editor_to_pane
     use text_buffer_module
     use regex_module
-    use renderer_module, only: render_screen
     implicit none
     private
 
@@ -239,10 +238,10 @@ contains
                         call search_forward(editor, buffer)
                     end if
 
-                    ! Re-render screen to show cursor at new match position
-                    call render_screen(buffer, editor)
+                    ! Note: Screen re-rendering happens in command_handler after search exits
+                    ! The match highlighting and cursor position will be visible after exiting search
 
-                    ! Update prompt with match count (redraw prompt over rendered screen)
+                    ! Update prompt with match count
                     call build_unified_prompt(prompt, find_buffer, find_pos, replace_buffer, replace_pos)
                     call display_prompt(editor, prompt, find_pos, replace_pos)
                 end if

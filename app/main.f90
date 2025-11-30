@@ -20,6 +20,8 @@ program facsimile
                                          notify_file_closed, process_server_messages, &
                                          set_diagnostics_handler, set_lsp_workspace_root
     use lsp_protocol_module, only: lsp_message_t
+    use app_state_module, only: is_first_run, mark_first_run_complete
+    use lsp_server_installer_panel_module, only: show_lsp_server_installer_panel
     implicit none
 
     type(editor_state_t) :: editor
@@ -351,6 +353,12 @@ program facsimile
 
     ! Save initial file state for undo (position 0)
     call save_initial_state_for_undo(buffer, editor)
+
+    ! First-run experience: show LSP server installer panel
+    if (is_first_run()) then
+        call show_lsp_server_installer_panel(editor%lsp_installer_panel)
+        call mark_first_run_complete()
+    end if
 
     ! Initial render
     call render_screen(buffer, editor, allocated(search_pattern), match_case_sensitive)

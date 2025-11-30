@@ -323,17 +323,21 @@ contains
         ! Draw header line with cyan title
         row = start_row + 1
         call terminal_move_cursor(row, start_col)
-        call terminal_write('│' // CYAN // ' Command Palette' // RESET)
-        display_width = 17  ! " Command Palette" length
-        call terminal_write(repeat(' ', content_width - display_width - 2) // '│')
+        call terminal_write('│')
+        call terminal_write(CYAN // ' Command Palette' // RESET)
+        display_width = 16  ! " Command Palette" visible length
+        call terminal_write(repeat(' ', max(0, content_width - 2 - display_width)))
+        call terminal_write('│')
 
         ! Draw search query line with yellow prompt
         row = row + 1
         call terminal_move_cursor(row, start_col)
-        call terminal_write('│' // YELLOW // ' > ' // RESET)
+        call terminal_write('│')
+        call terminal_write(YELLOW // ' > ' // RESET)
         call terminal_write(trim(palette%search_query))
-        display_width = 3 + len_trim(palette%search_query)
-        call terminal_write(repeat(' ', content_width - display_width - 2) // '│')
+        display_width = 3 + len_trim(palette%search_query)  ! " > " + query length
+        call terminal_write(repeat(' ', max(0, content_width - 2 - display_width)))
+        call terminal_write('│')
 
         ! Draw separator
         row = row + 1
@@ -352,7 +356,7 @@ contains
             call terminal_move_cursor(row, start_col)
             call terminal_write('│')
 
-            ! Build line with category, name, and shortcut
+            ! Build line with category, name, and shortcut (for display_width calculation)
             if (len_trim(cmd%category) > 0) then
                 write(category_tag, '(A,A,A)') '[', trim(cmd%category), '] '
             else
@@ -366,17 +370,29 @@ contains
                 write(line, '(A,A,A)') trim(line), '  ', trim(cmd%shortcut)
             end if
 
-            ! Truncate if too long
-            display_width = min(len_trim(line), content_width - 3)
+            ! Calculate visible width (actual characters, no ANSI codes)
+            display_width = len_trim(line)
+
+            ! Ensure it fits
+            if (display_width > content_width - 2) then
+                display_width = content_width - 2
+            end if
+
+            ! Calculate padding
+            display_width = max(0, min(display_width, content_width - 2))
 
             if (i == palette%selected_index) then
                 ! Highlight selected item with inverse colors
-                call terminal_write(INVERSE // line(1:display_width))
-                call terminal_write(repeat(' ', content_width - display_width - 2) // RESET // '│')
+                call terminal_write(INVERSE)
+                call terminal_write(line(1:display_width))
+                call terminal_write(repeat(' ', max(0, content_width - 2 - display_width)))
+                call terminal_write(RESET)
             else
                 call terminal_write(line(1:display_width))
-                call terminal_write(repeat(' ', content_width - display_width - 2) // '│')
+                call terminal_write(repeat(' ', max(0, content_width - 2 - display_width)))
             end if
+
+            call terminal_write('│')
         end do
 
         ! Fill remaining visible slots with empty rows
