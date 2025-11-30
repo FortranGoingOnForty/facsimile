@@ -4,7 +4,7 @@ module command_handler_module
     use editor_state_module, only: editor_state_t, cursor_t, switch_to_tab_with_buffer, &
                                    close_tab, create_tab, close_pane, split_pane_vertical, split_pane_horizontal, &
                                    navigate_to_pane_left, navigate_to_pane_right, navigate_to_pane_up, navigate_to_pane_down, &
-                                   sync_editor_to_pane
+                                   sync_editor_to_pane, tab_t
     use text_buffer_module
     use renderer_module, only: update_viewport, render_screen, tree_state
     use yank_stack_module
@@ -14,22 +14,66 @@ module command_handler_module
     use search_prompt_module, only: show_search_prompt, search_forward, search_backward, &
                                      current_search_pattern
     use replace_prompt_module, only: show_replace_prompt
+    use unified_search_module, only: show_unified_search_prompt
     use undo_stack_module
     use terminal_io_module, only: terminal_move_cursor, terminal_write, terminal_clear_screen
     use bracket_matching_module, only: find_matching_bracket
     use file_tree_module
     use git_ops_module
     use text_prompt_module, only: show_text_prompt, show_yes_no_prompt
+    use fortress_navigator_module, only: open_fortress_navigator
+    use binary_prompt_module, only: binary_file_prompt
+    use lsp_server_manager_module, only: request_completion, request_hover, request_definition, &
+                                         request_references, request_code_actions, request_document_symbols, &
+                                         request_signature_help, request_formatting, request_rename
+    use rename_prompt_module, only: show_rename_prompt
+    use completion_popup_module, only: show_completion_popup, hide_completion_popup, &
+                                        handle_completion_response, navigate_completion_up, &
+                                        navigate_completion_down, get_selected_completion, &
+                                        is_completion_visible
+    use hover_tooltip_module, only: show_hover_tooltip, hide_hover_tooltip, &
+                                     handle_hover_response, is_hover_visible
+    use diagnostics_panel_module, only: toggle_panel => toggle_diagnostics_panel, &
+                                        is_diagnostics_panel_visible, &
+                                        diagnostics_panel_handle_key
+    use references_panel_module, only: toggle_references_panel, &
+                                      is_references_panel_visible, &
+                                      references_panel_handle_key, &
+                                      get_selected_reference_location, &
+                                      hide_references_panel, &
+                                      show_references_panel, &
+                                      set_references, reference_location_t
+    use code_actions_menu_module, only: code_actions_menu_t, init_code_actions_menu, &
+                                        cleanup_code_actions_menu, show_code_actions_menu, &
+                                        hide_code_actions_menu, is_code_actions_menu_visible, &
+                                        code_actions_menu_handle_key, set_code_actions, &
+                                        clear_code_actions, get_selected_action
+    use symbols_panel_module, only: symbols_panel_t, document_symbol_t, &
+                                    toggle_symbols_panel, is_symbols_panel_visible, &
+                                    symbols_panel_handle_key, get_selected_symbol_location, &
+                                    hide_symbols_panel, show_symbols_panel, &
+                                    set_symbols, clear_symbols
+    use signature_tooltip_module, only: signature_tooltip_t, show_signature_tooltip, &
+                                        hide_signature_tooltip, is_signature_tooltip_visible, &
+                                        handle_signature_response
+    use jump_stack_module, only: push_jump_location, pop_jump_location, &
+                                 is_jump_stack_empty
     implicit none
     private
 
     public :: handle_key_command, init_command_handler, cleanup_command_handler
     public :: save_initial_state_for_undo
+    public :: search_pattern, match_case_sensitive  ! Exposed for status bar hint
 
     type(yank_stack_t) :: yank_stack
     type(undo_stack_t) :: undo_stack
     character(len=:), allocatable :: search_pattern  ! For ctrl-d functionality
+    logical :: match_case_sensitive = .true.  ! Case sensitivity for ctrl-d match mode
     logical :: last_action_was_edit = .false.
+
+    ! Module-level storage for LSP callbacks
+    type(editor_state_t), pointer, save :: saved_editor_for_callback => null()
+
 
 contains
 
@@ -65,43 +109,47 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         logical, intent(out) :: should_quit
-        integer :: line_count, i, j, insert_line
+        integer :: line_count, i, j, insert_line, pane_idx
         logical :: is_edit_action
         type(cursor_t), allocatable :: new_cursors(:)
         integer, allocatable :: original_lines(:)
         character(len=:), allocatable :: line
-        type(buffer_t), pointer :: active_buffer
-        integer :: tab_idx, pane_idx
 
         should_quit = .false.
-
-        ! Get the active pane's buffer when in multi-pane mode
-        tab_idx = editor%active_tab_index
-        if (tab_idx > 0 .and. tab_idx <= size(editor%tabs)) then
-            if (allocated(editor%tabs(tab_idx)%panes)) then
-                pane_idx = editor%tabs(tab_idx)%active_pane_index
-                if (pane_idx > 0 .and. pane_idx <= size(editor%tabs(tab_idx)%panes)) then
-                    active_buffer => editor%tabs(tab_idx)%panes(pane_idx)%buffer
-                else
-                    active_buffer => buffer
-                end if
-            else
-                active_buffer => buffer
-            end if
-        else
-            active_buffer => buffer
-        end if
-
-        line_count = buffer_get_line_count(active_buffer)
+        line_count = buffer_get_line_count(buffer)
         is_edit_action = .false.
+
+        ! DEBUG: Log ALL keys to file only (not screen to avoid overwriting status messages)
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '[KEY] "' // trim(key_str) // '"'
+            close(debug_unit)
+        end block
 
         ! Ignore empty key strings (from terminal position reports, etc)
         if (len_trim(key_str) == 0 .and. key_str(1:1) /= ' ') then
             return
         end if
 
-        ! Route input when in fuss mode (except ctrl-b and ctrl-q which work in both modes)
-        if (editor%fuss_mode_active .and. trim(key_str) /= 'ctrl-b' .and. trim(key_str) /= 'ctrl-q') then
+        ! Reset search_pattern for any key except ctrl-d and alt-c
+        ! This ensures ctrl-d always starts fresh when not in an active match sequence
+        ! alt-c is preserved to allow toggling case sensitivity during match mode
+        if (trim(key_str) /= 'ctrl-d' .and. trim(key_str) /= 'alt-c' .and. allocated(search_pattern)) then
+            deallocate(search_pattern)
+            match_case_sensitive = .true.  ! Reset to default
+        end if
+
+        ! Route input when in fuss mode (except ctrl-b/ctrl-shift-b/F-keys/Alt-keys/ctrl-q which work in both modes)
+        if (editor%fuss_mode_active .and. trim(key_str) /= 'ctrl-b' .and. &
+            trim(key_str) /= 'ctrl-shift-b' .and. trim(key_str) /= 'f2' .and. &
+            trim(key_str) /= 'f3' .and. trim(key_str) /= 'f4' .and. &
+            trim(key_str) /= 'f6' .and. trim(key_str) /= 'f8' .and. &
+            trim(key_str) /= 'f12' .and. trim(key_str) /= 'shift-f12' .and. &
+            trim(key_str) /= 'alt-g' .and. trim(key_str) /= 'alt-o' .and. &
+            trim(key_str) /= 'alt-p' .and. trim(key_str) /= 'alt-e' .and. &
+            trim(key_str) /= 'alt-r' .and. trim(key_str) /= 'ctrl-\\' .and. &
+            trim(key_str) /= 'ctrl-q') then
             call handle_fuss_input(key_str, editor, buffer)
             return
         end if
@@ -111,11 +159,58 @@ contains
         case('ctrl-q')
             should_quit = .true.
 
-        case('ctrl-b')
+        case('ctrl-b', 'ctrl-shift-b', 'f3')
             ! Toggle fuss mode (file tree)
+            ! ctrl-b: Original binding (conflicts with tmux prefix)
+            ! ctrl-shift-b: Alternative (tmux may still catch this)
+            ! f3: Tmux/terminal-safe alternative (recommended)
             call toggle_fuss_mode(editor)
 
+        case('ctrl-o')
+            ! Open fortress navigator (file/directory picker)
+            call handle_fortress_navigator(editor, buffer)
+
         case('esc')
+            ! If completion popup is visible, hide it
+            if (is_completion_visible(editor%completion_popup)) then
+                call hide_completion_popup(editor%completion_popup)
+                return
+            end if
+
+            ! If hover tooltip is visible, hide it
+            if (is_hover_visible(editor%hover_tooltip)) then
+                call hide_hover_tooltip(editor%hover_tooltip)
+                return
+            end if
+
+            ! If diagnostics panel is visible, hide it
+            if (is_diagnostics_panel_visible(editor%diagnostics_panel)) then
+                if (diagnostics_panel_handle_key(editor%diagnostics_panel, trim(key_str))) then
+                    return
+                end if
+            end if
+
+            ! If references panel is visible, hide it
+            if (is_references_panel_visible(editor%references_panel)) then
+                if (references_panel_handle_key(editor%references_panel, trim(key_str))) then
+                    return
+                end if
+            end if
+
+            ! If code actions menu is visible, hide it
+            if (is_code_actions_menu_visible(editor%code_actions_menu)) then
+                if (code_actions_menu_handle_key(editor%code_actions_menu, trim(key_str))) then
+                    return
+                end if
+            end if
+
+            ! If symbols panel is visible, hide it
+            if (is_symbols_panel_visible(editor%symbols_panel)) then
+                if (symbols_panel_handle_key(editor%symbols_panel, trim(key_str))) then
+                    return
+                end if
+            end if
+
             ! ESC - Clear selections and return to single cursor mode
             if (size(editor%cursors) > 1) then
                 ! Keep only the active cursor
@@ -130,6 +225,7 @@ contains
                 editor%cursors(editor%active_cursor)%has_selection = .false.
             end if
             call sync_editor_to_pane(editor)
+            call update_viewport(editor)
 
         case('ctrl-?', 'ctrl-/')
             ! Show help menu
@@ -200,26 +296,101 @@ contains
         case('ctrl-y')
             ! Yank (paste from yank stack)
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-            call yank_text(editor%cursors(editor%active_cursor), buffer)
+            if (size(editor%cursors) > 1) then
+                ! Apply yank to all cursors
+                do i = 1, size(editor%cursors)
+                    call yank_text(editor%cursors(i), buffer)
+                end do
+            else
+                call yank_text(editor%cursors(editor%active_cursor), buffer)
+            end if
             call sync_editor_to_pane(editor)
             is_edit_action = .true.
 
         ! Navigation
         case('up')
+            ! If completion popup is visible, navigate it instead
+            if (is_completion_visible(editor%completion_popup)) then
+                call navigate_completion_up(editor%completion_popup)
+                return
+            end if
+
+            ! If diagnostics panel is visible, navigate it
+            if (is_diagnostics_panel_visible(editor%diagnostics_panel)) then
+                if (diagnostics_panel_handle_key(editor%diagnostics_panel, trim(key_str))) then
+                    return
+                end if
+            end if
+
+            ! If references panel is visible, navigate it
+            if (is_references_panel_visible(editor%references_panel)) then
+                if (references_panel_handle_key(editor%references_panel, trim(key_str))) then
+                    return
+                end if
+            end if
+
+            ! If code actions menu is visible, navigate it
+            if (is_code_actions_menu_visible(editor%code_actions_menu)) then
+                if (code_actions_menu_handle_key(editor%code_actions_menu, trim(key_str))) then
+                    return
+                end if
+            end if
+
+            ! If symbols panel is visible, navigate it
+            if (is_symbols_panel_visible(editor%symbols_panel)) then
+                if (symbols_panel_handle_key(editor%symbols_panel, trim(key_str))) then
+                    return
+                end if
+            end if
+
             if (size(editor%cursors) > 1) then
                 ! Move all cursors
                 do i = 1, size(editor%cursors)
-                    call move_cursor_up(editor%cursors(i), buffer, line_count)
+                    call move_cursor_up(editor%cursors(i), buffer)
                 end do
                 ! Remove duplicate cursors that ended up at same position
                 call deduplicate_cursors(editor)
             else
-                call move_cursor_up(editor%cursors(editor%active_cursor), buffer, line_count)
+                call move_cursor_up(editor%cursors(editor%active_cursor), buffer)
             end if
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
         case('down')
+            ! If completion popup is visible, navigate it instead
+            if (is_completion_visible(editor%completion_popup)) then
+                call navigate_completion_down(editor%completion_popup)
+                return
+            end if
+
+            ! If diagnostics panel is visible, navigate it
+            if (is_diagnostics_panel_visible(editor%diagnostics_panel)) then
+                if (diagnostics_panel_handle_key(editor%diagnostics_panel, trim(key_str))) then
+                    return
+                end if
+            end if
+
+            ! If references panel is visible, navigate it
+            if (is_references_panel_visible(editor%references_panel)) then
+                if (references_panel_handle_key(editor%references_panel, trim(key_str))) then
+                    return
+                end if
+            end if
+
+            ! If code actions menu is visible, navigate it
+            if (is_code_actions_menu_visible(editor%code_actions_menu)) then
+                if (code_actions_menu_handle_key(editor%code_actions_menu, trim(key_str))) then
+                    return
+                end if
+            end if
+
+            ! If symbols panel is visible, navigate it
+            if (is_symbols_panel_visible(editor%symbols_panel)) then
+                if (symbols_panel_handle_key(editor%symbols_panel, trim(key_str))) then
+                    return
+                end if
+            end if
+
             if (size(editor%cursors) > 1) then
                 ! Move all cursors
                 do i = 1, size(editor%cursors)
@@ -234,6 +405,11 @@ contains
             call update_viewport(editor)
 
         case('left')
+            ! Hide hover tooltip on movement
+            if (is_hover_visible(editor%hover_tooltip)) then
+                call hide_hover_tooltip(editor%hover_tooltip)
+            end if
+
             if (size(editor%cursors) > 1) then
                 ! Move all cursors
                 do i = 1, size(editor%cursors)
@@ -248,6 +424,11 @@ contains
             call update_viewport(editor)
 
         case('right')
+            ! Hide hover tooltip on movement
+            if (is_hover_visible(editor%hover_tooltip)) then
+                call hide_hover_tooltip(editor%hover_tooltip)
+            end if
+
             if (size(editor%cursors) > 1) then
                 ! Move all cursors
                 do i = 1, size(editor%cursors)
@@ -263,7 +444,7 @@ contains
 
         ! Selection with shift+motion
         case('shift-up')
-            call extend_selection_up(editor%cursors(editor%active_cursor), buffer, line_count)
+            call extend_selection_up(editor%cursors(editor%active_cursor), buffer)
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
@@ -320,10 +501,10 @@ contains
             if (size(editor%cursors) > 1) then
                 ! Move all cursors
                 do i = 1, size(editor%cursors)
-                    call move_cursor_page_up(editor%cursors(i), editor, line_count)
+                    call move_cursor_page_up(editor%cursors(i), editor)
                 end do
             else
-                call move_cursor_page_up(editor%cursors(editor%active_cursor), editor, line_count)
+                call move_cursor_page_up(editor%cursors(editor%active_cursor), editor)
             end if
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
@@ -369,7 +550,7 @@ contains
             call update_viewport(editor)
 
         case('shift-pageup')
-            call extend_selection_page_up(editor%cursors(editor%active_cursor), editor, line_count)
+            call extend_selection_page_up(editor%cursors(editor%active_cursor), editor)
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
@@ -441,29 +622,39 @@ contains
             is_edit_action = .true.
 
         ! Tab navigation
-        case('alt-1')
+        case('alt-1', 'ctrl-1')
+            ! Switch to tab 1 (alt-1 or ctrl-1)
             if (size(editor%tabs) >= 1) call switch_to_tab_with_buffer(editor, 1, buffer)
-        case('alt-2')
+        case('alt-2', 'ctrl-2')
+            ! Switch to tab 2
             if (size(editor%tabs) >= 2) call switch_to_tab_with_buffer(editor, 2, buffer)
-        case('alt-3')
+        case('alt-3', 'ctrl-3')
+            ! Switch to tab 3
             if (size(editor%tabs) >= 3) call switch_to_tab_with_buffer(editor, 3, buffer)
-        case('alt-4')
+        case('alt-4', 'ctrl-4')
+            ! Switch to tab 4
             if (size(editor%tabs) >= 4) call switch_to_tab_with_buffer(editor, 4, buffer)
-        case('alt-5')
+        case('alt-5', 'ctrl-5')
+            ! Switch to tab 5
             if (size(editor%tabs) >= 5) call switch_to_tab_with_buffer(editor, 5, buffer)
-        case('alt-6')
+        case('alt-6', 'ctrl-6')
+            ! Switch to tab 6
             if (size(editor%tabs) >= 6) call switch_to_tab_with_buffer(editor, 6, buffer)
-        case('alt-7')
+        case('alt-7', 'ctrl-7')
+            ! Switch to tab 7
             if (size(editor%tabs) >= 7) call switch_to_tab_with_buffer(editor, 7, buffer)
-        case('alt-8')
+        case('alt-8', 'ctrl-8')
+            ! Switch to tab 8
             if (size(editor%tabs) >= 8) call switch_to_tab_with_buffer(editor, 8, buffer)
-        case('alt-9')
+        case('alt-9', 'ctrl-9')
+            ! Switch to tab 9
             if (size(editor%tabs) >= 9) call switch_to_tab_with_buffer(editor, 9, buffer)
-        case('alt-0')
+        case('alt-0', 'ctrl-0')
+            ! Switch to tab 10
             if (size(editor%tabs) >= 10) call switch_to_tab_with_buffer(editor, 10, buffer)
 
-        case('ctrl-alt-left')
-            ! Previous tab
+        case('ctrl-alt-left', 'ctrl-pageup')
+            ! Previous tab (ctrl-alt-left or ctrl-pageup)
             if (size(editor%tabs) > 0) then
                 if (editor%active_tab_index > 1) then
                     call switch_to_tab_with_buffer(editor, editor%active_tab_index - 1, buffer)
@@ -472,8 +663,8 @@ contains
                 end if
             end if
 
-        case('ctrl-alt-right')
-            ! Next tab
+        case('ctrl-alt-right', 'ctrl-pagedown')
+            ! Next tab (ctrl-alt-right or ctrl-pagedown)
             if (size(editor%tabs) > 0) then
                 if (editor%active_tab_index < size(editor%tabs)) then
                     call switch_to_tab_with_buffer(editor, editor%active_tab_index + 1, buffer)
@@ -510,6 +701,85 @@ contains
             is_edit_action = .true.
 
         case('enter')
+            ! If code actions menu is visible, apply selected action
+            if (is_code_actions_menu_visible(editor%code_actions_menu)) then
+                block
+                    character(len=:), allocatable :: action_json
+
+                    if (get_selected_action(editor%code_actions_menu, action_json)) then
+                        ! TODO: Apply the selected code action
+                        ! This will involve sending workspace/executeCommand or workspace/applyEdit
+                        call terminal_move_cursor(editor%screen_rows, 1)
+                        call terminal_write('Applying code action...                ')
+
+                        ! Hide menu after selection
+                        call hide_code_actions_menu(editor%code_actions_menu)
+                    end if
+                end block
+                return
+            end if
+
+            ! If symbols panel is visible, jump to selected symbol
+            if (is_symbols_panel_visible(editor%symbols_panel)) then
+                block
+                    integer(int32) :: line, col
+
+                    if (get_selected_symbol_location(editor%symbols_panel, line, col)) then
+                        ! Jump to the symbol location
+                        editor%cursors(editor%active_cursor)%line = line
+                        editor%cursors(editor%active_cursor)%column = col
+                        call update_viewport(editor)
+
+                        ! Hide panel after jump
+                        call hide_symbols_panel(editor%symbols_panel)
+                    end if
+                end block
+                return
+            end if
+
+            ! If references panel is visible, jump to selected reference
+            if (is_references_panel_visible(editor%references_panel)) then
+                block
+                    character(len=:), allocatable :: uri
+                    integer(int32) :: line, col
+
+                    if (get_selected_reference_location(editor%references_panel, uri, line, col)) then
+                        ! Convert URI to file path
+                        if (uri(1:7) == "file://") then
+                            ! Jump to the reference location
+                            ! TODO: Handle cross-file navigation
+                            editor%cursors(editor%active_cursor)%line = line
+                            editor%cursors(editor%active_cursor)%column = col
+                            call update_viewport(editor)
+                            call hide_references_panel(editor%references_panel)
+                        end if
+                    end if
+                end block
+                return
+            end if
+
+            ! If completion popup is visible, insert selected completion
+            if (is_completion_visible(editor%completion_popup)) then
+                block
+                    character(len=:), allocatable :: completion_text
+                    integer :: text_i
+                    completion_text = get_selected_completion(editor%completion_popup)
+                    if (len(completion_text) > 0) then
+                        ! Insert the completion text at cursor
+                        if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+                        do text_i = 1, len(completion_text)
+                            call buffer_insert_char(buffer, editor%cursors(editor%active_cursor), &
+                                                   completion_text(text_i:text_i))
+                            editor%cursors(editor%active_cursor)%column = &
+                                editor%cursors(editor%active_cursor)%column + 1
+                        end do
+                    end if
+                    call hide_completion_popup(editor%completion_popup)
+                end block
+                is_edit_action = .true.
+                return
+            end if
+
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (size(editor%cursors) > 1) then
                 ! Sort cursors and apply from bottom to top to avoid position shifts
@@ -583,6 +853,7 @@ contains
             else
                 call kill_line_forward(editor%cursors(editor%active_cursor), buffer)
             end if
+            call sync_editor_to_pane(editor)
             is_edit_action = .true.
 
         case('ctrl-u')
@@ -595,17 +866,34 @@ contains
             else
                 call kill_line_backward(editor%cursors(editor%active_cursor), buffer)
             end if
+            call sync_editor_to_pane(editor)
             is_edit_action = .true.
 
         case('alt-v')
             ! Split pane vertically
             if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
+                ! Sync current buffer to active pane before splitting
+                call sync_editor_to_pane(editor)
+                if (allocated(editor%tabs(editor%active_tab_index)%panes)) then
+                    pane_idx = editor%tabs(editor%active_tab_index)%active_pane_index
+                    if (pane_idx > 0 .and. pane_idx <= size(editor%tabs(editor%active_tab_index)%panes)) then
+                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(pane_idx)%buffer, buffer)
+                    end if
+                end if
                 call split_pane_vertical(editor)
             end if
 
         case('alt-s')
             ! Split pane horizontally
             if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
+                ! Sync current buffer to active pane before splitting
+                call sync_editor_to_pane(editor)
+                if (allocated(editor%tabs(editor%active_tab_index)%panes)) then
+                    pane_idx = editor%tabs(editor%active_tab_index)%active_pane_index
+                    if (pane_idx > 0 .and. pane_idx <= size(editor%tabs(editor%active_tab_index)%panes)) then
+                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(pane_idx)%buffer, buffer)
+                    end if
+                end if
                 call split_pane_horizontal(editor)
             end if
 
@@ -631,44 +919,18 @@ contains
             end if
 
         case('ctrl-w')
-            ! Close current tab (wipes editor if last tab)
+            ! Close current tab (prompts to save if modified)
             if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
-                ! Local variable for tab index
-                block
-                    integer :: tab_idx
-                    tab_idx = editor%active_tab_index
-
-                ! If this is the last tab, close it and clear editor
-                if (size(editor%tabs) == 1) then
-                    call close_tab(editor, tab_idx)
-
-                    ! Clear the buffer and open fuss mode
-                    call cleanup_buffer(buffer)
-                    call init_buffer(buffer)
-                    editor%fuss_mode_active = .true.
-                    if (allocated(editor%filename)) deallocate(editor%filename)
-                    editor%modified = .false.
-                    if (allocated(editor%workspace_path)) then
-                        call init_tree_state(tree_state, editor%workspace_path)
-                    end if
+                ! Check if tab is modified - prompt before closing
+                if (editor%tabs(editor%active_tab_index)%modified) then
+                    call prompt_save_before_close_tab(editor, buffer)
                 else
-                    ! Multiple tabs - close current tab normally
-                    call close_tab(editor, tab_idx)
-
-                    ! Copy new active tab's buffer
-                    if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
-                        call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
-                        editor%modified = editor%tabs(editor%active_tab_index)%modified
-                        if (allocated(editor%filename)) deallocate(editor%filename)
-                        allocate(character(len=len(editor%tabs(editor%active_tab_index)%filename)) :: editor%filename)
-                        editor%filename = editor%tabs(editor%active_tab_index)%filename
-                    end if
+                    call close_tab_without_prompt(editor, buffer)
                 end if
-                end block
             end if
 
         case('ctrl-shift-left', 'alt-h')
-            ! Navigate to pane on the left
+            ! Navigate to pane on the left (Vim-style hjkl with alt)
             if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
                 call navigate_to_pane_left(editor)
             end if
@@ -720,26 +982,96 @@ contains
             is_edit_action = .true.
 
         case('ctrl-t')
-            ! Create new empty tab
-            call create_tab(editor, '[Untitled]')
-            ! Switch to the new tab (it's already active after create_tab)
-            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-                ! Copy the new tab's buffer to display
-                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+            ! Create new empty tab with unique name
+            block
+                integer :: untitled_counter, i, name_len, max_untitled, dash_pos, num_start
+                character(len=32) :: untitled_name, num_str
+                logical :: name_exists
+                integer :: ios
 
-                ! Update editor state with the new tab
-                if (allocated(editor%filename)) deallocate(editor%filename)
-                allocate(character(len=10) :: editor%filename)
-                editor%filename = '[Untitled]'
+                ! Scan existing tabs to find highest untitled number
+                max_untitled = 0
+                if (allocated(editor%tabs)) then
+                    do i = 1, size(editor%tabs)
+                        if (allocated(editor%tabs(i)%filename)) then
+                            ! Check if it's an untitled tab
+                            if (index(editor%tabs(i)%filename, '[Untitled') == 1) then
+                                ! Check for plain [Untitled]
+                                if (trim(editor%tabs(i)%filename) == '[Untitled]') then
+                                    max_untitled = max(max_untitled, 1)
+                                else
+                                    ! Check for [Untitled-N]
+                                    dash_pos = index(editor%tabs(i)%filename, '-')
+                                    if (dash_pos > 0) then
+                                        num_start = dash_pos + 1
+                                        num_str = editor%tabs(i)%filename(num_start:len_trim(editor%tabs(i)%filename)-1)
+                                        read(num_str, *, iostat=ios) untitled_counter
+                                        if (ios == 0) then
+                                            max_untitled = max(max_untitled, untitled_counter)
+                                        end if
+                                    end if
+                                end if
+                            end if
+                        end if
+                    end do
+                end if
 
-                ! Reset cursor to top
-                editor%cursors(editor%active_cursor)%line = 1
-                editor%cursors(editor%active_cursor)%column = 1
-                editor%cursors(editor%active_cursor)%desired_column = 1
-                editor%viewport_line = 1
-                editor%viewport_column = 1
-                editor%modified = .false.
-            end if
+                ! Start checking from max_untitled + 1, but check backwards too in case of gaps
+                untitled_counter = max(1, max_untitled)
+                do
+                    if (untitled_counter == 1) then
+                        write(untitled_name, '(A)') '[Untitled]'
+                    else
+                        write(untitled_name, '(A,I0,A)') '[Untitled-', untitled_counter, ']'
+                    end if
+
+                    ! Check if this name already exists
+                    name_exists = .false.
+                    if (allocated(editor%tabs)) then
+                        do i = 1, size(editor%tabs)
+                            if (allocated(editor%tabs(i)%filename)) then
+                                if (trim(editor%tabs(i)%filename) == trim(untitled_name)) then
+                                    name_exists = .true.
+                                    exit
+                                end if
+                            end if
+                        end do
+                    end if
+
+                    if (.not. name_exists) exit
+                    untitled_counter = untitled_counter + 1
+                end do
+
+                call create_tab(editor, trim(untitled_name))
+
+                ! Switch to the new tab (it's already active after create_tab)
+                if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                    ! Clear the display buffer and copy from the new tab's pane (which is empty)
+                    call cleanup_buffer(buffer)
+                    call init_buffer(buffer)
+
+                    ! Copy empty buffer to the new tab's pane
+                    if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
+                        size(editor%tabs(editor%active_tab_index)%panes) > 0) then
+                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(1)%buffer, buffer)
+                        call copy_buffer(editor%tabs(editor%active_tab_index)%buffer, buffer)
+                    end if
+
+                    ! Update editor state with the new tab
+                    name_len = len_trim(untitled_name)
+                    if (allocated(editor%filename)) deallocate(editor%filename)
+                    allocate(character(len=name_len) :: editor%filename)
+                    editor%filename = trim(untitled_name)
+
+                    ! Reset cursor to top
+                    editor%cursors(editor%active_cursor)%line = 1
+                    editor%cursors(editor%active_cursor)%column = 1
+                    editor%cursors(editor%active_cursor)%desired_column = 1
+                    editor%viewport_line = 1
+                    editor%viewport_column = 1
+                    editor%modified = .false.
+                end if
+            end block
 
         case('ctrl-j')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
@@ -756,13 +1088,14 @@ contains
         case('ctrl-x')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (size(editor%cursors) > 1) then
-                ! Apply to all cursors
-                do i = 1, size(editor%cursors)
+                ! Apply to all cursors in reverse order (bottom to top)
+                do i = size(editor%cursors), 1, -1
                     call cut_selection_or_line(editor%cursors(i), buffer)
                 end do
             else
                 call cut_selection_or_line(editor%cursors(editor%active_cursor), buffer)
             end if
+            call sync_editor_to_pane(editor)
             is_edit_action = .true.
 
         case('ctrl-c')
@@ -772,19 +1105,458 @@ contains
         case('ctrl-v')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (size(editor%cursors) > 1) then
-                ! Apply to all cursors
-                do i = 1, size(editor%cursors)
+                ! Apply to all cursors in reverse order (bottom to top)
+                ! This prevents position shifts as we insert text
+                do i = size(editor%cursors), 1, -1
                     call paste_clipboard(editor%cursors(i), buffer)
                 end do
             else
                 call paste_clipboard(editor%cursors(editor%active_cursor), buffer)
             end if
+            call sync_editor_to_pane(editor)
             is_edit_action = .true.
 
         case('ctrl-s')
             ! Save the active pane/tab's buffer
             ! (All panes in a tab share the same buffer, so saving saves the entire tab)
             call save_file(editor, buffer)
+
+        ! LSP features
+        case('ctrl-space')
+            ! Trigger code completion
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                    ! Request completion at current cursor position
+                    ! LSP uses 0-based positions
+                    block
+                        integer :: request_id, lsp_line, lsp_char
+                        lsp_line = editor%cursors(editor%active_cursor)%line - 1
+                        lsp_char = editor%cursors(editor%active_cursor)%column - 1
+
+                        request_id = request_completion(editor%lsp_manager, &
+                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            editor%tabs(editor%active_tab_index)%filename, &
+                            lsp_line, lsp_char)
+
+                        if (request_id > 0) then
+                            ! Show popup at cursor position (will populate when response arrives)
+                            call show_completion_popup(editor%completion_popup, &
+                                editor%cursors(editor%active_cursor)%line - editor%viewport_line + 2, &
+                                editor%cursors(editor%active_cursor)%column - editor%viewport_column + 1)
+                        end if
+                    end block
+                end if
+            end if
+
+        case('ctrl-h')
+            ! Trigger hover information
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                    ! Request hover at current cursor position
+                    block
+                        integer :: request_id, lsp_line, lsp_char
+                        lsp_line = editor%cursors(editor%active_cursor)%line - 1
+                        lsp_char = editor%cursors(editor%active_cursor)%column - 1
+
+                        request_id = request_hover(editor%lsp_manager, &
+                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            editor%tabs(editor%active_tab_index)%filename, &
+                            lsp_line, lsp_char)
+
+                        if (request_id > 0) then
+                            ! Show tooltip at cursor position (will populate when response arrives)
+                            call show_hover_tooltip(editor%hover_tooltip, &
+                                editor%cursors(editor%active_cursor)%line - editor%viewport_line + 2, &
+                                editor%cursors(editor%active_cursor)%column - editor%viewport_column + 1)
+                        end if
+                    end block
+                end if
+            end if
+
+        case('ctrl-.')
+            ! Trigger code actions
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                    ! Request code actions at current cursor position
+                    block
+                        integer :: request_id, lsp_line, lsp_char
+                        lsp_line = editor%cursors(editor%active_cursor)%line - 1
+                        lsp_char = editor%cursors(editor%active_cursor)%column - 1
+
+                        ! Save editor state for callback
+                        if (allocated(saved_editor_for_callback)) then
+                            deallocate(saved_editor_for_callback)
+                        end if
+                        allocate(saved_editor_for_callback)
+                        saved_editor_for_callback = editor
+
+                        request_id = request_code_actions(editor%lsp_manager, &
+                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            editor%tabs(editor%active_tab_index)%filename, &
+                            lsp_line, lsp_char, &
+                            lsp_line, lsp_char, &
+                            handle_code_actions_response_wrapper)
+
+                        if (request_id > 0) then
+                            ! Show menu placeholder (will populate when response arrives)
+                            call show_code_actions_menu(editor%code_actions_menu, &
+                                editor%cursors(editor%active_cursor)%line - editor%viewport_line + 2, &
+                                editor%cursors(editor%active_cursor)%column - editor%viewport_column + 1)
+                        end if
+                    end block
+                end if
+            end if
+
+        case('f12', 'ctrl-\\', 'alt-g')
+            ! Go to definition (F12, Ctrl+\, or Alt+G)
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') '>>> INSIDE F12/ALT-G HANDLER <<<'
+                write(debug_unit, '(A,I0)') 'active_tab_index = ', editor%active_tab_index
+                write(debug_unit, '(A,I0)') 'size(tabs) = ', size(editor%tabs)
+                if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                    write(debug_unit, '(A,I0)') 'lsp_server_index = ', editor%tabs(editor%active_tab_index)%lsp_server_index
+                end if
+                close(debug_unit)
+            end block
+            call terminal_move_cursor(editor%screen_rows, 1)
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                    ! Save current location to jump stack
+                    if (allocated(editor%filename)) then
+                        call push_jump_location(editor%jump_stack, &
+                            trim(editor%filename), &
+                            editor%cursors(editor%active_cursor)%line, &
+                            editor%cursors(editor%active_cursor)%column)
+                    end if
+
+                    ! Request definition at current cursor position
+                    block
+                        integer :: request_id, lsp_line, lsp_char
+                        lsp_line = editor%cursors(editor%active_cursor)%line - 1
+                        lsp_char = editor%cursors(editor%active_cursor)%column - 1
+
+                        ! Save editor state pointer for callback
+                        saved_editor_for_callback => editor
+
+                        request_id = request_definition(editor%lsp_manager, &
+                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            editor%tabs(editor%active_tab_index)%filename, &
+                            lsp_line, lsp_char, handle_definition_response_wrapper)
+
+                        block
+                            integer :: debug_unit
+                            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                            write(debug_unit, '(A,I0)') 'request_definition returned request_id = ', request_id
+                            close(debug_unit)
+                        end block
+
+                        if (request_id > 0) then
+                            ! Response will be handled by callback
+                            call terminal_write('Searching for definition...                ')
+                        else
+                            call terminal_write('[F12] LSP request failed                    ')
+                        end if
+                    end block
+                else
+                    call terminal_write('[F12] No LSP server for this file           ')
+                end if
+            else
+                call terminal_write('[F12] No active tab                         ')
+            end if
+
+        case('shift-f12', 'alt-r')
+            ! Find all references (Shift+F12 or Alt+R)
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') '>>> INSIDE SHIFT-F12/ALT-R HANDLER <<<'
+                close(debug_unit)
+            end block
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                    ! Request references at current cursor position
+                    block
+                        integer :: request_id, lsp_line, lsp_char
+                        lsp_line = editor%cursors(editor%active_cursor)%line - 1
+                        lsp_char = editor%cursors(editor%active_cursor)%column - 1
+
+                        ! Save editor state for callback
+                        if (.not. allocated(saved_editor_for_callback)) then
+                            allocate(saved_editor_for_callback)
+                        end if
+                        saved_editor_for_callback = editor
+
+                        request_id = request_references(editor%lsp_manager, &
+                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            editor%tabs(editor%active_tab_index)%filename, &
+                            lsp_line, lsp_char, handle_references_response_wrapper)
+
+                        if (request_id > 0) then
+                            ! Response will be handled by callback
+                            call terminal_move_cursor(editor%screen_rows, 1)
+                            call terminal_write('Searching for references...                ')
+                            ! Show panel (will be populated when response arrives)
+                            call show_references_panel(editor%references_panel, editor%screen_cols, editor%screen_rows)
+                        end if
+                    end block
+                end if
+            end if
+
+        case('f2')
+            ! Rename symbol
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                    ! Get word under cursor as old name
+                    block
+                        character(len=:), allocatable :: line, old_name, new_name
+                        integer :: word_start, word_end, lsp_line, lsp_char, request_id
+                        logical :: cancelled
+
+                        line = buffer_get_line(buffer, editor%cursors(editor%active_cursor)%line)
+                        call find_word_boundaries(line, editor%cursors(editor%active_cursor)%column, &
+                            word_start, word_end)
+
+                        if (word_start > 0 .and. word_end >= word_start) then
+                            old_name = line(word_start:word_end)
+
+                            ! Show rename prompt
+                            call show_rename_prompt(editor%screen_rows, old_name, new_name, cancelled)
+
+                            if (.not. cancelled .and. allocated(new_name)) then
+                                ! Send rename request
+                                lsp_line = editor%cursors(editor%active_cursor)%line - 1
+                                lsp_char = editor%cursors(editor%active_cursor)%column - 1
+
+                                ! Save editor state for callback
+                                if (.not. allocated(saved_editor_for_callback)) then
+                                    allocate(saved_editor_for_callback)
+                                end if
+                                saved_editor_for_callback = editor
+
+                                request_id = request_rename(editor%lsp_manager, &
+                                    editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                                    editor%tabs(editor%active_tab_index)%filename, &
+                                    lsp_line, lsp_char, new_name, handle_rename_response_wrapper)
+
+                                if (request_id > 0) then
+                                    call terminal_move_cursor(editor%screen_rows, 1)
+                                    call terminal_write('Renaming symbol...                         ')
+                                end if
+
+                                deallocate(new_name)
+                            end if
+
+                            if (allocated(old_name)) deallocate(old_name)
+                        else
+                            call terminal_move_cursor(editor%screen_rows, 1)
+                            call terminal_write('No symbol under cursor                     ')
+                        end if
+
+                        if (allocated(line)) deallocate(line)
+                    end block
+                end if
+            end if
+
+        case('shift-alt-f')
+            ! Format document
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                    block
+                        integer :: request_id
+
+                        ! Save editor state for callback
+                        if (.not. allocated(saved_editor_for_callback)) then
+                            allocate(saved_editor_for_callback)
+                        end if
+                        saved_editor_for_callback = editor
+
+                        ! Request formatting with 4 spaces (configurable later)
+                        request_id = request_formatting(editor%lsp_manager, &
+                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            editor%tabs(editor%active_tab_index)%filename, &
+                            4, .true., handle_formatting_response_wrapper)
+
+                        if (request_id > 0) then
+                            call terminal_move_cursor(editor%screen_rows, 1)
+                            call terminal_write('Formatting document...                     ')
+                        end if
+                    end block
+                end if
+            end if
+
+        case('f4', 'alt-o')
+            ! Document symbols outline (F4 or Alt+O)
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') '>>> INSIDE F4/ALT-O HANDLER <<<'
+                close(debug_unit)
+            end block
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                    ! Request document symbols
+                    block
+                        integer :: request_id
+
+                        ! Save editor state for callback
+                        if (.not. allocated(saved_editor_for_callback)) then
+                            allocate(saved_editor_for_callback)
+                        end if
+                        saved_editor_for_callback = editor
+
+                        request_id = request_document_symbols(editor%lsp_manager, &
+                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            editor%tabs(editor%active_tab_index)%filename, &
+                            handle_symbols_response_wrapper)
+
+                        if (request_id > 0) then
+                            ! Response will be handled by callback
+                            call terminal_move_cursor(editor%screen_rows, 1)
+                            call terminal_write('Loading document symbols...                ')
+                            ! Show panel (will be populated when response arrives)
+                            call show_symbols_panel(editor%symbols_panel, editor%screen_cols, editor%screen_rows)
+                        end if
+                    end block
+                end if
+            end if
+
+        case('ctrl-p')
+            ! Command palette (Ctrl+P - VSCode standard)
+            ! Note: ctrl-shift-p doesn't work - terminals can't distinguish ctrl-p from ctrl-shift-p
+            block
+                use command_palette_module, only: show_command_palette_interactive
+                character(len=:), allocatable :: cmd_id
+
+                cmd_id = show_command_palette_interactive(editor%command_palette, editor%screen_rows)
+
+                if (allocated(cmd_id) .and. len_trim(cmd_id) > 0) then
+                    ! Execute the command by re-processing as a key
+                    call execute_palette_command(editor, buffer, cmd_id, should_quit)
+                end if
+
+                ! Redraw screen after palette
+                call render_screen(buffer, editor)
+            end block
+
+        case('f6', 'alt-p')
+            ! Workspace symbols (F6 or Alt+P for project)
+            ! Workspace symbols (fuzzy search across project)
+            if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
+                block
+                    use workspace_symbols_panel_module, only: show_workspace_symbols_panel, &
+                                                               render_workspace_symbols_panel, &
+                                                               workspace_symbols_panel_handle_key, &
+                                                               hide_workspace_symbols_panel, &
+                                                               get_selected_symbol, &
+                                                               workspace_symbol_t
+                    use input_handler_module, only: get_key_input
+                    use lsp_server_manager_module, only: request_workspace_symbols
+                    integer :: request_id, status
+                    character(len=32) :: key_input
+                    logical :: handled
+                    type(workspace_symbol_t) :: selected_symbol
+
+                    ! Show panel
+                    call show_workspace_symbols_panel(editor%workspace_symbols_panel)
+
+                    ! Send initial empty query to get all symbols
+                    if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                        request_id = request_workspace_symbols(editor%lsp_manager, &
+                            editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                            '', handle_workspace_symbols_response_wrapper)
+                    end if
+
+                    call render_workspace_symbols_panel(editor%workspace_symbols_panel, editor%screen_rows)
+
+                    ! Interactive loop
+                    do
+                        call get_key_input(key_input, status)
+                        if (status /= 0) cycle
+
+                        ! Handle special keys
+                        if (key_input == 'enter') then
+                            selected_symbol = get_selected_symbol(editor%workspace_symbols_panel)
+                            if (allocated(selected_symbol%file_uri) .and. len_trim(selected_symbol%file_uri) > 0) then
+                                ! Navigate to the symbol location
+                                call navigate_to_workspace_symbol(editor, buffer, selected_symbol, should_quit)
+                            end if
+                            call hide_workspace_symbols_panel(editor%workspace_symbols_panel)
+                            call render_screen(buffer, editor)
+                            exit
+                        else if (key_input == 'esc') then
+                            call hide_workspace_symbols_panel(editor%workspace_symbols_panel)
+                            call render_screen(buffer, editor)
+                            exit
+                        else if (key_input == 'backspace') then
+                            if (editor%workspace_symbols_panel%search_pos > 0) then
+                                editor%workspace_symbols_panel%search_query(editor%workspace_symbols_panel%search_pos:editor%workspace_symbols_panel%search_pos) = ' '
+                                editor%workspace_symbols_panel%search_pos = editor%workspace_symbols_panel%search_pos - 1
+                                ! Send new query to LSP
+                                if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                                    request_id = request_workspace_symbols(editor%lsp_manager, &
+                                        editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                                        trim(editor%workspace_symbols_panel%search_query(1:editor%workspace_symbols_panel%search_pos)), &
+                                        handle_workspace_symbols_response_wrapper)
+                                end if
+                            end if
+                        else
+                            ! Try navigation keys
+                            call workspace_symbols_panel_handle_key(editor%workspace_symbols_panel, key_input, handled)
+                            if (.not. handled) then
+                                ! Regular character - add to search
+                                if (len_trim(key_input) == 1) then
+                                    if (iachar(key_input(1:1)) >= 32 .and. iachar(key_input(1:1)) < 127 .and. &
+                                        editor%workspace_symbols_panel%search_pos < 255) then
+                                        editor%workspace_symbols_panel%search_pos = editor%workspace_symbols_panel%search_pos + 1
+                                        editor%workspace_symbols_panel%search_query(editor%workspace_symbols_panel%search_pos:editor%workspace_symbols_panel%search_pos) = key_input(1:1)
+                                        ! Send new query to LSP
+                                        if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                                            request_id = request_workspace_symbols(editor%lsp_manager, &
+                                                editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                                                trim(editor%workspace_symbols_panel%search_query(1:editor%workspace_symbols_panel%search_pos)), &
+                                                handle_workspace_symbols_response_wrapper)
+                                        end if
+                                    end if
+                                end if
+                            end if
+                        end if
+
+                        call render_workspace_symbols_panel(editor%workspace_symbols_panel, editor%screen_rows)
+                    end do
+                end block
+            end if
+
+        case('alt-comma')
+            ! Jump back in navigation history (Alt+,)
+            if (.not. is_jump_stack_empty(editor%jump_stack)) then
+                block
+                    character(len=:), allocatable :: jump_filename
+                    integer(int32) :: jump_line, jump_column
+                    logical :: success
+
+                    success = pop_jump_location(editor%jump_stack, jump_filename, jump_line, jump_column)
+                    if (success) then
+                        ! Check if we need to open a different file
+                        if (allocated(editor%filename)) then
+                            if (trim(jump_filename) /= trim(editor%filename)) then
+                                ! TODO: Open the file
+                                call terminal_move_cursor(editor%screen_rows, 1)
+                                call terminal_write('Opening: ' // trim(jump_filename))
+                                ! For now, just jump if same file
+                            end if
+                        end if
+
+                        ! Jump to the location
+                        editor%cursors(editor%active_cursor)%line = jump_line
+                        editor%cursors(editor%active_cursor)%column = jump_column
+                        editor%cursors(editor%active_cursor)%desired_column = jump_column
+                        call sync_editor_to_pane(editor)
+                        call update_viewport(editor)
+                    end if
+                end block
+            end if
 
         case("ctrl-'", "ctrl-apostrophe", "alt-'")
             ! Cycle quotes: " -> ' -> `
@@ -805,6 +1577,32 @@ contains
 
         case('ctrl-d')
             call select_next_match(editor, buffer)
+            call sync_editor_to_pane(editor)
+            call update_viewport(editor)
+
+        case('f8', 'alt-e')
+            ! Toggle diagnostics panel (F8 or Alt+E for errors)
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') '>>> INSIDE F8/ALT-E HANDLER <<<'
+                write(debug_unit, '(A)') 'Calling toggle_diagnostics_panel...'
+                close(debug_unit)
+            end block
+            call toggle_diagnostics_panel(editor)
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') 'toggle_diagnostics_panel returned'
+                close(debug_unit)
+            end block
+
+        case('alt-c')
+            ! Toggle case sensitivity for match mode (ctrl-d)
+            ! Only has effect when in active match mode (search_pattern allocated)
+            if (allocated(search_pattern)) then
+                match_case_sensitive = .not. match_case_sensitive
+            end if
 
         case('alt-[', 'alt-]')
             ! Jump to matching bracket
@@ -814,18 +1612,22 @@ contains
             ! Add cursor on line above
             ! opt-meta-up: Doesn't work (terminals don't send Cmd)
             ! ctrl-alt-up: Alternative binding that works
-            call add_cursor_above(editor, buffer)
+            call add_cursor_above(editor)
+            call sync_editor_to_pane(editor)
+            call update_viewport(editor)
 
         case('opt-meta-down', 'ctrl-alt-down', 'alt-ctrl-down')
             ! Add cursor on line below
             ! opt-meta-down: Doesn't work (terminals don't send Cmd)
             ! ctrl-alt-down: Alternative binding that works
             call add_cursor_below(editor, buffer)
+            call sync_editor_to_pane(editor)
+            call update_viewport(editor)
 
         ! Search commands
         case('ctrl-f')
-            ! Search forward (Ctrl+F)
-            call show_search_prompt(editor, buffer)
+            ! Unified search and replace (Ctrl+F)
+            call show_unified_search_prompt(editor, buffer)
             call update_viewport(editor)
 
         case('ctrl-r')
@@ -848,6 +1650,7 @@ contains
                 else
                     call insert_char(editor%cursors(editor%active_cursor), buffer, 'n')
                 end if
+                call sync_editor_to_pane(editor)
                 is_edit_action = .true.
             end if
 
@@ -864,10 +1667,17 @@ contains
                 else
                     call insert_char(editor%cursors(editor%active_cursor), buffer, 'N')
                 end if
+                call sync_editor_to_pane(editor)
                 is_edit_action = .true.
             end if
 
         case default
+            ! DEBUG: Show unhandled function keys
+            if (index(key_str, 'f') == 1 .or. index(key_str, 'shift-f') == 1) then
+                call terminal_move_cursor(editor%screen_rows, 1)
+                call terminal_write('[DEBUG] Unhandled key: ' // trim(key_str) // '                ')
+            end if
+
             ! Check for mouse events
             if (index(key_str, 'mouse-') == 1) then
                 call handle_mouse_event_action(key_str, editor, buffer)
@@ -884,35 +1694,73 @@ contains
                 end if
                 call sync_editor_to_pane(editor)
                 is_edit_action = .true.
+
+                ! Auto-trigger signature help on '(' or ','
+                if (key_str(1:1) == '(' .or. key_str(1:1) == ',') then
+                    if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                        if (editor%tabs(editor%active_tab_index)%lsp_server_index > 0) then
+                            block
+                                integer :: request_id, lsp_line, lsp_char
+                                lsp_line = editor%cursors(editor%active_cursor)%line - 1
+                                lsp_char = editor%cursors(editor%active_cursor)%column - 1
+
+                                ! Save editor state for callback
+                                if (.not. allocated(saved_editor_for_callback)) then
+                                    allocate(saved_editor_for_callback)
+                                end if
+                                saved_editor_for_callback = editor
+
+                                request_id = request_signature_help(editor%lsp_manager, &
+                                    editor%tabs(editor%active_tab_index)%lsp_server_index, &
+                                    editor%tabs(editor%active_tab_index)%filename, &
+                                    lsp_line, lsp_char, handle_signature_response_wrapper)
+
+                                if (request_id > 0) then
+                                    ! Show tooltip placeholder
+                                    call show_signature_tooltip(editor%signature_tooltip, &
+                                        editor%cursors(editor%active_cursor)%line - editor%viewport_line + 1, &
+                                        editor%cursors(editor%active_cursor)%column - editor%viewport_column + 1)
+                                end if
+                            end block
+                        end if
+                    end if
+                end if
+
+                ! Hide signature help on ')'
+                if (key_str(1:1) == ')') then
+                    call hide_signature_tooltip(editor%signature_tooltip)
+                end if
             end if
         end select
 
         ! Update edit action state
         last_action_was_edit = is_edit_action
+
+        ! Notify LSP of document changes if buffer was modified
+        if (is_edit_action) then
+            call notify_buffer_change(editor, buffer)
+        end if
     end subroutine handle_key_command
 
-    subroutine move_cursor_up(cursor, buffer, line_count)
+    subroutine move_cursor_up(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
-        integer, intent(in) :: line_count
         character(len=:), allocatable :: current_line, target_line
 
         cursor%has_selection = .false.  ! Clear selection
         if (cursor%line > 1) then
-            ! Check if current line is empty
             current_line = buffer_get_line(buffer, cursor%line)
-
             cursor%line = cursor%line - 1
             target_line = buffer_get_line(buffer, cursor%line)
 
-            ! If coming from an empty line, go to end of target line
-            if (len(current_line) == 0) then
+            ! If on empty line with no goal column established, go to end of target line
+            ! Otherwise, use the goal column
+            if (len(current_line) == 0 .and. cursor%desired_column == 1) then
                 cursor%column = len(target_line) + 1
                 cursor%desired_column = cursor%column
             else
-                ! Normal behavior - use desired column
+                ! Use goal column, clamped to line bounds
                 cursor%column = cursor%desired_column
-                ! Clamp to line bounds
                 if (cursor%column > len(target_line) + 1) then
                     cursor%column = len(target_line) + 1
                 end if
@@ -931,20 +1779,18 @@ contains
 
         cursor%has_selection = .false.  ! Clear selection
         if (cursor%line < line_count) then
-            ! Check if current line is empty
             current_line = buffer_get_line(buffer, cursor%line)
-
             cursor%line = cursor%line + 1
             target_line = buffer_get_line(buffer, cursor%line)
 
-            ! If coming from an empty line, go to column 1 of target line
-            if (len(current_line) == 0) then
+            ! If on empty line with no goal column established, go to col 1 of target line
+            ! Otherwise, use the goal column
+            if (len(current_line) == 0 .and. cursor%desired_column == 1) then
                 cursor%column = 1
-                cursor%desired_column = 1
+                ! desired_column stays 1
             else
-                ! Normal behavior - use desired column
+                ! Use goal column, clamped to line bounds
                 cursor%column = cursor%desired_column
-                ! Clamp to line bounds
                 if (cursor%column > len(target_line) + 1) then
                     cursor%column = len(target_line) + 1
                 end if
@@ -958,7 +1804,7 @@ contains
     subroutine move_cursor_left(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
-        character(len=:), allocatable :: line
+        integer :: char_count
 
         ! If we have a selection, move to START of selection (leftmost/earliest position)
         if (cursor%has_selection) then
@@ -981,18 +1827,16 @@ contains
         else if (cursor%line > 1) then
             ! Move to end of previous line
             cursor%line = cursor%line - 1
-            line = buffer_get_line(buffer, cursor%line)
-            cursor%column = len(line) + 1
+            char_count = buffer_get_line_char_count(buffer, cursor%line)
+            cursor%column = char_count + 1
             cursor%desired_column = cursor%column
-            if (allocated(line)) deallocate(line)
         end if
     end subroutine move_cursor_left
 
     subroutine move_cursor_right(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
-        character(len=:), allocatable :: line
-        integer :: line_count
+        integer :: line_count, char_count
 
         ! If we have a selection, move to END of selection (rightmost/latest position)
         if (cursor%has_selection) then
@@ -1009,10 +1853,10 @@ contains
             return
         end if
 
-        line = buffer_get_line(buffer, cursor%line)
+        char_count = buffer_get_line_char_count(buffer, cursor%line)
         line_count = buffer_get_line_count(buffer)
 
-        if (cursor%column <= len(line)) then
+        if (cursor%column <= char_count) then
             cursor%column = cursor%column + 1
             cursor%desired_column = cursor%column
         else if (cursor%line < line_count) then
@@ -1021,8 +1865,6 @@ contains
             cursor%column = 1
             cursor%desired_column = cursor%column
         end if
-
-        if (allocated(line)) deallocate(line)
     end subroutine move_cursor_right
 
     subroutine move_cursor_smart_home(cursor, buffer)
@@ -1072,10 +1914,9 @@ contains
         if (allocated(line)) deallocate(line)
     end subroutine move_cursor_end
 
-    subroutine move_cursor_page_up(cursor, editor, line_count)
+    subroutine move_cursor_page_up(cursor, editor)
         type(cursor_t), intent(inout) :: cursor
         type(editor_state_t), intent(in) :: editor
-        integer, intent(in) :: line_count
         integer :: page_size
 
         cursor%has_selection = .false.  ! Clear selection
@@ -1101,7 +1942,6 @@ contains
         type(buffer_t), intent(in) :: buffer
         character(len=:), allocatable :: line
         integer :: pos, line_len
-        logical :: in_word
 
         cursor%has_selection = .false.  ! Clear selection
         line = buffer_get_line(buffer, cursor%line)
@@ -1172,7 +2012,6 @@ contains
         type(buffer_t), intent(in) :: buffer
         character(len=:), allocatable :: line
         integer :: pos, line_count, line_len
-        logical :: in_word
 
         cursor%has_selection = .false.  ! Clear selection
         line = buffer_get_line(buffer, cursor%line)
@@ -1545,7 +2384,6 @@ contains
         character, intent(in) :: ch
         integer :: i
         integer :: offset_adjust
-        integer :: cursors_before
 
         ! Sort cursors by position to handle offset adjustments
         call sort_cursors_by_position(editor)
@@ -1763,10 +2601,15 @@ contains
     subroutine deduplicate_cursors(editor)
         type(editor_state_t), intent(inout) :: editor
         type(cursor_t), allocatable :: unique_cursors(:)
-        integer :: i, j, unique_count
+        integer :: i, j, unique_count, duplicate_of
         logical :: is_duplicate
+        integer, allocatable :: old_to_new_map(:)
 
         if (size(editor%cursors) <= 1) return
+
+        ! Allocate mapping from old cursor indices to new indices
+        allocate(old_to_new_map(size(editor%cursors)))
+        old_to_new_map = 0
 
         ! Count unique cursors
         unique_count = 0
@@ -1790,24 +2633,38 @@ contains
             unique_count = 0
             do i = 1, size(editor%cursors)
                 is_duplicate = .false.
+                duplicate_of = 0
                 do j = 1, i-1
                     if (editor%cursors(i)%line == editor%cursors(j)%line .and. &
                         editor%cursors(i)%column == editor%cursors(j)%column) then
                         is_duplicate = .true.
+                        duplicate_of = j
                         exit
                     end if
                 end do
                 if (.not. is_duplicate) then
                     unique_count = unique_count + 1
                     unique_cursors(unique_count) = editor%cursors(i)
-                    ! Adjust active cursor index
-                    if (i == editor%active_cursor) then
-                        editor%active_cursor = unique_count
-                    end if
+                    old_to_new_map(i) = unique_count
+                else
+                    ! This cursor is a duplicate of an earlier one
+                    ! Map it to the same new index as the earlier cursor
+                    old_to_new_map(i) = old_to_new_map(duplicate_of)
                 end if
             end do
+
+            ! Update active cursor using the mapping
+            if (editor%active_cursor > 0 .and. editor%active_cursor <= size(old_to_new_map)) then
+                editor%active_cursor = old_to_new_map(editor%active_cursor)
+            end if
+            ! Ensure active_cursor is valid
+            if (editor%active_cursor < 1 .or. editor%active_cursor > unique_count) then
+                editor%active_cursor = 1
+            end if
+
             deallocate(editor%cursors)
             editor%cursors = unique_cursors
+            deallocate(old_to_new_map)
         end if
     end subroutine deduplicate_cursors
 
@@ -1846,6 +2703,8 @@ contains
         character(len=:), allocatable :: killed_text
         integer :: i
 
+        cursor%has_selection = .false.  ! Clear selection
+
         line = buffer_get_line(buffer, cursor%line)
 
         if (cursor%column <= len(line)) then
@@ -1876,6 +2735,8 @@ contains
         character(len=:), allocatable :: line
         character(len=:), allocatable :: killed_text
         integer :: i, start_col
+
+        cursor%has_selection = .false.  ! Clear selection
 
         line = buffer_get_line(buffer, cursor%line)
         start_col = cursor%column
@@ -2109,39 +2970,6 @@ contains
         end do
     end subroutine insert_line_text
 
-    subroutine get_line_positions(buffer, line_num, start_pos, end_pos)
-        type(buffer_t), intent(in) :: buffer
-        integer, intent(in) :: line_num
-        integer, intent(out) :: start_pos, end_pos
-        integer :: current_line, i
-
-        current_line = 1
-        start_pos = 1
-
-        ! Find start of requested line
-        do i = 1, buffer%size
-            if (current_line == line_num) then
-                start_pos = i
-                exit
-            end if
-            if (i < buffer%gap_start .or. i >= buffer%gap_end) then
-                if (buffer_get_char_at(buffer, i) == char(10)) then
-                    current_line = current_line + 1
-                end if
-            end if
-        end do
-
-        ! Find end of line
-        end_pos = start_pos
-        do i = start_pos, buffer%size
-            if (buffer_get_char_at(buffer, i) == char(10)) then
-                end_pos = i
-                exit
-            end if
-            end_pos = i
-        end do
-    end subroutine get_line_positions
-
     function buffer_get_char_at(buffer, pos) result(ch)
         type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: pos
@@ -2193,10 +3021,10 @@ contains
         character(len=:), allocatable :: text
 
         if (cursor%has_selection) then
-            ! Get selected text
+            ! Get selected text (only what's selected, no automatic newlines)
             text = get_selection_text(cursor, buffer)
         else
-            ! Get current line
+            ! Get current line - don't add newline, user can select it if they want it
             text = buffer_get_line(buffer, cursor%line)
         end if
 
@@ -2235,20 +3063,57 @@ contains
     end subroutine paste_clipboard
 
     subroutine save_file(editor, buffer)
-        type(editor_state_t), intent(in) :: editor
+        use text_prompt_module, only: show_text_prompt
+        use lsp_server_manager_module, only: notify_file_saved
+        use text_buffer_module, only: buffer_to_string
+        type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
-        integer :: ios, temp_unit
+        integer :: ios, tab_idx
         character(len=256) :: temp_filename, command
-        character(len=1024) :: error_msg
-        logical :: file_exists, has_write_permission
+        character(len=512) :: new_filename
+        logical :: file_exists, cancelled
 
         if (.not. allocated(editor%filename)) return
 
-        ! Check if this is an untitled file
-        if (trim(editor%filename) == '[Untitled]') then
-            call terminal_move_cursor(editor%screen_rows, 1)
-            call terminal_write('Cannot save: Please use Save As or provide a filename (file is untitled)')
-            return
+        ! Check if this is an untitled file - prompt for filename
+        if (index(editor%filename, '[Untitled') == 1) then
+            call show_text_prompt('Save as: ', new_filename, cancelled, editor%screen_rows)
+
+            if (cancelled .or. len_trim(new_filename) == 0) then
+                ! User cancelled or entered empty filename
+                call terminal_move_cursor(editor%screen_rows, 1)
+                call terminal_write('Save cancelled')
+                return
+            end if
+
+            ! Update editor filename
+            if (allocated(editor%filename)) deallocate(editor%filename)
+            allocate(character(len=len_trim(new_filename)) :: editor%filename)
+            editor%filename = trim(new_filename)
+
+            ! Update tab filename if in workspace mode
+            if (allocated(editor%tabs) .and. editor%active_tab_index > 0) then
+                tab_idx = editor%active_tab_index
+                if (tab_idx <= size(editor%tabs)) then
+                    if (allocated(editor%tabs(tab_idx)%filename)) then
+                        deallocate(editor%tabs(tab_idx)%filename)
+                    end if
+                    allocate(character(len=len_trim(new_filename)) :: editor%tabs(tab_idx)%filename)
+                    editor%tabs(tab_idx)%filename = trim(new_filename)
+
+                    ! Update pane filename
+                    if (allocated(editor%tabs(tab_idx)%panes)) then
+                        if (size(editor%tabs(tab_idx)%panes) > 0) then
+                            if (allocated(editor%tabs(tab_idx)%panes(1)%filename)) then
+                                deallocate(editor%tabs(tab_idx)%panes(1)%filename)
+                            end if
+                            allocate(character(len=len_trim(new_filename)) :: &
+                                    editor%tabs(tab_idx)%panes(1)%filename)
+                            editor%tabs(tab_idx)%panes(1)%filename = trim(new_filename)
+                        end if
+                    end if
+                end if
+            end if
         end if
 
         ! First try normal save
@@ -2256,6 +3121,19 @@ contains
 
         if (ios == 0) then
             buffer%modified = .false.
+
+            ! Send LSP didSave notification if LSP is active
+            if (allocated(editor%tabs) .and. editor%active_tab_index > 0) then
+                tab_idx = editor%active_tab_index
+                if (tab_idx <= size(editor%tabs)) then
+                    if (editor%tabs(tab_idx)%lsp_server_index > 0) then
+                        call notify_file_saved(editor%lsp_manager, &
+                            editor%tabs(tab_idx)%lsp_server_index, &
+                            trim(editor%filename), buffer_to_string(buffer))
+                    end if
+                end if
+            end if
+
             return
         end if
 
@@ -2263,7 +3141,7 @@ contains
         inquire(file=editor%filename, exist=file_exists)
 
         ! If save failed, try sudo save
-        write(temp_filename, '(a,i0)') '/tmp/facsimile_sudo_', getpid()
+        write(temp_filename, '(a,i0)') '/tmp/facsimile_sudo_', get_process_id()
 
         ! Save to temporary file
         call buffer_save_file(buffer, temp_filename, ios)
@@ -2288,6 +3166,18 @@ contains
             buffer%modified = .false.
             call terminal_move_cursor(editor%screen_rows, 1)
             call terminal_write('File saved with sudo                  ')
+
+            ! Send LSP didSave notification if LSP is active
+            if (allocated(editor%tabs) .and. editor%active_tab_index > 0) then
+                tab_idx = editor%active_tab_index
+                if (tab_idx <= size(editor%tabs)) then
+                    if (editor%tabs(tab_idx)%lsp_server_index > 0) then
+                        call notify_file_saved(editor%lsp_manager, &
+                            editor%tabs(tab_idx)%lsp_server_index, &
+                            trim(editor%filename), buffer_to_string(buffer))
+                    end if
+                end if
+            end if
         else
             ! Clean up temp file
             write(command, '(a,a)') 'rm -f ', trim(temp_filename)
@@ -2297,7 +3187,7 @@ contains
         end if
     end subroutine save_file
 
-    function getpid() result(pid)
+    function get_process_id() result(pid)
         integer :: pid
         interface
             function c_getpid() bind(C, name="getpid")
@@ -2306,7 +3196,7 @@ contains
             end function
         end interface
         pid = c_getpid()
-    end function getpid
+    end function get_process_id
 
     subroutine cycle_quotes(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
@@ -2472,7 +3362,6 @@ contains
         integer :: colon1, colon2, colon3
         character(len=100) :: event_type
         integer :: ios, line_count
-        logical :: is_alt_click
         type(cursor_t), allocatable :: new_cursors(:)
         integer :: i, cursor_exists
         ! Variables for mouse drag handling
@@ -2764,77 +3653,6 @@ contains
         at_pos = (cursor_screen_row == screen_row .and. cursor_screen_col == screen_col)
     end function is_cursor_at_screen_pos
 
-    subroutine toggle_cursor_at_position(editor, buffer, row, col)
-        type(editor_state_t), intent(inout) :: editor
-        type(buffer_t), intent(in) :: buffer
-        integer, intent(in) :: row, col
-        integer :: i, cursor_exists
-        type(cursor_t), allocatable :: new_cursors(:)
-
-        ! Check if cursor already exists at this position
-        cursor_exists = 0
-        do i = 1, size(editor%cursors)
-            if (is_cursor_at_screen_pos(editor%cursors(i), editor, row, col)) then
-                cursor_exists = i
-                exit
-            end if
-        end do
-
-        if (cursor_exists > 0) then
-            ! Remove the cursor
-            if (size(editor%cursors) > 1) then
-                allocate(new_cursors(size(editor%cursors) - 1))
-                do i = 1, cursor_exists - 1
-                    new_cursors(i) = editor%cursors(i)
-                end do
-                do i = cursor_exists + 1, size(editor%cursors)
-                    new_cursors(i-1) = editor%cursors(i)
-                end do
-                deallocate(editor%cursors)
-                editor%cursors = new_cursors
-                if (editor%active_cursor >= cursor_exists) then
-                    editor%active_cursor = max(1, editor%active_cursor - 1)
-                end if
-            end if
-        else
-            ! Add a new cursor
-            allocate(new_cursors(size(editor%cursors) + 1))
-            do i = 1, size(editor%cursors)
-                new_cursors(i) = editor%cursors(i)
-            end do
-            call init_cursor(new_cursors(size(new_cursors)))
-            ! First move the new cursors to editor
-            deallocate(editor%cursors)
-            editor%cursors = new_cursors
-            editor%active_cursor = size(editor%cursors)
-            ! Then position the new cursor using its index
-            call position_cursor_at_screen(editor%active_cursor, &
-                                          editor, buffer, row, col)
-        end if
-    end subroutine toggle_cursor_at_position
-
-    subroutine handle_mouse_click(editor, buffer, row, col)
-        type(editor_state_t), intent(inout) :: editor
-        type(buffer_t), intent(in) :: buffer
-        integer, intent(in) :: row, col
-        integer :: cursor_idx
-
-        ! Clear multiple cursors
-        if (allocated(editor%cursors)) then
-            if (size(editor%cursors) > 1) then
-                deallocate(editor%cursors)
-                allocate(editor%cursors(1))
-                call init_cursor(editor%cursors(1))
-                editor%active_cursor = 1
-            end if
-        end if
-
-        ! Move cursor to click position
-        cursor_idx = 1
-        call position_cursor_at_screen(cursor_idx, editor, buffer, row, col)
-        call update_viewport(editor)
-    end subroutine handle_mouse_click
-
     subroutine select_next_match(editor, buffer)
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
@@ -2978,6 +3796,7 @@ contains
         logical, intent(out) :: found
         integer, intent(out) :: found_line, found_col
         character(len=:), allocatable :: line
+        character(len=:), allocatable :: search_line, search_pattern
         integer :: line_count, current_line, pos
         integer :: search_col
 
@@ -2996,12 +3815,22 @@ contains
                 search_col = 1
             end if
 
-            pos = index(line(search_col:), pattern)
+            ! Perform case-sensitive or case-insensitive search
+            if (match_case_sensitive) then
+                pos = index(line(search_col:), pattern)
+            else
+                search_line = to_lower(line(search_col:))
+                search_pattern = to_lower(pattern)
+                pos = index(search_line, search_pattern)
+                if (allocated(search_line)) deallocate(search_line)
+            end if
+
             if (pos > 0) then
                 found = .true.
                 found_line = current_line
                 found_col = search_col + pos - 1
                 if (allocated(line)) deallocate(line)
+                if (allocated(search_pattern)) deallocate(search_pattern)
                 return
             end if
             if (allocated(line)) deallocate(line)
@@ -3014,12 +3843,26 @@ contains
             if (current_line == start_line) then
                 ! Search only up to start position
                 if (start_col > 1) then
-                    pos = index(line(1:start_col-1), pattern)
+                    if (match_case_sensitive) then
+                        pos = index(line(1:start_col-1), pattern)
+                    else
+                        search_line = to_lower(line(1:start_col-1))
+                        search_pattern = to_lower(pattern)
+                        pos = index(search_line, search_pattern)
+                        if (allocated(search_line)) deallocate(search_line)
+                    end if
                 else
                     pos = 0
                 end if
             else
-                pos = index(line, pattern)
+                if (match_case_sensitive) then
+                    pos = index(line, pattern)
+                else
+                    search_line = to_lower(line)
+                    search_pattern = to_lower(pattern)
+                    pos = index(search_line, search_pattern)
+                    if (allocated(search_line)) deallocate(search_line)
+                end if
             end if
 
             if (pos > 0) then
@@ -3027,12 +3870,33 @@ contains
                 found_line = current_line
                 found_col = pos
                 if (allocated(line)) deallocate(line)
+                if (allocated(search_pattern)) deallocate(search_pattern)
                 return
             end if
 
             if (allocated(line)) deallocate(line)
         end do
+
+        if (allocated(search_pattern)) deallocate(search_pattern)
     end subroutine find_next_occurrence
+
+    ! Helper function to convert a string to lowercase for case-insensitive comparison
+    function to_lower(str) result(lower_str)
+        character(len=*), intent(in) :: str
+        character(len=:), allocatable :: lower_str
+        integer :: i
+
+        allocate(character(len=len(str)) :: lower_str)
+
+        do i = 1, len(str)
+            if (iachar(str(i:i)) >= iachar('A') .and. &
+                iachar(str(i:i)) <= iachar('Z')) then
+                lower_str(i:i) = char(iachar(str(i:i)) + 32)
+            else
+                lower_str(i:i) = str(i:i)
+            end if
+        end do
+    end function to_lower
 
     ! ========================================================================
     ! Buffer Helper Functions - Wrappers for cursor-based operations
@@ -3144,9 +4008,8 @@ contains
     ! Multiple Cursor Addition Above/Below
     ! ========================================================================
 
-    subroutine add_cursor_above(editor, buffer)
+    subroutine add_cursor_above(editor)
         type(editor_state_t), intent(inout) :: editor
-        type(buffer_t), intent(in) :: buffer
         type(cursor_t), allocatable :: new_cursors(:)
         type(cursor_t) :: active_cursor
         integer :: i, new_line
@@ -3240,10 +4103,9 @@ contains
     ! Selection Extension Subroutines
     ! ========================================================================
 
-    subroutine extend_selection_up(cursor, buffer, line_count)
+    subroutine extend_selection_up(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
-        integer, intent(in) :: line_count
         character(len=:), allocatable :: current_line, target_line
 
         ! Initialize selection if not already started
@@ -3398,10 +4260,9 @@ contains
         if (allocated(line)) deallocate(line)
     end subroutine extend_selection_end
 
-    subroutine extend_selection_page_up(cursor, editor, line_count)
+    subroutine extend_selection_page_up(cursor, editor)
         type(cursor_t), intent(inout) :: cursor
         type(editor_state_t), intent(in) :: editor
-        integer, intent(in) :: line_count
         integer :: page_size
 
         ! Initialize selection if not already started
@@ -3439,7 +4300,6 @@ contains
         type(buffer_t), intent(in) :: buffer
         character(len=:), allocatable :: line
         integer :: pos, line_len
-        logical :: in_word
 
         ! Initialize selection if not already started
         if (.not. cursor%has_selection) then
@@ -3513,7 +4373,6 @@ contains
         type(buffer_t), intent(in) :: buffer
         character(len=:), allocatable :: line
         integer :: pos, line_count, line_len
-        logical :: in_word
 
         ! Initialize selection if not already started
         if (.not. cursor%has_selection) then
@@ -3695,49 +4554,6 @@ contains
     ! Character Transpose Subroutine
     ! ========================================================================
 
-    subroutine transpose_characters(cursor, buffer)
-        type(cursor_t), intent(inout) :: cursor
-        type(buffer_t), intent(inout) :: buffer
-        character(len=:), allocatable :: line
-        character :: temp_char
-        integer :: pos1, pos2
-
-        line = buffer_get_line(buffer, cursor%line)
-
-        if (cursor%column > 1 .and. cursor%column <= len(line) + 1) then
-            if (cursor%column == len(line) + 1) then
-                ! At end of line, swap last two characters
-                pos1 = cursor%column - 2
-                pos2 = cursor%column - 1
-            else
-                ! In middle of line, swap character before cursor with character at cursor
-                pos1 = cursor%column - 1
-                pos2 = cursor%column
-            end if
-
-            if (pos1 >= 1 .and. pos2 <= len(line)) then
-                ! Get the two characters
-                temp_char = line(pos1:pos1)
-
-                ! Delete the first character
-                call delete_range(buffer, cursor%line, pos1, cursor%line, pos1)
-
-                ! Insert it after the second position
-                call insert_char_at(buffer, cursor%line, pos2, temp_char)
-
-                ! Move cursor forward if not at end of line
-                if (cursor%column < len(line) + 1) then
-                    cursor%column = cursor%column + 1
-                    cursor%desired_column = cursor%column
-                end if
-
-                buffer%modified = .true.
-            end if
-        end if
-
-        if (allocated(line)) deallocate(line)
-    end subroutine transpose_characters
-
     subroutine join_lines(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
@@ -3828,22 +4644,22 @@ contains
         end if
     end subroutine delete_range
 
-    subroutine insert_char_at(buffer, line_num, col, ch)
-        type(buffer_t), intent(inout) :: buffer
-        integer, intent(in) :: line_num, col
-        character, intent(in) :: ch
-        integer :: pos
-
-        ! Calculate buffer position
-        pos = get_line_start_pos(buffer, line_num) + col - 1
-
-        ! Move gap to insertion point
-        call buffer_move_gap(buffer, pos)
-
-        ! Insert character
-        buffer%data(buffer%gap_start:buffer%gap_start) = ch
-        buffer%gap_start = buffer%gap_start + 1
-    end subroutine insert_char_at
+    ! UNUSED:     subroutine insert_char_at(buffer, line_num, col, ch)
+    ! UNUSED:         type(buffer_t), intent(inout) :: buffer
+    ! UNUSED:         integer, intent(in) :: line_num, col
+    ! UNUSED:         character, intent(in) :: ch
+    ! UNUSED:         integer :: pos
+    ! UNUSED: 
+    ! UNUSED:         ! Calculate buffer position
+    ! UNUSED:         pos = get_line_start_pos(buffer, line_num) + col - 1
+    ! UNUSED: 
+    ! UNUSED:         ! Move gap to insertion point
+    ! UNUSED:         call buffer_move_gap(buffer, pos)
+    ! UNUSED: 
+    ! UNUSED:         ! Insert character
+    ! UNUSED:         buffer%data(buffer%gap_start:buffer%gap_start) = ch
+    ! UNUSED:         buffer%gap_start = buffer%gap_start + 1
+    ! UNUSED:     end subroutine insert_char_at
 
     ! Handle input when in fuss mode
     subroutine handle_fuss_input(key_str, editor, buffer)
@@ -3851,16 +4667,20 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: selected_path
-        integer :: status, i
+        integer :: i
 
         select case(trim(key_str))
         case('j', 'down')
             ! Move down in tree
             call tree_move_down(tree_state)
+            ! Update viewport to keep selection visible (estimate ~18 visible lines)
+            call update_tree_viewport(tree_state, 18)
 
         case('k', 'up')
             ! Move up in tree
             call tree_move_up(tree_state)
+            ! Update viewport to keep selection visible (estimate ~18 visible lines)
+            call update_tree_viewport(tree_state, 18)
 
         case('left')
             ! Move up to parent directory
@@ -3983,7 +4803,7 @@ contains
             end if
 
         case('v')
-            ! Open file in vertical split
+            ! Open file in vertical split (only for files, not directories)
             if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
                 if (.not. tree_state%selectable_files(tree_state%selected_index)%is_directory) then
                     selected_path = get_selected_item_path(tree_state)
@@ -3994,7 +4814,7 @@ contains
             end if
 
         case('s')
-            ! Open file in horizontal split
+            ! Open file in horizontal split (only for files, not directories)
             if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
                 if (.not. tree_state%selectable_files(tree_state%selected_index)%is_directory) then
                     selected_path = get_selected_item_path(tree_state)
@@ -4003,6 +4823,10 @@ contains
                     end if
                 end if
             end if
+
+        case('.')
+            ! Toggle hiding dotfiles/gitignored files
+            tree_state%hide_dotfiles = .not. tree_state%hide_dotfiles
 
         case('ctrl-/')
             ! Toggle fuss mode hints expansion
@@ -4037,12 +4861,41 @@ contains
         ! Create a new tab for this file
         call create_tab(editor, full_path)
 
-        ! Load file into the new tab's pane buffer
+        ! Load file into the new tab's buffer
         if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-            call buffer_load_file(editor%tabs(editor%active_tab_index)%panes(1)%buffer, full_path, status)
+            call buffer_load_file(editor%tabs(editor%active_tab_index)%buffer, full_path, status)
+
+            ! Handle binary files
+            if (status == -2) then
+                ! Binary file detected - prompt user
+                if (binary_file_prompt(full_path)) then
+                    ! User wants to view in hex mode
+                    call buffer_load_file_as_hex(editor%tabs(editor%active_tab_index)%buffer, full_path, status)
+                    if (status /= 0) then
+                        ! Failed to load hex view - close the tab and return
+                        call close_tab(editor, editor%active_tab_index)
+                        return
+                    end if
+                    ! Mark as hex view in filename
+                    full_path = trim(full_path) // ' [HEX]'
+                else
+                    ! User cancelled - close the tab and return
+                    call close_tab(editor, editor%active_tab_index)
+                    return
+                end if
+            end if
+
             if (status == 0) then
-                ! Copy pane's buffer to main buffer so it's displayed
-                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%panes(1)%buffer)
+                ! Copy tab's buffer to pane's buffer
+                if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
+                    editor%tabs(editor%active_tab_index)%active_pane_index > 0) then
+                    call copy_buffer(editor%tabs(editor%active_tab_index)%panes( &
+                        editor%tabs(editor%active_tab_index)%active_pane_index)%buffer, &
+                        editor%tabs(editor%active_tab_index)%buffer)
+                end if
+
+                ! Copy tab's buffer to main buffer so it's displayed
+                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
 
                 ! Update editor state with the new tab's info
                 if (allocated(editor%filename)) deallocate(editor%filename)
@@ -4112,34 +4965,58 @@ contains
         if (tab_idx > 0 .and. tab_idx <= size(editor%tabs)) then
             pane_idx = editor%tabs(tab_idx)%active_pane_index
 
-            ! Load the file into the NEW PANE's buffer
-            call buffer_load_file(editor%tabs(tab_idx)%panes(pane_idx)%buffer, full_path, status)
-            if (status == 0) then
-                ! Update filename for the NEW PANE
-                if (allocated(editor%tabs(tab_idx)%panes(pane_idx)%filename)) &
-                    deallocate(editor%tabs(tab_idx)%panes(pane_idx)%filename)
-                allocate(character(len=len_trim(full_path)) :: editor%tabs(tab_idx)%panes(pane_idx)%filename)
-                editor%tabs(tab_idx)%panes(pane_idx)%filename = full_path
+            ! Load the file into the new pane's buffer
+            if (allocated(editor%tabs(tab_idx)%panes) .and. pane_idx > 0) then
+                call buffer_load_file(editor%tabs(tab_idx)%panes(pane_idx)%buffer, full_path, status)
 
-                ! Copy to main buffer for display
-                call copy_buffer(buffer, editor%tabs(tab_idx)%panes(pane_idx)%buffer)
-
-                ! Update editor filename
-                if (allocated(editor%filename)) deallocate(editor%filename)
-                allocate(character(len=len_trim(full_path)) :: editor%filename)
-                editor%filename = full_path
-
-                ! Reset cursor in the new pane
-                if (allocated(editor%tabs(tab_idx)%panes(pane_idx)%cursors)) then
-                    editor%tabs(tab_idx)%panes(pane_idx)%cursors(1)%line = 1
-                    editor%tabs(tab_idx)%panes(pane_idx)%cursors(1)%column = 1
-                    editor%tabs(tab_idx)%panes(pane_idx)%cursors(1)%desired_column = 1
+                ! Handle binary files
+                if (status == -2) then
+                    ! Binary file detected - prompt user
+                    if (binary_file_prompt(full_path)) then
+                        ! User wants to view in hex mode
+                        call buffer_load_file_as_hex(editor%tabs(tab_idx)%panes(pane_idx)%buffer, full_path, status)
+                        if (status /= 0) then
+                            ! Failed to load hex view - close the pane and return
+                            call close_pane(editor)
+                            return
+                        end if
+                        ! Mark as hex view in filename
+                        full_path = trim(full_path) // ' [HEX]'
+                    else
+                        ! User cancelled - close the pane and return
+                        call close_pane(editor)
+                        return
+                    end if
                 end if
-                editor%tabs(tab_idx)%panes(pane_idx)%viewport_line = 1
-                editor%tabs(tab_idx)%panes(pane_idx)%viewport_column = 1
 
-                ! Sync editor state with the new pane
-                call sync_editor_to_pane(editor)
+                if (status == 0) then
+                    ! Update filename for the pane
+                    if (allocated(editor%tabs(tab_idx)%panes(pane_idx)%filename)) &
+                        deallocate(editor%tabs(tab_idx)%panes(pane_idx)%filename)
+                    allocate(character(len=len_trim(full_path)) :: editor%tabs(tab_idx)%panes(pane_idx)%filename)
+                    editor%tabs(tab_idx)%panes(pane_idx)%filename = full_path
+
+                    ! Copy to main buffer
+                    call copy_buffer(buffer, editor%tabs(tab_idx)%panes(pane_idx)%buffer)
+
+                    ! Update editor filename
+                    if (allocated(editor%filename)) deallocate(editor%filename)
+                    allocate(character(len=len_trim(full_path)) :: editor%filename)
+                    editor%filename = full_path
+
+                    ! Reset cursor in the new pane
+                    if (allocated(editor%tabs(tab_idx)%panes(pane_idx)%cursors) .and. &
+                        size(editor%tabs(tab_idx)%panes(pane_idx)%cursors) > 0) then
+                        editor%tabs(tab_idx)%panes(pane_idx)%cursors(1)%line = 1
+                        editor%tabs(tab_idx)%panes(pane_idx)%cursors(1)%column = 1
+                        editor%tabs(tab_idx)%panes(pane_idx)%cursors(1)%desired_column = 1
+                    end if
+                    editor%tabs(tab_idx)%panes(pane_idx)%viewport_line = 1
+                    editor%tabs(tab_idx)%panes(pane_idx)%viewport_column = 1
+
+                    ! Sync editor state with the new pane
+                    call sync_editor_to_pane(editor)
+                end if
             end if
         end if
     end subroutine open_file_in_vertical_split
@@ -4180,34 +5057,58 @@ contains
         if (tab_idx > 0 .and. tab_idx <= size(editor%tabs)) then
             pane_idx = editor%tabs(tab_idx)%active_pane_index
 
-            ! Load the file into the NEW PANE's buffer
-            call buffer_load_file(editor%tabs(tab_idx)%panes(pane_idx)%buffer, full_path, status)
-            if (status == 0) then
-                ! Update filename for the NEW PANE
-                if (allocated(editor%tabs(tab_idx)%panes(pane_idx)%filename)) &
-                    deallocate(editor%tabs(tab_idx)%panes(pane_idx)%filename)
-                allocate(character(len=len_trim(full_path)) :: editor%tabs(tab_idx)%panes(pane_idx)%filename)
-                editor%tabs(tab_idx)%panes(pane_idx)%filename = full_path
+            ! Load the file into the new pane's buffer
+            if (allocated(editor%tabs(tab_idx)%panes) .and. pane_idx > 0) then
+                call buffer_load_file(editor%tabs(tab_idx)%panes(pane_idx)%buffer, full_path, status)
 
-                ! Copy to main buffer for display
-                call copy_buffer(buffer, editor%tabs(tab_idx)%panes(pane_idx)%buffer)
-
-                ! Update editor filename
-                if (allocated(editor%filename)) deallocate(editor%filename)
-                allocate(character(len=len_trim(full_path)) :: editor%filename)
-                editor%filename = full_path
-
-                ! Reset cursor in the new pane
-                if (allocated(editor%tabs(tab_idx)%panes(pane_idx)%cursors)) then
-                    editor%tabs(tab_idx)%panes(pane_idx)%cursors(1)%line = 1
-                    editor%tabs(tab_idx)%panes(pane_idx)%cursors(1)%column = 1
-                    editor%tabs(tab_idx)%panes(pane_idx)%cursors(1)%desired_column = 1
+                ! Handle binary files
+                if (status == -2) then
+                    ! Binary file detected - prompt user
+                    if (binary_file_prompt(full_path)) then
+                        ! User wants to view in hex mode
+                        call buffer_load_file_as_hex(editor%tabs(tab_idx)%panes(pane_idx)%buffer, full_path, status)
+                        if (status /= 0) then
+                            ! Failed to load hex view - close the pane and return
+                            call close_pane(editor)
+                            return
+                        end if
+                        ! Mark as hex view in filename
+                        full_path = trim(full_path) // ' [HEX]'
+                    else
+                        ! User cancelled - close the pane and return
+                        call close_pane(editor)
+                        return
+                    end if
                 end if
-                editor%tabs(tab_idx)%panes(pane_idx)%viewport_line = 1
-                editor%tabs(tab_idx)%panes(pane_idx)%viewport_column = 1
 
-                ! Sync editor state with the new pane
-                call sync_editor_to_pane(editor)
+                if (status == 0) then
+                    ! Update filename for the pane
+                    if (allocated(editor%tabs(tab_idx)%panes(pane_idx)%filename)) &
+                        deallocate(editor%tabs(tab_idx)%panes(pane_idx)%filename)
+                    allocate(character(len=len_trim(full_path)) :: editor%tabs(tab_idx)%panes(pane_idx)%filename)
+                    editor%tabs(tab_idx)%panes(pane_idx)%filename = full_path
+
+                    ! Copy to main buffer
+                    call copy_buffer(buffer, editor%tabs(tab_idx)%panes(pane_idx)%buffer)
+
+                    ! Update editor filename
+                    if (allocated(editor%filename)) deallocate(editor%filename)
+                    allocate(character(len=len_trim(full_path)) :: editor%filename)
+                    editor%filename = full_path
+
+                    ! Reset cursor in the new pane
+                    if (allocated(editor%tabs(tab_idx)%panes(pane_idx)%cursors) .and. &
+                        size(editor%tabs(tab_idx)%panes(pane_idx)%cursors) > 0) then
+                        editor%tabs(tab_idx)%panes(pane_idx)%cursors(1)%line = 1
+                        editor%tabs(tab_idx)%panes(pane_idx)%cursors(1)%column = 1
+                        editor%tabs(tab_idx)%panes(pane_idx)%cursors(1)%desired_column = 1
+                    end if
+                    editor%tabs(tab_idx)%panes(pane_idx)%viewport_line = 1
+                    editor%tabs(tab_idx)%panes(pane_idx)%viewport_column = 1
+
+                    ! Sync editor state with the new pane
+                    call sync_editor_to_pane(editor)
+                end if
             end if
         end if
     end subroutine open_file_in_horizontal_split
@@ -4228,6 +5129,12 @@ contains
             call cleanup_tree_state(tree_state)
         end if
     end subroutine toggle_fuss_mode
+
+    ! Toggle diagnostics panel
+    subroutine toggle_diagnostics_panel(editor)
+        type(editor_state_t), intent(inout) :: editor
+        call toggle_panel(editor%diagnostics_panel)
+    end subroutine toggle_diagnostics_panel
 
     ! Handle git commit with message prompt
     subroutine handle_git_commit(editor)
@@ -4474,5 +5381,1240 @@ contains
             editor%fuss_mode_active = .false.
         end if
     end subroutine handle_git_diff
+
+    subroutine handle_fortress_navigator(editor, buffer)
+        use workspace_module, only: workspace_is_file_in_workspace, workspace_switch
+        use save_prompt_module, only: save_prompt, save_prompt_result_t
+        use input_handler_module, only: get_key_input
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: selected_path
+        character(len=32) :: key_input
+        logical :: is_directory, cancelled, is_in_workspace, switch_success
+        logical :: should_switch
+        integer :: load_status, tab_idx, status
+
+        ! Call fortress navigator (start in workspace if available)
+        if (allocated(editor%workspace_path)) then
+            call open_fortress_navigator(selected_path, is_directory, cancelled, editor%workspace_path)
+        else
+            call open_fortress_navigator(selected_path, is_directory, cancelled)
+        end if
+
+        ! If user selected something, open it
+        if (.not. cancelled .and. allocated(selected_path)) then
+            if (len_trim(selected_path) > 0) then
+                if (.not. is_directory) then
+                    ! Selected a file - create a new tab for it
+                    ! Check if file is within workspace
+                    if (allocated(editor%workspace_path)) then
+                        is_in_workspace = workspace_is_file_in_workspace(selected_path, editor%workspace_path)
+                    else
+                        is_in_workspace = .false.
+                    end if
+
+                    ! Create new tab
+                    call create_tab(editor, trim(selected_path))
+                    tab_idx = editor%active_tab_index
+
+                    ! Mark as orphan if outside workspace
+                    if (allocated(editor%tabs) .and. tab_idx > 0 .and. tab_idx <= size(editor%tabs)) then
+                        editor%tabs(tab_idx)%is_orphan = .not. is_in_workspace
+
+                        ! Load file into tab's buffer
+                        call buffer_load_file(editor%tabs(tab_idx)%buffer, selected_path, load_status)
+
+                        ! Also load into first pane's buffer
+                        if (allocated(editor%tabs(tab_idx)%panes) .and. &
+                            size(editor%tabs(tab_idx)%panes) > 0) then
+                            call buffer_load_file(editor%tabs(tab_idx)%panes(1)%buffer, selected_path, load_status)
+                            ! Copy to main buffer for rendering
+                            call copy_buffer(buffer, editor%tabs(tab_idx)%panes(1)%buffer)
+                        else
+                            ! Copy tab buffer to main buffer
+                            call copy_buffer(buffer, editor%tabs(tab_idx)%buffer)
+                        end if
+
+                        ! Update editor filename
+                        if (allocated(editor%filename)) deallocate(editor%filename)
+                        allocate(character(len=len_trim(selected_path)) :: editor%filename)
+                        editor%filename = selected_path
+
+                        ! Reset cursor to top
+                        editor%cursors(editor%active_cursor)%line = 1
+                        editor%cursors(editor%active_cursor)%column = 1
+                        editor%cursors(editor%active_cursor)%desired_column = 1
+                    end if
+                else
+                    ! Selected a directory - switch workspace (Phase 6)
+                    should_switch = .true.
+
+                    ! Check for dirty buffers and prompt to save
+                    if (allocated(editor%tabs)) then
+                        call handle_dirty_buffers_before_switch(editor, should_switch)
+                    end if
+
+                    ! If user didn't cancel, perform the switch
+                    if (should_switch) then
+                        call workspace_switch(editor, selected_path, switch_success)
+
+                        if (.not. switch_success) then
+                            ! Show error message
+                            call terminal_move_cursor(1, 1)
+                            call terminal_write("Error: Could not switch to workspace: " // trim(selected_path))
+                            call terminal_write("Press any key to continue...")
+                            ! Wait for keypress (simple implementation)
+                            call get_key_input(key_input, status)
+                        else
+                            ! Phase 7: Update file tree if it's active after successful workspace switch
+                            if (editor%fuss_mode_active .and. allocated(editor%workspace_path)) then
+                                call refresh_tree_state(tree_state, editor%workspace_path)
+                            end if
+                        end if
+                    end if
+                end if
+            end if
+        end if
+
+        ! Re-render after returning from fortress
+        call terminal_clear_screen()
+    end subroutine handle_fortress_navigator
+
+    !> Handle dirty buffers before workspace switch
+    subroutine handle_dirty_buffers_before_switch(editor, should_continue)
+        use save_prompt_module, only: save_prompt, save_prompt_result_t
+        use text_buffer_module, only: buffer_save_file
+        type(editor_state_t), intent(inout) :: editor
+        logical, intent(inout) :: should_continue
+        type(save_prompt_result_t) :: prompt_result
+        integer :: i, save_status
+
+        should_continue = .true.
+
+        ! Check each tab for modified buffers
+        do i = 1, size(editor%tabs)
+            if (editor%tabs(i)%modified .and. allocated(editor%tabs(i)%filename)) then
+                ! Prompt user for this file
+                call save_prompt(editor%tabs(i)%filename, prompt_result)
+
+                select case (prompt_result%action)
+                    case ('y')
+                        ! Save the file
+                        if (allocated(editor%tabs(i)%panes) .and. size(editor%tabs(i)%panes) > 0) then
+                            call buffer_save_file(editor%tabs(i)%panes(1)%buffer, &
+                                                  editor%tabs(i)%filename, save_status)
+                        else
+                            call buffer_save_file(editor%tabs(i)%buffer, &
+                                                  editor%tabs(i)%filename, save_status)
+                        end if
+
+                        if (save_status == 0) then
+                            editor%tabs(i)%modified = .false.
+                        end if
+
+                    case ('n')
+                        ! Skip saving - continue
+
+                    case ('c')
+                        ! Cancel the workspace switch
+                        should_continue = .false.
+                        return
+                end select
+            end if
+        end do
+    end subroutine handle_dirty_buffers_before_switch
+
+    !> Prompt to save before closing tab
+    subroutine prompt_save_before_close_tab(editor, buffer)
+        use save_prompt_module, only: save_prompt, save_prompt_result_t
+        use text_prompt_module, only: show_text_prompt
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        type(save_prompt_result_t) :: prompt_result
+        integer :: save_status, tab_idx
+        character(len=512) :: new_filename
+        logical :: cancelled
+
+        tab_idx = editor%active_tab_index
+
+        ! Prompt user to save
+        call save_prompt(editor%tabs(tab_idx)%filename, prompt_result)
+
+        if (prompt_result%action == 's') then
+            ! User wants to save
+            ! Check if untitled - need filename
+            if (index(editor%tabs(tab_idx)%filename, '[Untitled') == 1) then
+                call show_text_prompt('Save as: ', new_filename, cancelled, editor%screen_rows)
+                if (.not. cancelled .and. len_trim(new_filename) > 0) then
+                    ! Update filename and save
+                    if (allocated(editor%tabs(tab_idx)%filename)) deallocate(editor%tabs(tab_idx)%filename)
+                    allocate(character(len=len_trim(new_filename)) :: editor%tabs(tab_idx)%filename)
+                    editor%tabs(tab_idx)%filename = trim(new_filename)
+
+                    call buffer_save_file(buffer, new_filename, save_status)
+                    if (save_status == 0) then
+                        buffer%modified = .false.
+                        editor%tabs(tab_idx)%modified = .false.
+                    end if
+                else
+                    ! User cancelled filename prompt - don't close tab
+                    return
+                end if
+            else
+                ! Not untitled - just save
+                call buffer_save_file(buffer, editor%tabs(tab_idx)%filename, save_status)
+                if (save_status == 0) then
+                    buffer%modified = .false.
+                    editor%tabs(tab_idx)%modified = .false.
+                end if
+            end if
+
+            ! After saving, close the tab
+            call close_tab_without_prompt(editor, buffer)
+
+        else if (prompt_result%action == 'd') then
+            ! User wants to discard - just close
+            call close_tab_without_prompt(editor, buffer)
+
+        ! else if 'c' (cancel) - do nothing, don't close tab
+        end if
+    end subroutine prompt_save_before_close_tab
+
+    !> Close tab without prompting
+    subroutine close_tab_without_prompt(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer :: tab_idx
+
+        tab_idx = editor%active_tab_index
+
+        ! If this is the last tab, close it and clear editor
+        if (size(editor%tabs) == 1) then
+            call close_tab(editor, tab_idx)
+
+            ! Clear the buffer and open fuss mode
+            call cleanup_buffer(buffer)
+            call init_buffer(buffer)
+            editor%fuss_mode_active = .true.
+            if (allocated(editor%filename)) deallocate(editor%filename)
+            editor%modified = .false.
+            if (allocated(editor%workspace_path)) then
+                call init_tree_state(tree_state, editor%workspace_path)
+            end if
+        else
+            ! Multiple tabs - close current tab normally
+            call close_tab(editor, tab_idx)
+
+            ! Copy new active tab's buffer
+            if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
+                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+                editor%modified = editor%tabs(editor%active_tab_index)%modified
+                if (allocated(editor%filename)) deallocate(editor%filename)
+                allocate(character(len=len(editor%tabs(editor%active_tab_index)%filename)) :: editor%filename)
+                editor%filename = editor%tabs(editor%active_tab_index)%filename
+            end if
+        end if
+    end subroutine close_tab_without_prompt
+
+    ! Notify LSP server of buffer changes
+    subroutine notify_buffer_change(editor, buffer)
+        use document_sync_module, only: notify_document_change
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(in) :: buffer
+        character(len=:), allocatable :: full_content
+        integer :: i, line_count
+
+        ! Only notify if we have an active tab with LSP support
+        if (editor%active_tab_index < 1 .or. editor%active_tab_index > size(editor%tabs)) return
+        if (editor%tabs(editor%active_tab_index)%lsp_server_index <= 0) return
+
+        ! Build full document content
+        line_count = buffer_get_line_count(buffer)
+        full_content = ''
+        do i = 1, line_count
+            if (i > 1) then
+                full_content = full_content // char(10)  ! LF
+            end if
+            full_content = full_content // buffer_get_line(buffer, i)
+        end do
+
+        ! Notify document sync of the change
+        call notify_document_change(editor%tabs(editor%active_tab_index)%document_sync, &
+                                   full_content)
+    end subroutine notify_buffer_change
+
+    ! TODO: Handle LSP textDocument/definition response
+    ! This needs to be integrated with the main event loop callback system
+    ! The response parsing logic is ready but needs proper callback integration
+
+    ! Wrapper callback that matches the LSP callback signature
+    subroutine handle_references_response_wrapper(request_id, response)
+        use lsp_protocol_module, only: lsp_message_t
+        integer, intent(in) :: request_id
+        type(lsp_message_t), intent(in) :: response
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> REFERENCES RESPONSE RECEIVED <<<'
+            close(debug_unit)
+        end block
+
+        ! Call the actual handler with saved editor state
+        if (allocated(saved_editor_for_callback)) then
+            call handle_references_response_impl(saved_editor_for_callback, response)
+        end if
+    end subroutine handle_references_response_wrapper
+
+    ! Handle LSP textDocument/references response implementation
+    subroutine handle_references_response_impl(editor, response)
+        use lsp_protocol_module, only: lsp_message_t
+        use json_module, only: json_value_t, json_get_array, json_get_object, &
+                               json_get_string, json_get_number, json_array_size, &
+                               json_get_array_element, json_has_key
+        type(editor_state_t), intent(inout) :: editor
+        type(lsp_message_t), intent(in) :: response
+        type(json_value_t) :: result_array, location_obj, range_obj
+        type(json_value_t) :: start_obj, end_obj
+        type(reference_location_t), allocatable :: references(:)
+        integer :: num_refs, i
+        character(len=:), allocatable :: uri
+        real(8) :: line_real, col_real
+
+        ! The result is directly in response%result for LSP responses
+        result_array = response%result
+        num_refs = json_array_size(result_array)
+
+        if (num_refs == 0) then
+            ! No references found
+            allocate(references(0))
+            call set_references(editor%references_panel, references, 0)
+            return
+        end if
+
+        ! Allocate references array
+        allocate(references(num_refs))
+
+        ! Initialize all fields
+        do i = 1, num_refs
+            references(i)%line = 1
+            references(i)%column = 1
+            references(i)%end_line = 1
+            references(i)%end_column = 1
+        end do
+
+        ! Parse each reference location
+        do i = 1, num_refs
+            location_obj = json_get_array_element(result_array, i - 1)
+
+            ! Get URI
+            uri = json_get_string(location_obj, 'uri', '')
+            if (len(uri) > 0) then
+                allocate(character(len=len(uri)) :: references(i)%uri)
+                references(i)%uri = uri
+
+                ! Extract filename from URI
+                if (len(uri) > 7) then
+                    if (uri(1:7) == "file://") then
+                        allocate(character(len=len(uri)-7) :: references(i)%filename)
+                        references(i)%filename = uri(8:)
+                    end if
+                end if
+            end if
+
+            ! Get range
+            if (json_has_key(location_obj, 'range')) then
+                range_obj = json_get_object(location_obj, 'range')
+
+                ! Get start position
+                if (json_has_key(range_obj, 'start')) then
+                    start_obj = json_get_object(range_obj, 'start')
+                    line_real = json_get_number(start_obj, 'line', 0.0d0)
+                    references(i)%line = int(line_real) + 1  ! Convert from 0-based to 1-based
+                    col_real = json_get_number(start_obj, 'character', 0.0d0)
+                    references(i)%column = int(col_real) + 1  ! Convert from 0-based to 1-based
+                end if
+
+                ! Get end position
+                if (json_has_key(range_obj, 'end')) then
+                    end_obj = json_get_object(range_obj, 'end')
+                    line_real = json_get_number(end_obj, 'line', 0.0d0)
+                    references(i)%end_line = int(line_real) + 1
+                    col_real = json_get_number(end_obj, 'character', 0.0d0)
+                    references(i)%end_column = int(col_real) + 1
+                end if
+            end if
+
+            ! TODO: Load preview text from the file if available
+            allocate(character(len=50) :: references(i)%preview_text)
+            references(i)%preview_text = "..."  ! Placeholder
+        end do
+
+        ! Update the references panel
+        call set_references(editor%references_panel, references, num_refs)
+
+        ! Clean up
+        do i = 1, num_refs
+            if (allocated(references(i)%uri)) deallocate(references(i)%uri)
+            if (allocated(references(i)%filename)) deallocate(references(i)%filename)
+            if (allocated(references(i)%preview_text)) deallocate(references(i)%preview_text)
+        end do
+        deallocate(references)
+
+    end subroutine handle_references_response_impl
+
+    ! Wrapper callback that matches the LSP callback signature for code actions
+    subroutine handle_code_actions_response_wrapper(request_id, response)
+        use lsp_protocol_module, only: lsp_message_t
+        integer, intent(in) :: request_id
+        type(lsp_message_t), intent(in) :: response
+
+        ! Call the actual handler with saved editor state
+        if (allocated(saved_editor_for_callback)) then
+            call handle_code_actions_response_impl(saved_editor_for_callback, response)
+        end if
+    end subroutine handle_code_actions_response_wrapper
+
+    ! Handle LSP textDocument/codeAction response implementation
+    subroutine handle_code_actions_response_impl(editor, response)
+        use lsp_protocol_module, only: lsp_message_t
+        use json_module, only: json_value_t, json_get_array, json_get_object, &
+                               json_get_string, json_get_bool, json_array_size, &
+                               json_get_array_element, json_has_key, json_stringify
+        use code_actions_menu_module, only: code_action_t
+        type(editor_state_t), intent(inout) :: editor
+        type(lsp_message_t), intent(in) :: response
+        type(json_value_t) :: result_array, action_obj, edit_obj
+        type(code_action_t), allocatable :: actions(:)
+        integer :: num_actions, i
+        character(len=:), allocatable :: title, kind, action_json
+        logical :: is_preferred
+
+        ! The result is directly in response%result for LSP responses
+        result_array = response%result
+        num_actions = json_array_size(result_array)
+
+        if (num_actions == 0) then
+            call hide_code_actions_menu(editor%code_actions_menu)
+            call terminal_move_cursor(editor%screen_rows, 1)
+            call terminal_write('No code actions available at this position                ')
+            return
+        end if
+
+        ! Allocate and fill actions array
+        allocate(actions(num_actions))
+
+        do i = 1, num_actions
+            action_obj = json_get_array_element(result_array, i)
+
+            ! Get title (required)
+            if (json_has_key(action_obj, 'title')) then
+                title = json_get_string(action_obj, 'title', '')
+                if (allocated(actions(i)%title)) deallocate(actions(i)%title)
+                allocate(character(len=len(title)) :: actions(i)%title)
+                actions(i)%title = title
+            end if
+
+            ! Get kind (optional)
+            if (json_has_key(action_obj, 'kind')) then
+                kind = json_get_string(action_obj, 'kind', '')
+                if (allocated(actions(i)%kind)) deallocate(actions(i)%kind)
+                allocate(character(len=len(kind)) :: actions(i)%kind)
+                actions(i)%kind = kind
+            end if
+
+            ! Get isPreferred (optional)
+            if (json_has_key(action_obj, 'isPreferred')) then
+                actions(i)%is_preferred = json_get_bool(action_obj, 'isPreferred', .false.)
+            else
+                actions(i)%is_preferred = .false.
+            end if
+
+            ! Store the entire action as JSON for later application
+            action_json = json_stringify(action_obj)
+            if (allocated(actions(i)%action_json)) deallocate(actions(i)%action_json)
+            allocate(character(len=len(action_json)) :: actions(i)%action_json)
+            actions(i)%action_json = action_json
+        end do
+
+        ! Update the code actions menu
+        call set_code_actions(editor%code_actions_menu, actions, num_actions)
+
+        ! Show success message
+        call terminal_move_cursor(editor%screen_rows, 1)
+        if (num_actions == 1) then
+            call terminal_write('1 code action available                ')
+        else
+            block
+                character(len=50) :: msg
+                write(msg, '(I0,A)') num_actions, ' code actions available                '
+                call terminal_write(trim(msg))
+            end block
+        end if
+
+        ! Clean up
+        do i = 1, num_actions
+            if (allocated(actions(i)%title)) deallocate(actions(i)%title)
+            if (allocated(actions(i)%kind)) deallocate(actions(i)%kind)
+            if (allocated(actions(i)%action_json)) deallocate(actions(i)%action_json)
+        end do
+        deallocate(actions)
+
+    end subroutine handle_code_actions_response_impl
+
+    ! Wrapper callback that matches the LSP callback signature for symbols
+    subroutine handle_symbols_response_wrapper(request_id, response)
+        use lsp_protocol_module, only: lsp_message_t
+        integer, intent(in) :: request_id
+        type(lsp_message_t), intent(in) :: response
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> SYMBOLS RESPONSE RECEIVED <<<'
+            close(debug_unit)
+        end block
+
+        ! Call the actual handler with saved editor state
+        if (allocated(saved_editor_for_callback)) then
+            call handle_symbols_response_impl(saved_editor_for_callback, response)
+        end if
+    end subroutine handle_symbols_response_wrapper
+
+    ! Handle LSP textDocument/documentSymbol response implementation
+    subroutine handle_symbols_response_impl(editor, response)
+        use lsp_protocol_module, only: lsp_message_t
+        use json_module, only: json_value_t, json_get_array, json_get_object, &
+                               json_get_string, json_get_number, json_array_size, &
+                               json_get_array_element, json_has_key
+        type(editor_state_t), intent(inout) :: editor
+        type(lsp_message_t), intent(in) :: response
+        type(json_value_t) :: result_array, symbol_obj, location_obj, range_obj
+        type(json_value_t) :: start_obj, end_obj, children_array
+        type(document_symbol_t), allocatable :: symbols(:)
+        integer :: num_symbols, i
+        character(len=:), allocatable :: name, detail
+        real(8) :: kind_real, line_real, col_real
+
+        ! The result is directly in response%result for LSP responses
+        result_array = response%result
+        num_symbols = json_array_size(result_array)
+
+        if (num_symbols == 0) then
+            call clear_symbols(editor%symbols_panel)
+            call terminal_move_cursor(editor%screen_rows, 1)
+            call terminal_write('No symbols found in document                ')
+            return
+        end if
+
+        ! Allocate symbols array
+        allocate(symbols(num_symbols))
+
+        ! Parse each symbol
+        do i = 1, num_symbols
+            symbol_obj = json_get_array_element(result_array, i)
+
+            ! Get symbol name (required)
+            if (json_has_key(symbol_obj, 'name')) then
+                name = json_get_string(symbol_obj, 'name', '')
+                if (allocated(symbols(i)%name)) deallocate(symbols(i)%name)
+                allocate(character(len=len(name)) :: symbols(i)%name)
+                symbols(i)%name = name
+            end if
+
+            ! Get detail (optional)
+            if (json_has_key(symbol_obj, 'detail')) then
+                detail = json_get_string(symbol_obj, 'detail', '')
+                if (len(detail) > 0) then
+                    if (allocated(symbols(i)%detail)) deallocate(symbols(i)%detail)
+                    allocate(character(len=len(detail)) :: symbols(i)%detail)
+                    symbols(i)%detail = detail
+                end if
+            end if
+
+            ! Get kind (required)
+            if (json_has_key(symbol_obj, 'kind')) then
+                kind_real = json_get_number(symbol_obj, 'kind', 13.0d0)  ! Default to Variable
+                symbols(i)%kind = int(kind_real)
+            else
+                symbols(i)%kind = 13  ! Variable
+            end if
+
+            ! Get range or location
+            if (json_has_key(symbol_obj, 'range')) then
+                ! DocumentSymbol format (hierarchical)
+                range_obj = json_get_object(symbol_obj, 'range')
+
+                ! Get start position
+                if (json_has_key(range_obj, 'start')) then
+                    start_obj = json_get_object(range_obj, 'start')
+                    line_real = json_get_number(start_obj, 'line', 0.0d0)
+                    symbols(i)%line = int(line_real) + 1
+                    col_real = json_get_number(start_obj, 'character', 0.0d0)
+                    symbols(i)%column = int(col_real) + 1
+                end if
+
+                ! Get end position
+                if (json_has_key(range_obj, 'end')) then
+                    end_obj = json_get_object(range_obj, 'end')
+                    line_real = json_get_number(end_obj, 'line', 0.0d0)
+                    symbols(i)%end_line = int(line_real) + 1
+                    col_real = json_get_number(end_obj, 'character', 0.0d0)
+                    symbols(i)%end_column = int(col_real) + 1
+                end if
+
+                ! Check for children (hierarchical symbols)
+                if (json_has_key(symbol_obj, 'children')) then
+                    children_array = json_get_array(symbol_obj, 'children')
+                    symbols(i)%num_children = json_array_size(children_array)
+                    ! TODO: Parse children recursively
+                end if
+
+            else if (json_has_key(symbol_obj, 'location')) then
+                ! SymbolInformation format (flat)
+                location_obj = json_get_object(symbol_obj, 'location')
+
+                if (json_has_key(location_obj, 'range')) then
+                    range_obj = json_get_object(location_obj, 'range')
+
+                    ! Get start position
+                    if (json_has_key(range_obj, 'start')) then
+                        start_obj = json_get_object(range_obj, 'start')
+                        line_real = json_get_number(start_obj, 'line', 0.0d0)
+                        symbols(i)%line = int(line_real) + 1
+                        col_real = json_get_number(start_obj, 'character', 0.0d0)
+                        symbols(i)%column = int(col_real) + 1
+                    end if
+
+                    ! Get end position
+                    if (json_has_key(range_obj, 'end')) then
+                        end_obj = json_get_object(range_obj, 'end')
+                        line_real = json_get_number(end_obj, 'line', 0.0d0)
+                        symbols(i)%end_line = int(line_real) + 1
+                        col_real = json_get_number(end_obj, 'character', 0.0d0)
+                        symbols(i)%end_column = int(col_real) + 1
+                    end if
+                end if
+            end if
+
+            symbols(i)%depth = 0  ! Top level
+            symbols(i)%is_expanded = .true.
+        end do
+
+        ! Update the symbols panel
+        call set_symbols(editor%symbols_panel, symbols, num_symbols)
+
+        ! Show success message
+        call terminal_move_cursor(editor%screen_rows, 1)
+        if (num_symbols == 1) then
+            call terminal_write('1 symbol found                ')
+        else
+            block
+                character(len=50) :: msg
+                write(msg, '(I0,A)') num_symbols, ' symbols found                '
+                call terminal_write(trim(msg))
+            end block
+        end if
+
+        ! Clean up
+        do i = 1, num_symbols
+            if (allocated(symbols(i)%name)) deallocate(symbols(i)%name)
+            if (allocated(symbols(i)%detail)) deallocate(symbols(i)%detail)
+            if (allocated(symbols(i)%children)) deallocate(symbols(i)%children)
+        end do
+        deallocate(symbols)
+
+    end subroutine handle_symbols_response_impl
+
+    ! Wrapper callback that matches the LSP callback signature for signature help
+    subroutine handle_signature_response_wrapper(request_id, response)
+        use lsp_protocol_module, only: lsp_message_t
+        integer, intent(in) :: request_id
+        type(lsp_message_t), intent(in) :: response
+
+        ! Call the actual handler with saved editor state
+        if (allocated(saved_editor_for_callback)) then
+            call handle_signature_response(saved_editor_for_callback%signature_tooltip, response)
+        end if
+    end subroutine handle_signature_response_wrapper
+
+    ! Wrapper callback that matches the LSP callback signature for rename
+    subroutine handle_rename_response_wrapper(request_id, response)
+        use lsp_protocol_module, only: lsp_message_t
+        use json_module, only: json_value_t, json_stringify
+        integer, intent(in) :: request_id
+        type(lsp_message_t), intent(in) :: response
+
+        character(len=:), allocatable :: result_str
+        integer :: changes_applied
+
+        if (.not. allocated(saved_editor_for_callback)) return
+
+        ! Convert result to string for apply_workspace_edit
+        result_str = json_stringify(response%result)
+        if (.not. allocated(result_str) .or. result_str == 'null' .or. len_trim(result_str) == 0) then
+            call terminal_move_cursor(saved_editor_for_callback%screen_rows, 1)
+            call terminal_write('Rename failed or not supported                ')
+            if (allocated(result_str)) deallocate(result_str)
+            return
+        end if
+
+        ! Apply workspace edit
+        call apply_workspace_edit(saved_editor_for_callback, result_str, changes_applied)
+
+        call terminal_move_cursor(saved_editor_for_callback%screen_rows, 1)
+        if (changes_applied > 0) then
+            block
+                character(len=64) :: msg
+                write(msg, '(A,I0,A)') 'Renamed symbol (', changes_applied, ' changes applied)'
+                call terminal_write(trim(msg) // '                    ')
+            end block
+        else
+            call terminal_write('No changes applied                         ')
+        end if
+
+        if (allocated(result_str)) deallocate(result_str)
+    end subroutine handle_rename_response_wrapper
+
+    ! Wrapper callback for formatting response
+    subroutine handle_formatting_response_wrapper(request_id, response)
+        use lsp_protocol_module, only: lsp_message_t
+        use json_module, only: json_value_t, json_array_size, json_get_array_element, &
+                               json_get_object, json_get_string, json_get_number, json_has_key
+        integer, intent(in) :: request_id
+        type(lsp_message_t), intent(in) :: response
+
+        type(json_value_t) :: edits_array, edit_obj, range_obj, start_obj, end_obj
+        character(len=:), allocatable :: new_text
+        integer :: num_edits, i, tab_idx
+        integer :: start_line, start_char, end_line, end_char
+        integer :: changes_applied
+
+        if (.not. allocated(saved_editor_for_callback)) return
+
+        tab_idx = saved_editor_for_callback%active_tab_index
+        if (tab_idx < 1 .or. tab_idx > size(saved_editor_for_callback%tabs)) return
+
+        ! The result is an array of TextEdit objects
+        edits_array = response%result
+        num_edits = json_array_size(edits_array)
+
+        if (num_edits == 0) then
+            call terminal_move_cursor(saved_editor_for_callback%screen_rows, 1)
+            call terminal_write('No formatting changes needed                ')
+            return
+        end if
+
+        changes_applied = 0
+
+        ! Apply edits in reverse order (to preserve positions)
+        do i = num_edits - 1, 0, -1
+            edit_obj = json_get_array_element(edits_array, i)
+
+            if (.not. json_has_key(edit_obj, 'range')) cycle
+            range_obj = json_get_object(edit_obj, 'range')
+
+            if (json_has_key(range_obj, 'start') .and. json_has_key(range_obj, 'end')) then
+                start_obj = json_get_object(range_obj, 'start')
+                end_obj = json_get_object(range_obj, 'end')
+
+                start_line = int(json_get_number(start_obj, 'line', 0.0d0)) + 1
+                start_char = int(json_get_number(start_obj, 'character', 0.0d0)) + 1
+                end_line = int(json_get_number(end_obj, 'line', 0.0d0)) + 1
+                end_char = int(json_get_number(end_obj, 'character', 0.0d0)) + 1
+
+                new_text = json_get_string(edit_obj, 'newText')
+
+                if (allocated(new_text)) then
+                    call apply_single_edit(saved_editor_for_callback%tabs(tab_idx)%buffer, &
+                        start_line, start_char, end_line, end_char, new_text)
+                    changes_applied = changes_applied + 1
+                    deallocate(new_text)
+                end if
+            end if
+        end do
+
+        call terminal_move_cursor(saved_editor_for_callback%screen_rows, 1)
+        if (changes_applied > 0) then
+            block
+                character(len=64) :: msg
+                write(msg, '(A,I0,A)') 'Formatted (', changes_applied, ' edits applied)'
+                call terminal_write(trim(msg) // '                    ')
+            end block
+        else
+            call terminal_write('No formatting changes applied               ')
+        end if
+    end subroutine handle_formatting_response_wrapper
+
+    ! Apply a workspace edit from LSP
+    subroutine apply_workspace_edit(editor, edit_json, changes_applied)
+        use json_module, only: json_parse, json_value_t, json_get_array, json_array_size, &
+                               json_get_array_element, json_get_object, json_get_string, &
+                               json_get_number, json_has_key
+        type(editor_state_t), intent(inout) :: editor
+        character(len=*), intent(in) :: edit_json
+        integer, intent(out) :: changes_applied
+
+        type(json_value_t) :: edit_obj, doc_changes_arr, file_change_obj
+        type(json_value_t) :: text_doc_obj, edits_arr
+        character(len=:), allocatable :: uri
+        integer :: num_files, i
+
+        changes_applied = 0
+
+        ! Parse the edit JSON
+        edit_obj = json_parse(edit_json)
+
+        ! Try to get documentChanges first (newer format)
+        if (json_has_key(edit_obj, 'documentChanges')) then
+            doc_changes_arr = json_get_array(edit_obj, 'documentChanges')
+            num_files = json_array_size(doc_changes_arr)
+
+            do i = 0, num_files - 1  ! 0-based index
+                file_change_obj = json_get_array_element(doc_changes_arr, i)
+
+                ! Get text document URI
+                if (json_has_key(file_change_obj, 'textDocument')) then
+                    text_doc_obj = json_get_object(file_change_obj, 'textDocument')
+                    uri = json_get_string(text_doc_obj, 'uri')
+                end if
+
+                ! Get edits array
+                if (json_has_key(file_change_obj, 'edits') .and. allocated(uri)) then
+                    edits_arr = json_get_array(file_change_obj, 'edits')
+                    call apply_file_edits_obj(editor, uri, edits_arr, changes_applied)
+                    deallocate(uri)
+                end if
+            end do
+            return
+        end if
+
+        ! Fall back to changes format (older format - map of URI to edits)
+        if (json_has_key(edit_obj, 'changes')) then
+            call terminal_move_cursor(editor%screen_rows, 1)
+            call terminal_write('Workspace edit (changes format) not fully supported')
+            return
+        end if
+
+    end subroutine apply_workspace_edit
+
+    ! Apply edits to a specific file (using json_value_t)
+    subroutine apply_file_edits_obj(editor, uri, edits_arr, changes_applied)
+        use json_module, only: json_value_t, json_array_size, json_get_array_element, &
+                               json_get_object, json_get_string, json_get_number, json_has_key
+        type(editor_state_t), intent(inout) :: editor
+        character(len=*), intent(in) :: uri
+        type(json_value_t), intent(in) :: edits_arr
+        integer, intent(inout) :: changes_applied
+
+        type(json_value_t) :: edit_obj, range_obj, start_obj, end_obj
+        character(len=:), allocatable :: filename, new_text
+        integer :: num_edits, i, j, tab_idx
+        integer :: start_line, start_char, end_line, end_char
+
+        ! Convert URI to filename
+        if (len(uri) >= 7 .and. uri(1:7) == 'file://') then
+            filename = uri(8:)
+        else
+            filename = uri
+        end if
+
+        ! Find the tab with this file
+        tab_idx = 0
+        do j = 1, size(editor%tabs)
+            if (allocated(editor%tabs(j)%filename)) then
+                if (trim(editor%tabs(j)%filename) == trim(filename)) then
+                    tab_idx = j
+                    exit
+                end if
+            end if
+        end do
+
+        if (tab_idx == 0) then
+            ! File not open - skip for now
+            if (allocated(filename)) deallocate(filename)
+            return
+        end if
+
+        ! Apply edits in reverse order (to preserve line numbers)
+        num_edits = json_array_size(edits_arr)
+
+        do i = num_edits - 1, 0, -1  ! 0-based index, reverse order
+            edit_obj = json_get_array_element(edits_arr, i)
+
+            ! Get range
+            if (.not. json_has_key(edit_obj, 'range')) cycle
+            range_obj = json_get_object(edit_obj, 'range')
+
+            if (json_has_key(range_obj, 'start') .and. json_has_key(range_obj, 'end')) then
+                start_obj = json_get_object(range_obj, 'start')
+                end_obj = json_get_object(range_obj, 'end')
+
+                start_line = int(json_get_number(start_obj, 'line', 0.0d0)) + 1
+                start_char = int(json_get_number(start_obj, 'character', 0.0d0)) + 1
+                end_line = int(json_get_number(end_obj, 'line', 0.0d0)) + 1
+                end_char = int(json_get_number(end_obj, 'character', 0.0d0)) + 1
+
+                ! Get new text
+                new_text = json_get_string(edit_obj, 'newText')
+
+                if (allocated(new_text)) then
+                    ! Apply the edit to the buffer
+                    call apply_single_edit(editor%tabs(tab_idx)%buffer, &
+                        start_line, start_char, end_line, end_char, new_text)
+                    changes_applied = changes_applied + 1
+                    deallocate(new_text)
+                end if
+            end if
+        end do
+
+        if (allocated(filename)) deallocate(filename)
+    end subroutine apply_file_edits_obj
+
+    ! Apply a single text edit to a buffer
+    subroutine apply_single_edit(buffer, start_line, start_char, end_line, end_char, new_text)
+        type(buffer_t), intent(inout) :: buffer
+        integer, intent(in) :: start_line, start_char, end_line, end_char
+        character(len=*), intent(in) :: new_text
+
+        integer :: start_pos, end_pos, delete_count
+
+        ! Calculate buffer positions
+        start_pos = get_buffer_position(buffer, start_line, start_char)
+        end_pos = get_buffer_position(buffer, end_line, end_char)
+
+        if (start_pos <= 0 .or. end_pos <= 0) return
+
+        ! Delete the old text
+        delete_count = end_pos - start_pos
+        if (delete_count > 0) then
+            call buffer_delete(buffer, start_pos, delete_count)
+        end if
+
+        ! Insert the new text
+        if (len(new_text) > 0) then
+            call buffer_insert(buffer, start_pos, new_text)
+        end if
+    end subroutine apply_single_edit
+
+    ! Execute a command from the command palette
+    subroutine execute_palette_command(editor, buffer, cmd_id, should_quit)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=*), intent(in) :: cmd_id
+        logical, intent(out) :: should_quit
+
+        ! For now, just display the selected command
+        ! TODO: Implement full command execution in next iteration
+        call terminal_move_cursor(editor%screen_rows, 1)
+        call terminal_write('Selected: ' // trim(cmd_id) // '                    ')
+        should_quit = .false.
+    end subroutine execute_palette_command
+
+    ! Handle workspace symbols LSP response
+    subroutine handle_workspace_symbols_response_wrapper(request_id, response)
+        use lsp_protocol_module, only: lsp_message_t
+        use json_module
+        use workspace_symbols_panel_module, only: workspace_symbol_t, set_workspace_symbols
+        integer, intent(in) :: request_id
+        type(lsp_message_t), intent(in) :: response
+        type(json_value_t) :: result_array, symbol_obj, location_obj, range_obj, start_obj
+        integer :: num_symbols, i
+        type(workspace_symbol_t), allocatable :: symbols(:)
+        character(len=:), allocatable :: name, kind_str, container, uri
+        real(8) :: line_num, char_num, kind_num
+
+        num_symbols = json_array_size(response%result)
+        if (num_symbols == 0) return
+        allocate(symbols(num_symbols))
+
+        do i = 0, num_symbols - 1
+            symbol_obj = json_get_array_element(response%result, i)
+
+            ! Get name
+            name = json_get_string(symbol_obj, 'name', '')
+            if (allocated(name)) then
+                symbols(i+1)%name = name
+            end if
+
+            ! Get kind (as number) and convert to string
+            kind_num = json_get_number(symbol_obj, 'kind', 0.0d0)
+            symbols(i+1)%kind_name = symbol_kind_to_string(int(kind_num))
+
+            ! Get container name (optional)
+            container = json_get_string(symbol_obj, 'containerName', '')
+            if (allocated(container)) then
+                symbols(i+1)%container_name = container
+            end if
+
+            ! Get location
+            location_obj = json_get_object(symbol_obj, 'location')
+            uri = json_get_string(location_obj, 'uri', '')
+            if (allocated(uri) .and. len_trim(uri) > 0) then
+                symbols(i+1)%file_uri = uri
+
+                ! Get range -> start -> line/character
+                range_obj = json_get_object(location_obj, 'range')
+                start_obj = json_get_object(range_obj, 'start')
+                line_num = json_get_number(start_obj, 'line', 0.0d0)
+                char_num = json_get_number(start_obj, 'character', 0.0d0)
+                symbols(i+1)%line = int(line_num)
+                symbols(i+1)%character = int(char_num)
+            end if
+        end do
+
+        ! Update the panel
+        if (allocated(saved_editor_for_callback)) then
+            call set_workspace_symbols(saved_editor_for_callback%workspace_symbols_panel, symbols, num_symbols)
+        end if
+
+        if (allocated(symbols)) deallocate(symbols)
+    end subroutine handle_workspace_symbols_response_wrapper
+
+    ! Helper to convert LSP symbol kind number to string
+    function symbol_kind_to_string(kind) result(kind_str)
+        integer, intent(in) :: kind
+        character(len=:), allocatable :: kind_str
+
+        select case(kind)
+        case(1); kind_str = "File"
+        case(2); kind_str = "Module"
+        case(3); kind_str = "Namespace"
+        case(4); kind_str = "Package"
+        case(5); kind_str = "Class"
+        case(6); kind_str = "Method"
+        case(7); kind_str = "Property"
+        case(8); kind_str = "Field"
+        case(9); kind_str = "Constructor"
+        case(10); kind_str = "Enum"
+        case(11); kind_str = "Interface"
+        case(12); kind_str = "Function"
+        case(13); kind_str = "Variable"
+        case(14); kind_str = "Constant"
+        case(15); kind_str = "String"
+        case(16); kind_str = "Number"
+        case(17); kind_str = "Boolean"
+        case(18); kind_str = "Array"
+        case default; kind_str = "Unknown"
+        end select
+    end function symbol_kind_to_string
+
+    ! Navigate to a workspace symbol
+    subroutine navigate_to_workspace_symbol(editor, buffer, symbol, should_quit)
+        use workspace_symbols_panel_module, only: workspace_symbol_t
+        use jump_stack_module, only: push_jump_location
+        use editor_state_module, only: switch_to_tab, create_tab, sync_pane_to_editor, sync_editor_to_pane
+        use text_buffer_module, only: buffer_load_file, copy_buffer
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        type(workspace_symbol_t), intent(in) :: symbol
+        logical, intent(out) :: should_quit
+        character(len=:), allocatable :: filepath
+        integer :: i
+
+        should_quit = .false.
+
+        ! Convert file:// URI to filepath
+        if (index(symbol%file_uri, "file://") == 1) then
+            filepath = symbol%file_uri(8:)  ! Remove "file://"
+        else
+            filepath = symbol%file_uri
+        end if
+
+        ! Push current location to jump stack
+        if (allocated(editor%filename)) then
+            call push_jump_location(editor%jump_stack, editor%filename, &
+                editor%cursors(editor%active_cursor)%line, &
+                editor%cursors(editor%active_cursor)%column)
+        end if
+
+        ! Check if file is already open in a tab
+        do i = 1, size(editor%tabs)
+            if (allocated(editor%tabs(i)%filename)) then
+                if (trim(editor%tabs(i)%filename) == trim(filepath)) then
+                    call switch_to_tab(editor, i)
+                    ! Jump to the symbol's position
+                    editor%cursors(editor%active_cursor)%line = symbol%line + 1  ! LSP is 0-based
+                    editor%cursors(editor%active_cursor)%column = symbol%character + 1
+                    editor%cursors(editor%active_cursor)%desired_column = symbol%character + 1
+                    editor%viewport_line = max(1, symbol%line + 1 - editor%screen_rows / 2)
+                    return
+                end if
+            end if
+        end do
+
+        ! File not open - create a new tab and load the file
+        call create_tab(editor, filepath)
+
+        ! Load file content into the new tab's buffer
+        block
+            integer :: status, new_tab_idx
+
+            new_tab_idx = size(editor%tabs)  ! The tab we just created
+
+            call buffer_load_file(editor%tabs(new_tab_idx)%buffer, filepath, status)
+
+            if (status == 0) then
+                ! File loaded successfully
+                ! Copy buffer to the pane's buffer
+                if (allocated(editor%tabs(new_tab_idx)%panes)) then
+                    call copy_buffer(editor%tabs(new_tab_idx)%panes(1)%buffer, editor%tabs(new_tab_idx)%buffer)
+                end if
+
+                ! Switch to the new tab
+                call switch_to_tab(editor, new_tab_idx)
+
+                ! Sync the pane to editor state (this updates editor%cursors, etc.)
+                call sync_pane_to_editor(editor, new_tab_idx, 1)
+
+                ! Navigate to the symbol's position
+                editor%cursors(editor%active_cursor)%line = symbol%line + 1  ! LSP is 0-based
+                editor%cursors(editor%active_cursor)%column = symbol%character + 1
+                editor%cursors(editor%active_cursor)%desired_column = symbol%character + 1
+                editor%viewport_line = max(1, symbol%line + 1 - editor%screen_rows / 2)
+
+                ! Sync editor state back to pane
+                call sync_editor_to_pane(editor)
+            else
+                ! File load failed - could show error message
+                ! For now, just don't navigate
+                continue
+            end if
+        end block
+    end subroutine navigate_to_workspace_symbol
+
+    ! ==================================================
+    ! LSP Definition Response Handler
+    ! ==================================================
+
+    ! Wrapper callback for go to definition
+    subroutine handle_definition_response_wrapper(request_id, response)
+        use lsp_protocol_module, only: lsp_message_t
+        integer, intent(in) :: request_id
+        type(lsp_message_t), intent(in) :: response
+
+        ! Call actual handler with saved editor state
+        if (allocated(saved_editor_for_callback)) then
+            call handle_definition_response_impl(saved_editor_for_callback, response)
+        end if
+    end subroutine handle_definition_response_wrapper
+
+    ! Handle LSP textDocument/definition response
+    subroutine handle_definition_response_impl(editor, response)
+        use lsp_protocol_module, only: lsp_message_t
+        use json_module, only: json_value_t, json_get_object, json_get_string, &
+                               json_get_number, json_array_size, json_get_array_element, &
+                               json_has_key
+        type(editor_state_t), intent(inout) :: editor
+        type(lsp_message_t), intent(in) :: response
+        type(json_value_t) :: location_obj, range_obj, start_obj
+        character(len=:), allocatable :: uri, filepath
+        real(8) :: line_real, col_real
+        integer :: target_line, target_col, i, num_locations
+        logical :: found_file
+
+        ! Log response for debugging
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') '>>> DEFINITION RESPONSE RECEIVED <<<'
+            close(debug_unit)
+        end block
+
+        ! Try to treat result as array first
+        num_locations = json_array_size(response%result)
+
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A,I0)') 'num_locations = ', num_locations
+            write(debug_unit, '(A,L1)') 'has uri key = ', json_has_key(response%result, "uri")
+            close(debug_unit)
+        end block
+
+        if (num_locations > 0) then
+            ! Array of locations - take first one
+            location_obj = json_get_array_element(response%result, 0)
+        else if (json_has_key(response%result, "uri")) then
+            ! Single location object
+            location_obj = response%result
+        else
+            ! No definition found
+            block
+                integer :: debug_unit
+                open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+                write(debug_unit, '(A)') '>>> NO DEFINITION FOUND (empty response) <<<'
+                close(debug_unit)
+            end block
+            call terminal_move_cursor(editor%screen_rows, 1)
+            call terminal_write('No definition found                           ')
+            return
+        end if
+
+        ! Extract URI
+        uri = json_get_string(location_obj, 'uri', '')
+        if (len(uri) == 0) then
+            call terminal_move_cursor(editor%screen_rows, 1)
+            call terminal_write('Invalid definition response                   ')
+            return
+        end if
+
+        ! Convert URI to filepath (remove file:// prefix)
+        if (len(uri) > 7 .and. uri(1:7) == 'file://') then
+            filepath = uri(8:)
+        else
+            filepath = uri
+        end if
+
+        ! Get range
+        range_obj = json_get_object(location_obj, 'range')
+        start_obj = json_get_object(range_obj, 'start')
+
+        line_real = json_get_number(start_obj, 'line', 0.0d0)
+        col_real = json_get_number(start_obj, 'character', 0.0d0)
+
+        ! Convert from 0-based LSP to 1-based editor coordinates
+        target_line = int(line_real) + 1
+        target_col = int(col_real) + 1
+
+        ! Log details
+        block
+            integer :: debug_unit
+            open(newunit=debug_unit, file='/tmp/fac_keys.log', position='append', action='write')
+            write(debug_unit, '(A)') 'File: ' // trim(filepath)
+            write(debug_unit, '(A,I0,A,I0)') 'Position: line=', target_line, ', col=', target_col
+            close(debug_unit)
+        end block
+
+        ! Check if the file is already open in a tab
+        found_file = .false.
+        do i = 1, size(editor%tabs)
+            if (allocated(editor%tabs(i)%filename)) then
+                if (trim(editor%tabs(i)%filename) == trim(filepath)) then
+                    ! Switch to this tab
+                    editor%active_tab_index = i
+                    found_file = .true.
+                    exit
+                end if
+            end if
+        end do
+
+        ! If file not found in tabs, report location
+        if (.not. found_file) then
+            call terminal_move_cursor(editor%screen_rows, 1)
+            call terminal_write('Found in: ' // trim(filepath) // '                ')
+            return
+        end if
+
+        ! Jump to the line and column in current tab
+        editor%cursors(editor%active_cursor)%line = target_line
+        editor%cursors(editor%active_cursor)%column = target_col
+
+        ! Center viewport on target
+        editor%viewport_line = max(1, target_line - editor%screen_rows / 2)
+
+        call terminal_move_cursor(editor%screen_rows, 1)
+        call terminal_write('Jumped to definition                          ')
+    end subroutine handle_definition_response_impl
 
 end module command_handler_module

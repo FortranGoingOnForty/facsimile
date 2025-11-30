@@ -1,0 +1,63 @@
+#!/usr/bin/expect -f
+
+# Test that initial diagnostics are received when opening a file
+# This focuses on the textDocument/didOpen notification
+
+set timeout 10
+spawn ./fac tests/lsp/sample_errors.c
+
+# Wait for editor and LSP initialization
+expect {
+    "LSP server initialized" {
+        puts "✓ LSP server started for C file"
+    }
+    timeout {
+        puts "✗ LSP server did not initialize"
+        puts "  Check that clangd is installed: which clangd"
+        exit 1
+    }
+}
+
+# Wait for initial diagnostics to arrive
+sleep 4
+
+# Try to see diagnostics in status bar or gutter
+expect {
+    -re "●|▲|◆|○" {
+        puts "✓ Diagnostic markers visible in gutter"
+    }
+    "error" {
+        puts "✓ Error indicator found"
+    }
+    timeout {
+        puts "⚠ No visual diagnostic indicators found"
+    }
+}
+
+# Open diagnostics panel
+send "\033\[68;6u"  ;# Ctrl+Shift+D
+sleep 1
+
+# Check for diagnostics in panel
+expect {
+    "Diagnostics" { puts "✓ Diagnostics panel opened" }
+    timeout { puts "⚠ Diagnostics panel did not open" }
+}
+
+expect {
+    -re "\\d+ diagnostic" { puts "✓ Diagnostics count displayed" }
+    "expected" { puts "✓ Diagnostic message visible" }
+    "syntax" { puts "✓ Syntax error detected" }
+    "No diagnostics" { puts "✗ No diagnostics received from LSP" }
+    timeout { puts "⚠ Could not read diagnostics content" }
+}
+
+# Quit
+send "\030"  ;# Ctrl+X
+expect {
+    "Save" { send "n" }
+    eof { }
+}
+
+wait
+puts "\n=== Initial diagnostics test complete ===\n"

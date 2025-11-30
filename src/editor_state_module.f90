@@ -1,6 +1,36 @@
 module editor_state_module
     use iso_fortran_env, only: int32, int64
     use text_buffer_module, only: buffer_t, copy_buffer, init_buffer
+    use lsp_server_manager_module, only: lsp_manager_t, init_lsp_manager, cleanup_lsp_manager, &
+                                         get_or_start_server, process_server_messages, &
+                                         start_lsp_for_file, start_all_lsp_servers_for_file, &
+                                         get_server_with_capability, notify_file_opened, &
+                                         notify_file_changed, notify_file_closed, &
+                                         request_completion, request_hover
+    use completion_popup_module, only: completion_popup_t, init_completion_popup, &
+                                       cleanup_completion_popup
+    use hover_tooltip_module, only: hover_tooltip_t, init_hover_tooltip, &
+                                    cleanup_hover_tooltip
+    use diagnostics_module, only: diagnostics_store_t, init_diagnostics_store, &
+                                  cleanup_diagnostics_store
+    use diagnostics_panel_module, only: diagnostics_panel_t, init_diagnostics_panel, &
+                                       cleanup_diagnostics_panel
+    use references_panel_module, only: references_panel_t, init_references_panel, &
+                                      cleanup_references_panel
+    use code_actions_panel_module, only: code_actions_panel_t, init_code_actions_panel, &
+                                        cleanup_code_actions_panel
+    use symbols_panel_module, only: symbols_panel_t, init_symbols_panel, &
+                                     cleanup_symbols_panel
+    use signature_tooltip_module, only: signature_tooltip_t, init_signature_tooltip, &
+                                        cleanup_signature_tooltip
+    use command_palette_module, only: command_palette_t, init_command_palette, &
+                                       cleanup_command_palette
+    use workspace_symbols_panel_module, only: workspace_symbols_panel_t, init_workspace_symbols_panel, &
+                                               cleanup_workspace_symbols_panel
+    use document_sync_module, only: document_sync_t, init_document_sync, &
+                                    cleanup_document_sync
+    use jump_stack_module, only: jump_stack_t, init_jump_stack, &
+                                 cleanup_jump_stack
     implicit none
     private
 
@@ -66,6 +96,11 @@ module editor_state_module
 
         logical :: modified = .false.
         logical :: is_orphan = .false.  ! True if file is outside workspace (uses absolute path)
+
+        ! LSP support - multiple servers per file
+        integer, allocatable :: lsp_server_indices(:)  ! Indices of LSP servers handling this file
+        integer :: num_lsp_servers = 0                 ! Number of active LSP servers
+        type(document_sync_t) :: document_sync         ! Document synchronization for LSP
     end type tab_t
 
     ! Main editor state
@@ -87,6 +122,22 @@ module editor_state_module
         type(tab_t), allocatable :: tabs(:)
         integer(int32) :: active_tab_index = 1
         integer(int32) :: max_tabs = 10
+
+        ! LSP support
+        type(lsp_manager_t) :: lsp_manager
+        type(completion_popup_t) :: completion_popup
+        type(hover_tooltip_t) :: hover_tooltip
+        type(diagnostics_store_t) :: diagnostics
+        type(diagnostics_panel_t) :: diagnostics_panel
+        type(references_panel_t) :: references_panel
+        type(code_actions_panel_t) :: code_actions_panel
+        type(symbols_panel_t) :: symbols_panel
+        type(signature_tooltip_t) :: signature_tooltip
+        type(command_palette_t) :: command_palette
+        type(workspace_symbols_panel_t) :: workspace_symbols_panel
+
+        ! Navigation
+        type(jump_stack_t) :: jump_stack
     end type editor_state_t
 
 contains
@@ -112,6 +163,42 @@ contains
         ! Initialize tabs array (empty initially)
         allocate(editor%tabs(0))
         editor%active_tab_index = 0
+
+        ! Initialize LSP manager
+        call init_lsp_manager(editor%lsp_manager)
+
+        ! Initialize completion popup
+        call init_completion_popup(editor%completion_popup)
+
+        ! Initialize hover tooltip
+        call init_hover_tooltip(editor%hover_tooltip)
+
+        ! Initialize diagnostics store
+        call init_diagnostics_store(editor%diagnostics)
+
+        ! Initialize diagnostics panel
+        call init_diagnostics_panel(editor%diagnostics_panel)
+
+        ! Initialize references panel
+        call init_references_panel(editor%references_panel)
+
+        ! Initialize code actions menu
+        call init_code_actions_panel(editor%code_actions_panel)
+
+        ! Initialize symbols panel
+        call init_symbols_panel(editor%symbols_panel)
+
+        ! Initialize signature tooltip
+        call init_signature_tooltip(editor%signature_tooltip)
+
+        ! Initialize command palette
+        call init_command_palette(editor%command_palette)
+
+        ! Initialize workspace symbols panel
+        call init_workspace_symbols_panel(editor%workspace_symbols_panel)
+
+        ! Initialize jump stack
+        call init_jump_stack(editor%jump_stack)
     end subroutine init_editor
 
     subroutine cleanup_editor(editor)
@@ -129,6 +216,42 @@ contains
             end do
             deallocate(editor%tabs)
         end if
+
+        ! Cleanup LSP manager
+        call cleanup_lsp_manager(editor%lsp_manager)
+
+        ! Cleanup completion popup
+        call cleanup_completion_popup(editor%completion_popup)
+
+        ! Cleanup hover tooltip
+        call cleanup_hover_tooltip(editor%hover_tooltip)
+
+        ! Cleanup diagnostics store
+        call cleanup_diagnostics_store(editor%diagnostics)
+
+        ! Cleanup diagnostics panel
+        call cleanup_diagnostics_panel(editor%diagnostics_panel)
+
+        ! Cleanup references panel
+        call cleanup_references_panel(editor%references_panel)
+
+        ! Cleanup code actions menu
+        call cleanup_code_actions_panel(editor%code_actions_panel)
+
+        ! Cleanup symbols panel
+        call cleanup_symbols_panel(editor%symbols_panel)
+
+        ! Cleanup signature tooltip
+        call cleanup_signature_tooltip(editor%signature_tooltip)
+
+        ! Cleanup command palette
+        call cleanup_command_palette(editor%command_palette)
+
+        ! Cleanup workspace symbols panel
+        call cleanup_workspace_symbols_panel(editor%workspace_symbols_panel)
+
+        ! Cleanup jump stack
+        call cleanup_jump_stack(editor%jump_stack)
     end subroutine cleanup_editor
 
     ! Helper to cleanup a single tab
@@ -148,6 +271,13 @@ contains
         end if
 
         call cleanup_buffer(tab%buffer)
+
+        ! Cleanup LSP server indices
+        if (allocated(tab%lsp_server_indices)) deallocate(tab%lsp_server_indices)
+        tab%num_lsp_servers = 0
+
+        ! Cleanup document sync
+        call cleanup_document_sync(tab%document_sync)
     end subroutine cleanup_tab
 
     ! Create a new tab with the given filename
@@ -211,6 +341,22 @@ contains
 
         temp_tabs(new_index)%active_pane_index = 1
         temp_tabs(new_index)%modified = .false.
+
+        ! Start ALL LSP servers for this file (multi-server support)
+        call start_all_lsp_servers_for_file(editor%lsp_manager, filename, &
+                                           temp_tabs(new_index)%lsp_server_indices, &
+                                           temp_tabs(new_index)%num_lsp_servers)
+
+        ! Initialize document sync for LSP if we have servers
+        if (temp_tabs(new_index)%num_lsp_servers > 0) then
+            block
+                character(len=:), allocatable :: file_uri
+                file_uri = 'file://' // trim(filename)
+                ! Use first server for document sync (primary server)
+                call init_document_sync(temp_tabs(new_index)%document_sync, &
+                                      file_uri, temp_tabs(new_index)%lsp_server_indices(1))
+            end block
+        end if
 
         ! Replace tabs array
         call move_alloc(temp_tabs, editor%tabs)

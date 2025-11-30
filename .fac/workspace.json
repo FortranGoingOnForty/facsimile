@@ -1,0 +1,31 @@
+{
+  "version": "1.0",
+  "workspace_path": ".",
+  "last_opened": "20251117",
+  "tabs": [
+    {
+      "filename": ".gitignore", 
+      "is_orphan": false, 
+      "modified": false, 
+      "panes": [
+        {
+          "x_start": 0.0000,
+          "y_start": 0.0000,
+          "x_end": 1.0000,
+          "y_end": 1.0000,
+          "filename": ".gitignore",
+          "cursor_line": 9,
+          "cursor_column": 1,
+          "viewport_line": 1,
+          "viewport_column": 1
+        }
+      ],
+      "active_pane": 1
+}
+  ],
+  "active_tab": 1,
+  "fuss_mode": {
+    "active": false,
+    "width": 30
+  }
+}

@@ -6,23 +6,31 @@ program facsimile
     use editor_state_module
     use text_buffer_module
     use renderer_module
-    use command_handler_module
+    use command_handler_module, only: handle_key_command, init_command_handler, cleanup_command_handler, &
+                                      save_initial_state_for_undo, search_pattern, match_case_sensitive, &
+                                      g_lsp_modified_buffer, g_lsp_ui_changed
     use workspace_module
     use backup_module
     use save_prompt_module
+    use command_palette_module, only: register_command
     use welcome_menu_module, only: show_welcome_menu
     use fortress_navigator_module, only: open_fortress_navigator
     use binary_prompt_module, only: binary_file_prompt
+    use lsp_server_manager_module, only: notify_file_opened, notify_file_changed, &
+                                         notify_file_closed, process_server_messages, &
+                                         set_diagnostics_handler, set_lsp_workspace_root
+    use lsp_protocol_module, only: lsp_message_t
     implicit none
 
     type(editor_state_t) :: editor
     type(buffer_t) :: buffer
     character(len=32) :: key_input
-    character(len=512) :: filename, arg, workspace_dir
+    character(len=512) :: filename, arg, workspace_dir, lsp_workspace
     logical :: running, should_quit, is_workspace_mode, workspace_success
     logical :: welcome_cancelled, is_browse, nav_cancelled, is_directory
+    logical :: explicit_lsp_workspace
     character(len=:), allocatable :: selected_path
-    integer :: status, argc, rows, cols
+    integer :: status, argc, rows, cols, i
 
 
     ! Get command line arguments
@@ -30,9 +38,37 @@ program facsimile
     is_workspace_mode = .false.
     workspace_dir = ""
     filename = ""
+    lsp_workspace = ""
+    explicit_lsp_workspace = .false.
 
-    if (argc > 0) then
-        call get_command_argument(1, arg)
+    ! First pass: look for -w/--workspace flag
+    i = 1
+    do while (i <= argc)
+        call get_command_argument(i, arg)
+        if (trim(arg) == '-w' .or. trim(arg) == '--workspace') then
+            if (i < argc) then
+                call get_command_argument(i + 1, lsp_workspace)
+                explicit_lsp_workspace = .true.
+                i = i + 2
+            else
+                write(error_unit, '(A)') 'Error: -w/--workspace requires a directory argument'
+                stop 1
+            end if
+        else
+            i = i + 1
+        end if
+    end do
+
+    ! Second pass: handle other arguments
+    i = 1
+    do while (i <= argc)
+        call get_command_argument(i, arg)
+
+        ! Skip -w and its argument (already processed)
+        if (trim(arg) == '-w' .or. trim(arg) == '--workspace') then
+            i = i + 2
+            cycle
+        end if
 
         ! Handle version flags
         if (trim(arg) == '--version' .or. trim(arg) == '-v') then
@@ -46,6 +82,7 @@ program facsimile
             stop
         end if
 
+        ! This must be the file/directory argument
         ! Check if argument is a directory (workspace mode)
         ! Use test -d which is POSIX compliant (works on Linux, macOS, BSD)
         call execute_command_line("test -d '" // trim(arg) // &
@@ -64,7 +101,10 @@ program facsimile
             end if
             filename = arg
         end if
-    else
+        i = i + 1
+    end do
+
+    if (argc == 0) then
         ! No arguments - launch Fortress welcome menu (Phase 5)
         call terminal_init()
         call show_welcome_menu(selected_path, welcome_cancelled)
@@ -112,62 +152,42 @@ program facsimile
         ! User selected a workspace from welcome menu (not browse)
         ! This handles favorites, recents, and CURRENT DIRECTORY
         if (allocated(selected_path) .and. .not. is_browse) then
-            write(0, '(A)') '[DEBUG WELCOME] selected_path allocated, value: ' // selected_path
-            write(0, '(A,L1)') '[DEBUG WELCOME] is_browse: ', is_browse
-
             ! Check if user selected CURRENT DIRECTORY option
             if (selected_path == "CWD") then
-                write(0, '(A)') '[DEBUG WELCOME] CWD selected, getting workspace path'
                 ! Get actual current working directory
                 call get_workspace_path(selected_path)
-                write(0, '(A)') '[DEBUG WELCOME] Workspace path: ' // selected_path
                 arg = selected_path
             else
-                write(0, '(A)') '[DEBUG WELCOME] Not CWD, using selected_path directly'
                 arg = selected_path
             end if
 
             ! Check if it's a directory
-            write(0, '(A)') '[DEBUG WELCOME] Testing if directory: ' // trim(arg)
             call execute_command_line("test -d '" // trim(arg) // &
                 "' && echo 'Directory' > /tmp/.fac_filetype || " // &
                 "echo 'File' > /tmp/.fac_filetype", wait=.true.)
             call read_file_type(status)
-            write(0, '(A,I0)') '[DEBUG WELCOME] read_file_type status: ', status
             if (status == 0) then
                 ! Directory - workspace mode
-                write(0, '(A)') '[DEBUG WELCOME] Setting is_workspace_mode = TRUE'
                 is_workspace_mode = .true.
                 call workspace_get_path(trim(arg), workspace_dir)
-                write(0, '(A)') '[DEBUG WELCOME] workspace_dir: ' // trim(workspace_dir)
             else
                 ! Invalid selection (favorites/recents should only have directories)
                 write(error_unit, '(A)') 'Error: Selected path is not a directory'
                 stop 1
             end if
-        else
-            write(0, '(A,L1)') '[DEBUG WELCOME] selected_path allocated: ', allocated(selected_path)
-            if (allocated(selected_path)) then
-                write(0, '(A)') '[DEBUG WELCOME] selected_path value: ' // selected_path
-            end if
-            write(0, '(A,L1)') '[DEBUG WELCOME] is_browse: ', is_browse
         end if
     end if
 
     ! Handle workspace mode
-    write(0, '(A,L1)') '[DEBUG WORKSPACE] is_workspace_mode: ', is_workspace_mode
     if (is_workspace_mode) then
-        write(0, '(A)') '[DEBUG WORKSPACE] In workspace mode, workspace_dir: ' // trim(workspace_dir)
         ! Check if workspace exists, create if not
         if (.not. workspace_exists(workspace_dir)) then
-            write(0, '(A)') '[DEBUG WORKSPACE] Workspace does not exist, creating'
             call workspace_init(workspace_dir, workspace_success)
             if (.not. workspace_success) then
                 write(error_unit, '(A)') 'Error: Failed to create workspace'
                 stop 1
             end if
         else
-            write(0, '(A)') '[DEBUG WORKSPACE] Workspace exists, loading'
             ! Load existing workspace
             call workspace_load(workspace_dir, workspace_success)
             if (.not. workspace_success) then
@@ -175,13 +195,22 @@ program facsimile
                 stop 1
             end if
         end if
-    else
-        write(0, '(A)') '[DEBUG WORKSPACE] NOT in workspace mode'
     end if
 
     ! Initialize editor
     call init_editor(editor)
     running = .true.
+
+    ! Set LSP workspace root if explicit -w flag was provided
+    if (explicit_lsp_workspace) then
+        call set_lsp_workspace_root(editor%lsp_manager, trim(lsp_workspace))
+    end if
+
+    ! Set up diagnostics handler for LSP
+    call set_diagnostics_handler(editor%lsp_manager, handle_diagnostics)
+
+    ! Register all commands for command palette
+    call register_all_commands()
 
     ! Initialize terminal early (needed for workspace restoration warnings)
     call terminal_init()
@@ -191,28 +220,13 @@ program facsimile
     call init_buffer(buffer)
 
     ! Set workspace path
-    write(0, '(A,L1)') '[DEBUG RESTORE CHECK] is_workspace_mode: ', is_workspace_mode
     if (is_workspace_mode) then
-        write(0, '(A)') '[DEBUG RESTORE CHECK] workspace_dir: ' // trim(workspace_dir)
         ! Use detected/created workspace directory
         allocate(character(len=len_trim(workspace_dir)) :: editor%workspace_path)
         editor%workspace_path = trim(workspace_dir)
 
-        ! DEBUG: Print before restoration (unit 0 = stderr)
-        write(0, '(A)') '[DEBUG RESTORE] About to restore workspace from: ' // trim(editor%workspace_path)
-        write(0, '(A)') '[DEBUG RESTORE] Workspace JSON path: ' // trim(editor%workspace_path) // '/.fac/workspace.json'
-
         ! Restore workspace state (tabs, cursor positions, etc.)
         call workspace_restore_state(editor, editor%workspace_path, workspace_success)
-
-        ! DEBUG: Print restoration results
-        write(0, '(A,L1)') '[DEBUG RESTORE] Workspace restore success: ', workspace_success
-        if (allocated(editor%tabs)) then
-            write(0, '(A,I0)') '[DEBUG RESTORE] Number of tabs restored: ', size(editor%tabs)
-        else
-            write(0, '(A)') '[DEBUG RESTORE] No tabs allocated after restore'
-        end if
-        write(0, '(A,I0)') '[DEBUG RESTORE] Active tab index: ', editor%active_tab_index
 
         ! Sync restored active tab's buffer to main buffer
         if (workspace_success .and. allocated(editor%tabs) .and. editor%active_tab_index > 0) then
@@ -220,17 +234,9 @@ program facsimile
                 if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
                     size(editor%tabs(editor%active_tab_index)%panes) > 0) then
                     ! Copy active pane's buffer to main buffer (replaces the empty init)
-                    write(0, '(A)') '[DEBUG RESTORE] Copying restored tab buffer to main buffer'
                     call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%panes(1)%buffer)
-                else
-                    write(0, '(A)') '[DEBUG RESTORE] Active tab has no panes!'
                 end if
-            else
-                write(0, '(A,I0,A,I0)') '[DEBUG RESTORE] Active tab index ', editor%active_tab_index, &
-                    ' exceeds tab count ', size(editor%tabs)
             end if
-        else
-            write(0, '(A)') '[DEBUG RESTORE] Skipping buffer sync - conditions not met'
         end if
     else
         ! Single-file mode - use current directory
@@ -247,8 +253,12 @@ program facsimile
     editor%screen_rows = rows
     editor%screen_cols = cols
 
-    ! Initialize renderer
-    call init_renderer(rows, cols)
+    ! Initialize renderer (pass filename for syntax highlighting detection)
+    if (len_trim(filename) > 0) then
+        call init_renderer(rows, cols, trim(filename))
+    else
+        call init_renderer(rows, cols)
+    end if
 
     ! Initialize command handler (for yank stack)
     call init_command_handler()
@@ -280,6 +290,20 @@ program facsimile
             if (allocated(editor%filename)) deallocate(editor%filename)
             allocate(character(len=len_trim(filename)) :: editor%filename)
             editor%filename = trim(filename)
+
+            ! Send LSP didOpen notification to ALL active servers
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                if (editor%tabs(editor%active_tab_index)%num_lsp_servers > 0) then
+                    block
+                        integer :: srv_i
+                        do srv_i = 1, editor%tabs(editor%active_tab_index)%num_lsp_servers
+                            call notify_file_opened(editor%lsp_manager, &
+                                editor%tabs(editor%active_tab_index)%lsp_server_indices(srv_i), &
+                                trim(filename), buffer_to_string(buffer))
+                        end do
+                    end block
+                end if
+            end if
         else if (status == -2) then
             ! Binary file detected - prompt user
             if (binary_file_prompt(trim(filename))) then
@@ -333,6 +357,52 @@ program facsimile
 
     ! Main event loop
     do while (running)
+        ! Process any LSP messages
+        call process_server_messages(editor%lsp_manager)
+
+        ! Sync local buffer from tab after LSP processing (in case LSP modified it)
+        block
+            logical :: should_render
+            should_render = .false.
+
+            ! Check if LSP set the UI changed flag (e.g., code actions panel shown)
+            if (g_lsp_ui_changed) then
+                should_render = .true.
+                g_lsp_ui_changed = .false.
+            end if
+
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                ! Check if LSP set the modified flag
+                if (g_lsp_modified_buffer) then
+                    should_render = .true.
+                    g_lsp_modified_buffer = .false.
+                end if
+
+                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+
+                ! Also sync to active pane buffer if panes exist (so pane doesn't overwrite LSP changes)
+                if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
+                    size(editor%tabs(editor%active_tab_index)%panes) > 0) then
+                    status = editor%tabs(editor%active_tab_index)%active_pane_index
+                    if (status > 0 .and. status <= size(editor%tabs(editor%active_tab_index)%panes)) then
+                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(status)%buffer, buffer)
+                    end if
+                end if
+            end if
+
+            ! Render immediately if LSP modified the buffer (do this OUTSIDE the if block)
+            if (should_render) then
+                if (editor%fuss_mode_active) then
+                    call render_screen_with_tree(buffer, editor, allocated(search_pattern), match_case_sensitive)
+                else
+                    call render_screen(buffer, editor, allocated(search_pattern), match_case_sensitive)
+                end if
+            end if
+        end block
+
+        ! Flush any pending document changes to LSP
+        call flush_pending_document_changes(editor)
+
         ! Get input
         call get_key_input(key_input, status)
 
@@ -431,6 +501,36 @@ program facsimile
 
 contains
 
+    ! Handler for LSP diagnostics notifications (with server attribution)
+    subroutine handle_diagnostics(notification, server_index)
+        use lsp_protocol_module, only: lsp_message_t
+        use diagnostics_module, only: parse_diagnostics_from_params_with_server
+        use terminal_io_module, only: terminal_write
+        type(lsp_message_t), intent(in) :: notification
+        integer, intent(in) :: server_index
+
+        ! Parse and store diagnostics with server attribution (for multi-LSP)
+        ! This keeps diagnostics from different servers separate
+        call parse_diagnostics_from_params_with_server(editor%diagnostics, notification%params, server_index)
+    end subroutine handle_diagnostics
+
+    ! Flush pending document changes for all tabs
+    subroutine flush_pending_document_changes(editor)
+        use document_sync_module, only: flush_pending_changes
+        type(editor_state_t), intent(inout) :: editor
+        integer :: i
+
+        ! Check all tabs for pending changes
+        if (allocated(editor%tabs)) then
+            do i = 1, size(editor%tabs)
+                if (editor%tabs(i)%num_lsp_servers > 0) then
+                    call flush_pending_changes(editor%tabs(i)%document_sync, &
+                                              editor%lsp_manager, .false.)
+                end if
+            end do
+        end if
+    end subroutine flush_pending_document_changes
+
     subroutine read_file_type(is_directory)
         integer, intent(out) :: is_directory
         character(len=20) :: file_type
@@ -479,9 +579,12 @@ contains
         write(output_unit, '(A)') ''
         write(output_unit, '(A)') 'Usage:'
         write(output_unit, '(A)') '  fac [filename]       Open a file for editing'
+        write(output_unit, '(A)') '  fac [directory]      Open directory in workspace mode'
         write(output_unit, '(A)') '  fac                  Start with empty buffer'
         write(output_unit, '(A)') '  fac --version, -v    Show version information'
         write(output_unit, '(A)') '  fac --help, -h       Show this help message'
+        write(output_unit, '(A)') '  fac -w <dir> [file]  Set LSP workspace root to <dir>'
+        write(output_unit, '(A)') '  fac --workspace <dir> Same as -w'
         write(output_unit, '(A)') ''
         write(output_unit, '(A)') 'Key Bindings:'
         write(output_unit, '(A)') '  Ctrl-Q               Quit'
@@ -861,5 +964,54 @@ contains
         call terminal_write('Press any key to continue...')
         call get_key_input(key_input, status)
     end subroutine show_backup_diff
+
+    ! Register all available commands for the command palette
+    subroutine register_all_commands()
+        ! File operations
+        call register_command('Save File', 'save', 'Ctrl+S', 'File')
+        call register_command('Save All', 'save-all', 'Ctrl+Shift+S', 'File')
+        call register_command('Quit', 'quit', 'Ctrl+Q', 'File')
+        call register_command('Open File', 'open', 'Ctrl+O', 'File')
+        call register_command('Toggle File Tree', 'toggle-tree', 'F3', 'File')
+
+        ! Edit operations
+        call register_command('Copy', 'copy', 'Ctrl+C', 'Edit')
+        call register_command('Paste', 'paste', 'Ctrl+V', 'Edit')
+        call register_command('Cut', 'cut', 'Ctrl+X', 'Edit')
+        call register_command('Undo', 'undo', 'Ctrl+Z', 'Edit')
+        call register_command('Redo', 'redo', 'Ctrl+Y', 'Edit')
+
+        ! Search operations
+        call register_command('Find', 'find', 'Ctrl+F', 'Search')
+        call register_command('Replace', 'replace', 'Ctrl+H', 'Search')
+        call register_command('Find Next', 'find-next', 'Ctrl+G', 'Search')
+        call register_command('Find Previous', 'find-prev', 'Shift+Ctrl+G', 'Search')
+
+        ! Navigation
+        call register_command('Go to Line', 'goto-line', 'Ctrl+G', 'Navigation')
+        call register_command('Go to Definition', 'goto-def', 'F12', 'Navigation')
+        call register_command('Find References', 'find-refs', 'Shift+F12', 'Navigation')
+        call register_command('Jump Back', 'jump-back', 'Alt+,', 'Navigation')
+        call register_command('Go to Symbol', 'goto-symbol', 'Ctrl+Shift+O', 'Navigation')
+
+        ! LSP features
+        call register_command('Code Actions', 'code-actions', 'Ctrl+.', 'LSP')
+        call register_command('Rename Symbol', 'rename', 'F2', 'LSP')
+        call register_command('Show Diagnostics', 'diagnostics', 'Ctrl+Shift+D', 'LSP')
+        call register_command('Show Hover Info', 'hover', 'Ctrl+K Ctrl+I', 'LSP')
+
+        ! View
+        call register_command('Split Vertical', 'split-v', 'Ctrl+\\', 'View')
+        call register_command('Split Horizontal', 'split-h', 'Ctrl+Shift+\\', 'View')
+        call register_command('Close Pane', 'close-pane', 'Ctrl+W', 'View')
+        call register_command('Navigate Pane Left', 'pane-left', 'Ctrl+H', 'View')
+        call register_command('Navigate Pane Right', 'pane-right', 'Ctrl+L', 'View')
+        call register_command('Navigate Pane Up', 'pane-up', 'Ctrl+K', 'View')
+        call register_command('Navigate Pane Down', 'pane-down', 'Ctrl+J', 'View')
+
+        ! Help
+        call register_command('Show Help', 'help', '?', 'Help')
+        call register_command('Command Palette', 'palette', 'Ctrl+Shift+P', 'Help')
+    end subroutine register_all_commands
 
 end program facsimile

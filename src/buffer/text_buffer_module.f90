@@ -10,6 +10,7 @@ module text_buffer_module
     public :: buffer_load_file, buffer_save_file, buffer_load_file_as_hex
     public :: buffer_move_gap
     public :: buffer_char_at, buffer_byte_to_char_col, buffer_char_to_byte_col
+    public :: buffer_to_string
 
     integer, parameter :: INITIAL_SIZE = 8192
     integer, parameter :: GROW_FACTOR = 2
@@ -544,5 +545,34 @@ contains
             pos = pos + 1
         end do
     end subroutine format_hex_line
+
+    ! Convert buffer contents to a string
+    function buffer_to_string(buffer) result(str)
+        type(buffer_t), intent(in) :: buffer
+        character(len=:), allocatable :: str
+        integer :: content_len
+
+        if (buffer%gap_start == 1) then
+            ! No content before gap
+            content_len = buffer%size - buffer%gap_end + 1
+            if (content_len > 0) then
+                allocate(character(len=content_len) :: str)
+                str = buffer%data(buffer%gap_end:buffer%size)
+            else
+                allocate(character(len=0) :: str)
+                str = ""
+            end if
+        else if (buffer%gap_end > buffer%size) then
+            ! No gap (full buffer)
+            content_len = buffer%gap_start - 1
+            allocate(character(len=content_len) :: str)
+            str = buffer%data(1:content_len)
+        else
+            ! Content on both sides of gap
+            content_len = (buffer%gap_start - 1) + (buffer%size - buffer%gap_end + 1)
+            allocate(character(len=content_len) :: str)
+            str = buffer%data(1:buffer%gap_start-1) // buffer%data(buffer%gap_end:buffer%size)
+        end if
+    end function buffer_to_string
 
 end module text_buffer_module

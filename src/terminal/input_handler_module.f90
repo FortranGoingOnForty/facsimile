@@ -55,14 +55,16 @@ contains
 
         ! Check for special keys
         select case(iachar(ch))
+        case(0)  ! Ctrl-Space (NULL character)
+            key_str = 'ctrl-space'
         case(27)  ! ESC
             call handle_escape_sequence(key_str)
         case(9)  ! Tab
             key_str = 'tab'
         case(10, 13)  ! Enter
             key_str = 'enter'
-        case(8)  ! Ctrl-H (backspace)
-            key_str = 'backspace'
+        case(8)  ! Ctrl-H
+            key_str = 'ctrl-h'
         case(26)  ! Ctrl-Z
             key_str = 'ctrl-z'
         case(31)  ! Ctrl-/ and Ctrl-? (both send ASCII 31)
@@ -192,27 +194,34 @@ contains
                         end if
                     else if (ch3 == '1' .or. ch3 == '2' .or. ch3 == '3' .or. ch3 == '4' .or. &
                              ch3 == '5' .or. ch3 == '7' .or. ch3 == '8' .or. ch3 == '9') then
-                        ! Function keys F1-F9: ESC [ 1 X ~
+                        ! Function keys F1-F8: ESC [ 1 X ~ or ESC [ 1 X ; modifier ~
                         char_code = terminal_read_char()
-                        if (char_code >= 0 .and. achar(char_code) == '~') then
-                            select case(ch3)
-                            case('1')
-                                key_str = 'f1'
-                            case('2')
-                                key_str = 'f2'
-                            case('3')
-                                key_str = 'f3'
-                            case('4')
-                                key_str = 'f4'
-                            case('5')
-                                key_str = 'f5'
-                            case('7')
-                                key_str = 'f6'
-                            case('8')
-                                key_str = 'f7'
-                            case('9')
-                                key_str = 'f8'
-                            end select
+                        if (char_code >= 0) then
+                            ch = achar(char_code)
+                            if (ch == '~') then
+                                ! Unmodified F1-F8
+                                select case(ch3)
+                                case('1')
+                                    key_str = 'f1'
+                                case('2')
+                                    key_str = 'f2'
+                                case('3')
+                                    key_str = 'f3'
+                                case('4')
+                                    key_str = 'f4'
+                                case('5')
+                                    key_str = 'f5'
+                                case('7')
+                                    key_str = 'f6'
+                                case('8')
+                                    key_str = 'f7'
+                                case('9')
+                                    key_str = 'f8'
+                                end select
+                            else if (ch == ';') then
+                                ! Modified F1-F8: ESC [ 1 X ; modifier ~
+                                call handle_modified_function_key(key_str, '1', ch3)
+                            end if
                         end if
                     else if (ch3 == ';') then
                         ! Modified arrow key or home/end: ESC [ 1 ; 2 A format
@@ -225,19 +234,26 @@ contains
                 if (char_code >= 0) then
                     ch3 = achar(char_code)
                     if (ch3 == '0' .or. ch3 == '1' .or. ch3 == '3' .or. ch3 == '4') then
-                        ! Function keys F9-F12: ESC [ 2 X ~
+                        ! Function keys F9-F12: ESC [ 2 X ~ or ESC [ 2 X ; modifier ~
                         char_code = terminal_read_char()
-                        if (char_code >= 0 .and. achar(char_code) == '~') then
-                            select case(ch3)
-                            case('0')
-                                key_str = 'f9'
-                            case('1')
-                                key_str = 'f10'
-                            case('3')
-                                key_str = 'f11'
-                            case('4')
-                                key_str = 'f12'
-                            end select
+                        if (char_code >= 0) then
+                            ch = achar(char_code)
+                            if (ch == '~') then
+                                ! Unmodified F9-F12
+                                select case(ch3)
+                                case('0')
+                                    key_str = 'f9'
+                                case('1')
+                                    key_str = 'f10'
+                                case('3')
+                                    key_str = 'f11'
+                                case('4')
+                                    key_str = 'f12'
+                                end select
+                            else if (ch == ';') then
+                                ! Modified F9-F12: ESC [ 2 X ; modifier ~
+                                call handle_modified_function_key(key_str, '2', ch3)
+                            end if
                         end if
                     else if (ch3 == ';') then
                         ! ESC [ 2 ; A format (shift+arrow)
@@ -366,6 +382,9 @@ contains
         else if (ch1 == ']') then
             ! Alt+] for jump to matching bracket
             key_str = "alt-]"
+        else if (ch1 == '.') then
+            ! Alt+. for code actions
+            key_str = "alt-."
         end if
 
     end subroutine handle_escape_sequence
@@ -407,64 +426,71 @@ contains
         if (terminator == '') return
 
         ! Parse modifier
-        if (len_trim(modifier_seq) > 1 .and. modifier_seq(1:1) == ';') then
-            ! Standard format: ";2" where 2 is the modifier
+        if (len_trim(modifier_seq) >= 1 .and. modifier_seq(1:1) == ';') then
+            ! Standard format with leading ';': ";2" where 2 is the modifier
             if (len_trim(modifier_seq) >= 2) then
                 read(modifier_seq(2:len_trim(modifier_seq)), '(i10)', iostat=ios) modifier
             else
                 ios = -1
             end if
-            if (ios == 0) then
-                select case(modifier)
-                case(2)  ! Shift
-                    key_str = 'shift-'
-                case(3)  ! Alt
-                    key_str = 'alt-'
-                case(4)  ! Alt+Shift
-                    key_str = 'alt-shift-'
-                case(5)  ! Ctrl
-                    key_str = 'ctrl-'
-                case(6)  ! Ctrl+Shift
-                    key_str = 'ctrl-shift-'
-                case(7)  ! Alt+Ctrl
-                    key_str = 'alt-ctrl-'
-                case(8)  ! Alt+Shift (or Option+Shift)
-                    key_str = 'alt-shift-'
-                case(9)  ! Alt+Cmd (or Option+Cmd on macOS)
-                    key_str = 'opt-meta-'
-                case default
-                    key_str = ''
-                end select
+        else if (len_trim(modifier_seq) >= 1 .and. &
+                 modifier_seq(1:1) >= '1' .and. modifier_seq(1:1) <= '9') then
+            ! Format without leading ';' (already consumed by caller): "2" or "3" etc
+            read(modifier_seq(1:len_trim(modifier_seq)), '(i10)', iostat=ios) modifier
+        else
+            ios = -1
+        end if
 
-                ! Append the key type using the terminator character
-                select case(terminator)
-                case('A')
-                    key_str = trim(key_str) // 'up'
-                case('B')
-                    key_str = trim(key_str) // 'down'
-                case('C')
-                    key_str = trim(key_str) // 'right'
-                case('D')
-                    key_str = trim(key_str) // 'left'
-                case('H')
-                    key_str = trim(key_str) // 'home'
-                case('F')
-                    key_str = trim(key_str) // 'end'
-                case('Z')
-                    ! Shift+Z could be ctrl-shift-z for redo
-                    if (index(key_str, 'ctrl-shift') == 1) then
-                        key_str = 'ctrl-shift-z'
-                    else
-                        key_str = trim(key_str) // 'Z'
-                    end if
-                case('~')
-                    ! Check what special key it is based on the beginning of modifier_seq
-                    if (index(modifier_seq, ';') == 1 .and. len_trim(modifier_seq) > 1) then
-                        ! Already read the ;2 or ;5 etc, the key type should be before
-                        key_str = trim(key_str) // 'unknown'
-                    end if
-                end select
-            end if
+        if (ios == 0) then
+            select case(modifier)
+            case(2)  ! Shift
+                key_str = 'shift-'
+            case(3)  ! Alt
+                key_str = 'alt-'
+            case(4)  ! Alt+Shift
+                key_str = 'alt-shift-'
+            case(5)  ! Ctrl
+                key_str = 'ctrl-'
+            case(6)  ! Ctrl+Shift
+                key_str = 'ctrl-shift-'
+            case(7)  ! Alt+Ctrl
+                key_str = 'alt-ctrl-'
+            case(8)  ! Alt+Shift (or Option+Shift)
+                key_str = 'alt-shift-'
+            case(9)  ! Alt+Cmd (or Option+Cmd on macOS)
+                key_str = 'opt-meta-'
+            case default
+                key_str = ''
+            end select
+
+            ! Append the key type using the terminator character
+            select case(terminator)
+            case('A')
+                key_str = trim(key_str) // 'up'
+            case('B')
+                key_str = trim(key_str) // 'down'
+            case('C')
+                key_str = trim(key_str) // 'right'
+            case('D')
+                key_str = trim(key_str) // 'left'
+            case('H')
+                key_str = trim(key_str) // 'home'
+            case('F')
+                key_str = trim(key_str) // 'end'
+            case('Z')
+                ! Shift+Z could be ctrl-shift-z for redo
+                if (index(key_str, 'ctrl-shift') == 1) then
+                    key_str = 'ctrl-shift-z'
+                else
+                    key_str = trim(key_str) // 'Z'
+                end if
+            case('~')
+                ! Check what special key it is based on the beginning of modifier_seq
+                if (index(modifier_seq, ';') == 1 .and. len_trim(modifier_seq) > 1) then
+                    ! Already read the ;2 or ;5 etc, the key type should be before
+                    key_str = trim(key_str) // 'unknown'
+                end if
+            end select
         end if
     end subroutine handle_modified_key
 
@@ -659,6 +685,90 @@ contains
             end if
         end if
     end subroutine handle_modified_special_key
+
+    subroutine handle_modified_function_key(key_str, series, fkey_code)
+        character(len=*), intent(out) :: key_str
+        character, intent(in) :: series      ! '1' for ESC[1X~, '2' for ESC[2X~
+        character, intent(in) :: fkey_code   ! The X in ESC[1X~ or ESC[2X~
+        character :: ch, modifier_ch
+        integer :: char_code, modifier
+        character(len=10) :: base_key
+
+        key_str = ''
+
+        ! Determine base function key from series and code
+        if (series == '1') then
+            ! ESC[1X~ format: 1=F1, 2=F2, 3=F3, 4=F4, 5=F5, 7=F6, 8=F7, 9=F8
+            select case(fkey_code)
+            case('1')
+                base_key = 'f1'
+            case('2')
+                base_key = 'f2'
+            case('3')
+                base_key = 'f3'
+            case('4')
+                base_key = 'f4'
+            case('5')
+                base_key = 'f5'
+            case('7')
+                base_key = 'f6'
+            case('8')
+                base_key = 'f7'
+            case('9')
+                base_key = 'f8'
+            case default
+                return
+            end select
+        else if (series == '2') then
+            ! ESC[2X~ format: 0=F9, 1=F10, 3=F11, 4=F12
+            select case(fkey_code)
+            case('0')
+                base_key = 'f9'
+            case('1')
+                base_key = 'f10'
+            case('3')
+                base_key = 'f11'
+            case('4')
+                base_key = 'f12'
+            case default
+                return
+            end select
+        else
+            return
+        end if
+
+        ! Read modifier (should be a digit 2-8)
+        char_code = terminal_read_char()
+        if (char_code < 0) return
+        modifier_ch = achar(char_code)
+
+        ! Read terminating ~
+        char_code = terminal_read_char()
+        if (char_code < 0 .or. achar(char_code) /= '~') return
+
+        ! Parse modifier: 2=Shift, 3=Alt, 4=Alt+Shift, 5=Ctrl, 6=Ctrl+Shift, 7=Alt+Ctrl, 8=Alt+Shift
+        read(modifier_ch, '(i1)') modifier
+
+        select case(modifier)
+        case(2)  ! Shift
+            key_str = 'shift-' // trim(base_key)
+        case(3)  ! Alt
+            key_str = 'alt-' // trim(base_key)
+        case(4)  ! Alt+Shift
+            key_str = 'alt-shift-' // trim(base_key)
+        case(5)  ! Ctrl
+            key_str = 'ctrl-' // trim(base_key)
+        case(6)  ! Ctrl+Shift
+            key_str = 'ctrl-shift-' // trim(base_key)
+        case(7)  ! Alt+Ctrl
+            key_str = 'alt-ctrl-' // trim(base_key)
+        case(8)  ! Alt+Ctrl+Shift
+            key_str = 'alt-ctrl-shift-' // trim(base_key)
+        case default
+            ! Unknown modifier, return unmodified key
+            key_str = trim(base_key)
+        end select
+    end subroutine handle_modified_function_key
 
     subroutine handle_mouse_event(key_str)
         character(len=*), intent(out) :: key_str

@@ -11,9 +11,16 @@ CC = gcc
 ifeq ($(UNAME_S),Darwin)
     # macOS
     ifeq ($(UNAME_M),arm64)
-        # Apple Silicon - use flang-new for better arm64 support
+        # Apple Silicon - use gfortran-15 for syntax highlighting support
         BREW_PREFIX = /opt/homebrew
-        ifneq ($(wildcard $(BREW_PREFIX)/bin/flang-new),)
+        ifneq ($(wildcard $(BREW_PREFIX)/bin/gfortran-15),)
+            FC = $(BREW_PREFIX)/bin/gfortran-15
+            FFLAGS = -O2 -Wall -ffree-line-length-none
+            FFLAGS_DEV = -O0 -g -Wall -Wextra -pedantic -Wunused-variable -Wuninitialized \
+                         -Wimplicit-interface -fcheck=all -fbacktrace -ffree-line-length-none
+            FFLAGS_DEBUG = -O0 -g -fcheck=all -fbacktrace -ffree-line-length-none
+        else ifneq ($(wildcard $(BREW_PREFIX)/bin/flang-new),)
+            # Fallback to flang-new if gfortran-15 not available
             FC = $(BREW_PREFIX)/bin/flang-new
             # flang-new flags
             FFLAGS = -O2
@@ -23,7 +30,7 @@ ifeq ($(UNAME_S),Darwin)
             # Debug flags with debug symbols
             FFLAGS_DEBUG = -O0 -g
         else
-            # Fallback to gfortran if flang-new not available
+            # Fallback to any available gfortran
             ifneq ($(wildcard $(BREW_PREFIX)/bin/gfortran-*),)
                 FC = $(shell ls $(BREW_PREFIX)/bin/gfortran-* | head -n1)
             endif
@@ -68,6 +75,22 @@ SOURCES = src/version_module.f90 \
           src/terminal/terminal_io_module.f90 \
           src/terminal/input_handler_module.f90 \
           src/utils/bracket_matching_module.f90 \
+          src/navigation/jump_stack_module.f90 \
+          src/lsp/json_module.f90 \
+          src/lsp/lsp_protocol_module.f90 \
+          src/lsp/lsp_server_manager_module.f90 \
+          src/lsp/lsp_client_module.f90 \
+          src/lsp/document_sync_module.f90 \
+          src/lsp/diagnostics_module.f90 \
+          src/ui/completion_popup_module.f90 \
+          src/ui/hover_tooltip_module.f90 \
+          src/ui/diagnostics_panel_module.f90 \
+          src/ui/references_panel_module.f90 \
+          src/ui/code_actions_panel_module.f90 \
+          src/ui/symbols_panel_module.f90 \
+          src/ui/signature_tooltip_module.f90 \
+          src/ui/command_palette_module.f90 \
+          src/ui/workspace_symbols_panel_module.f90 \
           src/editor_state_module.f90 \
           src/undo/undo_stack_module.f90 \
           src/workspace/file_tree_module.f90 \
@@ -78,12 +101,14 @@ SOURCES = src/version_module.f90 \
           src/workspace/recents_module.f90 \
           src/workspace/workspace_module.f90 \
           src/workspace/backup_module.f90 \
-          src/terminal/renderer_module.f90 \
+          src/syntax/syntax_highlighter_module.f90 \
           src/ui/help_display_module.f90 \
           src/ui/text_prompt_module.f90 \
+          src/ui/rename_prompt_module.f90 \
           src/ui/search_prompt_module.f90 \
-          src/ui/replace_prompt_module.f90 \
           src/ui/unified_search_module.f90 \
+          src/terminal/renderer_module.f90 \
+          src/ui/replace_prompt_module.f90 \
           src/ui/goto_prompt_module.f90 \
           src/ui/save_prompt_module.f90 \
           src/ui/binary_prompt_module.f90 \
@@ -96,7 +121,8 @@ SOURCES = src/version_module.f90 \
 
 OBJECTS = $(SOURCES:.f90=.o)
 C_SOURCES = src/terminal/termios_wrapper.c \
-            src/utils/regex_wrapper.c
+            src/utils/regex_wrapper.c \
+            src/lsp/lsp_process_wrapper.c
 C_OBJECTS = $(C_SOURCES:.c=.o)
 
 all: $(TARGET)
@@ -202,4 +228,30 @@ release: clean all
 	@echo "5. Push: git push && git push --tags"
 	@echo ""
 
-.PHONY: all clean dev debug info bump-patch bump-minor bump-major version release
+# LSP development targets
+lsp-modules: src/lsp/json_module.o src/lsp/lsp_protocol_module.o src/lsp/lsp_server_manager_module.o src/lsp/lsp_client_module.o src/lsp/lsp_process_wrapper.o
+	@echo "LSP modules built successfully"
+
+test-lsp: lsp-modules
+	@echo "Testing LSP JSON parser..."
+	@$(FC) $(FFLAGS_DEBUG) tests/lsp/test_json.f90 src/lsp/json_module.o -o tests/lsp/test_json 2>/dev/null && tests/lsp/test_json || true
+	@echo ""
+	@echo "Testing LSP initialization..."
+	@$(FC) $(FFLAGS_DEBUG) tests/lsp/test_lsp_init.f90 src/lsp/json_module.o src/lsp/lsp_protocol_module.o src/lsp/lsp_process_wrapper.o src/lsp/lsp_client_module.o src/lsp/lsp_server_manager_module.o -o tests/lsp/test_lsp_init 2>/dev/null && tests/lsp/test_lsp_init || true
+
+test-lsp-editor: all
+	@echo "Testing LSP in editor with sample C file..."
+	@echo "Opening tests/lsp/sample.c - check for LSP server initialization"
+	@timeout 2 ./fac tests/lsp/sample.c < /dev/null 2>&1 | grep -q "LSP server initialized" && \
+		echo "✓ LSP server initialized for C file" || \
+		echo "✗ LSP server did not initialize (check if clangd is installed)"
+
+clean-lsp:
+	rm -f src/lsp/*.o src/lsp/*.mod /tmp/test_json /tmp/test_lsp_init /tmp/test_lsp_raw
+
+# Build LSP modules with debug flags for development
+lsp-dev: clean-lsp
+	@echo "Building LSP modules with debug flags..."
+	@$(MAKE) lsp-modules FFLAGS="$(FFLAGS_DEBUG)" CFLAGS="$(CFLAGS_DEV)"
+
+.PHONY: all clean dev debug info bump-patch bump-minor bump-major version release lsp-modules test-lsp test-lsp-editor clean-lsp lsp-dev

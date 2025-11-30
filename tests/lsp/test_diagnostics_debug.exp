@@ -1,0 +1,84 @@
+#!/usr/bin/expect -f
+
+# Debug version of diagnostics test with verbose output
+
+set timeout 15
+log_user 1  ;# Show all output
+
+puts "=== Starting LSP Diagnostics Debug Test ===\n"
+puts "Opening file with syntax errors: tests/lsp/sample_errors.c\n"
+
+spawn ./fac tests/lsp/sample_errors.c
+
+# Wait for LSP initialization
+expect {
+    "LSP server initialized" {
+        puts "\n✓ LSP server started successfully"
+    }
+    timeout {
+        puts "\n✗ LSP server failed to initialize"
+        puts "  Ensure clangd is installed: which clangd"
+        exit 1
+    }
+}
+
+puts "\nWaiting 5 seconds for initial diagnostics to arrive..."
+sleep 5
+
+# Try multiple methods to detect diagnostics
+
+puts "\nMethod 1: Looking for diagnostic markers in display..."
+send ""  ;# Trigger redraw
+sleep 0.5
+
+puts "\nMethod 2: Opening diagnostics panel with Ctrl+Shift+D..."
+send "\033\[68;6u"
+sleep 2
+
+puts "\nMethod 3: Checking status bar..."
+send ""  ;# Trigger another redraw
+sleep 0.5
+
+puts "\nMethod 4: Manually triggering buffer change to force sync..."
+# Add a space and delete it to trigger didChange
+send " "
+sleep 0.5
+send "\b"
+sleep 3  ;# Wait for debounce and processing
+
+puts "\nMethod 5: Reopening diagnostics panel..."
+send "\033\[68;6u"  ;# Close
+sleep 0.5
+send "\033\[68;6u"  ;# Open
+sleep 1
+
+puts "\n\n=== Current screen content (looking for diagnostics): ===\n"
+# The expect buffer should contain the screen content
+
+# Final check for any diagnostic-related text
+expect {
+    "diagnostic" { puts "\n✓ Found 'diagnostic' keyword" }
+    "error" { puts "\n✓ Found 'error' keyword" }
+    "warning" { puts "\n✓ Found 'warning' keyword" }
+    "expected" { puts "\n✓ Found 'expected' keyword (likely from diagnostic message)" }
+    -re "●|▲|◆|○" { puts "\n✓ Found diagnostic marker symbols" }
+    timeout { puts "\n⚠ No diagnostic indicators found after all attempts" }
+}
+
+puts "\n\nQuitting editor..."
+send "\030"  ;# Ctrl+X
+expect {
+    "Save" {
+        send "n"
+        puts "Declined save prompt"
+    }
+    eof { puts "Editor exited" }
+}
+
+wait
+puts "\n=== Debug test complete ===\n"
+puts "If no diagnostics were found, possible issues:"
+puts "1. LSP server (clangd) not sending publishDiagnostics notifications"
+puts "2. Diagnostics handler not properly connected"
+puts "3. File URI mismatch between didOpen and publishDiagnostics"
+puts "4. Need to implement textDocument/didSave for some LSP servers"
