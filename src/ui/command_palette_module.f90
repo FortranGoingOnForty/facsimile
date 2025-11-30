@@ -13,6 +13,7 @@ module command_palette_module
 
     integer, parameter :: MAX_COMMANDS = 100
     integer, parameter :: MAX_VISIBLE = 10
+    integer, parameter :: PALETTE_WIDTH = 60  ! Fixed width for centered palette
 
     type :: command_t
         character(len=:), allocatable :: name
@@ -291,37 +292,65 @@ contains
         end select
     end subroutine command_palette_handle_key
 
-    subroutine render_command_palette(palette, screen_rows)
+    subroutine render_command_palette(palette, screen_rows, screen_cols)
         type(command_palette_t), intent(in) :: palette
-        integer, intent(in) :: screen_rows
-        integer :: i, visible_start, visible_end, row
+        integer, intent(in) :: screen_rows, screen_cols
+        integer :: i, visible_start, visible_end, row, start_col, start_row
+        integer :: content_width, display_width
         character(len=256) :: line, category_tag
         type(command_t) :: cmd
+        character(len=:), allocatable :: border_top, border_bottom
+        ! ANSI escape codes
+        character(len=*), parameter :: ESC = char(27)
+        character(len=*), parameter :: CYAN = ESC // '[36m'
+        character(len=*), parameter :: YELLOW = ESC // '[33m'
+        character(len=*), parameter :: INVERSE = ESC // '[7m'
+        character(len=*), parameter :: RESET = ESC // '[0m'
 
-        ! Clear and draw header
-        call terminal_move_cursor(screen_rows - MAX_VISIBLE - 2, 1)
-        call terminal_write(repeat(' ', 80))
-        call terminal_move_cursor(screen_rows - MAX_VISIBLE - 2, 1)
-        call terminal_write('Command Palette (type to search, Esc to cancel)')
+        ! Calculate centering - top-center like VSCode
+        content_width = min(PALETTE_WIDTH, screen_cols - 4)
+        start_col = max(1, (screen_cols - content_width) / 2)
+        start_row = 2  ! Start near top (below tab bar if present)
 
-        ! Draw search query
-        call terminal_move_cursor(screen_rows - MAX_VISIBLE - 1, 1)
-        call terminal_write(repeat(' ', 80))
-        call terminal_move_cursor(screen_rows - MAX_VISIBLE - 1, 1)
-        call terminal_write('> ' // trim(palette%search_query))
+        ! Build border strings
+        border_top = '┌' // repeat('─', content_width - 2) // '┐'
+        border_bottom = '└' // repeat('─', content_width - 2) // '┘'
+
+        ! Draw top border
+        call terminal_move_cursor(start_row, start_col)
+        call terminal_write(border_top)
+
+        ! Draw header line with cyan title
+        row = start_row + 1
+        call terminal_move_cursor(row, start_col)
+        call terminal_write('│' // CYAN // ' Command Palette' // RESET)
+        display_width = 17  ! " Command Palette" length
+        call terminal_write(repeat(' ', content_width - display_width - 2) // '│')
+
+        ! Draw search query line with yellow prompt
+        row = row + 1
+        call terminal_move_cursor(row, start_col)
+        call terminal_write('│' // YELLOW // ' > ' // RESET)
+        call terminal_write(trim(palette%search_query))
+        display_width = 3 + len_trim(palette%search_query)
+        call terminal_write(repeat(' ', content_width - display_width - 2) // '│')
+
+        ! Draw separator
+        row = row + 1
+        call terminal_move_cursor(row, start_col)
+        call terminal_write('├' // repeat('─', content_width - 2) // '┤')
 
         ! Calculate visible range
         visible_start = palette%scroll_offset + 1
         visible_end = min(visible_start + MAX_VISIBLE - 1, palette%num_filtered)
 
         ! Draw commands
-        row = screen_rows - MAX_VISIBLE
         do i = visible_start, visible_end
+            row = row + 1
             cmd = palette%filtered_commands(i)
 
-            call terminal_move_cursor(row, 1)
-            call terminal_write(repeat(' ', 80))
-            call terminal_move_cursor(row, 1)
+            call terminal_move_cursor(row, start_col)
+            call terminal_write('│')
 
             ! Build line with category, name, and shortcut
             if (len_trim(cmd%category) > 0) then
@@ -330,37 +359,46 @@ contains
                 category_tag = ''
             end if
 
-            if (i == palette%selected_index) then
-                ! Highlight selected item
-                write(line, '(A,A,A)') '> ', trim(category_tag), trim(cmd%name)
-            else
-                write(line, '(A,A,A)') '  ', trim(category_tag), trim(cmd%name)
-            end if
+            write(line, '(A,A,A)') ' ', trim(category_tag), trim(cmd%name)
 
             ! Add shortcut if available
             if (len_trim(cmd%shortcut) > 0) then
-                write(line, '(A,A,A)') trim(line), ' (', trim(cmd%shortcut) // ')'
+                write(line, '(A,A,A)') trim(line), '  ', trim(cmd%shortcut)
             end if
 
-            call terminal_write(trim(line))
-            row = row + 1
+            ! Truncate if too long
+            display_width = min(len_trim(line), content_width - 3)
+
+            if (i == palette%selected_index) then
+                ! Highlight selected item with inverse colors
+                call terminal_write(INVERSE // line(1:display_width))
+                call terminal_write(repeat(' ', content_width - display_width - 2) // RESET // '│')
+            else
+                call terminal_write(line(1:display_width))
+                call terminal_write(repeat(' ', content_width - display_width - 2) // '│')
+            end if
         end do
 
-        ! Clear remaining lines
-        do while (row <= screen_rows)
-            call terminal_move_cursor(row, 1)
-            call terminal_write(repeat(' ', 80))
+        ! Fill remaining visible slots with empty rows
+        do i = visible_end + 1, visible_start + MAX_VISIBLE - 1
             row = row + 1
+            call terminal_move_cursor(row, start_col)
+            call terminal_write('│' // repeat(' ', content_width - 2) // '│')
         end do
 
-        ! Position cursor at end of search query
-        call terminal_move_cursor(screen_rows - MAX_VISIBLE - 1, 3 + palette%search_pos)
+        ! Draw bottom border
+        row = row + 1
+        call terminal_move_cursor(row, start_col)
+        call terminal_write(border_bottom)
+
+        ! Position cursor at end of search query (inside the box)
+        call terminal_move_cursor(start_row + 2, start_col + 4 + palette%search_pos)
     end subroutine render_command_palette
 
-    function show_command_palette_interactive(palette, screen_rows) result(selected_cmd_id)
+    function show_command_palette_interactive(palette, screen_rows, screen_cols) result(selected_cmd_id)
         use input_handler_module, only: get_key_input
         type(command_palette_t), intent(inout) :: palette
-        integer, intent(in) :: screen_rows
+        integer, intent(in) :: screen_rows, screen_cols
         character(len=:), allocatable :: selected_cmd_id
         character(len=32) :: key_input
         integer :: ch, status
@@ -368,7 +406,7 @@ contains
         type(command_t) :: cmd
 
         call show_command_palette(palette)
-        call render_command_palette(palette, screen_rows)
+        call render_command_palette(palette, screen_rows, screen_cols)
 
         do
             call get_key_input(key_input, status)
@@ -406,7 +444,7 @@ contains
                 end if
             end if
 
-            call render_command_palette(palette, screen_rows)
+            call render_command_palette(palette, screen_rows, screen_cols)
         end do
     end function show_command_palette_interactive
 

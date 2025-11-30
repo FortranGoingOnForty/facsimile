@@ -1562,7 +1562,7 @@ contains
                 use command_palette_module, only: show_command_palette_interactive
                 character(len=:), allocatable :: cmd_id
 
-                cmd_id = show_command_palette_interactive(editor%command_palette, editor%screen_rows)
+                cmd_id = show_command_palette_interactive(editor%command_palette, editor%screen_rows, editor%screen_cols)
 
                 if (allocated(cmd_id) .and. len_trim(cmd_id) > 0) then
                     ! Execute the command by re-processing as a key
@@ -6584,11 +6584,79 @@ contains
         character(len=*), intent(in) :: cmd_id
         logical, intent(out) :: should_quit
 
-        ! For now, just display the selected command
-        ! TODO: Implement full command execution in next iteration
-        call terminal_move_cursor(editor%screen_rows, 1)
-        call terminal_write('Selected: ' // trim(cmd_id) // '                    ')
         should_quit = .false.
+
+        ! Map command IDs to their corresponding key commands
+        select case(trim(cmd_id))
+        ! File operations
+        case('save')
+            call handle_key_command('ctrl-s', editor, buffer, should_quit)
+        case('save-all')
+            call handle_key_command('ctrl-shift-s', editor, buffer, should_quit)
+        case('quit')
+            call handle_key_command('ctrl-q', editor, buffer, should_quit)
+        case('open')
+            ! Open fortress mode for file browsing
+            editor%fuss_mode_active = .true.
+            call render_screen(buffer, editor)
+        case('toggle-tree')
+            call handle_key_command('f3', editor, buffer, should_quit)
+
+        ! Edit operations
+        case('copy')
+            call handle_key_command('ctrl-c', editor, buffer, should_quit)
+        case('paste')
+            call handle_key_command('ctrl-v', editor, buffer, should_quit)
+        case('cut')
+            call handle_key_command('ctrl-x', editor, buffer, should_quit)
+        case('undo')
+            call handle_key_command('ctrl-z', editor, buffer, should_quit)
+        case('redo')
+            call handle_key_command('ctrl-y', editor, buffer, should_quit)
+
+        ! Search operations
+        case('find')
+            call handle_key_command('ctrl-f', editor, buffer, should_quit)
+        case('replace')
+            call handle_key_command('ctrl-h', editor, buffer, should_quit)
+        case('find-next')
+            call handle_key_command('ctrl-g', editor, buffer, should_quit)
+
+        ! Navigation
+        case('goto-line')
+            call handle_key_command('alt-g', editor, buffer, should_quit)
+        case('goto-def')
+            call handle_key_command('f12', editor, buffer, should_quit)
+        case('find-refs')
+            call handle_key_command('shift-f12', editor, buffer, should_quit)
+        case('jump-back')
+            call handle_key_command('alt-,', editor, buffer, should_quit)
+        case('goto-symbol')
+            call handle_key_command('f4', editor, buffer, should_quit)
+
+        ! LSP features
+        case('code-actions')
+            call handle_key_command('f8', editor, buffer, should_quit)
+        case('rename')
+            call handle_key_command('f2', editor, buffer, should_quit)
+        case('diagnostics')
+            call handle_key_command('alt-e', editor, buffer, should_quit)
+
+        ! View
+        case('split-v')
+            call handle_key_command('ctrl-\\', editor, buffer, should_quit)
+        case('close-pane')
+            call handle_key_command('ctrl-w', editor, buffer, should_quit)
+
+        ! Help
+        case('help')
+            call handle_key_command('f1', editor, buffer, should_quit)
+
+        case default
+            ! Unknown command - show message
+            call terminal_move_cursor(editor%screen_rows, 1)
+            call terminal_write('Unknown command: ' // trim(cmd_id) // repeat(' ', 20))
+        end select
     end subroutine execute_palette_command
 
     ! Handle workspace symbols LSP response
