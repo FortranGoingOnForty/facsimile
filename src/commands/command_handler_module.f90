@@ -1373,6 +1373,8 @@ contains
                                                 end if
                                             end if
                                         end block
+                                        ! Sync editor cursor to pane before rendering
+                                        call sync_editor_to_pane(editor)
                                         call hide_references_panel(editor%references_panel)
                                         call render_screen(buffer, editor)
                                         exit
