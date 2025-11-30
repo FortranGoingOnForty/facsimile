@@ -4,6 +4,7 @@ module unified_search_module
     use editor_state_module, only: editor_state_t, cursor_t, sync_editor_to_pane
     use text_buffer_module
     use regex_module
+    use renderer_module, only: render_screen
     implicit none
     private
 
@@ -238,7 +239,10 @@ contains
                         call search_forward(editor, buffer)
                     end if
 
-                    ! Update prompt with match count
+                    ! Re-render screen to show cursor at new match position
+                    call render_screen(buffer, editor)
+
+                    ! Update prompt with match count (redraw prompt over rendered screen)
                     call build_unified_prompt(prompt, find_buffer, find_pos, replace_buffer, replace_pos)
                     call display_prompt(editor, prompt, find_pos, replace_pos)
                 end if
@@ -279,7 +283,33 @@ contains
                     search_mode_active = .false.
                     exit
                 end if
-            else if (ch == 13 .or. ch == 10) then  ! Enter - accept current match and exit
+            else if (ch == 13 .or. ch == 10) then  ! Enter - find first match and exit
+                ! If we have a search pattern, perform search first if needed
+                if (find_pos > 0) then
+                    ! Save search pattern
+                    if (allocated(current_search_pattern)) deallocate(current_search_pattern)
+                    allocate(character(len=find_pos) :: current_search_pattern)
+                    current_search_pattern = find_buffer(1:find_pos)
+
+                    ! Add to search history
+                    call add_to_search_history(current_search_pattern)
+
+                    ! If no selection yet (haven't searched), perform the search
+                    if (.not. editor%cursors(editor%active_cursor)%has_selection) then
+                        search_mode_active = .true.
+                        call count_all_matches(buffer, current_search_pattern)
+                        call perform_search(editor, buffer, current_search_pattern)
+
+                        ! Save current parameters
+                        if (allocated(last_search_pattern)) deallocate(last_search_pattern)
+                        allocate(character(len=len(current_search_pattern)) :: last_search_pattern)
+                        last_search_pattern = current_search_pattern
+                        last_case_sensitive = case_sensitive
+                        last_whole_word = whole_word
+                        last_use_regex = use_regex
+                    end if
+                end if
+
                 ! Move cursor to START of match (not end)
                 if (editor%cursors(editor%active_cursor)%has_selection) then
                     editor%cursors(editor%active_cursor)%line = &
@@ -465,29 +495,11 @@ contains
             last_search_line = found_line
             last_search_col = found_col
 
-            ! DEBUG: Write to file
-            open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
-            write(99, '(A,I0,A,I0,A,L1)') 'SEARCH: found at line=', found_line, ' col=', found_col, &
-                ' has_sel=', editor%cursors(editor%active_cursor)%has_selection
-            close(99)
-
-            ! Sync cursor to pane so pane has the updated selection
-            call sync_editor_to_pane(editor)
-
-            ! DEBUG: Check after sync
-            open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
-            write(99, '(A,L1)') 'SEARCH: after sync_editor_to_pane, has_sel=', &
-                editor%cursors(editor%active_cursor)%has_selection
-            close(99)
-
+            ! Center viewport on the found match FIRST
             call center_viewport_on_cursor(editor)
-            ! Note: render_screen should be called by the caller
 
-            ! DEBUG: Check after centering
-            open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
-            write(99, '(A,L1)') 'SEARCH: after center_viewport, has_sel=', &
-                editor%cursors(editor%active_cursor)%has_selection
-            close(99)
+            ! THEN sync cursor and viewport to pane so rendering shows updated state
+            call sync_editor_to_pane(editor)
         end if
     end subroutine perform_search
 
@@ -530,11 +542,11 @@ contains
             last_search_line = found_line
             last_search_col = found_col
 
-            ! Sync cursor to pane so pane has the updated selection
-            call sync_editor_to_pane(editor)
-
+            ! Center viewport on the found match FIRST
             call center_viewport_on_cursor(editor)
-            ! Note: render_screen should be called by the caller
+
+            ! THEN sync cursor and viewport to pane
+            call sync_editor_to_pane(editor)
         end if
     end subroutine search_forward
 
