@@ -197,7 +197,8 @@ contains
         type(json_value_t) :: diagnostics_array, diag_obj, range_obj
         type(json_value_t) :: start_obj, end_obj
         character(len=:), allocatable :: uri
-        integer :: i, n_diagnostics, file_idx, old_count, new_count, j
+        integer :: i, n_diagnostics, file_idx, new_count, j
+        integer :: old_count = 0
         type(diagnostic_t) :: diag
         type(diagnostic_t), allocatable :: old_items(:)
 
@@ -210,7 +211,6 @@ contains
 
         ! First, remove any existing diagnostics from this server
         if (allocated(store%files(file_idx)%items) .and. store%files(file_idx)%count > 0) then
-            old_count = 0
             ! Count diagnostics NOT from this server
             do i = 1, store%files(file_idx)%count
                 if (store%files(file_idx)%items(i)%server_index /= server_index) then
@@ -230,8 +230,6 @@ contains
                 end do
             end if
             deallocate(store%files(file_idx)%items)
-        else
-            old_count = 0
         end if
 
         ! Parse new diagnostics array
@@ -249,7 +247,7 @@ contains
             store%files(file_idx)%count = new_count
 
             ! Copy old diagnostics first
-            if (old_count > 0) then
+            if (old_count > 0 .and. allocated(old_items)) then
                 store%files(file_idx)%items(1:old_count) = old_items(1:old_count)
                 deallocate(old_items)
             end if
