@@ -1378,7 +1378,9 @@ contains
                                             character(len=:), allocatable :: ref_uri
                                             integer :: ref_line, ref_col
 
-                                            if (get_selected_reference_location(editor%references_panel, ref_uri, ref_line, ref_col)) then
+                                            if (get_selected_reference_location( &
+                                                editor%references_panel, &
+                                                ref_uri, ref_line, ref_col)) then
                                                 if (len(ref_uri) >= 7 .and. ref_uri(1:7) == "file://") then
                                                     ! Jump to the reference location
                                                     editor%cursors(editor%active_cursor)%line = ref_line
@@ -1461,9 +1463,11 @@ contains
                                                 if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
                                                     size(editor%tabs(editor%active_tab_index)%panes) > 0) then
                                                     pane_idx = editor%tabs(editor%active_tab_index)%active_pane_index
-                                                    if (pane_idx > 0 .and. pane_idx <= size(editor%tabs(editor%active_tab_index)%panes)) then
+                                                    if (pane_idx > 0 .and. pane_idx <= &
+                                                        size(editor%tabs(editor%active_tab_index)%panes)) then
                                                         ! Copy FROM pane buffer TO local buffer (for rendering)
-                                                        call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%panes(pane_idx)%buffer)
+                                                        call copy_buffer(buffer, &
+                                                            editor%tabs(editor%active_tab_index)%panes(pane_idx)%buffer)
                                                         ! Also sync to tab buffer (to keep them consistent)
                                                         call copy_buffer(editor%tabs(editor%active_tab_index)%buffer, buffer)
                                                     end if
@@ -1471,9 +1475,11 @@ contains
 
                                                 ! Render the updated buffer immediately
                                                 if (editor%fuss_mode_active) then
-                                                    call render_screen_with_tree(buffer, editor, allocated(search_pattern), match_case_sensitive)
+                                                    call render_screen_with_tree(buffer, editor, &
+                                                        allocated(search_pattern), match_case_sensitive)
                                                 else
-                                                    call render_screen(buffer, editor, allocated(search_pattern), match_case_sensitive)
+                                                    call render_screen(buffer, editor, &
+                                                        allocated(search_pattern), match_case_sensitive)
                                                 end if
 
                                                 ! Reset flag and exit loop

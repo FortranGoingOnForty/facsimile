@@ -442,7 +442,9 @@ contains
 
                 ! Add kind indicator
                 if (allocated(panel%filtered_symbols(i)%kind_name)) then
-                    line = trim(line) // "[" // trim(panel%filtered_symbols(i)%kind_name(1:min(3, len_trim(panel%filtered_symbols(i)%kind_name)))) // "] "
+                    line = trim(line) // "[" // &
+                        trim(panel%filtered_symbols(i)%kind_name(1: &
+                        min(3, len_trim(panel%filtered_symbols(i)%kind_name)))) // "] "
                 else
                     line = trim(line) // "    "
                 end if
