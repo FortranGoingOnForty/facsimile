@@ -84,7 +84,7 @@ contains
         type(diagnostics_store_t), intent(in) :: diagnostics_store
         character(len=*), intent(in) :: file_uri
         integer, intent(in) :: screen_rows, screen_cols
-        integer :: start_col, row, i, visible_items, item_idx
+        integer :: start_col, row, i, visible_items
         character(len=256) :: line_buffer
         character(len=5) :: severity_marker
         character(len=10) :: severity_color
@@ -131,7 +131,7 @@ contains
 
         ! Render diagnostics with wrapping for selected item
         block
-            integer :: screen_line, diag_idx, wrap_line, num_wrap_lines
+            integer :: screen_line, diag_idx, wrap_line
             integer :: max_content_lines
             logical :: is_selected
 
@@ -392,7 +392,6 @@ contains
         type(diagnostics_panel_t), intent(inout) :: panel
         character(len=*), intent(in) :: key
         logical :: handled
-        integer :: max_visible
 
         handled = .false.
         if (.not. panel%visible) return

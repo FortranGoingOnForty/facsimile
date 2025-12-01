@@ -51,7 +51,7 @@ contains
     subroutine handle_hover_response(tooltip, response)
         type(hover_tooltip_t), intent(inout) :: tooltip
         type(json_value_t), intent(in) :: response
-        type(json_value_t) :: contents, markup_content
+        type(json_value_t) :: contents
         character(len=:), allocatable :: hover_text, language, value
 
         call cleanup_hover_tooltip(tooltip)

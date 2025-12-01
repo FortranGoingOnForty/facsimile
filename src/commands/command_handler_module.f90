@@ -5927,11 +5927,10 @@ contains
         use code_actions_panel_module, only: code_action_t
         type(editor_state_t), intent(inout) :: editor
         type(lsp_message_t), intent(in) :: response
-        type(json_value_t) :: result_array, action_obj, edit_obj
+        type(json_value_t) :: result_array, action_obj
         type(code_action_t), allocatable :: actions(:)
         integer :: num_actions, i
         character(len=:), allocatable :: title, kind, action_json
-        logical :: is_preferred
 
         ! The result is directly in response%result for LSP responses
         result_array = response%result
@@ -6679,10 +6678,10 @@ contains
         use workspace_symbols_panel_module, only: workspace_symbol_t, set_workspace_symbols
         integer, intent(in) :: request_id
         type(lsp_message_t), intent(in) :: response
-        type(json_value_t) :: result_array, symbol_obj, location_obj, range_obj, start_obj
+        type(json_value_t) :: symbol_obj, location_obj, range_obj, start_obj
         integer :: num_symbols, i
         type(workspace_symbol_t), allocatable :: symbols(:)
-        character(len=:), allocatable :: name, kind_str, container, uri
+        character(len=:), allocatable :: name, container, uri
         real(8) :: line_num, char_num, kind_num
 
         num_symbols = json_array_size(response%result)

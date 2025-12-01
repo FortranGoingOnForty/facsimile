@@ -211,7 +211,7 @@ contains
         type(signature_tooltip_t), intent(inout) :: tooltip
         type(lsp_message_t), intent(in) :: response
         type(json_value_t) :: result_obj, signatures_array, sig_obj
-        type(json_value_t) :: params_array, param_obj, param_label_obj
+        type(json_value_t) :: params_array, param_obj
         integer :: num_signatures, num_params, i, j
         character(len=:), allocatable :: label, doc
         real(8) :: active_sig_real, active_param_real

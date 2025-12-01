@@ -136,10 +136,7 @@ contains
         type(syntax_highlighter_t), intent(inout) :: highlighter
         character(len=*), intent(in) :: line
         type(token_t), allocatable, intent(out) :: tokens(:)
-        integer :: i, j, line_len, token_count
-        logical :: in_string, in_comment
-        character(len=1) :: ch
-        character(len=:), allocatable :: word
+        integer :: i, line_len, token_count
 
         if (.not. highlighter%enabled) then
             allocate(tokens(1))

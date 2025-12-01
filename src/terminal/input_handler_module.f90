@@ -690,7 +690,7 @@ contains
         character(len=*), intent(out) :: key_str
         character, intent(in) :: series      ! '1' for ESC[1X~, '2' for ESC[2X~
         character, intent(in) :: fkey_code   ! The X in ESC[1X~ or ESC[2X~
-        character :: ch, modifier_ch
+        character :: modifier_ch
         integer :: char_code, modifier
         character(len=10) :: base_key
 

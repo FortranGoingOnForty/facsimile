@@ -96,7 +96,6 @@ contains
         character(len=*), intent(in) :: file_path, content
         character(len=*), intent(in), optional :: language_id
         type(document_info_t), allocatable :: new_documents(:)
-        type(lsp_server_t), pointer :: server
         type(lsp_message_t) :: msg
         character(len=:), allocatable :: lang_id, uri
         integer :: i, server_index

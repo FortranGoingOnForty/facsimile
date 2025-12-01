@@ -78,9 +78,9 @@ contains
     subroutine handle_completion_response(popup, response)
         type(completion_popup_t), intent(inout) :: popup
         type(json_value_t), intent(in) :: response
-        type(json_value_t) :: items_array, item, text_edit
+        type(json_value_t) :: items_array, item
         integer :: i, n_items, kind_num
-        character(len=:), allocatable :: label, kind_str, detail, insert_text
+        character(len=:), allocatable :: label, detail, insert_text
 
         call cleanup_completion_popup(popup)
 

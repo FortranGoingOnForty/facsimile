@@ -538,7 +538,6 @@ contains
         type(lsp_server_t), intent(inout) :: server
         character(len=65536) :: buffer
         integer :: bytes_read
-        type(lsp_message_t) :: msg
 
         ! Read from server
         bytes_read = lsp_read_message_f(server%handle, buffer, len(buffer))

@@ -1982,7 +1982,7 @@ contains
         use editor_state_module, only: pane_t
         type(editor_state_t), intent(inout) :: editor
         integer, intent(in) :: start_col, width
-        integer :: tab_idx, active_pane, i
+        integer :: tab_idx, active_pane
         type(pane_t) :: pane
         integer :: screen_row, screen_col
 
