@@ -316,45 +316,60 @@ contains
         type(buffer_t), intent(in) :: buffer
         type(editor_state_t), intent(in) :: editor
         integer, intent(in) :: line_num, start_col, width
-        character(len=:), allocatable :: line
-        integer :: i, col, line_len, token_idx
+        character(len=:), allocatable :: line, utf8_ch
+        integer :: i, char_idx, byte_pos, token_idx, char_count, display_col, char_width
         integer :: sel_start_line, sel_start_col, sel_end_line, sel_end_col
         logical :: in_selection, is_bracket_match, is_current_line, is_search_match
-        character :: ch
         type(token_t), allocatable :: tokens(:)
         character(len=:), allocatable :: token_color
         integer :: search_matches(2, 50)  ! Up to 50 matches per line (start, end pairs)
         integer :: num_search_matches, match_idx
+        integer :: line_byte_len
 
         line = buffer_get_line(buffer, line_num)
-        line_len = len(line)
+        line_byte_len = len(line)
+        char_count = utf8_char_count(line)
 
-        ! Get all search matches on this line
+        ! Get all search matches on this line (these use byte indices)
         if (search_mode_active) then
             call get_matches_on_line(line, line_num, search_matches, num_search_matches)
         else
             num_search_matches = 0
         end if
 
-        ! Get syntax tokens for this line
+        ! Get syntax tokens for this line (tokens use byte indices)
         if (syntax_highlighter%enabled) then
             call tokenize_line(syntax_highlighter, line, tokens)
         else
             allocate(tokens(1))
             tokens(1)%type = TOKEN_PLAIN
             tokens(1)%start_col = 1
-            tokens(1)%end_col = max(1, line_len)
+            tokens(1)%end_col = max(1, line_byte_len)
         end if
 
         ! Check if this is the current line
         is_current_line = (line_num == editor%cursors(editor%active_cursor)%line) .and. highlight_current_line
 
-        ! Render each character with selection highlighting
-        do col = start_col, min(start_col + width - 1, line_len + 1)
+        ! Render each UTF-8 character with selection highlighting
+        ! char_idx = 1-based character index (for selection logic)
+        ! display_col = screen column position (for width tracking)
+        ! byte_pos = byte position in string (for token lookup)
+        display_col = 0
+        char_idx = start_col
+
+        do while (char_idx <= char_count .and. display_col < width)
             in_selection = .false.
             is_bracket_match = .false.
 
+            ! Get the UTF-8 character at this position
+            utf8_ch = utf8_char_at(line, char_idx)
+            char_width = utf8_display_width(utf8_ch)
+
+            ! Get byte position for token lookup
+            byte_pos = utf8_char_to_byte_index(line, char_idx)
+
             ! Check if this position is in any cursor's selection
+            ! (cursor positions are character indices, not byte indices)
             do i = 1, size(editor%cursors)
                 if (editor%cursors(i)%has_selection) then
                     ! Determine selection bounds (handle both directions)
@@ -374,26 +389,26 @@ contains
                         sel_end_col = editor%cursors(i)%column
                     end if
 
-                    ! Check if this position is selected
+                    ! Check if this position is selected (using char_idx)
                     if (line_num > sel_start_line .and. line_num < sel_end_line) then
                         ! Fully selected line (between start and end)
                         in_selection = .true.
                         exit
                     else if (line_num == sel_start_line .and. line_num == sel_end_line) then
                         ! Single-line selection
-                        if (col >= sel_start_col .and. col < sel_end_col) then
+                        if (char_idx >= sel_start_col .and. char_idx < sel_end_col) then
                             in_selection = .true.
                             exit
                         end if
                     else if (line_num == sel_start_line .and. line_num < sel_end_line) then
                         ! First line of multi-line selection
-                        if (col >= sel_start_col) then
+                        if (char_idx >= sel_start_col) then
                             in_selection = .true.
                             exit
                         end if
                     else if (line_num == sel_end_line .and. line_num > sel_start_line) then
                         ! Last line of multi-line selection
-                        if (col < sel_end_col) then
+                        if (char_idx < sel_end_col) then
                             in_selection = .true.
                             exit
                         end if
@@ -401,26 +416,28 @@ contains
                 end if
             end do
 
-            ! Check if this position is a bracket or its match
-            if ((line_num == bracket_line .and. col == bracket_col) .or. &
-                (line_num == matching_bracket_line .and. col == matching_bracket_col)) then
+            ! Check if this position is a bracket or its match (using char_idx)
+            if ((line_num == bracket_line .and. char_idx == bracket_col) .or. &
+                (line_num == matching_bracket_line .and. char_idx == matching_bracket_col)) then
                 is_bracket_match = .true.
             end if
 
-            ! Check if this position is part of a search match
+            ! Check if this position is part of a search match (search uses byte indices)
             is_search_match = .false.
-            do match_idx = 1, num_search_matches
-                if (col >= search_matches(1, match_idx) .and. col <= search_matches(2, match_idx)) then
-                    is_search_match = .true.
-                    exit
-                end if
-            end do
+            if (byte_pos > 0) then
+                do match_idx = 1, num_search_matches
+                    if (byte_pos >= search_matches(1, match_idx) .and. byte_pos <= search_matches(2, match_idx)) then
+                        is_search_match = .true.
+                        exit
+                    end if
+                end do
+            end if
 
-            ! Find which token this column belongs to
+            ! Find which token this column belongs to (tokens use byte indices)
             token_color = ""
-            if (syntax_highlighter%enabled) then
+            if (syntax_highlighter%enabled .and. byte_pos > 0) then
                 do token_idx = 1, size(tokens)
-                    if (col >= tokens(token_idx)%start_col .and. col <= tokens(token_idx)%end_col) then
+                    if (byte_pos >= tokens(token_idx)%start_col .and. byte_pos <= tokens(token_idx)%end_col) then
                         token_color = get_token_color(tokens(token_idx)%type)
                         exit
                     end if
@@ -428,42 +445,39 @@ contains
             end if
 
             ! Render character with or without highlighting
-            if (col <= line_len) then
-                ch = line(col:col)
-            else
-                ch = ' '
-            end if
-
             if (in_selection) then
                 ! Highlight selected text with reverse video (highest priority)
-                call terminal_write(char(27) // '[7m' // ch // char(27) // '[0m')
+                call terminal_write(char(27) // '[7m' // utf8_ch // char(27) // '[0m')
             else if (is_bracket_match) then
                 ! Highlight matching brackets with cyan background
-                call terminal_write(char(27) // '[46m' // ch // char(27) // '[0m')
+                call terminal_write(char(27) // '[46m' // utf8_ch // char(27) // '[0m')
             else if (is_search_match) then
                 ! Highlight search matches with yellow background
                 if (len(token_color) > 0) then
-                    call terminal_write(token_color // char(27) // '[43m' // ch // char(27) // '[0m')
+                    call terminal_write(token_color // char(27) // '[43m' // utf8_ch // char(27) // '[0m')
                 else
-                    call terminal_write(char(27) // '[43m' // ch // char(27) // '[0m')
+                    call terminal_write(char(27) // '[43m' // utf8_ch // char(27) // '[0m')
                 end if
             else if (is_current_line) then
                 ! Subtle background for current line with syntax color
                 if (len(token_color) > 0) then
-                    call terminal_write(token_color // char(27) // '[48;5;236m' // ch // char(27) // '[0m')
+                    call terminal_write(token_color // char(27) // '[48;5;236m' // utf8_ch // char(27) // '[0m')
                 else
-                    call terminal_write(char(27) // '[48;5;236m' // ch // char(27) // '[0m')
+                    call terminal_write(char(27) // '[48;5;236m' // utf8_ch // char(27) // '[0m')
                 end if
             else if (len(token_color) > 0) then
                 ! Apply syntax highlighting
-                call terminal_write(token_color // ch // char(27) // '[0m')
+                call terminal_write(token_color // utf8_ch // char(27) // '[0m')
             else
-                call terminal_write(ch)
+                call terminal_write(utf8_ch)
             end if
+
+            display_col = display_col + char_width
+            char_idx = char_idx + 1
         end do
 
         ! Fill remaining width with spaces
-        do col = max(line_len + 1, start_col), start_col + width - 1
+        do while (display_col < width)
             in_selection = .false.
 
             ! Check if end of line position is in selection
@@ -485,25 +499,26 @@ contains
                     end if
 
                     ! Check if this position is selected (multi-line aware)
+                    ! Use char_idx which is now past end of line content
                     if (line_num > sel_start_line .and. line_num < sel_end_line) then
                         ! Fully selected line
                         in_selection = .true.
                         exit
                     else if (line_num == sel_start_line .and. line_num == sel_end_line) then
                         ! Single-line selection
-                        if (col >= sel_start_col .and. col < sel_end_col) then
+                        if (char_idx >= sel_start_col .and. char_idx < sel_end_col) then
                             in_selection = .true.
                             exit
                         end if
                     else if (line_num == sel_start_line .and. line_num < sel_end_line) then
                         ! First line of multi-line selection
-                        if (col >= sel_start_col) then
+                        if (char_idx >= sel_start_col) then
                             in_selection = .true.
                             exit
                         end if
                     else if (line_num == sel_end_line .and. line_num > sel_start_line) then
                         ! Last line of multi-line selection
-                        if (col < sel_end_col) then
+                        if (char_idx < sel_end_col) then
                             in_selection = .true.
                             exit
                         end if
@@ -518,9 +533,12 @@ contains
             else
                 call terminal_write(' ')
             end if
+            display_col = display_col + 1
+            char_idx = char_idx + 1
         end do
 
         if (allocated(line)) deallocate(line)
+        if (allocated(utf8_ch)) deallocate(utf8_ch)
     end subroutine render_line_with_selections
 
     subroutine render_status_bar(editor, buffer, match_mode_active, match_case_sens)
@@ -1319,14 +1337,13 @@ contains
         type(buffer_t), intent(in) :: buffer
         type(editor_state_t), intent(in) :: editor
         integer, intent(in) :: pane_idx, line_num, screen_row, col, width
-        character(len=:), allocatable :: line
+        character(len=:), allocatable :: line, utf8_ch
         type(pane_t) :: pane
-        integer :: tab_idx, start_col, end_col, i, char_col
+        integer :: tab_idx, i, char_idx, char_count, display_col, char_width
         integer :: content_width, content_col
         character(len=5) :: line_num_str
         logical :: is_current_line, in_selection, is_bracket_match
         integer :: sel_start_line, sel_start_col, sel_end_line, sel_end_col
-        character(len=1) :: ch
 
         tab_idx = editor%active_tab_index
         pane = editor%tabs(tab_idx)%panes(pane_idx)
@@ -1377,9 +1394,8 @@ contains
         line = buffer_get_line(buffer, line_num)
         if (.not. allocated(line)) return
 
-        ! Calculate visible portion based on horizontal scroll
-        start_col = pane%viewport_column
-        end_col = min(start_col + content_width - 1, len(line))
+        ! Get character count for UTF-8 iteration
+        char_count = utf8_char_count(line)
 
         ! Check if this is the current line with a cursor
         is_current_line = .false.
@@ -1393,8 +1409,16 @@ contains
         end if
 
         ! Render the line character by character with selection highlighting
-        do char_col = start_col, start_col + content_width - 1
+        ! Using UTF-8 aware iteration
+        display_col = 0
+        char_idx = pane%viewport_column  ! Start from viewport column (character index)
+
+        do while (char_idx <= char_count .and. display_col < content_width)
             in_selection = .false.
+
+            ! Get the UTF-8 character at this position
+            utf8_ch = utf8_char_at(line, char_idx)
+            char_width = utf8_display_width(utf8_ch)
 
             ! Check if this position is in any cursor's selection (use pane's cursors)
             if (allocated(pane%cursors)) then
@@ -1417,26 +1441,26 @@ contains
                             sel_end_col = pane%cursors(i)%column
                         end if
 
-                        ! Check if this position is selected
+                        ! Check if this position is selected (using char_idx)
                         if (line_num > sel_start_line .and. line_num < sel_end_line) then
                             ! Fully selected line (between start and end)
                             in_selection = .true.
                             exit
                         else if (line_num == sel_start_line .and. line_num == sel_end_line) then
                             ! Single-line selection
-                            if (char_col >= sel_start_col .and. char_col < sel_end_col) then
+                            if (char_idx >= sel_start_col .and. char_idx < sel_end_col) then
                                 in_selection = .true.
                                 exit
                             end if
                         else if (line_num == sel_start_line .and. line_num < sel_end_line) then
                             ! First line of multi-line selection
-                            if (char_col >= sel_start_col) then
+                            if (char_idx >= sel_start_col) then
                                 in_selection = .true.
                                 exit
                             end if
                         else if (line_num == sel_end_line .and. line_num > sel_start_line) then
                             ! Last line of multi-line selection
-                            if (char_col < sel_end_col) then
+                            if (char_idx < sel_end_col) then
                                 in_selection = .true.
                                 exit
                             end if
@@ -1448,40 +1472,50 @@ contains
             ! Check if this position is a bracket or its match (only for active pane)
             is_bracket_match = .false.
             if (pane%is_active) then
-                if ((line_num == bracket_line .and. char_col == bracket_col) .or. &
-                    (line_num == matching_bracket_line .and. char_col == matching_bracket_col)) then
+                if ((line_num == bracket_line .and. char_idx == bracket_col) .or. &
+                    (line_num == matching_bracket_line .and. char_idx == matching_bracket_col)) then
                     is_bracket_match = .true.
                 end if
-            end if
-
-            ! Get the character at this position
-            if (char_col <= len(line)) then
-                ch = line(char_col:char_col)
-            else
-                ch = ' '
             end if
 
             ! Render the character with appropriate highlighting
             if (in_selection) then
                 ! Highlight selected text with reverse video
-                call terminal_write(char(27) // '[7m' // ch // char(27) // '[0m')
+                call terminal_write(char(27) // '[7m' // utf8_ch // char(27) // '[0m')
             else if (is_bracket_match) then
                 ! Highlight matching brackets with cyan background
-                call terminal_write(char(27) // '[46m' // ch // char(27) // '[0m')
+                call terminal_write(char(27) // '[46m' // utf8_ch // char(27) // '[0m')
             else if (pane%is_active .and. is_current_line) then
                 ! Subtle background for current line in active pane
-                call terminal_write(char(27) // '[48;5;237m' // ch // char(27) // '[0m')
+                call terminal_write(char(27) // '[48;5;237m' // utf8_ch // char(27) // '[0m')
             else if (.not. pane%is_active) then
                 ! Inactive pane background
-                call terminal_write(char(27) // '[48;5;234m' // ch // char(27) // '[0m')
+                call terminal_write(char(27) // '[48;5;234m' // utf8_ch // char(27) // '[0m')
             else
                 ! Normal text
-                call terminal_write(ch)
+                call terminal_write(utf8_ch)
             end if
+
+            display_col = display_col + char_width
+            char_idx = char_idx + 1
+        end do
+
+        ! Fill remaining width with spaces
+        do while (display_col < content_width)
+            if (.not. pane%is_active) then
+                call terminal_write(char(27) // '[48;5;234m ' // char(27) // '[0m')
+            else if (is_current_line) then
+                call terminal_write(char(27) // '[48;5;237m ' // char(27) // '[0m')
+            else
+                call terminal_write(' ')
+            end if
+            display_col = display_col + 1
         end do
 
         ! Reset attributes
         call terminal_write(char(27) // '[0m')
+
+        if (allocated(utf8_ch)) deallocate(utf8_ch)
     end subroutine render_buffer_line_in_pane
 
     subroutine render_pane_separator(col, start_row, height)
@@ -1879,13 +1913,11 @@ contains
             end if
         case ("symbols")
             if (is_symbols_panel_visible(editor%symbols_panel)) then
-                call render_lsp_symbols_panel(editor%symbols_panel, panel_start_col, panel_width, &
-                                              2, editor%screen_rows - 1)
+                call render_lsp_symbols_panel(editor%symbols_panel, editor%screen_rows - 1)
             end if
         case ("workspace_symbols")
             if (is_workspace_symbols_panel_visible(editor%workspace_symbols_panel)) then
-                call render_lsp_workspace_symbols_panel(editor%workspace_symbols_panel, panel_start_col, &
-                                                        panel_width, 2, editor%screen_rows - 1)
+                call render_lsp_workspace_symbols_panel(editor%workspace_symbols_panel, editor%screen_rows - 1)
             end if
         end select
 
@@ -2130,25 +2162,25 @@ contains
     end subroutine render_lsp_references_panel
 
     ! Render symbols panel in offcanvas mode (right side, full height)
-    subroutine render_lsp_symbols_panel(panel, start_col, width, start_row, end_row)
+    subroutine render_lsp_symbols_panel(panel, screen_height)
         use symbols_panel_module, only: symbols_panel_t, render_symbols_panel
         type(symbols_panel_t), intent(in) :: panel
-        integer, intent(in) :: start_col, width, start_row, end_row
+        integer, intent(in) :: screen_height
 
         ! Delegate to the real symbols panel renderer
         ! The panel manages its own positioning via panel_start_col and panel_width
-        call render_symbols_panel(panel, end_row)
+        call render_symbols_panel(panel, screen_height)
     end subroutine render_lsp_symbols_panel
 
     ! Render workspace symbols panel in offcanvas mode (right side, full height)
-    subroutine render_lsp_workspace_symbols_panel(panel, start_col, width, start_row, end_row)
+    subroutine render_lsp_workspace_symbols_panel(panel, screen_height)
         use workspace_symbols_panel_module, only: workspace_symbols_panel_t, render_workspace_symbols_panel
         type(workspace_symbols_panel_t), intent(in) :: panel
-        integer, intent(in) :: start_col, width, start_row, end_row
+        integer, intent(in) :: screen_height
 
         ! Delegate to the real workspace symbols panel renderer
         ! The panel manages its own positioning via panel_start_col and panel_width
-        call render_workspace_symbols_panel(panel, end_row)
+        call render_workspace_symbols_panel(panel, screen_height)
     end subroutine render_lsp_workspace_symbols_panel
 
     ! Helper function to extract basename from path
