@@ -1791,42 +1791,43 @@ contains
         end do
     end subroutine render_tab_bar
 
-    ! Get diagnostic marker and color for a line
-    subroutine get_diagnostic_marker(diagnostics, marker, color)
-        type(diagnostic_t), intent(in) :: diagnostics(:)
-        character(len=3), intent(out) :: marker  ! UTF-8 characters can be up to 3 bytes
-        character(len=:), allocatable, intent(out) :: color
-        integer :: i, max_severity
-
-        marker = ' '
-        color = ''
-
-        if (size(diagnostics) == 0) return
-
-        ! Find highest severity diagnostic
-        max_severity = SEVERITY_HINT
-        do i = 1, size(diagnostics)
-            if (diagnostics(i)%severity < max_severity) then
-                max_severity = diagnostics(i)%severity
-            end if
-        end do
-
-        ! Set marker and color based on severity
-        select case(max_severity)
-        case(SEVERITY_ERROR)
-            marker = '●'  ! Filled circle for errors
-            color = char(27) // '[31m'  ! Red
-        case(SEVERITY_WARNING)
-            marker = '▲'  ! Triangle for warnings
-            color = char(27) // '[33m'  ! Yellow
-        case(SEVERITY_INFO)
-            marker = '◆'  ! Diamond for info
-            color = char(27) // '[36m'  ! Cyan
-        case(SEVERITY_HINT)
-            marker = '○'  ! Empty circle for hints
-            color = char(27) // '[90m'  ! Gray
-        end select
-    end subroutine get_diagnostic_marker
+    ! UNUSED: Get diagnostic marker and color for a line
+    ! Kept for potential future use
+    ! subroutine get_diagnostic_marker(diagnostics, marker, color)
+    !     type(diagnostic_t), intent(in) :: diagnostics(:)
+    !     character(len=3), intent(out) :: marker  ! UTF-8 characters can be up to 3 bytes
+    !     character(len=:), allocatable, intent(out) :: color
+    !     integer :: i, max_severity
+    !
+    !     marker = ' '
+    !     color = ''
+    !
+    !     if (size(diagnostics) == 0) return
+    !
+    !     ! Find highest severity diagnostic
+    !     max_severity = SEVERITY_HINT
+    !     do i = 1, size(diagnostics)
+    !         if (diagnostics(i)%severity < max_severity) then
+    !             max_severity = diagnostics(i)%severity
+    !         end if
+    !     end do
+    !
+    !     ! Set marker and color based on severity
+    !     select case(max_severity)
+    !     case(SEVERITY_ERROR)
+    !         marker = '●'  ! Filled circle for errors
+    !         color = char(27) // '[31m'  ! Red
+    !     case(SEVERITY_WARNING)
+    !         marker = '▲'  ! Triangle for warnings
+    !         color = char(27) // '[33m'  ! Yellow
+    !     case(SEVERITY_INFO)
+    !         marker = '◆'  ! Diamond for info
+    !         color = char(27) // '[36m'  ! Cyan
+    !     case(SEVERITY_HINT)
+    !         marker = '○'  ! Empty circle for hints
+    !         color = char(27) // '[90m'  ! Gray
+    !     end select
+    ! end subroutine get_diagnostic_marker
 
     ! Render screen with LSP panel on the right (similar to render_screen_with_tree but for right side)
     subroutine render_screen_with_lsp_panel(buffer, editor, panel_type, match_mode_active, match_case_sens)

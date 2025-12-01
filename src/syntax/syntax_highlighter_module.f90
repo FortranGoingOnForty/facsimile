@@ -431,6 +431,9 @@ contains
         line_len = len(line)
         start_pos = pos
 
+        ! Initialize delimiter (defensive programming - should always be set in loop below)
+        delimiter = '"'  ! Default fallback
+
         ! Find which delimiter matches
         do i = 1, size(highlighter%current_lang%string_delimiters)
             delim_len = len_trim(highlighter%current_lang%string_delimiters(i))

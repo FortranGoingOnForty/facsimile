@@ -326,65 +326,67 @@ contains
         end do
     end subroutine append_truncated_message
 
-    ! Calculate how many lines a message needs when wrapped
-    function calc_wrapped_lines(message, width) result(num_lines)
-        character(len=*), intent(in) :: message
-        integer, intent(in) :: width
-        integer :: num_lines
-        integer :: msg_len, wrap_width
+    ! UNUSED: Calculate how many lines a message needs when wrapped
+    ! Kept for potential future use
+    ! function calc_wrapped_lines(message, width) result(num_lines)
+    !     character(len=*), intent(in) :: message
+    !     integer, intent(in) :: width
+    !     integer :: num_lines
+    !     integer :: msg_len, wrap_width
+    !
+    !     msg_len = len_trim(message)
+    !     wrap_width = width - 4  ! Leave space for indentation
+    !
+    !     if (msg_len <= wrap_width) then
+    !         num_lines = 1
+    !     else
+    !         num_lines = (msg_len + wrap_width - 1) / wrap_width
+    !     end if
+    ! end function calc_wrapped_lines
 
-        msg_len = len_trim(message)
-        wrap_width = width - 4  ! Leave space for indentation
-
-        if (msg_len <= wrap_width) then
-            num_lines = 1
-        else
-            num_lines = (msg_len + wrap_width - 1) / wrap_width
-        end if
-    end function calc_wrapped_lines
-
-    ! Render a wrapped line of a message (line_num is 1-based)
-    subroutine render_wrapped_line(message, line_num, width, start_col, is_selected)
-        character(len=*), intent(in) :: message
-        integer, intent(in) :: line_num, width, start_col
-        logical, intent(in) :: is_selected
-        character(len=256) :: output_buffer
-        integer :: msg_len, wrap_width, start_pos, end_pos, i
-
-        msg_len = len_trim(message)
-        wrap_width = width - 4  ! Leave space for indentation
-
-        ! Calculate which portion of message to show
-        start_pos = (line_num - 1) * wrap_width + 1
-        end_pos = min(start_pos + wrap_width - 1, msg_len)
-
-        ! Initialize buffer with spaces
-        output_buffer = repeat(' ', len(output_buffer))
-
-        ! Add indentation for continuation lines
-        output_buffer(1:4) = '    '
-
-        ! Copy message portion
-        if (start_pos <= msg_len) then
-            output_buffer(5:5 + end_pos - start_pos) = message(start_pos:end_pos)
-        end if
-
-        ! Pad to width
-        do i = len_trim(output_buffer) + 1, width
-            output_buffer(i:i) = ' '
-        end do
-
-        ! Set background color
-        if (is_selected) then
-            call terminal_write(char(27) // '[48;5;240m')  ! Highlight
-        else
-            call terminal_write(char(27) // '[48;5;235m')  ! Normal
-        end if
-
-        ! Write the line
-        call terminal_write(output_buffer(1:width))
-        call terminal_write(char(27) // '[0m')
-    end subroutine render_wrapped_line
+    ! UNUSED: Render a wrapped line of a message (line_num is 1-based)
+    ! Kept for potential future use
+    ! subroutine render_wrapped_line(message, line_num, width, start_col, is_selected)
+    !     character(len=*), intent(in) :: message
+    !     integer, intent(in) :: line_num, width, start_col
+    !     logical, intent(in) :: is_selected
+    !     character(len=256) :: output_buffer
+    !     integer :: msg_len, wrap_width, start_pos, end_pos, i
+    !
+    !     msg_len = len_trim(message)
+    !     wrap_width = width - 4  ! Leave space for indentation
+    !
+    !     ! Calculate which portion of message to show
+    !     start_pos = (line_num - 1) * wrap_width + 1
+    !     end_pos = min(start_pos + wrap_width - 1, msg_len)
+    !
+    !     ! Initialize buffer with spaces
+    !     output_buffer = repeat(' ', len(output_buffer))
+    !
+    !     ! Add indentation for continuation lines
+    !     output_buffer(1:4) = '    '
+    !
+    !     ! Copy message portion
+    !     if (start_pos <= msg_len) then
+    !         output_buffer(5:5 + end_pos - start_pos) = message(start_pos:end_pos)
+    !     end if
+    !
+    !     ! Pad to width
+    !     do i = len_trim(output_buffer) + 1, width
+    !         output_buffer(i:i) = ' '
+    !     end do
+    !
+    !     ! Set background color
+    !     if (is_selected) then
+    !         call terminal_write(char(27) // '[48;5;240m')  ! Highlight
+    !     else
+    !         call terminal_write(char(27) // '[48;5;235m')  ! Normal
+    !     end if
+    !
+    !     ! Write the line
+    !     call terminal_write(output_buffer(1:width))
+    !     call terminal_write(char(27) // '[0m')
+    ! end subroutine render_wrapped_line
 
     function diagnostics_panel_handle_key(panel, key) result(handled)
         type(diagnostics_panel_t), intent(inout) :: panel
@@ -419,22 +421,24 @@ contains
         end select
     end function diagnostics_panel_handle_key
 
-    function get_selected_diagnostic_location(panel, line, col) result(has_location)
-        type(diagnostics_panel_t), intent(in) :: panel
-        integer, intent(out) :: line, col
-        logical :: has_location
-
-        has_location = .false.
-        line = 1
-        col = 1
-
-        if (panel%visible .and. panel%diagnostic_count > 0 .and. &
-            panel%selected_index > 0 .and. panel%selected_index <= panel%diagnostic_count) then
-
-            line = panel%diagnostics(panel%selected_index)%range%start_line + 1  ! Convert to 1-based
-            col = panel%diagnostics(panel%selected_index)%range%start_col + 1
-            has_location = .true.
-        end if
-    end function get_selected_diagnostic_location
+    ! UNUSED: Get location of selected diagnostic
+    ! Kept for potential future use
+    ! function get_selected_diagnostic_location(panel, line, col) result(has_location)
+    !     type(diagnostics_panel_t), intent(in) :: panel
+    !     integer, intent(out) :: line, col
+    !     logical :: has_location
+    !
+    !     has_location = .false.
+    !     line = 1
+    !     col = 1
+    !
+    !     if (panel%visible .and. panel%diagnostic_count > 0 .and. &
+    !         panel%selected_index > 0 .and. panel%selected_index <= panel%diagnostic_count) then
+    !
+    !         line = panel%diagnostics(panel%selected_index)%range%start_line + 1  ! Convert to 1-based
+    !         col = panel%diagnostics(panel%selected_index)%range%start_col + 1
+    !         has_location = .true.
+    !     end if
+    ! end function get_selected_diagnostic_location
 
 end module diagnostics_panel_module

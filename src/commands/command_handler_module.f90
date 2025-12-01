@@ -5279,11 +5279,12 @@ contains
         end if
     end subroutine toggle_fuss_mode
 
-    ! Toggle diagnostics panel
-    subroutine toggle_diagnostics_panel(editor)
-        type(editor_state_t), intent(inout) :: editor
-        call toggle_panel(editor%diagnostics_panel)
-    end subroutine toggle_diagnostics_panel
+    ! UNUSED: Toggle diagnostics panel
+    ! Kept for potential future use
+    ! subroutine toggle_diagnostics_panel(editor)
+    !     type(editor_state_t), intent(inout) :: editor
+    !     call toggle_panel(editor%diagnostics_panel)
+    ! end subroutine toggle_diagnostics_panel
 
     ! Handle git commit with message prompt
     subroutine handle_git_commit(editor)

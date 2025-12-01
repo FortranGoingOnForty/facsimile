@@ -112,94 +112,96 @@ contains
         tooltip%active_parameter = param_index
     end subroutine set_active_parameter
 
-    subroutine render_signature_tooltip(tooltip)
-        type(signature_tooltip_t), intent(in) :: tooltip
-        integer :: display_row, sig_idx
-        character(len=512) :: line
-        character(len=256) :: label
-        integer :: param_start, param_end, i
-
-        if (.not. tooltip%visible .or. tooltip%num_signatures == 0) return
-
-        sig_idx = tooltip%active_signature
-        if (sig_idx < 1 .or. sig_idx > tooltip%num_signatures) return
-
-        display_row = tooltip%row
-
-        ! Draw background
-        call terminal_move_cursor(display_row, tooltip%col)
-        call terminal_write(char(27) // '[48;5;238m')  ! Dark background
-
-        ! Build signature line with parameter highlighting
-        if (allocated(tooltip%signatures(sig_idx)%label)) then
-            label = tooltip%signatures(sig_idx)%label
-
-            ! If we have parameters, try to highlight the active one
-            if (tooltip%signatures(sig_idx)%num_parameters > 0 .and. &
-                tooltip%active_parameter > 0 .and. &
-                tooltip%active_parameter <= tooltip%signatures(sig_idx)%num_parameters) then
-
-                ! Get the parameter label to highlight
-                if (allocated(tooltip%signatures(sig_idx)%parameters(tooltip%active_parameter)%label)) then
-                    block
-                        character(len=:), allocatable :: param_label
-                        param_label = tooltip%signatures(sig_idx)%parameters(tooltip%active_parameter)%label
-
-                        ! Find parameter in signature
-                        param_start = index(label, trim(param_label))
-                        if (param_start > 0) then
-                            param_end = param_start + len_trim(param_label) - 1
-
-                            ! Build highlighted line
-                            line = " "
-                            if (param_start > 1) then
-                                line = trim(line) // label(1:param_start-1)
-                            end if
-
-                            ! Highlight the active parameter
-                            line = trim(line) // char(27) // '[1;33m'  ! Bold yellow
-                            line = trim(line) // label(param_start:param_end)
-                            line = trim(line) // char(27) // '[0;48;5;238m'  ! Reset to dark bg
-
-                            if (param_end < len_trim(label)) then
-                                line = trim(line) // label(param_end+1:len_trim(label))
-                            end if
-                            line = trim(line) // " "
-                        else
-                            ! Couldn't find parameter, show plain
-                            line = " " // trim(label) // " "
-                        end if
-                    end block
-                else
-                    line = " " // trim(label) // " "
-                end if
-            else
-                line = " " // trim(label) // " "
-            end if
-        else
-            line = " (no signature) "
-        end if
-
-        ! Truncate if too long
-        if (len_trim(line) > tooltip%max_width) then
-            line = line(1:tooltip%max_width-3) // "..."
-        end if
-
-        call terminal_write(trim(line))
-
-        ! Show which signature if multiple
-        if (tooltip%num_signatures > 1) then
-            block
-                character(len=20) :: sig_indicator
-                write(sig_indicator, '(A,I0,A,I0,A)') " (", sig_idx, "/", tooltip%num_signatures, ")"
-                call terminal_write(char(27) // '[90m')  ! Gray
-                call terminal_write(trim(sig_indicator))
-            end block
-        end if
-
-        ! Reset colors
-        call terminal_write(char(27) // '[0m')
-    end subroutine render_signature_tooltip
+    ! UNUSED: Render signature tooltip with parameter highlighting
+    ! Kept for potential future use
+    ! subroutine render_signature_tooltip(tooltip)
+    !     type(signature_tooltip_t), intent(in) :: tooltip
+    !     integer :: display_row, sig_idx
+    !     character(len=512) :: line
+    !     character(len=256) :: label
+    !     integer :: param_start, param_end, i
+    !
+    !     if (.not. tooltip%visible .or. tooltip%num_signatures == 0) return
+    !
+    !     sig_idx = tooltip%active_signature
+    !     if (sig_idx < 1 .or. sig_idx > tooltip%num_signatures) return
+    !
+    !     display_row = tooltip%row
+    !
+    !     ! Draw background
+    !     call terminal_move_cursor(display_row, tooltip%col)
+    !     call terminal_write(char(27) // '[48;5;238m')  ! Dark background
+    !
+    !     ! Build signature line with parameter highlighting
+    !     if (allocated(tooltip%signatures(sig_idx)%label)) then
+    !         label = tooltip%signatures(sig_idx)%label
+    !
+    !         ! If we have parameters, try to highlight the active one
+    !         if (tooltip%signatures(sig_idx)%num_parameters > 0 .and. &
+    !             tooltip%active_parameter > 0 .and. &
+    !             tooltip%active_parameter <= tooltip%signatures(sig_idx)%num_parameters) then
+    !
+    !             ! Get the parameter label to highlight
+    !             if (allocated(tooltip%signatures(sig_idx)%parameters(tooltip%active_parameter)%label)) then
+    !                 block
+    !                     character(len=:), allocatable :: param_label
+    !                     param_label = tooltip%signatures(sig_idx)%parameters(tooltip%active_parameter)%label
+    !
+    !                     ! Find parameter in signature
+    !                     param_start = index(label, trim(param_label))
+    !                     if (param_start > 0) then
+    !                         param_end = param_start + len_trim(param_label) - 1
+    !
+    !                         ! Build highlighted line
+    !                         line = " "
+    !                         if (param_start > 1) then
+    !                             line = trim(line) // label(1:param_start-1)
+    !                         end if
+    !
+    !                         ! Highlight the active parameter
+    !                         line = trim(line) // char(27) // '[1;33m'  ! Bold yellow
+    !                         line = trim(line) // label(param_start:param_end)
+    !                         line = trim(line) // char(27) // '[0;48;5;238m'  ! Reset to dark bg
+    !
+    !                         if (param_end < len_trim(label)) then
+    !                             line = trim(line) // label(param_end+1:len_trim(label))
+    !                         end if
+    !                         line = trim(line) // " "
+    !                     else
+    !                         ! Couldn't find parameter, show plain
+    !                         line = " " // trim(label) // " "
+    !                     end if
+    !                 end block
+    !             else
+    !                 line = " " // trim(label) // " "
+    !             end if
+    !         else
+    !             line = " " // trim(label) // " "
+    !         end if
+    !     else
+    !         line = " (no signature) "
+    !     end if
+    !
+    !     ! Truncate if too long
+    !     if (len_trim(line) > tooltip%max_width) then
+    !         line = line(1:tooltip%max_width-3) // "..."
+    !     end if
+    !
+    !     call terminal_write(trim(line))
+    !
+    !     ! Show which signature if multiple
+    !     if (tooltip%num_signatures > 1) then
+    !         block
+    !             character(len=20) :: sig_indicator
+    !             write(sig_indicator, '(A,I0,A,I0,A)') " (", sig_idx, "/", tooltip%num_signatures, ")"
+    !             call terminal_write(char(27) // '[90m')  ! Gray
+    !             call terminal_write(trim(sig_indicator))
+    !         end block
+    !     end if
+    !
+    !     ! Reset colors
+    !     call terminal_write(char(27) // '[0m')
+    ! end subroutine render_signature_tooltip
 
     subroutine handle_signature_response(tooltip, response)
         use lsp_protocol_module, only: lsp_message_t
