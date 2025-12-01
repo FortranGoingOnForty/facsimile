@@ -82,6 +82,8 @@ SOURCES = src/version_module.f90 \
           src/lsp/lsp_client_module.f90 \
           src/lsp/document_sync_module.f90 \
           src/lsp/diagnostics_module.f90 \
+          src/lsp/server_detection_module.f90 \
+          src/lsp/server_installer_module.f90 \
           src/ui/completion_popup_module.f90 \
           src/ui/hover_tooltip_module.f90 \
           src/ui/diagnostics_panel_module.f90 \
@@ -91,12 +93,14 @@ SOURCES = src/version_module.f90 \
           src/ui/signature_tooltip_module.f90 \
           src/ui/command_palette_module.f90 \
           src/ui/workspace_symbols_panel_module.f90 \
+          src/ui/lsp_server_installer_panel_module.f90 \
           src/editor_state_module.f90 \
           src/undo/undo_stack_module.f90 \
           src/workspace/file_tree_module.f90 \
           src/workspace/git_ops_module.f90 \
           src/workspace/file_tree_renderer_module.f90 \
           src/workspace/config_module.f90 \
+          src/workspace/app_state_module.f90 \
           src/workspace/favorites_module.f90 \
           src/workspace/recents_module.f90 \
           src/workspace/workspace_module.f90 \

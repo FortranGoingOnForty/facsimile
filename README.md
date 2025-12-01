@@ -75,8 +75,6 @@ fpm run -- [filename]
 
 ### Search
 - `ctrl-f` - search forward
-- `n` - next match (only after search)
-- `N` - previous match (only after search)
 - `ctrl-r` - find and replace
 
 ### Special
