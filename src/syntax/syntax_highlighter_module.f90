@@ -166,8 +166,12 @@ contains
         do while (i <= line_len)
             ch = line(i:i)
 
+            ! Check for multiline comment start
+            if (check_multiline_comment_start(highlighter, line, i)) then
+                call process_multiline_comment_start(highlighter, line, tokens, token_count, i)
+
             ! Check for single-line comment
-            if (check_comment_start(highlighter, line, i)) then
+            else if (check_comment_start(highlighter, line, i)) then
                 token_count = token_count + 1
                 tokens(token_count)%type = TOKEN_COMMENT
                 tokens(token_count)%start_col = i
@@ -396,6 +400,22 @@ contains
         end if
     end function check_comment_start
 
+    function check_multiline_comment_start(highlighter, line, pos) result(res)
+        type(syntax_highlighter_t), intent(in) :: highlighter
+        character(len=*), intent(in) :: line
+        integer, intent(in) :: pos
+        logical :: res
+        integer :: comment_len
+
+        res = .false.
+        if (highlighter%current_lang%comment_start /= "") then
+            comment_len = len_trim(highlighter%current_lang%comment_start)
+            if (pos + comment_len - 1 <= len(line)) then
+                res = line(pos:pos+comment_len-1) == trim(highlighter%current_lang%comment_start)
+            end if
+        end if
+    end function check_multiline_comment_start
+
     function check_string_start(highlighter, line, pos) result(res)
         type(syntax_highlighter_t), intent(in) :: highlighter
         character(len=*), intent(in) :: line
@@ -424,7 +444,7 @@ contains
         integer, intent(inout) :: token_count, pos
         integer :: i, start_pos, delim_len, line_len
         character(len=:), allocatable :: delimiter
-        logical :: found_end
+        logical :: found_end, is_multiline
 
         line_len = len(line)
         start_pos = pos
@@ -442,6 +462,11 @@ contains
                 end if
             end if
         end do
+
+        ! Check if this is a multiline-capable delimiter
+        ! Python: """ or ''' (length 3)
+        ! JavaScript/TypeScript: ` (template literals)
+        is_multiline = (len(delimiter) >= 3) .or. (delimiter == '`')
 
         ! Move past opening delimiter
         pos = pos + len(delimiter)
@@ -473,6 +498,11 @@ contains
 
         ! Handle unclosed string
         if (.not. found_end) then
+            if (is_multiline) then
+                ! Enter multiline string mode
+                highlighter%in_multiline_string = .true.
+                highlighter%string_delimiter = delimiter
+            end if
             pos = line_len + 1
         end if
     end subroutine process_string
@@ -949,13 +979,83 @@ contains
         highlighter%enabled = .true.
     end subroutine load_markdown_syntax
 
-    ! Stub implementations for multiline handling
+    ! Handle multiline comment start (when we encounter /* on a line)
+    subroutine process_multiline_comment_start(highlighter, line, tokens, token_count, pos)
+        type(syntax_highlighter_t), intent(inout) :: highlighter
+        character(len=*), intent(in) :: line
+        type(token_t), intent(inout) :: tokens(:)
+        integer, intent(inout) :: token_count, pos
+        integer :: start_pos, end_pos, comment_start_len, comment_end_len, line_len
+
+        line_len = len(line)
+        start_pos = pos
+        comment_start_len = len_trim(highlighter%current_lang%comment_start)
+        comment_end_len = len_trim(highlighter%current_lang%comment_end)
+
+        ! Skip past the opening delimiter
+        pos = pos + comment_start_len
+
+        ! Look for closing delimiter on the same line
+        end_pos = index(line(pos:), trim(highlighter%current_lang%comment_end))
+
+        if (end_pos > 0) then
+            ! Found closing delimiter on same line - this is a complete comment
+            end_pos = pos + end_pos - 1 + comment_end_len - 1
+
+            token_count = token_count + 1
+            tokens(token_count)%type = TOKEN_COMMENT
+            tokens(token_count)%start_col = start_pos
+            tokens(token_count)%end_col = end_pos
+
+            pos = end_pos + 1
+        else
+            ! Closing delimiter not found - rest of line is comment, enter multiline mode
+            token_count = token_count + 1
+            tokens(token_count)%type = TOKEN_COMMENT
+            tokens(token_count)%start_col = start_pos
+            tokens(token_count)%end_col = line_len
+
+            highlighter%in_multiline_comment = .true.
+            pos = line_len + 1
+        end if
+    end subroutine process_multiline_comment_start
+
+    ! Handle multiline comment continuation (when we start a line in comment mode)
     subroutine process_multiline_comment(highlighter, line, tokens, token_count, pos)
         type(syntax_highlighter_t), intent(inout) :: highlighter
         character(len=*), intent(in) :: line
         type(token_t), intent(inout) :: tokens(:)
         integer, intent(inout) :: token_count, pos
-        ! TODO: Implement multiline comment handling
+        integer :: end_pos, comment_end_len, line_len
+
+        line_len = len(line)
+        comment_end_len = len_trim(highlighter%current_lang%comment_end)
+
+        ! Look for closing delimiter
+        end_pos = index(line(pos:), trim(highlighter%current_lang%comment_end))
+
+        if (end_pos > 0) then
+            ! Found closing delimiter on this line
+            end_pos = pos + end_pos - 1 + comment_end_len - 1
+
+            token_count = token_count + 1
+            tokens(token_count)%type = TOKEN_COMMENT
+            tokens(token_count)%start_col = pos
+            tokens(token_count)%end_col = end_pos
+
+            ! Exit multiline comment mode
+            highlighter%in_multiline_comment = .false.
+            pos = end_pos + 1
+        else
+            ! Closing delimiter not found - entire rest of line is comment
+            token_count = token_count + 1
+            tokens(token_count)%type = TOKEN_COMMENT
+            tokens(token_count)%start_col = pos
+            tokens(token_count)%end_col = line_len
+
+            ! Stay in multiline comment mode
+            pos = line_len + 1
+        end if
     end subroutine process_multiline_comment
 
     subroutine process_multiline_string(highlighter, line, tokens, token_count, pos)
@@ -963,7 +1063,37 @@ contains
         character(len=*), intent(in) :: line
         type(token_t), intent(inout) :: tokens(:)
         integer, intent(inout) :: token_count, pos
-        ! TODO: Implement multiline string handling
+        integer :: end_pos, delim_len, line_len
+
+        line_len = len(line)
+        delim_len = len(highlighter%string_delimiter)
+
+        ! Look for closing delimiter
+        end_pos = index(line(pos:), highlighter%string_delimiter)
+
+        if (end_pos > 0) then
+            ! Found closing delimiter on this line
+            end_pos = pos + end_pos - 1 + delim_len - 1
+
+            token_count = token_count + 1
+            tokens(token_count)%type = TOKEN_STRING
+            tokens(token_count)%start_col = pos
+            tokens(token_count)%end_col = end_pos
+
+            ! Exit multiline string mode
+            highlighter%in_multiline_string = .false.
+            highlighter%string_delimiter = ""
+            pos = end_pos + 1
+        else
+            ! Closing delimiter not found - entire rest of line is string
+            token_count = token_count + 1
+            tokens(token_count)%type = TOKEN_STRING
+            tokens(token_count)%start_col = pos
+            tokens(token_count)%end_col = line_len
+
+            ! Stay in multiline string mode
+            pos = line_len + 1
+        end if
     end subroutine process_multiline_string
 
 end module syntax_highlighter_module

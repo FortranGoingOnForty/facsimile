@@ -5798,9 +5798,9 @@ contains
     ! The response parsing logic is ready but needs proper callback integration
 
     ! Wrapper callback that matches the LSP callback signature
-    subroutine handle_references_response_wrapper(request_id, response)
+    subroutine handle_references_response_wrapper(unused_request_id, response)
         use lsp_protocol_module, only: lsp_message_t
-        integer, intent(in) :: request_id
+        integer, intent(in) :: unused_request_id
         type(lsp_message_t), intent(in) :: response
 
         ! Call the actual handler with saved editor state
@@ -5907,9 +5907,9 @@ contains
     end subroutine handle_references_response_impl
 
     ! Wrapper callback that matches the LSP callback signature for code actions
-    subroutine handle_code_actions_response_wrapper(request_id, response)
+    subroutine handle_code_actions_response_wrapper(unused_request_id, response)
         use lsp_protocol_module, only: lsp_message_t
-        integer, intent(in) :: request_id
+        integer, intent(in) :: unused_request_id
         type(lsp_message_t), intent(in) :: response
 
         ! Call the actual handler with saved editor state
@@ -5994,9 +5994,9 @@ contains
     end subroutine handle_code_actions_response_impl
 
     ! Wrapper callback that matches the LSP callback signature for symbols
-    subroutine handle_symbols_response_wrapper(request_id, response)
+    subroutine handle_symbols_response_wrapper(unused_request_id, response)
         use lsp_protocol_module, only: lsp_message_t
-        integer, intent(in) :: request_id
+        integer, intent(in) :: unused_request_id
         type(lsp_message_t), intent(in) :: response
 
         ! Call the actual handler with saved editor state
@@ -6155,9 +6155,9 @@ contains
     end subroutine handle_symbols_response_impl
 
     ! Wrapper callback that matches the LSP callback signature for signature help
-    subroutine handle_signature_response_wrapper(request_id, response)
+    subroutine handle_signature_response_wrapper(unused_request_id, response)
         use lsp_protocol_module, only: lsp_message_t
-        integer, intent(in) :: request_id
+        integer, intent(in) :: unused_request_id
         type(lsp_message_t), intent(in) :: response
 
         ! Call the actual handler with saved editor state
@@ -6167,10 +6167,10 @@ contains
     end subroutine handle_signature_response_wrapper
 
     ! Wrapper callback that matches the LSP callback signature for rename
-    subroutine handle_rename_response_wrapper(request_id, response)
+    subroutine handle_rename_response_wrapper(unused_request_id, response)
         use lsp_protocol_module, only: lsp_message_t
         use json_module, only: json_value_t, json_stringify
-        integer, intent(in) :: request_id
+        integer, intent(in) :: unused_request_id
         type(lsp_message_t), intent(in) :: response
 
         character(len=:), allocatable :: result_str
@@ -6206,11 +6206,11 @@ contains
     end subroutine handle_rename_response_wrapper
 
     ! Wrapper callback for formatting response
-    subroutine handle_formatting_response_wrapper(request_id, response)
+    subroutine handle_formatting_response_wrapper(unused_request_id, response)
         use lsp_protocol_module, only: lsp_message_t
         use json_module, only: json_value_t, json_array_size, json_get_array_element, &
                                json_get_object, json_get_string, json_get_number, json_has_key
-        integer, intent(in) :: request_id
+        integer, intent(in) :: unused_request_id
         type(lsp_message_t), intent(in) :: response
 
         type(json_value_t) :: edits_array, edit_obj, range_obj, start_obj, end_obj
@@ -6672,11 +6672,11 @@ contains
     end subroutine execute_palette_command
 
     ! Handle workspace symbols LSP response
-    subroutine handle_workspace_symbols_response_wrapper(request_id, response)
+    subroutine handle_workspace_symbols_response_wrapper(unused_request_id, response)
         use lsp_protocol_module, only: lsp_message_t
         use json_module
         use workspace_symbols_panel_module, only: workspace_symbol_t, set_workspace_symbols
-        integer, intent(in) :: request_id
+        integer, intent(in) :: unused_request_id
         type(lsp_message_t), intent(in) :: response
         type(json_value_t) :: symbol_obj, location_obj, range_obj, start_obj
         integer :: num_symbols, i
@@ -6943,9 +6943,9 @@ contains
     ! ==================================================
 
     ! Wrapper callback for go to definition
-    subroutine handle_definition_response_wrapper(request_id, response)
+    subroutine handle_definition_response_wrapper(unused_request_id, response)
         use lsp_protocol_module, only: lsp_message_t
-        integer, intent(in) :: request_id
+        integer, intent(in) :: unused_request_id
         type(lsp_message_t), intent(in) :: response
 
         ! Call actual handler with saved editor state

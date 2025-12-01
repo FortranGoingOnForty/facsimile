@@ -1971,17 +1971,16 @@ contains
         if (n_panes == 0) return
 
         if (n_panes > 1) then
-            call render_cursor_for_panes_in_lsp_view(editor, start_col, width)
+            call render_cursor_for_panes_in_lsp_view(editor)
         else
             call render_cursor_in_pane(editor, start_col, width)
         end if
     end subroutine render_cursor_for_lsp_panel
 
     ! Helper to render cursor for multiple panes when LSP panel is visible
-    subroutine render_cursor_for_panes_in_lsp_view(editor, start_col, width)
+    subroutine render_cursor_for_panes_in_lsp_view(editor)
         use editor_state_module, only: pane_t
         type(editor_state_t), intent(inout) :: editor
-        integer, intent(in) :: start_col, width
         integer :: tab_idx, active_pane
         type(pane_t) :: pane
         integer :: screen_row, screen_col
@@ -2132,82 +2131,24 @@ contains
 
     ! Render symbols panel in offcanvas mode (right side, full height)
     subroutine render_lsp_symbols_panel(panel, start_col, width, start_row, end_row)
-        use symbols_panel_module, only: symbols_panel_t
+        use symbols_panel_module, only: symbols_panel_t, render_symbols_panel
         type(symbols_panel_t), intent(in) :: panel
         integer, intent(in) :: start_col, width, start_row, end_row
-        integer :: row
-        character(len=1), parameter :: ESC = achar(27)
 
-        ! Clear panel area
-        do row = start_row, end_row
-            call terminal_move_cursor(row, start_col)
-            call terminal_write(repeat(' ', width))
-        end do
-
-        row = start_row
-
-        ! Header
-        call terminal_move_cursor(row, start_col)
-        call terminal_write(ESC // '[48;5;237m' // ESC // '[1m Document Symbols ')
-        if (19 < width) then
-            call terminal_write(repeat(' ', width - 19))
-        end if
-        call terminal_write(ESC // '[0m')
-        row = row + 1
-
-        ! Separator
-        call terminal_move_cursor(row, start_col)
-        call terminal_write(ESC // '[48;5;237m' // repeat("─", width) // ESC // '[0m')
-        row = row + 1
-
-        ! Legend
-        call terminal_move_cursor(row, start_col)
-        call terminal_write(ESC // '[90mj/k:nav  enter:jump  esc:close' // ESC // '[0m')
-        row = row + 1
-
-        ! TODO: Actually render symbols (will delegate to symbols_panel_module logic)
-        call terminal_move_cursor(row, start_col)
-        call terminal_write(ESC // '[90m(symbols panel implementation pending)' // ESC // '[0m')
+        ! Delegate to the real symbols panel renderer
+        ! The panel manages its own positioning via panel_start_col and panel_width
+        call render_symbols_panel(panel, end_row)
     end subroutine render_lsp_symbols_panel
 
     ! Render workspace symbols panel in offcanvas mode (right side, full height)
     subroutine render_lsp_workspace_symbols_panel(panel, start_col, width, start_row, end_row)
-        use workspace_symbols_panel_module, only: workspace_symbols_panel_t
+        use workspace_symbols_panel_module, only: workspace_symbols_panel_t, render_workspace_symbols_panel
         type(workspace_symbols_panel_t), intent(in) :: panel
         integer, intent(in) :: start_col, width, start_row, end_row
-        integer :: row
-        character(len=1), parameter :: ESC = achar(27)
 
-        ! Clear panel area
-        do row = start_row, end_row
-            call terminal_move_cursor(row, start_col)
-            call terminal_write(repeat(' ', width))
-        end do
-
-        row = start_row
-
-        ! Header
-        call terminal_move_cursor(row, start_col)
-        call terminal_write(ESC // '[48;5;237m' // ESC // '[1m Workspace Symbols ')
-        if (21 < width) then
-            call terminal_write(repeat(' ', width - 21))
-        end if
-        call terminal_write(ESC // '[0m')
-        row = row + 1
-
-        ! Separator
-        call terminal_move_cursor(row, start_col)
-        call terminal_write(ESC // '[48;5;237m' // repeat("─", width) // ESC // '[0m')
-        row = row + 1
-
-        ! Legend
-        call terminal_move_cursor(row, start_col)
-        call terminal_write(ESC // '[90mj/k:nav  enter:jump  esc:close' // ESC // '[0m')
-        row = row + 1
-
-        ! TODO: Actually render workspace symbols (will delegate to workspace_symbols_panel_module logic)
-        call terminal_move_cursor(row, start_col)
-        call terminal_write(ESC // '[90m(workspace symbols panel implementation pending)' // ESC // '[0m')
+        ! Delegate to the real workspace symbols panel renderer
+        ! The panel manages its own positioning via panel_start_col and panel_width
+        call render_workspace_symbols_panel(panel, end_row)
     end subroutine render_lsp_workspace_symbols_panel
 
     ! Helper function to extract basename from path
