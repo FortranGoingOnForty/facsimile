@@ -292,9 +292,9 @@ contains
         end select
     end subroutine command_palette_handle_key
 
-    subroutine render_command_palette(palette, screen_rows, screen_cols)
+    subroutine render_command_palette(palette, screen_cols)
         type(command_palette_t), intent(in) :: palette
-        integer, intent(in) :: screen_rows, screen_cols
+        integer, intent(in) :: screen_cols
         integer :: i, visible_start, visible_end, row, start_col, start_row
         integer :: content_width, display_width
         character(len=256) :: line, category_tag
@@ -411,10 +411,10 @@ contains
         call terminal_move_cursor(start_row + 2, start_col + 4 + palette%search_pos)
     end subroutine render_command_palette
 
-    function show_command_palette_interactive(palette, screen_rows, screen_cols) result(selected_cmd_id)
+    function show_command_palette_interactive(palette, screen_cols) result(selected_cmd_id)
         use input_handler_module, only: get_key_input
         type(command_palette_t), intent(inout) :: palette
-        integer, intent(in) :: screen_rows, screen_cols
+        integer, intent(in) :: screen_cols
         character(len=:), allocatable :: selected_cmd_id
         character(len=32) :: key_input
         integer :: ch, status
@@ -422,7 +422,7 @@ contains
         type(command_t) :: cmd
 
         call show_command_palette(palette)
-        call render_command_palette(palette, screen_rows, screen_cols)
+        call render_command_palette(palette, screen_cols)
 
         do
             call get_key_input(key_input, status)
@@ -460,7 +460,7 @@ contains
                 end if
             end if
 
-            call render_command_palette(palette, screen_rows, screen_cols)
+            call render_command_palette(palette, screen_cols)
         end do
     end function show_command_palette_interactive
 

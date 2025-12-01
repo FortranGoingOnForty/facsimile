@@ -250,7 +250,7 @@ contains
             do while (screen_line < max_content_lines)
                 screen_line = screen_line + 1
                 call terminal_move_cursor(row + screen_line - 1, start_col)
-                call render_empty_line(start_col, panel%width)
+                call render_empty_line(panel%width)
             end do
         end block
 
@@ -266,8 +266,8 @@ contains
 
     end subroutine render_diagnostics_panel
 
-    subroutine render_empty_line(start_col, width)
-        integer, intent(in) :: start_col, width
+    subroutine render_empty_line(width)
+        integer, intent(in) :: width
 
         call terminal_write(char(27) // '[48;5;235m')  ! Dark background
         call terminal_write(repeat(' ', width))

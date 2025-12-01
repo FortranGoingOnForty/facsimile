@@ -167,9 +167,9 @@ contains
         end select
     end function lsp_server_installer_panel_handle_key
 
-    subroutine render_lsp_server_installer_panel(panel, screen_rows, screen_cols)
+    subroutine render_lsp_server_installer_panel(panel, screen_cols)
         type(lsp_server_installer_panel_t), intent(in) :: panel
-        integer, intent(in) :: screen_rows, screen_cols
+        integer, intent(in) :: screen_cols
         integer :: start_col, start_row, row, i, visible_end
         integer :: content_width, visible_len, status_len, padding
         character(len=:), allocatable :: border_top, border_mid, border_bottom
@@ -197,7 +197,7 @@ contains
 
         ! Render confirm dialog if in confirm mode
         if (panel%confirm_mode) then
-            call render_confirm_dialog(panel, screen_rows, screen_cols)
+            call render_confirm_dialog(panel, screen_cols)
             return
         end if
 
@@ -309,9 +309,9 @@ contains
         call terminal_hide_cursor()
     end subroutine render_lsp_server_installer_panel
 
-    subroutine render_confirm_dialog(panel, screen_rows, screen_cols)
+    subroutine render_confirm_dialog(panel, screen_cols)
         type(lsp_server_installer_panel_t), intent(in) :: panel
-        integer, intent(in) :: screen_rows, screen_cols
+        integer, intent(in) :: screen_cols
         integer :: start_col, start_row, row, content_width
         character(len=:), allocatable :: border_top, border_bottom
         character(len=256) :: server_name, install_cmd

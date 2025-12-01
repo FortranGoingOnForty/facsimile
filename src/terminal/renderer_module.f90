@@ -219,7 +219,7 @@ contains
                 ! Render LSP server installer panel if visible (for panes path)
                 if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel)) then
                     call render_lsp_server_installer_panel(editor%lsp_installer_panel, &
-                        editor%screen_rows, editor%screen_cols)
+                        editor%screen_cols)
                 end if
 
                 ! Position cursor for panes
@@ -296,7 +296,7 @@ contains
         ! Render LSP server installer panel if visible
         if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel)) then
             call render_lsp_server_installer_panel(editor%lsp_installer_panel, &
-                editor%screen_rows, editor%screen_cols)
+                editor%screen_cols)
         end if
 
         ! Position cursor for panes or regular view
@@ -908,7 +908,7 @@ contains
         ! Render LSP server installer panel if visible
         if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel)) then
             call render_lsp_server_installer_panel(editor%lsp_installer_panel, &
-                editor%screen_rows, editor%screen_cols)
+                editor%screen_cols)
         end if
 
         ! Position cursor in editor pane (use appropriate method based on pane count)

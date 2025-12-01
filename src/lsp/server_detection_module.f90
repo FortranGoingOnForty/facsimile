@@ -34,7 +34,7 @@ contains
         allocate(servers(num_servers))
 
         ! Initialize all known servers
-        call init_known_servers(servers, num_servers)
+        call init_known_servers(servers)
 
         ! Check which are installed
         do i = 1, num_servers
@@ -42,9 +42,8 @@ contains
         end do
     end subroutine detect_all_servers
 
-    subroutine init_known_servers(servers, num_servers)
+    subroutine init_known_servers(servers)
         type(detected_server_t), intent(inout) :: servers(:)
-        integer, intent(in) :: num_servers
         integer :: i
 
         i = 1

@@ -262,7 +262,7 @@ contains
         if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel)) then
             if (lsp_server_installer_panel_handle_key(editor%lsp_installer_panel, trim(key_str))) then
                 call render_lsp_server_installer_panel(editor%lsp_installer_panel, &
-                    editor%screen_rows, editor%screen_cols)
+                    editor%screen_cols)
                 return
             end if
         end if
@@ -1583,7 +1583,7 @@ contains
                 use command_palette_module, only: show_command_palette_interactive
                 character(len=:), allocatable :: cmd_id
 
-                cmd_id = show_command_palette_interactive(editor%command_palette, editor%screen_rows, editor%screen_cols)
+                cmd_id = show_command_palette_interactive(editor%command_palette, editor%screen_cols)
 
                 if (allocated(cmd_id) .and. len_trim(cmd_id) > 0) then
                     ! Execute the command by re-processing as a key

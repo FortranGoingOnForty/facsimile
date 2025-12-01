@@ -194,8 +194,7 @@ contains
 
         ! Clear to end of header line
         call terminal_move_cursor(row, start_col + len_trim(header))
-        call render_empty_line(start_col + len_trim(header), &
-            panel%width - len_trim(header))
+        call render_empty_line(panel%width - len_trim(header))
 
         row = row + 1
 
@@ -271,7 +270,7 @@ contains
             do i = row, start_row + max_visible + 1
                 if (i > panel%screen_height - 1) exit
                 call terminal_move_cursor(i, start_col)
-                call render_empty_line(start_col, panel%width)
+                call render_empty_line(panel%width)
             end do
 
             ! Show scroll indicator if needed
@@ -291,8 +290,8 @@ contains
         end if
     end subroutine render_references_panel
 
-    subroutine render_empty_line(start_col, width)
-        integer, intent(in) :: start_col, width
+    subroutine render_empty_line(width)
+        integer, intent(in) :: width
         call terminal_write(char(27) // '[48;5;235m' // repeat(" ", width) // char(27) // '[0m')
     end subroutine render_empty_line
 

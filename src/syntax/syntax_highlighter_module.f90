@@ -137,6 +137,7 @@ contains
         character(len=*), intent(in) :: line
         type(token_t), allocatable, intent(out) :: tokens(:)
         integer :: i, line_len, token_count
+        character :: ch
 
         if (.not. highlighter%enabled) then
             allocate(tokens(1))

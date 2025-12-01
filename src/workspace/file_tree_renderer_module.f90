@@ -53,10 +53,10 @@ contains
         if (associated(state%root)) then
             item_idx = 0
             if (hints_expanded) then
-                call render_tree_node(state%root, '', .true., .true., &
+                call render_tree_node(state%root, '', .true., &
                                     state, item_idx, current_row, end_row - 4, start_col, width)
             else
-                call render_tree_node(state%root, '', .true., .true., &
+                call render_tree_node(state%root, '', .true., &
                                     state, item_idx, current_row, end_row - 1, start_col, width)
             end if
         end if
@@ -100,11 +100,11 @@ contains
         end if
     end subroutine render_file_tree
 
-    recursive subroutine render_tree_node(node, prefix, is_last, is_root, &
+    recursive subroutine render_tree_node(node, prefix, is_root, &
                                          state, item_idx, current_row, end_row, start_col, width)
         type(tree_node_t), pointer, intent(in) :: node
         character(len=*), intent(in) :: prefix
-        logical, intent(in) :: is_last, is_root
+        logical, intent(in) :: is_root
         type(tree_state_t), intent(in) :: state
         integer, intent(inout) :: item_idx, current_row
         integer, intent(in) :: end_row, start_col, width
@@ -196,7 +196,7 @@ contains
                 new_prefix = prefix // '  '
             end if
 
-            call render_tree_node(child, new_prefix, is_last_child, .false., &
+            call render_tree_node(child, new_prefix, .false., &
                                 state, item_idx, current_row, end_row, start_col, width)
             child => child%next_sibling
             end do
