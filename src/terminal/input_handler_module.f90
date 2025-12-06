@@ -1,6 +1,6 @@
 module input_handler_module
     use iso_fortran_env, only: input_unit, int8, error_unit
-    use terminal_io_module, only: terminal_read_char
+    use terminal_io_module, only: terminal_read_char, terminal_read_char_escape
     implicit none
     private
 
@@ -43,7 +43,7 @@ contains
         key_str = ''
         status = -1
 
-        ! Read single character using raw mode function
+        ! Read single character using raw mode function (50ms timeout when idle)
         char_code = terminal_read_char()
 
         if (char_code < 0) then
@@ -90,14 +90,14 @@ contains
 
         key_str = 'esc'
 
-        ! Try to read next character (with timeout)
-        char_code = terminal_read_char()
+        ! Try to read next character (with fast 5ms timeout for escape sequences)
+        char_code = terminal_read_char_escape()
         if (char_code < 0) return
         ch1 = achar(char_code)
 
         if (ch1 == '[') then
             ! CSI sequence (or Alt+[ if no valid sequence follows)
-            char_code = terminal_read_char()
+            char_code = terminal_read_char_escape()
             if (char_code < 0) then
                 ! Timeout - no character follows, this is Alt+[
                 key_str = 'alt-['
@@ -123,7 +123,7 @@ contains
                 key_str = 'shift-tab'
             case('3')
                 ! Could be delete or Alt+Delete
-                char_code = terminal_read_char()
+                char_code = terminal_read_char_escape()
                 if (char_code >= 0) then
                     ch3 = achar(char_code)
                     if (ch3 == '~') then
@@ -131,11 +131,11 @@ contains
                     else if (ch3 == ';') then
                         ! Modified delete: ESC [ 3 ; modifier ~
                         ! Read the modifier
-                        char_code = terminal_read_char()
+                        char_code = terminal_read_char_escape()
                         if (char_code >= 0) then
                             modifier_ch = achar(char_code)
                             ! Read the terminating ~
-                            char_code = terminal_read_char()
+                            char_code = terminal_read_char_escape()
                             if (char_code >= 0 .and. achar(char_code) == '~') then
                                 ! Check modifier: 3 = Alt
                                 if (modifier_ch == '3') then
@@ -149,7 +149,7 @@ contains
                 end if
             case('5')
                 ! Could be page up
-                char_code = terminal_read_char()
+                char_code = terminal_read_char_escape()
                 if (char_code >= 0) then
                     ch3 = achar(char_code)
                     ios = 0
@@ -164,7 +164,7 @@ contains
                 end if
             case('6')
                 ! Could be page down
-                char_code = terminal_read_char()
+                char_code = terminal_read_char_escape()
                 if (char_code >= 0) then
                     ch3 = achar(char_code)
                     ios = 0
@@ -180,7 +180,7 @@ contains
             case('1')
                 ! Could be function key (F1-F9) or modified arrow/home/end
                 ! Check next character
-                char_code = terminal_read_char()
+                char_code = terminal_read_char_escape()
                 if (char_code >= 0) then
                     ch3 = achar(char_code)
                     if (ch3 == '~') then
@@ -188,14 +188,14 @@ contains
                         key_str = 'f1'
                     else if (ch3 == '0') then
                         ! F10 might be ESC [ 2 1 ~, check for tilde
-                        char_code = terminal_read_char()
+                        char_code = terminal_read_char_escape()
                         if (char_code >= 0 .and. achar(char_code) == '~') then
                             key_str = 'f10'
                         end if
                     else if (ch3 == '1' .or. ch3 == '2' .or. ch3 == '3' .or. ch3 == '4' .or. &
                              ch3 == '5' .or. ch3 == '7' .or. ch3 == '8' .or. ch3 == '9') then
                         ! Function keys F1-F8: ESC [ 1 X ~ or ESC [ 1 X ; modifier ~
-                        char_code = terminal_read_char()
+                        char_code = terminal_read_char_escape()
                         if (char_code >= 0) then
                             ch = achar(char_code)
                             if (ch == '~') then
@@ -230,12 +230,12 @@ contains
                 end if
             case('2')
                 ! Could be F9-F12 or alternate modified keys
-                char_code = terminal_read_char()
+                char_code = terminal_read_char_escape()
                 if (char_code >= 0) then
                     ch3 = achar(char_code)
                     if (ch3 == '0' .or. ch3 == '1' .or. ch3 == '3' .or. ch3 == '4') then
                         ! Function keys F9-F12: ESC [ 2 X ~ or ESC [ 2 X ; modifier ~
-                        char_code = terminal_read_char()
+                        char_code = terminal_read_char_escape()
                         if (char_code >= 0) then
                             ch = achar(char_code)
                             if (ch == '~') then
@@ -257,7 +257,7 @@ contains
                         end if
                     else if (ch3 == ';') then
                         ! ESC [ 2 ; A format (shift+arrow)
-                        char_code = terminal_read_char()
+                        char_code = terminal_read_char_escape()
                         if (char_code >= 0) then
                             ch = achar(char_code)
                             key_str = 'shift-'
@@ -297,7 +297,7 @@ contains
             end select
         else if (ch1 == 'O') then
             ! SS3 sequence (e.g., function keys F1-F4)
-            char_code = terminal_read_char()
+            char_code = terminal_read_char_escape()
             if (char_code < 0) then
                 ! Timeout - this is just Alt+O
                 key_str = 'alt-o'
@@ -319,12 +319,12 @@ contains
             end select
         else if (ch1 == achar(27)) then
             ! ESC ESC - likely Alt+something
-            char_code = terminal_read_char()
+            char_code = terminal_read_char_escape()
             if (char_code >= 0) then
                 ch2 = achar(char_code)
                 if (ch2 == '[') then
                     ! ESC ESC [ - Alt+arrow keys or Alt+modified keys
-                    char_code = terminal_read_char()
+                    char_code = terminal_read_char_escape()
                     if (char_code >= 0) then
                         ch3 = achar(char_code)
                         select case(ch3)
@@ -338,7 +338,7 @@ contains
                             key_str = 'alt-left'
                         case('3')
                             ! Could be Alt+Delete (ESC ESC [ 3 ~)
-                            char_code = terminal_read_char()
+                            char_code = terminal_read_char_escape()
                             if (char_code >= 0 .and. achar(char_code) == '~') then
                                 key_str = 'alt-delete'
                             end if
@@ -406,7 +406,7 @@ contains
             read_count = read_count + 1
             if (read_count > 20) exit  ! Safety limit
 
-            char_code = terminal_read_char()
+            char_code = terminal_read_char_escape()
             if (char_code >= 0) then
                 ch = achar(char_code)
                 ios = 0
@@ -506,14 +506,14 @@ contains
         read(modifier_char, '(i1)') modifier
 
         ! Read the next character - might be the key or a semicolon
-        char_code = terminal_read_char()
+        char_code = terminal_read_char_escape()
         if (char_code < 0) return
         ch = achar(char_code)
 
         ! Check if there's a semicolon (ESC [ 2 ; A format) or direct key (ESC [ 2 A)
         if (ch == ';') then
             ! Read the actual key
-            char_code = terminal_read_char()
+            char_code = terminal_read_char_escape()
             if (char_code < 0) return
             ch = achar(char_code)
         end if
@@ -574,7 +574,7 @@ contains
             read_count = read_count + 1
             if (read_count > 20) exit
 
-            char_code = terminal_read_char()
+            char_code = terminal_read_char_escape()
             if (char_code < 0) exit
 
             ch = achar(char_code)
@@ -641,7 +641,7 @@ contains
 
         ! Read modifier sequence (already past the semicolon)
         do
-            char_code = terminal_read_char()
+            char_code = terminal_read_char_escape()
             if (char_code >= 0) then
                 ch = achar(char_code)
                 ios = 0
@@ -738,12 +738,12 @@ contains
         end if
 
         ! Read modifier (should be a digit 2-8)
-        char_code = terminal_read_char()
+        char_code = terminal_read_char_escape()
         if (char_code < 0) return
         modifier_ch = achar(char_code)
 
         ! Read terminating ~
-        char_code = terminal_read_char()
+        char_code = terminal_read_char_escape()
         if (char_code < 0 .or. achar(char_code) /= '~') return
 
         ! Parse modifier: 2=Shift, 3=Alt, 4=Alt+Shift, 5=Ctrl, 6=Ctrl+Shift, 7=Alt+Ctrl, 8=Alt+Shift
@@ -784,7 +784,7 @@ contains
 
         ! Read until 'M' (press) or 'm' (release)
         do
-            char_code = terminal_read_char()
+            char_code = terminal_read_char_escape()
             if (char_code >= 0) then
                 ch = achar(char_code)
                 ios = 0

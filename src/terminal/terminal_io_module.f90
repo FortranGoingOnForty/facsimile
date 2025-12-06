@@ -4,7 +4,9 @@ module terminal_io_module
     use raw_mode_module, only: raw_enable_raw_mode => enable_raw_mode, &
                                raw_disable_raw_mode => disable_raw_mode, &
                                raw_input_available => input_available, &
-                               raw_read_char_timeout => read_char_timeout
+                               raw_read_char_timeout => read_char_timeout, &
+                               raw_read_char_escape => read_char_escape, &
+                               raw_input_available_count => input_available_count
     implicit none
     private
 
@@ -13,6 +15,7 @@ module terminal_io_module
     public :: terminal_get_size, terminal_enable_raw_mode, terminal_disable_raw_mode
     public :: terminal_write, terminal_enable_mouse, terminal_disable_mouse
     public :: terminal_input_available, terminal_read_char
+    public :: terminal_read_char_escape, terminal_input_available_count
 
     ! ANSI escape codes
     character(len=*), parameter :: ESC = char(27)
@@ -117,6 +120,18 @@ contains
         integer :: ch
         ch = raw_read_char_timeout()
     end function terminal_read_char
+
+    ! Fast read for escape sequences (5ms timeout)
+    function terminal_read_char_escape() result(ch)
+        integer :: ch
+        ch = raw_read_char_escape()
+    end function terminal_read_char_escape
+
+    ! Get count of available input bytes
+    function terminal_input_available_count() result(count)
+        integer :: count
+        count = raw_input_available_count()
+    end function terminal_input_available_count
 
     subroutine terminal_write(text)
         character(len=*), intent(in) :: text

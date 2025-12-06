@@ -8,7 +8,7 @@ program facsimile
     use renderer_module
     use command_handler_module, only: handle_key_command, init_command_handler, cleanup_command_handler, &
                                       save_initial_state_for_undo, search_pattern, match_case_sensitive, &
-                                      g_lsp_modified_buffer, g_lsp_ui_changed
+                                      g_lsp_modified_buffer, g_lsp_ui_changed, g_cursor_only_move
     use workspace_module
     use backup_module
     use save_prompt_module
@@ -434,27 +434,30 @@ program facsimile
             call handle_key_command(key_input, editor, buffer, should_quit)
 
             ! Sync back to active pane and other instances
-            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-                if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
-                    size(editor%tabs(editor%active_tab_index)%panes) > 0) then
-                    ! Get active pane index
-                    status = editor%tabs(editor%active_tab_index)%active_pane_index
-                    if (status > 0 .and. status <= size(editor%tabs(editor%active_tab_index)%panes)) then
-                        ! Copy main buffer back to active pane's buffer
-                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(status)%buffer, buffer)
+            ! Skip buffer sync for cursor-only moves (buffer content unchanged)
+            if (.not. g_cursor_only_move) then
+                if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                    if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
+                        size(editor%tabs(editor%active_tab_index)%panes) > 0) then
+                        ! Get active pane index
+                        status = editor%tabs(editor%active_tab_index)%active_pane_index
+                        if (status > 0 .and. status <= size(editor%tabs(editor%active_tab_index)%panes)) then
+                            ! Copy main buffer back to active pane's buffer
+                            call copy_buffer(editor%tabs(editor%active_tab_index)%panes(status)%buffer, buffer)
 
-                        ! Sync to all instances of this file
-                        if (allocated(editor%tabs(editor%active_tab_index)%panes(status)%filename)) then
-                            call sync_buffer_to_all_instances(editor, &
-                                editor%tabs(editor%active_tab_index)%panes(status)%filename, buffer)
+                            ! Sync to all instances of this file
+                            if (allocated(editor%tabs(editor%active_tab_index)%panes(status)%filename)) then
+                                call sync_buffer_to_all_instances(editor, &
+                                    editor%tabs(editor%active_tab_index)%panes(status)%filename, buffer)
+                            end if
                         end if
+
+                        ! Also update tab buffer for backwards compatibility
+                        call copy_buffer(editor%tabs(editor%active_tab_index)%buffer, buffer)
+
+                        ! Sync modified flag from buffer to tab
+                        editor%tabs(editor%active_tab_index)%modified = buffer%modified
                     end if
-
-                    ! Also update tab buffer for backwards compatibility
-                    call copy_buffer(editor%tabs(editor%active_tab_index)%buffer, buffer)
-
-                    ! Sync modified flag from buffer to tab
-                    editor%tabs(editor%active_tab_index)%modified = buffer%modified
                 end if
             end if
 
@@ -462,7 +465,11 @@ program facsimile
                 running = .false.
             else
                 ! Re-render screen after each command
-                if (editor%fuss_mode_active) then
+                ! Use fast path for cursor-only movements
+                if (g_cursor_only_move) then
+                    call render_cursor_only(buffer, editor, allocated(search_pattern), match_case_sensitive)
+                    g_cursor_only_move = .false.
+                else if (editor%fuss_mode_active) then
                     call render_screen_with_tree(buffer, editor, allocated(search_pattern), match_case_sensitive)
                 else
                     call render_screen(buffer, editor, allocated(search_pattern), match_case_sensitive)

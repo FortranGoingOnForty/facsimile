@@ -5,9 +5,17 @@
 #include <stdio.h>
 #include <errno.h>
 #include <sys/ioctl.h>
+#include <sys/select.h>
+#include <string.h>
 
 static struct termios orig_termios;
 static int raw_mode_enabled = 0;
+
+// Input buffer for batching reads
+#define INPUT_BUFFER_SIZE 256
+static unsigned char input_buffer[INPUT_BUFFER_SIZE];
+static int buffer_start = 0;
+static int buffer_end = 0;
 
 // Enable raw mode - returns 0 on success, -1 on failure
 int enable_raw_mode(void) {
@@ -31,15 +39,17 @@ int enable_raw_mode(void) {
     // Local flags: disable canonical mode, echo, signals, extended input processing
     raw.c_lflag &= ~(tcflag_t)(ECHO | ICANON | ISIG | IEXTEN);
 
-    // Control characters: minimum bytes and timeout for read()
-    raw.c_cc[VMIN] = 0;  // Return each byte, or zero for timeout
-    raw.c_cc[VTIME] = 1; // 100ms timeout (unit is 1/10 second)
+    // Control characters: non-blocking reads
+    // We'll use select() for timeout management instead of VTIME
+    raw.c_cc[VMIN] = 0;   // Don't block
+    raw.c_cc[VTIME] = 0;  // No timeout - we use select() instead
 
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) {
         return -1;
     }
 
     raw_mode_enabled = 1;
+    buffer_start = buffer_end = 0;
     return 0;
 }
 
@@ -52,11 +62,18 @@ int disable_raw_mode(void) {
     }
 
     raw_mode_enabled = 0;
+    buffer_start = buffer_end = 0;
     return 0;
 }
 
 // Check if input is available (non-blocking)
 int input_available(void) {
+    // First check our buffer
+    if (buffer_start < buffer_end) {
+        return 1;
+    }
+
+    // Then check stdin
     int nread;
     if (ioctl(STDIN_FILENO, FIONREAD, &nread) == -1) {
         return 0;
@@ -64,13 +81,105 @@ int input_available(void) {
     return nread > 0;
 }
 
-// Read a single character (with timeout)
-int read_char_timeout(void) {
-    char c;
-    ssize_t nread = read(STDIN_FILENO, &c, 1);
-    if (nread == 1) {
-        return (unsigned char)c;
-    } else {
-        return -1; // No input or error
+// Get count of available input bytes
+int input_available_count(void) {
+    int buffered = buffer_end - buffer_start;
+    int pending = 0;
+    if (ioctl(STDIN_FILENO, FIONREAD, &pending) == -1) {
+        pending = 0;
     }
+    return buffered + pending;
+}
+
+// Fill the input buffer with all available data
+static void fill_input_buffer(void) {
+    // Shift remaining data to start of buffer
+    if (buffer_start > 0 && buffer_start < buffer_end) {
+        memmove(input_buffer, input_buffer + buffer_start, buffer_end - buffer_start);
+        buffer_end -= buffer_start;
+        buffer_start = 0;
+    } else if (buffer_start >= buffer_end) {
+        buffer_start = buffer_end = 0;
+    }
+
+    // Read all available data into buffer
+    int space = INPUT_BUFFER_SIZE - buffer_end;
+    if (space > 0) {
+        ssize_t nread = read(STDIN_FILENO, input_buffer + buffer_end, space);
+        if (nread > 0) {
+            buffer_end += nread;
+        }
+    }
+}
+
+// Read a single character with smart timeout
+// - If data is buffered or available, return immediately
+// - Otherwise wait up to timeout_ms for input
+// - Use short timeout (5ms) for escape sequence continuation
+// - Use longer timeout (50ms) for initial wait when idle
+int read_char_timeout(void) {
+    // Return from buffer if available
+    if (buffer_start < buffer_end) {
+        return input_buffer[buffer_start++];
+    }
+
+    // Try to fill buffer
+    fill_input_buffer();
+    if (buffer_start < buffer_end) {
+        return input_buffer[buffer_start++];
+    }
+
+    // No data available - wait with select()
+    // Use 50ms timeout for responsive feel without busy-waiting
+    fd_set readfds;
+    struct timeval tv;
+
+    FD_ZERO(&readfds);
+    FD_SET(STDIN_FILENO, &readfds);
+    tv.tv_sec = 0;
+    tv.tv_usec = 50000;  // 50ms - good balance of responsiveness and CPU usage
+
+    int ret = select(STDIN_FILENO + 1, &readfds, NULL, NULL, &tv);
+    if (ret > 0) {
+        fill_input_buffer();
+        if (buffer_start < buffer_end) {
+            return input_buffer[buffer_start++];
+        }
+    }
+
+    return -1;  // No input
+}
+
+// Read a character with very short timeout (for escape sequences)
+// This is used when we've already seen ESC and are looking for the rest
+int read_char_escape(void) {
+    // Return from buffer if available
+    if (buffer_start < buffer_end) {
+        return input_buffer[buffer_start++];
+    }
+
+    // Try immediate read first
+    fill_input_buffer();
+    if (buffer_start < buffer_end) {
+        return input_buffer[buffer_start++];
+    }
+
+    // Short wait for escape sequence continuation (5ms)
+    fd_set readfds;
+    struct timeval tv;
+
+    FD_ZERO(&readfds);
+    FD_SET(STDIN_FILENO, &readfds);
+    tv.tv_sec = 0;
+    tv.tv_usec = 5000;  // 5ms - fast escape sequence detection
+
+    int ret = select(STDIN_FILENO + 1, &readfds, NULL, NULL, &tv);
+    if (ret > 0) {
+        fill_input_buffer();
+        if (buffer_start < buffer_end) {
+            return input_buffer[buffer_start++];
+        }
+    }
+
+    return -1;
 }

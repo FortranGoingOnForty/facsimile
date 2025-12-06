@@ -79,11 +79,14 @@ module command_handler_module
     public :: search_pattern, match_case_sensitive  ! Exposed for status bar hint
     public :: g_lsp_modified_buffer  ! Flag for immediate render after LSP edits
     public :: g_lsp_ui_changed       ! Flag for immediate render after LSP UI changes
+    public :: g_cursor_only_move     ! Flag for cursor-only moves (skip full re-render)
 
     ! Flag to track if LSP modified the buffer (for immediate rendering)
     logical :: g_lsp_modified_buffer = .false.
     ! Flag to track if LSP changed UI panels (for immediate rendering)
     logical :: g_lsp_ui_changed = .false.
+    ! Flag for cursor-only movements (can skip full re-render)
+    logical :: g_cursor_only_move = .false.
 
     type(yank_stack_t) :: yank_stack
     type(undo_stack_t) :: undo_stack
@@ -416,6 +419,7 @@ contains
             end if
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
+            g_cursor_only_move = .true.
 
         case('down')
             ! If completion popup is visible, navigate it instead
@@ -438,6 +442,7 @@ contains
             end if
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
+            g_cursor_only_move = .true.
 
         case('left')
             ! Hide hover tooltip on movement
@@ -457,6 +462,7 @@ contains
             end if
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
+            g_cursor_only_move = .true.
 
         case('right')
             ! Hide hover tooltip on movement
@@ -476,6 +482,7 @@ contains
             end if
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
+            g_cursor_only_move = .true.
 
         ! Selection with shift+motion
         case('shift-up')

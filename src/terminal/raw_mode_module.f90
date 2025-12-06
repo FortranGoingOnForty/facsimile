@@ -4,6 +4,7 @@ module raw_mode_module
     private
 
     public :: enable_raw_mode, disable_raw_mode, input_available, read_char_timeout
+    public :: read_char_escape, input_available_count
 
     ! C function interfaces
     interface
@@ -22,10 +23,20 @@ module raw_mode_module
             integer(c_int) :: c_input_available
         end function c_input_available
 
+        function c_input_available_count() bind(C, name="input_available_count")
+            import :: c_int
+            integer(c_int) :: c_input_available_count
+        end function c_input_available_count
+
         function c_read_char_timeout() bind(C, name="read_char_timeout")
             import :: c_int
             integer(c_int) :: c_read_char_timeout
         end function c_read_char_timeout
+
+        function c_read_char_escape() bind(C, name="read_char_escape")
+            import :: c_int
+            integer(c_int) :: c_read_char_escape
+        end function c_read_char_escape
     end interface
 
 contains
@@ -54,6 +65,14 @@ contains
         available = (result > 0)
     end function input_available
 
+    function input_available_count() result(count)
+        integer :: count
+        integer(c_int) :: result
+
+        result = c_input_available_count()
+        count = result
+    end function input_available_count
+
     function read_char_timeout() result(ch)
         integer :: ch
         integer(c_int) :: result
@@ -61,5 +80,14 @@ contains
         result = c_read_char_timeout()
         ch = result
     end function read_char_timeout
+
+    ! Fast read for escape sequences (5ms timeout instead of 50ms)
+    function read_char_escape() result(ch)
+        integer :: ch
+        integer(c_int) :: result
+
+        result = c_read_char_escape()
+        ch = result
+    end function read_char_escape
 
 end module raw_mode_module

@@ -27,6 +27,7 @@ module renderer_module
     public :: render_screen_with_tree, render_screen_with_lsp_panel
     public :: tree_state
     public :: update_syntax_highlighter
+    public :: render_cursor_only  ! Fast path for cursor-only updates
 
     ! Configuration
     logical :: show_line_numbers = .true.
@@ -772,6 +773,38 @@ contains
             end if
         end if
     end subroutine render_cursor
+
+    ! Fast path for cursor-only updates - just update cursor and status bar
+    ! Use this when only cursor position changed, not buffer content
+    subroutine render_cursor_only(buffer, editor, match_mode_active, match_case_sens)
+        type(buffer_t), intent(in) :: buffer
+        type(editor_state_t), intent(inout) :: editor
+        logical, intent(in), optional :: match_mode_active
+        logical, intent(in), optional :: match_case_sens
+
+        ! Just render the status bar and position cursor
+        call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
+
+        ! Handle panes vs single buffer
+        if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0 .and. &
+            editor%active_tab_index <= size(editor%tabs)) then
+            if (allocated(editor%tabs(editor%active_tab_index)%panes)) then
+                if (editor%fuss_mode_active) then
+                    call render_cursor_for_panes_with_tree(editor, 31, editor%screen_cols - 30)
+                else
+                    call render_cursor_for_panes(editor)
+                end if
+                return
+            end if
+        end if
+
+        ! Single buffer mode
+        if (editor%fuss_mode_active) then
+            call render_cursor_in_pane(editor, 31, editor%screen_cols - 30)
+        else
+            call render_cursor(editor, buffer)
+        end if
+    end subroutine render_cursor_only
 
     subroutine update_viewport(editor)
         use editor_state_module, only: pane_t
