@@ -1,3 +1,232 @@
+// LSP Process wrapper - platform independent implementation
+// Handles process creation, pipes, and I/O for LSP servers
+
+#ifdef _WIN32
+// Windows implementation
+#include <windows.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct {
+    HANDLE hProcess;
+    DWORD pid;
+    HANDLE stdin_write;
+    HANDLE stdout_read;
+    HANDLE stderr_read;
+} lsp_process_t;
+
+// Get temp directory path
+static const char* get_temp_dir(void) {
+    static char temp_path[MAX_PATH];
+    GetTempPathA(MAX_PATH, temp_path);
+    return temp_path;
+}
+
+// Start an LSP server process
+lsp_process_t* lsp_start_server(const char* command) {
+    lsp_process_t* proc = (lsp_process_t*)malloc(sizeof(lsp_process_t));
+    if (!proc) return NULL;
+
+    memset(proc, 0, sizeof(lsp_process_t));
+
+    // Create pipes for stdin, stdout, stderr
+    HANDLE stdin_read, stdin_write;
+    HANDLE stdout_read, stdout_write;
+    HANDLE stderr_read, stderr_write;
+
+    SECURITY_ATTRIBUTES sa;
+    sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+    sa.bInheritHandle = TRUE;
+    sa.lpSecurityDescriptor = NULL;
+
+    if (!CreatePipe(&stdin_read, &stdin_write, &sa, 0)) {
+        free(proc);
+        return NULL;
+    }
+    // Don't inherit the write end of stdin
+    SetHandleInformation(stdin_write, HANDLE_FLAG_INHERIT, 0);
+
+    if (!CreatePipe(&stdout_read, &stdout_write, &sa, 0)) {
+        CloseHandle(stdin_read);
+        CloseHandle(stdin_write);
+        free(proc);
+        return NULL;
+    }
+    // Don't inherit the read end of stdout
+    SetHandleInformation(stdout_read, HANDLE_FLAG_INHERIT, 0);
+
+    if (!CreatePipe(&stderr_read, &stderr_write, &sa, 0)) {
+        CloseHandle(stdin_read);
+        CloseHandle(stdin_write);
+        CloseHandle(stdout_read);
+        CloseHandle(stdout_write);
+        free(proc);
+        return NULL;
+    }
+    // Don't inherit the read end of stderr
+    SetHandleInformation(stderr_read, HANDLE_FLAG_INHERIT, 0);
+
+    // Set up process startup info
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.hStdInput = stdin_read;
+    si.hStdOutput = stdout_write;
+    si.hStdError = stderr_write;
+    si.dwFlags |= STARTF_USESTDHANDLES;
+
+    ZeroMemory(&pi, sizeof(pi));
+
+    // Build command line for cmd.exe
+    char cmd_line[2048];
+    snprintf(cmd_line, sizeof(cmd_line), "cmd.exe /c %s", command);
+
+    // Create the process
+    if (!CreateProcessA(
+            NULL,           // Application name (use command line)
+            cmd_line,       // Command line
+            NULL,           // Process security attributes
+            NULL,           // Thread security attributes
+            TRUE,           // Inherit handles
+            CREATE_NO_WINDOW, // Don't create a console window
+            NULL,           // Environment (inherit)
+            NULL,           // Current directory (inherit)
+            &si,            // Startup info
+            &pi             // Process info
+        )) {
+        CloseHandle(stdin_read);
+        CloseHandle(stdin_write);
+        CloseHandle(stdout_read);
+        CloseHandle(stdout_write);
+        CloseHandle(stderr_read);
+        CloseHandle(stderr_write);
+        free(proc);
+        return NULL;
+    }
+
+    // Close handles we don't need
+    CloseHandle(stdin_read);
+    CloseHandle(stdout_write);
+    CloseHandle(stderr_write);
+    CloseHandle(pi.hThread);
+
+    proc->hProcess = pi.hProcess;
+    proc->pid = pi.dwProcessId;
+    proc->stdin_write = stdin_write;
+    proc->stdout_read = stdout_read;
+    proc->stderr_read = stderr_read;
+
+    // Make stdout and stderr non-blocking by using overlapped I/O
+    // For simplicity, we'll use PeekNamedPipe for non-blocking reads
+
+    // Debug log
+    {
+        char log_path[MAX_PATH];
+        snprintf(log_path, sizeof(log_path), "%sfac_lsp_read.log", get_temp_dir());
+        FILE* dbg = fopen(log_path, "a");
+        if (dbg) {
+            fprintf(dbg, "Started LSP server: pid=%lu, cmd=%s\n",
+                    (unsigned long)proc->pid, command);
+            fclose(dbg);
+        }
+    }
+
+    return proc;
+}
+
+// Send data to LSP server
+int lsp_send_message(lsp_process_t* proc, const char* message, int len) {
+    if (!proc || proc->stdin_write == INVALID_HANDLE_VALUE) return -1;
+
+    DWORD written;
+    if (!WriteFile(proc->stdin_write, message, (DWORD)len, &written, NULL)) {
+        return -1;
+    }
+
+    return (int)written;
+}
+
+// Read data from LSP server (non-blocking)
+int lsp_read_message(lsp_process_t* proc, char* buffer, int max_len) {
+    if (!proc || proc->stdout_read == INVALID_HANDLE_VALUE) return -1;
+
+    // Check if data is available
+    DWORD available = 0;
+    if (!PeekNamedPipe(proc->stdout_read, NULL, 0, NULL, &available, NULL)) {
+        return -1;
+    }
+
+    if (available == 0) {
+        return 0;  // No data available
+    }
+
+    // Read available data
+    DWORD bytes_read;
+    DWORD to_read = (available < (DWORD)(max_len - 1)) ? available : (DWORD)(max_len - 1);
+
+    if (!ReadFile(proc->stdout_read, buffer, to_read, &bytes_read, NULL)) {
+        return -1;
+    }
+
+    if (bytes_read > 0) {
+        buffer[bytes_read] = '\0';
+    }
+
+    return (int)bytes_read;
+}
+
+// Check if process is still running
+int lsp_is_running(lsp_process_t* proc) {
+    if (!proc || proc->hProcess == INVALID_HANDLE_VALUE) return 0;
+
+    DWORD exit_code;
+    if (!GetExitCodeProcess(proc->hProcess, &exit_code)) {
+        return 0;
+    }
+
+    return (exit_code == STILL_ACTIVE) ? 1 : 0;
+}
+
+// Stop LSP server
+void lsp_stop_server(lsp_process_t* proc) {
+    if (!proc) return;
+
+    if (proc->stdin_write != INVALID_HANDLE_VALUE) {
+        CloseHandle(proc->stdin_write);
+        proc->stdin_write = INVALID_HANDLE_VALUE;
+    }
+
+    if (proc->stdout_read != INVALID_HANDLE_VALUE) {
+        CloseHandle(proc->stdout_read);
+        proc->stdout_read = INVALID_HANDLE_VALUE;
+    }
+
+    if (proc->stderr_read != INVALID_HANDLE_VALUE) {
+        CloseHandle(proc->stderr_read);
+        proc->stderr_read = INVALID_HANDLE_VALUE;
+    }
+
+    if (proc->hProcess != INVALID_HANDLE_VALUE) {
+        // Try graceful termination first
+        TerminateProcess(proc->hProcess, 0);
+        WaitForSingleObject(proc->hProcess, 1000);  // Wait up to 1 second
+        CloseHandle(proc->hProcess);
+        proc->hProcess = INVALID_HANDLE_VALUE;
+    }
+
+    free(proc);
+}
+
+// Get process ID
+DWORD lsp_get_pid(lsp_process_t* proc) {
+    return proc ? proc->pid : 0;
+}
+
+#else
+// Unix implementation
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -246,7 +475,9 @@ pid_t lsp_get_pid(lsp_process_t* proc) {
     return proc ? proc->pid : -1;
 }
 
-// Fortran-callable wrappers
+#endif
+
+// Fortran-callable wrappers (platform independent)
 void lsp_start_server_f(const char* command, int command_len, void** handle) {
     char cmd[1024];
     int len = command_len < 1023 ? command_len : 1023;
@@ -280,5 +511,9 @@ int lsp_is_running_f(void** handle) {
 
 int lsp_get_pid_f(void** handle) {
     if (!*handle) return -1;
+#ifdef _WIN32
+    return (int)lsp_get_pid((lsp_process_t*)*handle);
+#else
     return lsp_get_pid((lsp_process_t*)*handle);
+#endif
 }

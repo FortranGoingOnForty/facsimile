@@ -1,4 +1,289 @@
-// C wrapper for termios functions to enable raw mode in Fortran
+// C wrapper for terminal functions to enable raw mode in Fortran
+// Platform-independent implementation for Unix and Windows
+
+#ifdef _WIN32
+// Windows implementation
+#include <windows.h>
+#include <conio.h>
+#include <stdio.h>
+#include <string.h>
+
+static HANDLE hStdin = INVALID_HANDLE_VALUE;
+static HANDLE hStdout = INVALID_HANDLE_VALUE;
+static DWORD orig_stdin_mode = 0;
+static DWORD orig_stdout_mode = 0;
+static int raw_mode_enabled = 0;
+
+// Input buffer for batching reads
+#define INPUT_BUFFER_SIZE 256
+static unsigned char input_buffer[INPUT_BUFFER_SIZE];
+static int buffer_start = 0;
+static int buffer_end = 0;
+
+// Flush any pending input from stdin
+static void flush_input(void) {
+    FlushConsoleInputBuffer(hStdin);
+    buffer_start = buffer_end = 0;
+}
+
+// Enable raw mode - returns 0 on success, -1 on failure
+int enable_raw_mode(void) {
+    if (raw_mode_enabled) return 0;
+
+    hStdin = GetStdHandle(STD_INPUT_HANDLE);
+    hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
+
+    if (hStdin == INVALID_HANDLE_VALUE || hStdout == INVALID_HANDLE_VALUE) {
+        return -1;
+    }
+
+    // Save original console modes
+    if (!GetConsoleMode(hStdin, &orig_stdin_mode)) {
+        return -1;
+    }
+    if (!GetConsoleMode(hStdout, &orig_stdout_mode)) {
+        return -1;
+    }
+
+    // Set input mode: disable line input, echo, and processed input
+    DWORD new_stdin_mode = orig_stdin_mode;
+    new_stdin_mode &= ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
+    new_stdin_mode |= ENABLE_VIRTUAL_TERMINAL_INPUT;  // Enable VT input sequences
+
+    if (!SetConsoleMode(hStdin, new_stdin_mode)) {
+        // Try without VT input (older Windows)
+        new_stdin_mode &= ~ENABLE_VIRTUAL_TERMINAL_INPUT;
+        if (!SetConsoleMode(hStdin, new_stdin_mode)) {
+            return -1;
+        }
+    }
+
+    // Enable VT processing for output (ANSI escape codes)
+    DWORD new_stdout_mode = orig_stdout_mode;
+    new_stdout_mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
+
+    if (!SetConsoleMode(hStdout, new_stdout_mode)) {
+        // Try with just VT processing
+        new_stdout_mode = orig_stdout_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        if (!SetConsoleMode(hStdout, new_stdout_mode)) {
+            // Restore stdin and fail
+            SetConsoleMode(hStdin, orig_stdin_mode);
+            return -1;
+        }
+    }
+
+    raw_mode_enabled = 1;
+    buffer_start = buffer_end = 0;
+    flush_input();
+
+    return 0;
+}
+
+// Disable raw mode - returns 0 on success, -1 on failure
+int disable_raw_mode(void) {
+    if (!raw_mode_enabled) return 0;
+
+    int result = 0;
+    if (!SetConsoleMode(hStdin, orig_stdin_mode)) {
+        result = -1;
+    }
+    if (!SetConsoleMode(hStdout, orig_stdout_mode)) {
+        result = -1;
+    }
+
+    raw_mode_enabled = 0;
+    buffer_start = buffer_end = 0;
+    return result;
+}
+
+// Check if input is available (non-blocking)
+int input_available(void) {
+    if (buffer_start < buffer_end) {
+        return 1;
+    }
+
+    DWORD num_events = 0;
+    if (!GetNumberOfConsoleInputEvents(hStdin, &num_events)) {
+        return 0;
+    }
+
+    if (num_events == 0) return 0;
+
+    // Peek to see if there's actually a key event
+    INPUT_RECORD ir[16];
+    DWORD events_read = 0;
+    if (!PeekConsoleInput(hStdin, ir, 16, &events_read)) {
+        return 0;
+    }
+
+    for (DWORD i = 0; i < events_read; i++) {
+        if (ir[i].EventType == KEY_EVENT && ir[i].Event.KeyEvent.bKeyDown) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+// Get count of available input bytes
+int input_available_count(void) {
+    int buffered = buffer_end - buffer_start;
+    DWORD num_events = 0;
+    GetNumberOfConsoleInputEvents(hStdin, &num_events);
+    return buffered + (int)num_events;
+}
+
+// Read a single character from console
+static int read_console_char(int timeout_ms) {
+    DWORD wait_result;
+
+    if (timeout_ms < 0) {
+        wait_result = WaitForSingleObject(hStdin, INFINITE);
+    } else {
+        wait_result = WaitForSingleObject(hStdin, (DWORD)timeout_ms);
+    }
+
+    if (wait_result != WAIT_OBJECT_0) {
+        return -1;  // Timeout or error
+    }
+
+    INPUT_RECORD ir;
+    DWORD events_read;
+
+    while (ReadConsoleInput(hStdin, &ir, 1, &events_read) && events_read > 0) {
+        if (ir.EventType == KEY_EVENT && ir.Event.KeyEvent.bKeyDown) {
+            KEY_EVENT_RECORD *key = &ir.Event.KeyEvent;
+
+            // Handle special keys by generating escape sequences
+            if (key->wVirtualKeyCode == VK_UP) {
+                input_buffer[buffer_end++] = 27;  // ESC
+                input_buffer[buffer_end++] = '[';
+                input_buffer[buffer_end++] = 'A';
+                return input_buffer[buffer_start++];
+            } else if (key->wVirtualKeyCode == VK_DOWN) {
+                input_buffer[buffer_end++] = 27;
+                input_buffer[buffer_end++] = '[';
+                input_buffer[buffer_end++] = 'B';
+                return input_buffer[buffer_start++];
+            } else if (key->wVirtualKeyCode == VK_RIGHT) {
+                input_buffer[buffer_end++] = 27;
+                input_buffer[buffer_end++] = '[';
+                input_buffer[buffer_end++] = 'C';
+                return input_buffer[buffer_start++];
+            } else if (key->wVirtualKeyCode == VK_LEFT) {
+                input_buffer[buffer_end++] = 27;
+                input_buffer[buffer_end++] = '[';
+                input_buffer[buffer_end++] = 'D';
+                return input_buffer[buffer_start++];
+            } else if (key->wVirtualKeyCode == VK_HOME) {
+                input_buffer[buffer_end++] = 27;
+                input_buffer[buffer_end++] = '[';
+                input_buffer[buffer_end++] = 'H';
+                return input_buffer[buffer_start++];
+            } else if (key->wVirtualKeyCode == VK_END) {
+                input_buffer[buffer_end++] = 27;
+                input_buffer[buffer_end++] = '[';
+                input_buffer[buffer_end++] = 'F';
+                return input_buffer[buffer_start++];
+            } else if (key->wVirtualKeyCode == VK_DELETE) {
+                input_buffer[buffer_end++] = 27;
+                input_buffer[buffer_end++] = '[';
+                input_buffer[buffer_end++] = '3';
+                input_buffer[buffer_end++] = '~';
+                return input_buffer[buffer_start++];
+            } else if (key->wVirtualKeyCode == VK_PRIOR) {  // Page Up
+                input_buffer[buffer_end++] = 27;
+                input_buffer[buffer_end++] = '[';
+                input_buffer[buffer_end++] = '5';
+                input_buffer[buffer_end++] = '~';
+                return input_buffer[buffer_start++];
+            } else if (key->wVirtualKeyCode == VK_NEXT) {  // Page Down
+                input_buffer[buffer_end++] = 27;
+                input_buffer[buffer_end++] = '[';
+                input_buffer[buffer_end++] = '6';
+                input_buffer[buffer_end++] = '~';
+                return input_buffer[buffer_start++];
+            } else if (key->wVirtualKeyCode == VK_INSERT) {
+                input_buffer[buffer_end++] = 27;
+                input_buffer[buffer_end++] = '[';
+                input_buffer[buffer_end++] = '2';
+                input_buffer[buffer_end++] = '~';
+                return input_buffer[buffer_start++];
+            } else if (key->wVirtualKeyCode >= VK_F1 && key->wVirtualKeyCode <= VK_F12) {
+                // F1-F12 keys
+                int fnum = key->wVirtualKeyCode - VK_F1 + 1;
+                input_buffer[buffer_end++] = 27;
+                input_buffer[buffer_end++] = 'O';
+                input_buffer[buffer_end++] = 'P' + (fnum - 1);  // Simplified
+                return input_buffer[buffer_start++];
+            } else if (key->uChar.AsciiChar != 0) {
+                // Regular ASCII character
+                return (unsigned char)key->uChar.AsciiChar;
+            }
+        }
+    }
+
+    return -1;
+}
+
+// Fill the input buffer
+static void fill_input_buffer(void) {
+    if (buffer_start > 0 && buffer_start < buffer_end) {
+        memmove(input_buffer, input_buffer + buffer_start, buffer_end - buffer_start);
+        buffer_end -= buffer_start;
+        buffer_start = 0;
+    } else if (buffer_start >= buffer_end) {
+        buffer_start = buffer_end = 0;
+    }
+}
+
+// Read a single character with smart timeout
+int read_char_timeout(void) {
+    if (buffer_start < buffer_end) {
+        return input_buffer[buffer_start++];
+    }
+
+    fill_input_buffer();
+    if (buffer_start < buffer_end) {
+        return input_buffer[buffer_start++];
+    }
+
+    return read_console_char(50);  // 50ms timeout
+}
+
+// Read a character with very short timeout (for escape sequences)
+int read_char_escape(void) {
+    if (buffer_start < buffer_end) {
+        return input_buffer[buffer_start++];
+    }
+
+    fill_input_buffer();
+    if (buffer_start < buffer_end) {
+        return input_buffer[buffer_start++];
+    }
+
+    return read_console_char(5);  // 5ms timeout
+}
+
+// Public function to flush input buffer
+void flush_input_buffer(void) {
+    flush_input();
+}
+
+// Get terminal size
+void get_terminal_size(int *rows, int *cols) {
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(hStdout, &csbi)) {
+        *cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+        *rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+    } else {
+        *rows = 24;
+        *cols = 80;
+    }
+}
+
+#else
+// Unix implementation (original code)
 #include <termios.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -16,6 +301,29 @@ static int raw_mode_enabled = 0;
 static unsigned char input_buffer[INPUT_BUFFER_SIZE];
 static int buffer_start = 0;
 static int buffer_end = 0;
+
+// Flush any pending input from stdin
+static void flush_input(void) {
+    // Discard any pending input data
+    tcflush(STDIN_FILENO, TCIFLUSH);
+
+    // Also drain our internal buffer
+    buffer_start = buffer_end = 0;
+
+    // Small delay to let any in-flight data arrive and be discarded
+    struct timeval tv = {0, 10000};  // 10ms
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    FD_SET(STDIN_FILENO, &readfds);
+    while (select(STDIN_FILENO + 1, &readfds, NULL, NULL, &tv) > 0) {
+        char discard[256];
+        read(STDIN_FILENO, discard, sizeof(discard));
+        tv.tv_sec = 0;
+        tv.tv_usec = 5000;  // Keep draining with shorter timeout
+        FD_ZERO(&readfds);
+        FD_SET(STDIN_FILENO, &readfds);
+    }
+}
 
 // Enable raw mode - returns 0 on success, -1 on failure
 int enable_raw_mode(void) {
@@ -50,6 +358,10 @@ int enable_raw_mode(void) {
 
     raw_mode_enabled = 1;
     buffer_start = buffer_end = 0;
+
+    // Flush any stale input that might be waiting
+    flush_input();
+
     return 0;
 }
 
@@ -113,10 +425,6 @@ static void fill_input_buffer(void) {
 }
 
 // Read a single character with smart timeout
-// - If data is buffered or available, return immediately
-// - Otherwise wait up to timeout_ms for input
-// - Use short timeout (5ms) for escape sequence continuation
-// - Use longer timeout (50ms) for initial wait when idle
 int read_char_timeout(void) {
     // Return from buffer if available
     if (buffer_start < buffer_end) {
@@ -130,14 +438,13 @@ int read_char_timeout(void) {
     }
 
     // No data available - wait with select()
-    // Use 50ms timeout for responsive feel without busy-waiting
     fd_set readfds;
     struct timeval tv;
 
     FD_ZERO(&readfds);
     FD_SET(STDIN_FILENO, &readfds);
     tv.tv_sec = 0;
-    tv.tv_usec = 50000;  // 50ms - good balance of responsiveness and CPU usage
+    tv.tv_usec = 50000;  // 50ms
 
     int ret = select(STDIN_FILENO + 1, &readfds, NULL, NULL, &tv);
     if (ret > 0) {
@@ -151,7 +458,6 @@ int read_char_timeout(void) {
 }
 
 // Read a character with very short timeout (for escape sequences)
-// This is used when we've already seen ESC and are looking for the rest
 int read_char_escape(void) {
     // Return from buffer if available
     if (buffer_start < buffer_end) {
@@ -171,7 +477,7 @@ int read_char_escape(void) {
     FD_ZERO(&readfds);
     FD_SET(STDIN_FILENO, &readfds);
     tv.tv_sec = 0;
-    tv.tv_usec = 5000;  // 5ms - fast escape sequence detection
+    tv.tv_usec = 5000;  // 5ms
 
     int ret = select(STDIN_FILENO + 1, &readfds, NULL, NULL, &tv);
     if (ret > 0) {
@@ -183,3 +489,23 @@ int read_char_escape(void) {
 
     return -1;
 }
+
+// Public function to flush input buffer (callable from Fortran)
+void flush_input_buffer(void) {
+    flush_input();
+}
+
+// Get terminal size using ioctl (no escape sequences needed)
+void get_terminal_size(int *rows, int *cols) {
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
+        *rows = ws.ws_row;
+        *cols = ws.ws_col;
+    } else {
+        // Fallback to defaults
+        *rows = 24;
+        *cols = 80;
+    }
+}
+
+#endif

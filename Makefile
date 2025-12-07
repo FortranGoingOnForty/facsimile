@@ -1,7 +1,7 @@
 # Makefile for facsimile
 # Detect operating system
-UNAME_S := $(shell uname -s)
-UNAME_M := $(shell uname -m)
+UNAME_S := $(shell uname -s 2>/dev/null || echo Windows)
+UNAME_M := $(shell uname -m 2>/dev/null || echo x86_64)
 
 # Default compilers
 FC = gfortran
@@ -51,6 +51,34 @@ ifeq ($(UNAME_S),Darwin)
         CFLAGS = -O2 -Wall
         CFLAGS_DEV = -O0 -g -Wall -Wextra -pedantic -Wconversion
     endif
+    TARGET = fac
+else ifneq (,$(findstring MINGW,$(UNAME_S)))
+    # Windows (MSYS2/MinGW)
+    FFLAGS = -O2 -Wall -ffree-line-length-none
+    FFLAGS_DEV = -O0 -g -Wall -Wextra -pedantic -Wunused-variable -Wuninitialized \
+                 -fcheck=all -fbacktrace -ffree-line-length-none
+    FFLAGS_DEBUG = -O0 -g -fcheck=all -fbacktrace -ffree-line-length-none
+    CFLAGS = -O2 -Wall
+    CFLAGS_DEV = -O0 -g -Wall -Wextra -pedantic -Wconversion
+    TARGET = fac.exe
+else ifneq (,$(findstring MSYS,$(UNAME_S)))
+    # Windows (MSYS2)
+    FFLAGS = -O2 -Wall -ffree-line-length-none
+    FFLAGS_DEV = -O0 -g -Wall -Wextra -pedantic -Wunused-variable -Wuninitialized \
+                 -fcheck=all -fbacktrace -ffree-line-length-none
+    FFLAGS_DEBUG = -O0 -g -fcheck=all -fbacktrace -ffree-line-length-none
+    CFLAGS = -O2 -Wall
+    CFLAGS_DEV = -O0 -g -Wall -Wextra -pedantic -Wconversion
+    TARGET = fac.exe
+else ifeq ($(UNAME_S),Windows)
+    # Windows (native or cross-compile)
+    FFLAGS = -O2 -Wall -ffree-line-length-none
+    FFLAGS_DEV = -O0 -g -Wall -Wextra -pedantic -Wunused-variable -Wuninitialized \
+                 -fcheck=all -fbacktrace -ffree-line-length-none
+    FFLAGS_DEBUG = -O0 -g -fcheck=all -fbacktrace -ffree-line-length-none
+    CFLAGS = -O2 -Wall
+    CFLAGS_DEV = -O0 -g -Wall -Wextra -pedantic -Wconversion
+    TARGET = fac.exe
 else
     # Linux
     FFLAGS = -O2 -Wall
@@ -59,13 +87,14 @@ else
     FFLAGS_DEBUG = -O0 -g -fcheck=all -fbacktrace
     CFLAGS = -O2 -Wall
     CFLAGS_DEV = -O0 -g -Wall -Wextra -pedantic -Wconversion
+    TARGET = fac
 endif
 
-TARGET = fac
 VERSION := $(shell cat VERSION 2>/dev/null || echo "unknown")
 
 # Source files (order matters for dependencies)
 SOURCES = src/version_module.f90 \
+          src/utils/platform_module.f90 \
           src/utils/utf8_module.f90 \
           src/utils/regex_module.f90 \
           src/buffer/text_buffer_module.f90 \
@@ -126,6 +155,7 @@ SOURCES = src/version_module.f90 \
 OBJECTS = $(SOURCES:.f90=.o)
 C_SOURCES = src/terminal/termios_wrapper.c \
             src/utils/regex_wrapper.c \
+            src/utils/platform_wrapper.c \
             src/lsp/lsp_process_wrapper.c
 C_OBJECTS = $(C_SOURCES:.c=.o)
 
@@ -152,7 +182,7 @@ $(TARGET): src/version_module.f90 $(OBJECTS) $(C_OBJECTS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(OBJECTS) $(C_OBJECTS) $(TARGET) *.mod src/*/*.mod src/workspace/*.o src/utils/*.o
+	rm -f $(OBJECTS) $(C_OBJECTS) $(TARGET) fac fac.exe *.mod src/*/*.mod src/workspace/*.o src/utils/*.o
 
 # Development build with comprehensive warnings
 dev: clean
@@ -171,7 +201,11 @@ debug: clean
 
 # Show current compiler and flags
 info:
-	@echo "Compiler: $(FC)"
+	@echo "Platform: $(UNAME_S)"
+	@echo "Architecture: $(UNAME_M)"
+	@echo "Target: $(TARGET)"
+	@echo ""
+	@echo "Fortran Compiler: $(FC)"
 	@echo "Default FFLAGS: $(FFLAGS)"
 	@echo "Dev FFLAGS: $(FFLAGS_DEV)"
 	@echo "Debug FFLAGS: $(FFLAGS_DEBUG)"

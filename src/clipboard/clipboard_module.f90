@@ -1,88 +1,125 @@
 module clipboard_module
     use iso_fortran_env, only: int32, error_unit
+    use platform_module, only: is_windows, get_temp_dir, &
+        platform_copy_to_clipboard, platform_paste_from_clipboard
     implicit none
     private
 
     public :: copy_to_clipboard, paste_from_clipboard, cut_to_clipboard
 
+    ! Internal clipboard for when system clipboard is unavailable
+    character(len=:), allocatable :: internal_clipboard
+
 contains
 
     subroutine copy_to_clipboard(text)
         character(len=*), intent(in) :: text
-        integer :: unit, ios
-        character(len=256) :: command
+        integer :: unit, ios, file_size
+        character(len=512) :: command
+        character(len=:), allocatable :: temp_dir, temp_file
 
-        ! Use pbcopy on macOS, xclip on Linux
-        ! For now, implementing macOS version
-        open(newunit=unit, file='/tmp/facsimile_clipboard.tmp', &
+        ! Guard against empty or invalid text
+        if (len_trim(text) == 0) return
+
+        ! Always store in internal clipboard as fallback
+        if (allocated(internal_clipboard)) deallocate(internal_clipboard)
+        allocate(character(len=len_trim(text)) :: internal_clipboard)
+        internal_clipboard = trim(text)
+
+        ! On Windows, use native clipboard API
+        if (is_windows()) then
+            if (platform_copy_to_clipboard(trim(text))) return
+            ! Fall through to internal clipboard only
+            return
+        end if
+
+        ! Unix: Try to also copy to system clipboard
+        ! Write text to temp file first (avoids shell escaping issues)
+        temp_dir = get_temp_dir()
+        temp_file = temp_dir // 'facsimile_clipboard.tmp'
+
+        open(newunit=unit, file=temp_file, &
              status='replace', action='write', access='stream', iostat=ios)
 
-        if (ios == 0) then
-            write(unit, iostat=ios) text
-            close(unit)
+        if (ios /= 0) return
 
-            ! Send to system clipboard
-            command = 'cat /tmp/facsimile_clipboard.tmp | pbcopy 2>/dev/null'
-            call execute_command_line(command, exitstat=ios)
+        write(unit, iostat=ios) trim(text)
+        close(unit)
 
-            if (ios /= 0) then
-                ! Try Linux xclip as fallback
-                command = 'cat /tmp/facsimile_clipboard.tmp | xclip -selection clipboard 2>/dev/null'
-                call execute_command_line(command, exitstat=ios)
-            end if
-        end if
+        if (ios /= 0) return
+
+        ! Send to system clipboard using temp file
+        ! Try multiple clipboard tools via sh -c, suppress all output
+        command = "sh -c 'cat " // temp_file // " | xsel -b -i 2>/dev/null || " // &
+                  "cat " // temp_file // " | xclip -sel c 2>/dev/null || " // &
+                  "cat " // temp_file // " | pbcopy 2>/dev/null || " // &
+                  "cat " // temp_file // " | wl-copy 2>/dev/null || true'"
+        call execute_command_line(trim(command), wait=.true., exitstat=ios)
+
+        ! Clean up temp file
+        command = 'rm -f ' // temp_file // ' 2>/dev/null'
+        call execute_command_line(trim(command), wait=.true.)
     end subroutine copy_to_clipboard
 
     function paste_from_clipboard() result(text)
         character(len=:), allocatable :: text
         integer :: unit, ios, file_size
-        character(len=256) :: command
-        character(len=:), allocatable :: buffer  ! Dynamic buffer for clipboard content
+        character(len=512) :: command
+        character(len=:), allocatable :: buffer, temp_dir, temp_file
 
-        ! Get clipboard content
-        command = 'pbpaste > /tmp/facsimile_clipboard.tmp 2>/dev/null'
-        call execute_command_line(command, exitstat=ios)
+        text = ''
 
-        if (ios /= 0) then
-            ! Try Linux xclip as fallback
-            command = 'xclip -selection clipboard -o > /tmp/facsimile_clipboard.tmp 2>/dev/null'
-            call execute_command_line(command, exitstat=ios)
+        ! On Windows, use native clipboard API
+        if (is_windows()) then
+            text = platform_paste_from_clipboard()
+            if (len_trim(text) > 0) return
+            ! Fall through to internal clipboard
+            goto 100
         end if
 
+        ! Unix: Try system clipboard first
+        temp_dir = get_temp_dir()
+        temp_file = temp_dir // 'facsimile_clipboard.tmp'
+
+        command = "sh -c 'xsel -b -o > " // temp_file // " 2>/dev/null || " // &
+                  "xclip -sel c -o > " // temp_file // " 2>/dev/null || " // &
+                  "pbpaste > " // temp_file // " 2>/dev/null || " // &
+                  "wl-paste > " // temp_file // " 2>/dev/null || true'"
+        call execute_command_line(trim(command), wait=.true., exitstat=ios)
+
         if (ios == 0) then
-            ! Read the clipboard content
-            open(newunit=unit, file='/tmp/facsimile_clipboard.tmp', &
+            ! Try to read the clipboard content
+            open(newunit=unit, file=temp_file, &
                  status='old', action='read', access='stream', iostat=ios)
 
             if (ios == 0) then
-                ! Get file size
                 inquire(unit=unit, size=file_size)
                 if (file_size > 0 .and. file_size < 1000000) then
-                    ! Allocate buffer to exact size needed
                     allocate(character(len=file_size) :: buffer)
                     read(unit, iostat=ios) buffer
                     if (ios == 0) then
                         allocate(character(len=file_size) :: text)
                         text = buffer
-                    else
-                        text = ''
                     end if
-                    ! Clean up buffer
                     if (allocated(buffer)) deallocate(buffer)
-                else
-                    text = ''
                 end if
                 close(unit)
-            else
-                text = ''
             end if
-        else
-            text = ''
+
+            ! Clean up temp file
+            command = 'rm -f ' // temp_file // ' 2>/dev/null'
+            call execute_command_line(trim(command), wait=.true.)
         end if
 
-        ! Clean up temp file
-        command = 'rm -f /tmp/facsimile_clipboard.tmp 2>/dev/null'
-        call execute_command_line(command)
+100     continue
+        ! Fall back to internal clipboard if system clipboard failed or was empty
+        if (len_trim(text) == 0 .and. allocated(internal_clipboard)) then
+            if (len(internal_clipboard) > 0) then
+                if (allocated(text)) deallocate(text)
+                allocate(character(len=len(internal_clipboard)) :: text)
+                text = internal_clipboard
+            end if
+        end if
     end function paste_from_clipboard
 
     subroutine cut_to_clipboard(text)

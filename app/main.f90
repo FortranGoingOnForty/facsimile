@@ -465,11 +465,7 @@ program facsimile
                 running = .false.
             else
                 ! Re-render screen after each command
-                ! Use fast path for cursor-only movements
-                if (g_cursor_only_move) then
-                    call render_cursor_only(buffer, editor, allocated(search_pattern), match_case_sensitive)
-                    g_cursor_only_move = .false.
-                else if (editor%fuss_mode_active) then
+                if (editor%fuss_mode_active) then
                     call render_screen_with_tree(buffer, editor, allocated(search_pattern), match_case_sensitive)
                 else
                     call render_screen(buffer, editor, allocated(search_pattern), match_case_sensitive)
