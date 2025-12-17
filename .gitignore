@@ -7,3 +7,7 @@ fac_debug.txt
 # Temporary files
 /tmp/
 .fac
+
+# Scratch/notes
+old/
+CLAUDE.md
