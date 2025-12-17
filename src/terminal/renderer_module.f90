@@ -270,6 +270,8 @@ contains
                         call terminal_write('~' // repeat(' ', content_width - 1))
                     end if
                 end if
+                ! Clear to end of line to prevent stale content when scrolling
+                call terminal_write(char(27) // '[K')
             end do
 
         ! Render status bar
@@ -1114,6 +1116,8 @@ contains
                 padding = '~' // repeat(' ', adjusted_width - 1)
                 call terminal_write(padding)
             end if
+            ! Clear to end of line to prevent stale content when scrolling
+            call terminal_write(char(27) // '[K')
         end do
     end subroutine render_editor_pane
 

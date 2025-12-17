@@ -4,7 +4,7 @@ module raw_mode_module
     private
 
     public :: enable_raw_mode, disable_raw_mode, input_available, read_char_timeout
-    public :: read_char_escape, input_available_count
+    public :: read_char_escape, input_available_count, get_terminal_size
 
     ! C function interfaces
     interface
@@ -37,6 +37,11 @@ module raw_mode_module
             import :: c_int
             integer(c_int) :: c_read_char_escape
         end function c_read_char_escape
+
+        subroutine c_get_terminal_size(rows, cols) bind(C, name="get_terminal_size")
+            import :: c_int
+            integer(c_int), intent(out) :: rows, cols
+        end subroutine c_get_terminal_size
     end interface
 
 contains
@@ -89,5 +94,15 @@ contains
         result = c_read_char_escape()
         ch = result
     end function read_char_escape
+
+    ! Get terminal size using ioctl (no escape sequences)
+    subroutine get_terminal_size(rows, cols)
+        integer, intent(out) :: rows, cols
+        integer(c_int) :: c_rows, c_cols
+
+        call c_get_terminal_size(c_rows, c_cols)
+        rows = c_rows
+        cols = c_cols
+    end subroutine get_terminal_size
 
 end module raw_mode_module

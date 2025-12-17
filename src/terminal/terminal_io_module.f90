@@ -6,7 +6,8 @@ module terminal_io_module
                                raw_input_available => input_available, &
                                raw_read_char_timeout => read_char_timeout, &
                                raw_read_char_escape => read_char_escape, &
-                               raw_input_available_count => input_available_count
+                               raw_input_available_count => input_available_count, &
+                               raw_get_terminal_size => get_terminal_size
     implicit none
     private
 
@@ -65,28 +66,8 @@ contains
 
     subroutine terminal_get_size(rows, cols)
         integer, intent(out) :: rows, cols
-        character(len=32) :: response
-        integer :: ios, r, c
-
-        ! Request cursor position after moving to bottom-right
-        write(output_unit, '(a)', advance='no') CSI // '999;999H'
-        write(output_unit, '(a)', advance='no') CSI // '6n'
-        flush(output_unit)
-
-        ! Read response (format: ESC[row;colR)
-        read(input_unit, '(a)', iostat=ios) response
-
-        ! Parse response
-        if (ios == 0 .and. response(1:2) == ESC // '[') then
-            ! Parse the response manually to handle variable width
-            call parse_cursor_response(response(3:), r, c)
-            rows = r
-            cols = c
-        else
-            ! Fallback to default
-            rows = 24
-            cols = 80
-        end if
+        ! Use ioctl-based method from C (no escape sequences)
+        call raw_get_terminal_size(rows, cols)
     end subroutine terminal_get_size
 
     subroutine terminal_enable_raw_mode()
@@ -138,30 +119,6 @@ contains
         write(output_unit, '(a)', advance='no') text
         flush(output_unit)
     end subroutine terminal_write
-
-    subroutine parse_cursor_response(response, row, col)
-        character(len=*), intent(in) :: response
-        integer, intent(out) :: row, col
-        integer :: semicolon_pos, r_pos, ios
-
-        row = 24
-        col = 80
-
-        ! Find semicolon position
-        semicolon_pos = index(response, ';')
-        if (semicolon_pos == 0) return
-
-        ! Find 'R' position
-        r_pos = index(response, 'R')
-        if (r_pos == 0) return
-
-        ! Parse row and column
-        read(response(1:semicolon_pos-1), '(i10)', iostat=ios) row
-        if (ios /= 0) return
-
-        read(response(semicolon_pos+1:r_pos-1), '(i10)', iostat=ios) col
-        if (ios /= 0) return
-    end subroutine parse_cursor_response
 
     subroutine terminal_enable_mouse()
         ! Enable mouse tracking modes:
