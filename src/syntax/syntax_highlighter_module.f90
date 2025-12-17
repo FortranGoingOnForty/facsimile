@@ -465,8 +465,9 @@ contains
 
         ! Check if this is a multiline-capable delimiter
         ! Python: """ or ''' (length 3)
-        ! JavaScript/TypeScript: ` (template literals)
-        is_multiline = (len(delimiter) >= 3) .or. (delimiter == '`')
+        ! JavaScript/TypeScript template literals (```) would need length 3
+        ! Single backticks should NOT be multiline (breaks markdown with Ctrl+\`)
+        is_multiline = (len(delimiter) >= 3)
 
         ! Move past opening delimiter
         pos = pos + len(delimiter)
@@ -474,8 +475,8 @@ contains
         ! Find closing delimiter
         found_end = .false.
         do while (pos <= line_len)
-            if (line(pos:pos) == '\' .and. pos < line_len) then
-                ! Skip escaped character
+            ! Skip escaped character (but NOT for backticks - markdown inline code is literal)
+            if (line(pos:pos) == '\' .and. pos < line_len .and. delimiter /= '`') then
                 pos = pos + 2
             else if (pos + len(delimiter) - 1 <= line_len) then
                 if (line(pos:pos+len(delimiter)-1) == delimiter) then

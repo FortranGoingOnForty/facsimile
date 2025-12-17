@@ -1381,6 +1381,10 @@ contains
         character(len=5) :: line_num_str
         logical :: is_current_line, in_selection, is_bracket_match
         integer :: sel_start_line, sel_start_col, sel_end_line, sel_end_col
+        ! Syntax highlighting support
+        type(token_t), allocatable :: tokens(:)
+        character(len=:), allocatable :: token_color
+        integer :: byte_pos, token_idx, line_byte_len
 
         tab_idx = editor%active_tab_index
         pane = editor%tabs(tab_idx)%panes(pane_idx)
@@ -1433,6 +1437,17 @@ contains
 
         ! Get character count for UTF-8 iteration
         char_count = utf8_char_count(line)
+        line_byte_len = len(line)
+
+        ! Get syntax tokens for this line
+        if (syntax_highlighter%enabled) then
+            call tokenize_line(syntax_highlighter, line, tokens)
+        else
+            allocate(tokens(1))
+            tokens(1)%type = TOKEN_PLAIN
+            tokens(1)%start_col = 1
+            tokens(1)%end_col = max(1, line_byte_len)
+        end if
 
         ! Check if this is the current line with a cursor
         is_current_line = .false.
@@ -1515,6 +1530,21 @@ contains
                 end if
             end if
 
+            ! Get byte position for syntax token lookup
+            byte_pos = utf8_char_to_byte_index(line, char_idx)
+
+            ! Find which token this column belongs to (tokens use byte indices)
+            token_color = ""
+            if (syntax_highlighter%enabled .and. byte_pos > 0) then
+                do token_idx = 1, size(tokens)
+                    if (byte_pos >= tokens(token_idx)%start_col .and. &
+                        byte_pos <= tokens(token_idx)%end_col) then
+                        token_color = get_token_color(tokens(token_idx)%type)
+                        exit
+                    end if
+                end do
+            end if
+
             ! Render the character with appropriate highlighting
             if (in_selection) then
                 ! Highlight selected text with reverse video
@@ -1523,13 +1553,24 @@ contains
                 ! Highlight matching brackets with cyan background
                 call terminal_write(char(27) // '[46m' // utf8_ch // char(27) // '[0m')
             else if (pane%is_active .and. is_current_line) then
-                ! Subtle background for current line in active pane
-                call terminal_write(char(27) // '[48;5;237m' // utf8_ch // char(27) // '[0m')
+                ! Current line with syntax highlighting
+                if (len(token_color) > 0) then
+                    call terminal_write(token_color // char(27) // '[48;5;237m' // utf8_ch // char(27) // '[0m')
+                else
+                    call terminal_write(char(27) // '[48;5;237m' // utf8_ch // char(27) // '[0m')
+                end if
             else if (.not. pane%is_active) then
-                ! Inactive pane background
-                call terminal_write(char(27) // '[48;5;234m' // utf8_ch // char(27) // '[0m')
+                ! Inactive pane with syntax highlighting
+                if (len(token_color) > 0) then
+                    call terminal_write(token_color // char(27) // '[48;5;234m' // utf8_ch // char(27) // '[0m')
+                else
+                    call terminal_write(char(27) // '[48;5;234m' // utf8_ch // char(27) // '[0m')
+                end if
+            else if (len(token_color) > 0) then
+                ! Normal text with syntax highlighting
+                call terminal_write(token_color // utf8_ch // char(27) // '[0m')
             else
-                ! Normal text
+                ! Normal text without highlighting
                 call terminal_write(utf8_ch)
             end if
 
