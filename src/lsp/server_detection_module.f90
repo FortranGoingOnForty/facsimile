@@ -51,7 +51,7 @@ contains
         ! Python - Pyright
         servers(i)%name = 'pyright'
         servers(i)%language = 'Python'
-        servers(i)%install_cmd = 'pip install pyright'
+        servers(i)%install_cmd = 'pipx install pyright'
         servers(i)%description = 'Python type checker and language server'
         servers(i)%check_cmd = 'pyright-langserver'
         i = i + 1
@@ -59,7 +59,7 @@ contains
         ! Python - Ruff
         servers(i)%name = 'ruff'
         servers(i)%language = 'Python'
-        servers(i)%install_cmd = 'pip install ruff'
+        servers(i)%install_cmd = 'pipx install ruff'
         servers(i)%description = 'Fast Python linter with auto-fix'
         servers(i)%check_cmd = 'ruff'
         i = i + 1
@@ -67,7 +67,7 @@ contains
         ! Python - python-lsp-server
         servers(i)%name = 'python-lsp-server'
         servers(i)%language = 'Python'
-        servers(i)%install_cmd = 'pip install python-lsp-server'
+        servers(i)%install_cmd = 'pipx install python-lsp-server'
         servers(i)%description = 'Python LSP (pylsp) with plugins support'
         servers(i)%check_cmd = 'pylsp'
         i = i + 1
@@ -203,7 +203,7 @@ contains
         ! Fortran - fortls
         servers(i)%name = 'fortls'
         servers(i)%language = 'Fortran'
-        servers(i)%install_cmd = 'pip install fortls'
+        servers(i)%install_cmd = 'pipx install fortls'
         servers(i)%description = 'Fortran language server'
         servers(i)%check_cmd = 'fortls'
     end subroutine init_known_servers
