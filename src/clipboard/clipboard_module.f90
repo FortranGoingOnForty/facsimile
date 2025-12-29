@@ -14,7 +14,7 @@ contains
 
     subroutine copy_to_clipboard(text)
         character(len=*), intent(in) :: text
-        integer :: unit, ios, file_size
+        integer :: unit, ios
         character(len=512) :: command
         character(len=:), allocatable :: temp_dir, temp_file
 

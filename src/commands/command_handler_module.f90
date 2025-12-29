@@ -6,7 +6,10 @@ module command_handler_module
                                    navigate_to_pane_left, navigate_to_pane_right, navigate_to_pane_up, navigate_to_pane_down, &
                                    sync_editor_to_pane, tab_t
     use text_buffer_module
-    use renderer_module, only: update_viewport, render_screen, render_screen_with_tree, tree_state
+    use renderer_module, only: update_viewport, render_screen, render_screen_with_tree, tree_state, &
+                               fuss_search_buffer, fuss_search_len, fuss_search_last_time, &
+                               fuss_fuzzy_jump, fuss_reset_search, get_time_ms, &
+                               fuss_git_prefix_active
     use yank_stack_module
     use clipboard_module
     use help_display_module, only: show_help
@@ -4887,52 +4890,96 @@ contains
                 end if
             end if
 
+        case('ctrl-g')
+            ! Activate git prefix mode (Ctrl+g then a/u/m/p/f/l/t/d)
+            fuss_git_prefix_active = .true.
+
         case('a')
-            ! Stage file
-            if (allocated(editor%workspace_path)) then
-                call tree_stage_file(tree_state, editor%workspace_path)
+            ! Stage file (only with Ctrl+g prefix)
+            if (fuss_git_prefix_active) then
+                fuss_git_prefix_active = .false.
+                if (allocated(editor%workspace_path)) then
+                    call tree_stage_file(tree_state, editor%workspace_path)
+                end if
+            else
+                call handle_fuss_fuzzy_search(key_str)
             end if
 
         case('u')
-            ! Unstage file
-            if (allocated(editor%workspace_path)) then
-                call tree_unstage_file(tree_state, editor%workspace_path)
+            ! Unstage file (only with Ctrl+g prefix)
+            if (fuss_git_prefix_active) then
+                fuss_git_prefix_active = .false.
+                if (allocated(editor%workspace_path)) then
+                    call tree_unstage_file(tree_state, editor%workspace_path)
+                end if
+            else
+                call handle_fuss_fuzzy_search(key_str)
             end if
 
         case('m')
-            ! Git commit with message
-            if (allocated(editor%workspace_path)) then
-                call handle_git_commit(editor)
+            ! Git commit with message (only with Ctrl+g prefix)
+            if (fuss_git_prefix_active) then
+                fuss_git_prefix_active = .false.
+                if (allocated(editor%workspace_path)) then
+                    call handle_git_commit(editor)
+                end if
+            else
+                call handle_fuss_fuzzy_search(key_str)
             end if
 
         case('p')
-            ! Git push
-            if (allocated(editor%workspace_path)) then
-                call handle_git_push(editor)
+            ! Git push (only with Ctrl+g prefix)
+            if (fuss_git_prefix_active) then
+                fuss_git_prefix_active = .false.
+                if (allocated(editor%workspace_path)) then
+                    call handle_git_push(editor)
+                end if
+            else
+                call handle_fuss_fuzzy_search(key_str)
             end if
 
         case('f')
-            ! Git fetch
-            if (allocated(editor%workspace_path)) then
-                call handle_git_fetch(editor)
+            ! Git fetch (only with Ctrl+g prefix)
+            if (fuss_git_prefix_active) then
+                fuss_git_prefix_active = .false.
+                if (allocated(editor%workspace_path)) then
+                    call handle_git_fetch(editor)
+                end if
+            else
+                call handle_fuss_fuzzy_search(key_str)
             end if
 
         case('l')
-            ! Git pull
-            if (allocated(editor%workspace_path)) then
-                call handle_git_pull(editor)
+            ! Git pull (only with Ctrl+g prefix)
+            if (fuss_git_prefix_active) then
+                fuss_git_prefix_active = .false.
+                if (allocated(editor%workspace_path)) then
+                    call handle_git_pull(editor)
+                end if
+            else
+                call handle_fuss_fuzzy_search(key_str)
             end if
 
         case('t')
-            ! Git tag
-            if (allocated(editor%workspace_path)) then
-                call handle_git_tag(editor)
+            ! Git tag (only with Ctrl+g prefix)
+            if (fuss_git_prefix_active) then
+                fuss_git_prefix_active = .false.
+                if (allocated(editor%workspace_path)) then
+                    call handle_git_tag(editor)
+                end if
+            else
+                call handle_fuss_fuzzy_search(key_str)
             end if
 
         case('d')
-            ! Git diff
-            if (allocated(editor%workspace_path)) then
-                call handle_git_diff(editor, buffer)
+            ! Git diff (only with Ctrl+g prefix)
+            if (fuss_git_prefix_active) then
+                fuss_git_prefix_active = .false.
+                if (allocated(editor%workspace_path)) then
+                    call handle_git_diff(editor, buffer)
+                end if
+            else
+                call handle_fuss_fuzzy_search(key_str)
             end if
 
         case('enter', 'o')
@@ -4947,7 +4994,21 @@ contains
             end if
 
         case('v')
-            ! Open file in vertical split (only for files, not directories)
+            ! Fuzzy search (vsplit moved to alt-v)
+            if (fuss_git_prefix_active) then
+                fuss_git_prefix_active = .false.
+            end if
+            call handle_fuss_fuzzy_search(key_str)
+
+        case('s')
+            ! Fuzzy search (hsplit moved to alt-s)
+            if (fuss_git_prefix_active) then
+                fuss_git_prefix_active = .false.
+            end if
+            call handle_fuss_fuzzy_search(key_str)
+
+        case('alt-v')
+            ! Open file in vertical split (direct shortcut)
             if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
                 if (.not. tree_state%selectable_files(tree_state%selected_index)%is_directory) then
                     selected_path = get_selected_item_path(tree_state)
@@ -4957,8 +5018,8 @@ contains
                 end if
             end if
 
-        case('s')
-            ! Open file in horizontal split (only for files, not directories)
+        case('alt-s')
+            ! Open file in horizontal split (direct shortcut)
             if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
                 if (.not. tree_state%selectable_files(tree_state%selected_index)%is_directory) then
                     selected_path = get_selected_item_path(tree_state)
@@ -4977,13 +5038,74 @@ contains
             editor%fuss_hints_expanded = .not. editor%fuss_hints_expanded
 
         case('esc')
-            ! Exit fuss mode
-            editor%fuss_mode_active = .false.
-            editor%fuss_hints_expanded = .false.  ! Reset to collapsed
-            call cleanup_tree_state(tree_state)
+            ! Exit fuss mode (or cancel git prefix mode)
+            if (fuss_git_prefix_active) then
+                fuss_git_prefix_active = .false.
+            else
+                editor%fuss_mode_active = .false.
+                editor%fuss_hints_expanded = .false.  ! Reset to collapsed
+                fuss_git_prefix_active = .false.
+                call fuss_reset_search()
+                call cleanup_tree_state(tree_state)
+            end if
+
+        case default
+            ! Reset git prefix mode if invalid key in prefix mode
+            if (fuss_git_prefix_active) then
+                fuss_git_prefix_active = .false.
+            end if
+            ! Fuzzy search: accumulate typed characters and jump to match
+            ! Only handle single printable characters (letters, digits)
+            if (len_trim(key_str) == 1) then
+                call handle_fuss_fuzzy_search(key_str)
+            end if
 
         end select
     end subroutine handle_fuss_input
+
+    ! Handle fuzzy search character input in fuss mode
+    subroutine handle_fuss_fuzzy_search(key_str)
+        use iso_fortran_env, only: int64
+        character(len=*), intent(in) :: key_str
+        integer(int64) :: current_time, elapsed
+        character(len=1) :: ch
+        logical :: found
+
+        ch = key_str(1:1)
+
+        ! Only accept printable characters (letters, digits, some punctuation)
+        if (ichar(ch) < 32 .or. ichar(ch) > 126) return
+
+        ! Get current time
+        current_time = get_time_ms()
+
+        ! Check for timeout (500ms) - reset if too long since last keystroke
+        if (fuss_search_last_time > 0) then
+            elapsed = current_time - fuss_search_last_time
+            if (elapsed > 500) then
+                ! Timeout - reset search buffer
+                fuss_search_buffer = ''
+                fuss_search_len = 0
+            end if
+        end if
+
+        ! Add character to search buffer (if there's room)
+        if (fuss_search_len < 64) then
+            fuss_search_len = fuss_search_len + 1
+            fuss_search_buffer(fuss_search_len:fuss_search_len) = ch
+        end if
+
+        ! Update timestamp
+        fuss_search_last_time = current_time
+
+        ! Try to jump to a match
+        found = fuss_fuzzy_jump(fuss_search_buffer(1:fuss_search_len))
+
+        ! Update viewport to keep selection visible
+        if (found) then
+            call update_tree_viewport(tree_state, 18)
+        end if
+    end subroutine handle_fuss_fuzzy_search
 
     ! Open a file in the editor
     subroutine open_file_in_editor(file_path, editor, buffer)
@@ -5810,6 +5932,8 @@ contains
         integer, intent(in) :: unused_request_id
         type(lsp_message_t), intent(in) :: response
 
+        if (.false.) print *, unused_request_id  ! Silence unused warning
+
         ! Call the actual handler with saved editor state
         if (associated(saved_editor_for_callback)) then
             call handle_references_response_impl(saved_editor_for_callback, response)
@@ -5919,6 +6043,8 @@ contains
         integer, intent(in) :: unused_request_id
         type(lsp_message_t), intent(in) :: response
 
+        if (.false.) print *, unused_request_id  ! Silence unused warning
+
         ! Call the actual handler with saved editor state
         if (associated(saved_editor_for_callback)) then
             call handle_code_actions_response_impl(saved_editor_for_callback, response)
@@ -6005,6 +6131,8 @@ contains
         use lsp_protocol_module, only: lsp_message_t
         integer, intent(in) :: unused_request_id
         type(lsp_message_t), intent(in) :: response
+
+        if (.false.) print *, unused_request_id  ! Silence unused warning
 
         ! Call the actual handler with saved editor state
         if (associated(saved_editor_for_callback)) then
@@ -6167,6 +6295,8 @@ contains
         integer, intent(in) :: unused_request_id
         type(lsp_message_t), intent(in) :: response
 
+        if (.false.) print *, unused_request_id  ! Silence unused warning
+
         ! Call the actual handler with saved editor state
         if (associated(saved_editor_for_callback)) then
             call handle_signature_response(saved_editor_for_callback%signature_tooltip, response)
@@ -6182,6 +6312,8 @@ contains
 
         character(len=:), allocatable :: result_str
         integer :: changes_applied
+
+        if (.false.) print *, unused_request_id  ! Silence unused warning
 
         if (.not. associated(saved_editor_for_callback)) return
 
@@ -6225,6 +6357,8 @@ contains
         integer :: num_edits, i, tab_idx
         integer :: start_line, start_char, end_line, end_char
         integer :: changes_applied
+
+        if (.false.) print *, unused_request_id  ! Silence unused warning
 
         if (.not. associated(saved_editor_for_callback)) return
 
@@ -6691,6 +6825,8 @@ contains
         character(len=:), allocatable :: name, container, uri
         real(8) :: line_num, char_num, kind_num
 
+        if (.false.) print *, unused_request_id  ! Silence unused warning
+
         num_symbols = json_array_size(response%result)
         if (num_symbols == 0) return
         allocate(symbols(num_symbols))
@@ -6954,6 +7090,8 @@ contains
         use lsp_protocol_module, only: lsp_message_t
         integer, intent(in) :: unused_request_id
         type(lsp_message_t), intent(in) :: response
+
+        if (.false.) print *, unused_request_id  ! Silence unused warning
 
         ! Call actual handler with saved editor state
         if (associated(saved_editor_for_callback)) then

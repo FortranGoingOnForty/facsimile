@@ -771,6 +771,8 @@ contains
 
         ! Servers can send requests too (like workspace/configuration)
         ! TODO: Handle server requests
+        ! Silence unused argument warnings (stub for future implementation)
+        if (.false.) print *, manager%num_servers, server%initialized, msg%id
     end subroutine handle_request
 
     subroutine track_request(server, request_id)

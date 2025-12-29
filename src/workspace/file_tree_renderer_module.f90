@@ -14,13 +14,22 @@ module file_tree_renderer_module
 
 contains
 
-    subroutine render_file_tree(state, start_row, end_row, start_col, width, hints_expanded)
+    subroutine render_file_tree(state, start_row, end_row, start_col, width, hints_expanded, git_prefix_active)
         type(tree_state_t), intent(in) :: state
         integer, intent(in) :: start_row, end_row, start_col, width
         logical, intent(in) :: hints_expanded
+        logical, intent(in), optional :: git_prefix_active
+        logical :: git_mode
         integer :: current_row, item_idx, row
         character(len=512) :: status_line
         character(len=:), allocatable :: padding
+
+        ! Handle optional git_prefix_active parameter
+        if (present(git_prefix_active)) then
+            git_mode = git_prefix_active
+        else
+            git_mode = .false.
+        end if
 
         ! First, clear all rows in the tree pane
         padding = repeat(' ', width)
@@ -71,17 +80,30 @@ contains
                 call terminal_write('j/k:nav →:in ←:up o:open .:hide spc:toggle')
                 call terminal_write(ESC // '[0m')
 
-                ! Second row: git operations (staging/basic)
-                call terminal_move_cursor(end_row - 2, start_col)
-                call terminal_write(ESC // '[90m') ! Gray
-                call terminal_write('a:stage u:unstage d:diff m:commit')
-                call terminal_write(ESC // '[0m')
+                ! Second and third rows: git operations (only shown when git mode active)
+                if (git_mode) then
+                    ! Git mode active - show git bindings in yellow
+                    call terminal_move_cursor(end_row - 2, start_col)
+                    call terminal_write(ESC // '[1;33m') ! Bright yellow
+                    call terminal_write('a:stage u:unstage d:diff m:commit')
+                    call terminal_write(ESC // '[0m')
 
-                ! Third row: git operations (remote)
-                call terminal_move_cursor(end_row - 1, start_col)
-                call terminal_write(ESC // '[90m') ! Gray
-                call terminal_write('p:push f:fetch l:pull t:tag')
-                call terminal_write(ESC // '[0m')
+                    call terminal_move_cursor(end_row - 1, start_col)
+                    call terminal_write(ESC // '[1;33m') ! Bright yellow
+                    call terminal_write('p:push f:fetch l:pull t:tag  esc:cancel')
+                    call terminal_write(ESC // '[0m')
+                else
+                    ! Normal mode - show shortcuts and fuzzy search hint
+                    call terminal_move_cursor(end_row - 2, start_col)
+                    call terminal_write(ESC // '[90m') ! Gray
+                    call terminal_write('alt-v:vsplit alt-s:hsplit ctrl-g:git')
+                    call terminal_write(ESC // '[0m')
+
+                    call terminal_move_cursor(end_row - 1, start_col)
+                    call terminal_write(ESC // '[90m') ! Gray
+                    call terminal_write('type to fuzzy search files')
+                    call terminal_write(ESC // '[0m')
+                end if
 
                 ! Fourth row: exit
                 call terminal_move_cursor(end_row, start_col)

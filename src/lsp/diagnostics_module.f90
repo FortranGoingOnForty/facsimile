@@ -202,6 +202,9 @@ contains
         type(diagnostic_t) :: diag
         type(diagnostic_t), allocatable :: old_items(:)
 
+        ! Initialize old_items to prevent uninitialized warning
+        allocate(old_items(0))
+
         ! Get URI
         if (.not. json_has_key(params, "uri")) return
         uri = json_get_string(params, "uri")

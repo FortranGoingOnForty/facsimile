@@ -180,7 +180,8 @@ void get_temp_dir_f(char* buffer, int buffer_len, int* result_len) {
     int copy_len = len + needs_slash;
     if (copy_len >= buffer_len) copy_len = buffer_len - 1;
 
-    strncpy(buffer, tmp, len < buffer_len ? len : buffer_len - 1);
+    int bytes_to_copy = len < buffer_len - 1 ? len : buffer_len - 1;
+    memcpy(buffer, tmp, bytes_to_copy);
     if (needs_slash && len < buffer_len - 1) {
         buffer[len] = '/';
         buffer[len + 1] = '\0';
@@ -242,7 +243,7 @@ void get_config_dir_f(char* buffer, int buffer_len, int* result_len) {
     if (config && strlen(config) > 0) {
         int len = strlen(config);
         int copy_len = len < buffer_len - 1 ? len : buffer_len - 1;
-        strncpy(buffer, config, copy_len);
+        memcpy(buffer, config, copy_len);
         buffer[copy_len] = '\0';
         *result_len = copy_len;
         return;

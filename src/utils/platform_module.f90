@@ -121,7 +121,7 @@ contains
 
     function platform_paste_from_clipboard() result(text)
         character(len=:), allocatable :: text
-        character(len=100000) :: buffer
+        character(len=100000), save :: buffer  ! save prevents stack overflow warning
         integer(c_int) :: result_len, res
 
         res = paste_from_clipboard_c(buffer, 100000_c_int, result_len)

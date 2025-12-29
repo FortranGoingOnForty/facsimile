@@ -1,5 +1,5 @@
 module renderer_module
-    use iso_fortran_env, only: int32, output_unit
+    use iso_fortran_env, only: int32, int64, output_unit
     use terminal_io_module
     use text_buffer_module
     use utf8_module
@@ -28,6 +28,9 @@ module renderer_module
     public :: tree_state
     public :: update_syntax_highlighter
     public :: render_cursor_only  ! Fast path for cursor-only updates
+    public :: fuss_search_buffer, fuss_search_len, fuss_search_last_time
+    public :: fuss_fuzzy_jump, fuss_reset_search, get_time_ms
+    public :: fuss_git_prefix_active
 
     ! Configuration
     logical :: show_line_numbers = .true.
@@ -52,6 +55,14 @@ module renderer_module
 
     ! File tree state (for fuss mode)
     type(tree_state_t) :: tree_state
+
+    ! Fuzzy search state for fuss mode (500ms timeout)
+    character(len=64) :: fuss_search_buffer = ''
+    integer :: fuss_search_len = 0
+    integer(int64) :: fuss_search_last_time = 0
+
+    ! Git prefix mode for fuss (Ctrl+g followed by command key)
+    logical :: fuss_git_prefix_active = .false.
 
     ! Syntax highlighting state
     type(syntax_highlighter_t) :: syntax_highlighter
@@ -928,7 +939,8 @@ contains
         call render_tab_bar(editor, editor_start_col, editor_width)
 
         ! Render file tree in left pane (start at row 2 for tab bar)
-        call render_file_tree(tree_state, 2, editor%screen_rows - 1, 2, tree_width - 2, editor%fuss_hints_expanded)
+        call render_file_tree(tree_state, 2, editor%screen_rows - 1, 2, tree_width - 2, &
+                              editor%fuss_hints_expanded, fuss_git_prefix_active)
 
         ! Render vertical separator (start at row 2 for tab bar)
         call render_vertical_separator(separator_col, 2, editor%screen_rows - 1)
@@ -2281,5 +2293,84 @@ contains
             basename = path
         end if
     end function get_basename_str
+
+    ! Get current time in milliseconds (for fuzzy search timeout)
+    function get_time_ms() result(ms)
+        integer(int64) :: ms
+        integer(int64) :: count, count_rate
+
+        call system_clock(count, count_rate)
+        if (count_rate > 0) then
+            ms = (count * 1000_int64) / count_rate
+        else
+            ms = 0
+        end if
+    end function get_time_ms
+
+    ! Reset fuzzy search buffer
+    subroutine fuss_reset_search()
+        fuss_search_buffer = ''
+        fuss_search_len = 0
+        fuss_search_last_time = 0
+    end subroutine fuss_reset_search
+
+    ! Fuzzy jump to matching entry in fuss mode
+    ! Returns true if a match was found and jumped to
+    function fuss_fuzzy_jump(search_str) result(found)
+        character(len=*), intent(in) :: search_str
+        logical :: found
+        integer :: i, start_idx, search_len
+        character(len=256) :: item_name, search_lower, name_lower
+
+        found = .false.
+        search_len = len_trim(search_str)
+        if (search_len == 0) return
+        if (tree_state%n_selectable == 0) return
+
+        ! Convert search string to lowercase for case-insensitive matching
+        search_lower = to_lower(trim(search_str))
+
+        ! Start searching from current position + 1, wrap around
+        start_idx = tree_state%selected_index
+        do i = 1, tree_state%n_selectable
+            ! Wrap around index
+            start_idx = start_idx + 1
+            if (start_idx > tree_state%n_selectable) start_idx = 1
+
+            ! Get item name (extract basename from path for files)
+            if (associated(tree_state%selectable_files(start_idx)%node)) then
+                item_name = trim(tree_state%selectable_files(start_idx)%node%name)
+            else
+                item_name = trim(tree_state%selectable_files(start_idx)%path)
+            end if
+
+            ! Convert to lowercase for comparison
+            name_lower = to_lower(trim(item_name))
+
+            ! Check if name starts with search string (prefix match)
+            if (len_trim(name_lower) >= search_len) then
+                if (name_lower(1:search_len) == search_lower(1:search_len)) then
+                    tree_state%selected_index = start_idx
+                    found = .true.
+                    return
+                end if
+            end if
+        end do
+    end function fuss_fuzzy_jump
+
+    ! Convert string to lowercase
+    function to_lower(str) result(lower_str)
+        character(len=*), intent(in) :: str
+        character(len=256) :: lower_str
+        integer :: i, ic
+
+        lower_str = str
+        do i = 1, len_trim(str)
+            ic = ichar(str(i:i))
+            if (ic >= ichar('A') .and. ic <= ichar('Z')) then
+                lower_str(i:i) = char(ic + 32)
+            end if
+        end do
+    end function to_lower
 
 end module renderer_module

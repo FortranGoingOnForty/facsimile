@@ -22,6 +22,10 @@ contains
         integer :: replace_count
         character(len=:), allocatable :: find_pattern, replace_text
 
+        ! Initialize allocatables to prevent "may be uninitialized" warning
+        allocate(character(len=0) :: find_pattern)
+        allocate(character(len=0) :: replace_text)
+
         ! Initialize
         find_buffer = ''
         replace_buffer = ''
