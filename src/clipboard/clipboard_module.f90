@@ -98,6 +98,7 @@ contains
                     allocate(character(len=file_size) :: buffer)
                     read(unit, iostat=ios) buffer
                     if (ios == 0) then
+                        if (allocated(text)) deallocate(text)
                         allocate(character(len=file_size) :: text)
                         text = buffer
                     end if
