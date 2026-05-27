@@ -627,12 +627,12 @@ contains
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
-        case('alt-shift-left')
+        case('alt-shift-left', 'ctrl-shift-left')
             call extend_selection_word_left(editor%cursors(editor%active_cursor), buffer)
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
-        case('alt-shift-right')
+        case('alt-shift-right', 'ctrl-shift-right')
             call extend_selection_word_right(editor%cursors(editor%active_cursor), buffer)
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
@@ -957,13 +957,13 @@ contains
                 end if
             end if
 
-        case('ctrl-shift-left', 'alt-h')
+        case('alt-h')
             ! Navigate to pane on the left (Vim-style hjkl with alt)
             if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
                 call navigate_to_pane_left(editor)
             end if
 
-        case('ctrl-shift-right', 'alt-l')
+        case('alt-l')
             ! Navigate to pane on the right
             if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
                 call navigate_to_pane_right(editor)
