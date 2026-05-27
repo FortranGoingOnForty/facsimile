@@ -59,12 +59,12 @@ contains
             current_row = current_row + 1
         end if
 
-        ! Display tree (leave space for legend - 1 or 4 rows)
+        ! Display tree (leave space for legend - 1 or 6 rows)
         if (associated(state%root)) then
             item_idx = 0
             if (hints_expanded) then
                 call render_tree_node(state%root, '', .true., &
-                                    state, item_idx, current_row, end_row - 4, start_col, width)
+                                    state, item_idx, current_row, end_row - 6, start_col, width)
             else
                 call render_tree_node(state%root, '', .true., &
                                     state, item_idx, current_row, end_row - 1, start_col, width)
@@ -73,44 +73,33 @@ contains
 
         ! Display legend at bottom (either minimal or expanded)
         if (hints_expanded) then
-            ! Expanded legend (four rows)
-            if (end_row >= start_row + 4) then
-                ! First row: navigation
+            ! Expanded legend (six rows, short lines to fit pane)
+            if (end_row >= start_row + 6) then
+                call terminal_move_cursor(end_row - 5, start_col)
+                call terminal_write(ESC // '[90m' // 'j/k:nav o:open' // ESC // '[0m')
+
+                call terminal_move_cursor(end_row - 4, start_col)
+                call terminal_write(ESC // '[90m' // '→:in ←:up .:hide' // ESC // '[0m')
+
                 call terminal_move_cursor(end_row - 3, start_col)
-                call terminal_write(ESC // '[90m') ! Gray
-                call terminal_write('j/k:nav →:in ←:up o:open .:hide spc:toggle')
-                call terminal_write(ESC // '[0m')
+                call terminal_write(ESC // '[90m' // 'spc:toggle' // ESC // '[0m')
 
-                ! Second and third rows: git operations (only shown when git mode active)
                 if (git_mode) then
-                    ! Git mode active - show git bindings in yellow
                     call terminal_move_cursor(end_row - 2, start_col)
-                    call terminal_write(ESC // '[1;33m') ! Bright yellow
-                    call terminal_write('a:stage u:unstage d:diff m:commit')
-                    call terminal_write(ESC // '[0m')
+                    call terminal_write(ESC // '[1;33m' // 'a:stage u:unstage' // ESC // '[0m')
 
                     call terminal_move_cursor(end_row - 1, start_col)
-                    call terminal_write(ESC // '[1;33m') ! Bright yellow
-                    call terminal_write('p:push f:fetch l:pull t:tag  esc:cancel')
-                    call terminal_write(ESC // '[0m')
+                    call terminal_write(ESC // '[1;33m' // 'd:diff m:commit' // ESC // '[0m')
                 else
-                    ! Normal mode - show shortcuts and fuzzy search hint
                     call terminal_move_cursor(end_row - 2, start_col)
-                    call terminal_write(ESC // '[90m') ! Gray
-                    call terminal_write('alt-v:vsplit alt-s:hsplit ctrl-g:git')
-                    call terminal_write(ESC // '[0m')
+                    call terminal_write(ESC // '[90m' // 'alt-v:vs alt-s:hs' // ESC // '[0m')
 
                     call terminal_move_cursor(end_row - 1, start_col)
-                    call terminal_write(ESC // '[90m') ! Gray
-                    call terminal_write('type to fuzzy search files')
-                    call terminal_write(ESC // '[0m')
+                    call terminal_write(ESC // '[90m' // 'ctrl-g:git  type:search' // ESC // '[0m')
                 end if
 
-                ! Fourth row: exit
                 call terminal_move_cursor(end_row, start_col)
-                call terminal_write(ESC // '[90m') ! Gray
-                call terminal_write('ctrl-/:collapse esc/F3:close')
-                call terminal_write(ESC // '[0m')
+                call terminal_write(ESC // '[90m' // 'ctrl-/:collapse esc:close' // ESC // '[0m')
             end if
         else
             ! Minimal legend (one row)
