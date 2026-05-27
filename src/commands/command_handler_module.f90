@@ -4683,14 +4683,17 @@ contains
                     exit
                 end if
             end do
+        end if
 
-            ! Delete from start position to cursor
-            if (start_col <= end_col) then
-                call delete_range(buffer, cursor%line, start_col, cursor%line, end_col)
-                cursor%column = start_col
-                cursor%desired_column = cursor%column
-                buffer%modified = .true.
-            end if
+        ! Clamp to valid 1-based column
+        if (start_col < 1) start_col = 1
+
+        ! Delete from start position to cursor
+        if (start_col <= end_col) then
+            call delete_range(buffer, cursor%line, start_col, cursor%line, end_col)
+            cursor%column = start_col
+            cursor%desired_column = cursor%column
+            buffer%modified = .true.
         end if
 
         if (allocated(line)) deallocate(line)
