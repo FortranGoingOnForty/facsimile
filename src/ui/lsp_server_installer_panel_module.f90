@@ -13,7 +13,7 @@ module lsp_server_installer_panel_module
     public :: render_lsp_server_installer_panel
     public :: refresh_server_status
 
-    integer, parameter :: PANEL_WIDTH = 62
+    integer, parameter :: PANEL_WIDTH = 70
     integer, parameter :: MAX_VISIBLE = 8
 
     type :: lsp_server_installer_panel_t
@@ -224,8 +224,9 @@ contains
             call terminal_write('│')
 
             ! Build line content (visible text only for width calculation)
-            ! Format: " ✓ servername (Language) <spaces> status"
-            visible_text = ' ✓ ' // trim(panel%servers(i)%name) // ' (' // &
+            ! Format: " X servername (Language) <spaces> status"
+            ! Use ' X ' (3 ASCII chars) instead of ' ✓ ' (5 bytes) for correct display width
+            visible_text = ' X ' // trim(panel%servers(i)%name) // ' (' // &
                           trim(panel%servers(i)%language) // ')'
 
             ! Calculate visible length (icon + space + name + space + language + parens)
@@ -294,7 +295,7 @@ contains
         call terminal_move_cursor(row, start_col)
         if (len_trim(panel%status_message) > 0) then
             call terminal_write('│ ' // YELLOW // trim(panel%status_message) // RESET)
-            call terminal_write(repeat(' ', content_width - len_trim(panel%status_message) - 4) // ' │')
+            call terminal_write(repeat(' ', max(0, content_width - len_trim(panel%status_message) - 4)) // ' │')
         else
             call terminal_write('│' // DIM // ' ↑↓ Navigate  Enter Install  r Refresh  Esc Close' // RESET)
             call terminal_write(repeat(' ', content_width - 52) // '│')
@@ -340,7 +341,7 @@ contains
         row = start_row + 1
         call terminal_move_cursor(row, start_col)
         call terminal_write('│' // CYAN // ' Install ' // trim(server_name) // '?' // RESET)
-        call terminal_write(repeat(' ', content_width - 12 - len_trim(server_name)) // '│')
+        call terminal_write(repeat(' ', max(0, content_width - 12 - len_trim(server_name))) // '│')
 
         ! Blank line
         row = row + 1
@@ -351,7 +352,7 @@ contains
         row = row + 1
         call terminal_move_cursor(row, start_col)
         call terminal_write('│ Command: ' // YELLOW // trim(install_cmd) // RESET)
-        call terminal_write(repeat(' ', content_width - 12 - len_trim(install_cmd)) // '│')
+        call terminal_write(repeat(' ', max(0, content_width - 12 - len_trim(install_cmd))) // '│')
 
         ! Blank line
         row = row + 1
