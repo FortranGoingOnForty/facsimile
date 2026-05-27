@@ -29,7 +29,9 @@ contains
         target_col = editor%cursors(editor%active_cursor)%column
         line_count = buffer_get_line_count(buffer)
 
-        ! Display prompt at bottom of screen
+        ! Display prompt at bottom of screen (clear entire row first)
+        call terminal_move_cursor(editor%screen_rows, 1)
+        call terminal_write(repeat(' ', editor%screen_cols))
         call terminal_move_cursor(editor%screen_rows, 1)
         call terminal_write(prompt)
         call terminal_show_cursor()
