@@ -122,29 +122,14 @@ contains
                 ! Shift+Tab sends ESC[Z
                 key_str = 'shift-tab'
             case('3')
-                ! Could be delete or Alt+Delete
+                ! Delete key: ESC [ 3 ~ or ESC [ 3 ; modifier ~
                 char_code = terminal_read_char_escape()
                 if (char_code >= 0) then
                     ch3 = achar(char_code)
                     if (ch3 == '~') then
                         key_str = 'delete'
                     else if (ch3 == ';') then
-                        ! Modified delete: ESC [ 3 ; modifier ~
-                        ! Read the modifier
-                        char_code = terminal_read_char_escape()
-                        if (char_code >= 0) then
-                            modifier_ch = achar(char_code)
-                            ! Read the terminating ~
-                            char_code = terminal_read_char_escape()
-                            if (char_code >= 0 .and. achar(char_code) == '~') then
-                                ! Check modifier: 3 = Alt
-                                if (modifier_ch == '3') then
-                                    key_str = 'alt-delete'
-                                else
-                                    key_str = 'delete'  ! Other modified deletes default to delete
-                                end if
-                            end if
-                        end if
+                        call handle_modified_key(key_str, 3)
                     end if
                 end if
             case('5')
@@ -225,7 +210,8 @@ contains
                         end if
                     else if (ch3 == ';') then
                         ! Modified arrow key or home/end: ESC [ 1 ; 2 A format
-                        call handle_modified_key(key_str)
+                        ! Pass key_code=1 so ~ terminator resolves to 'home'
+                        call handle_modified_key(key_str, 1)
                     end if
                 end if
             case('2')
@@ -287,9 +273,19 @@ contains
                         end select
                     end if
                 end if
-            case('4', '7', '8')
-                ! Alternate format: ESC [ 2 A (modifier directly, no '1')
-                ! This is sent by some terminals for shift+arrows
+            case('4')
+                ! End key: ESC [ 4 ~ or ESC [ 4 ; modifier ~
+                char_code = terminal_read_char_escape()
+                if (char_code >= 0) then
+                    ch3 = achar(char_code)
+                    if (ch3 == '~') then
+                        key_str = 'end'
+                    else if (ch3 == ';') then
+                        call handle_modified_key(key_str, 4)
+                    end if
+                end if
+            case('7', '8')
+                ! rxvt Home/End or alternate modified keys
                 call handle_alternate_modified_key(key_str, ch2)
             case('<')
                 ! Mouse event in SGR mode
@@ -393,8 +389,9 @@ contains
 
     end subroutine handle_escape_sequence
 
-    subroutine handle_modified_key(key_str)
+    subroutine handle_modified_key(key_str, caller_key_code)
         character(len=*), intent(out) :: key_str
+        integer, intent(in), optional :: caller_key_code
         character :: ch, terminator
         character(len=10) :: modifier_seq
         integer :: ios, modifier, char_code, read_count
@@ -489,10 +486,26 @@ contains
                     key_str = trim(key_str) // 'Z'
                 end if
             case('~')
-                ! Check what special key it is based on the beginning of modifier_seq
-                if (index(modifier_seq, ';') == 1 .and. len_trim(modifier_seq) > 1) then
-                    ! Already read the ;2 or ;5 etc, the key type should be before
-                    key_str = trim(key_str) // 'unknown'
+                ! Tilde-terminated key: resolve using caller's key code
+                if (present(caller_key_code)) then
+                    select case(caller_key_code)
+                    case(1)
+                        key_str = trim(key_str) // 'home'
+                    case(2)
+                        key_str = trim(key_str) // 'insert'
+                    case(3)
+                        key_str = trim(key_str) // 'delete'
+                    case(4)
+                        key_str = trim(key_str) // 'end'
+                    case(5)
+                        key_str = trim(key_str) // 'pageup'
+                    case(6)
+                        key_str = trim(key_str) // 'pagedown'
+                    case default
+                        key_str = ''
+                    end select
+                else
+                    key_str = ''
                 end if
             end select
         end if
