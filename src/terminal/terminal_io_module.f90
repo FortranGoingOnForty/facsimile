@@ -26,6 +26,9 @@ contains
 
     subroutine terminal_init()
         call terminal_enable_raw_mode()
+        ! Enter alternate screen buffer so shell history stays intact
+        write(output_unit, '(a)', advance='no') ESC // '[?1049h'
+        flush(output_unit)
         call terminal_enable_mouse()
         call terminal_clear_screen()
         call terminal_hide_cursor()
@@ -34,8 +37,9 @@ contains
     subroutine terminal_cleanup()
         call terminal_show_cursor()
         call terminal_disable_mouse()
-        call terminal_clear_screen()
-        call terminal_move_cursor(1, 1)
+        ! Leave alternate screen buffer to restore original shell view
+        write(output_unit, '(a)', advance='no') ESC // '[?1049l'
+        flush(output_unit)
         call terminal_disable_raw_mode()
     end subroutine terminal_cleanup
 
