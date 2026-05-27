@@ -67,7 +67,7 @@ contains
                                     state, item_idx, current_row, end_row - 6, start_col, width)
             else
                 call render_tree_node(state%root, '', .true., &
-                                    state, item_idx, current_row, end_row - 1, start_col, width)
+                                    state, item_idx, current_row, end_row - 2, start_col, width)
             end if
         end if
 
@@ -99,15 +99,16 @@ contains
                 end if
 
                 call terminal_move_cursor(end_row, start_col)
-                call terminal_write(ESC // '[90m' // 'ctrl-/:collapse esc:close' // ESC // '[0m')
+                call terminal_write(ESC // '[90m' // 'ctrl-/:less esc:close' // ESC // '[0m')
             end if
         else
-            ! Minimal legend (one row)
-            if (end_row >= start_row + 1) then
+            ! Minimal legend (two rows)
+            if (end_row >= start_row + 2) then
+                call terminal_move_cursor(end_row - 1, start_col)
+                call terminal_write(ESC // '[90m' // '.:hide ctrl-/:hints' // ESC // '[0m')
+
                 call terminal_move_cursor(end_row, start_col)
-                call terminal_write(ESC // '[90m') ! Gray
-                call terminal_write('.:hide  ctrl-/:hints  esc/F3:close')
-                call terminal_write(ESC // '[0m')
+                call terminal_write(ESC // '[90m' // 'esc/F3:close' // ESC // '[0m')
             end if
         end if
     end subroutine render_file_tree
