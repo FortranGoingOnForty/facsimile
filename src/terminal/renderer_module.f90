@@ -938,15 +938,19 @@ contains
         ! Render tab bar if there are any tabs (positioned in editor pane area)
         call render_tab_bar(editor, editor_start_col, editor_width)
 
+        ! Render editor FIRST so its ESC[K (clear-to-end-of-line) can't destroy
+        ! file tree content. When the editor fills to the last column, the cursor
+        ! may wrap to the next row; ESC[K then clears from column 1, wiping anything
+        ! already drawn on that row. By rendering the editor before the tree, the
+        ! tree overwrites any such damage.
+        call render_editor_area_with_tree(editor, editor_start_col, editor_width)
+
         ! Render file tree in left pane (start at row 2 for tab bar)
         call render_file_tree(tree_state, 2, editor%screen_rows - 1, 2, tree_width - 2, &
                               editor%fuss_hints_expanded, fuss_git_prefix_active)
 
         ! Render vertical separator (start at row 2 for tab bar)
         call render_vertical_separator(separator_col, 2, editor%screen_rows - 1)
-
-        ! Render editor in right pane (check for multiple panes)
-        call render_editor_area_with_tree(editor, editor_start_col, editor_width)
 
         ! Render status bar (full width)
         call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
