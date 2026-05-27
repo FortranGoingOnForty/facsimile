@@ -305,6 +305,10 @@ contains
             end if
             ch2 = achar(char_code)
             select case(ch2)
+            case('H')
+                key_str = 'home'
+            case('F')
+                key_str = 'end'
             case('P')
                 key_str = 'f1'
             case('Q')
