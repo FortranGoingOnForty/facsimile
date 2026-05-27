@@ -129,7 +129,7 @@ contains
             call collapse_tree_smart(state%root)
 
             ! Build selectable files list in tree traversal order
-            call build_selectable_list(state%root, state%selectable_files, state%n_selectable)
+            call build_selectable_list(state%root, state%selectable_files, state%n_selectable, state%hide_dotfiles)
         else
             state%n_selectable = 0
         end if
@@ -672,19 +672,24 @@ contains
     end function compare_nodes
 
     ! Build list of selectable files in tree traversal order
-    subroutine build_selectable_list(root, selectable, n_selectable)
+    subroutine build_selectable_list(root, selectable, n_selectable, hide_dotfiles)
         type(tree_node_t), pointer, intent(in) :: root
         type(selectable_file_t), allocatable, intent(out) :: selectable(:)
         integer, intent(out) :: n_selectable
+        logical, intent(in), optional :: hide_dotfiles
         type(selectable_file_t), allocatable :: temp(:)
         integer :: max_size, count
+        logical :: do_hide
+
+        do_hide = .false.
+        if (present(hide_dotfiles)) do_hide = hide_dotfiles
 
         max_size = 1000
         allocate(temp(max_size))
         count = 0
 
         ! Traverse tree and collect files
-        call collect_files_recursive(root, temp, count, max_size)
+        call collect_files_recursive(root, temp, count, max_size, do_hide)
 
         n_selectable = count
         allocate(selectable(n_selectable))
@@ -692,14 +697,18 @@ contains
         deallocate(temp)
     end subroutine build_selectable_list
 
-    recursive subroutine collect_files_recursive(node, list, count, max_size)
+    recursive subroutine collect_files_recursive(node, list, count, max_size, hide_dotfiles)
         type(tree_node_t), pointer, intent(in) :: node
         type(selectable_file_t), intent(inout) :: list(:)
         integer, intent(inout) :: count
         integer, intent(in) :: max_size
+        logical, intent(in) :: hide_dotfiles
         type(tree_node_t), pointer :: child
 
         if (.not. associated(node)) return
+
+        ! Skip hidden files when hide_dotfiles is enabled (match renderer logic)
+        if (hide_dotfiles .and. node%is_file .and. (node%is_dotfile .or. node%is_gitignored)) return
 
         ! Add both files and directories to selectable list
         ! Skip root node (name = '.')
@@ -724,7 +733,7 @@ contains
         if (node%expanded .or. trim(node%name) == '.') then
             child => node%first_child
             do while (associated(child))
-                call collect_files_recursive(child, list, count, max_size)
+                call collect_files_recursive(child, list, count, max_size, hide_dotfiles)
                 child => child%next_sibling
             end do
         end if
@@ -935,7 +944,7 @@ contains
 
             ! Rebuild selectable list to reflect new visibility
             if (allocated(state%selectable_files)) deallocate(state%selectable_files)
-            call build_selectable_list(state%root, state%selectable_files, state%n_selectable)
+            call build_selectable_list(state%root, state%selectable_files, state%n_selectable, state%hide_dotfiles)
 
             ! Find the toggled node in the new list to maintain selection
             do i = 1, state%n_selectable
