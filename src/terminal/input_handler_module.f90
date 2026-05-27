@@ -284,9 +284,28 @@ contains
                         call handle_modified_key(key_str, 4)
                     end if
                 end if
-            case('7', '8')
-                ! rxvt Home/End or alternate modified keys
-                call handle_alternate_modified_key(key_str, ch2)
+            case('7')
+                ! rxvt Home: ESC [ 7 ~ or ESC [ 7 ; modifier ~
+                char_code = terminal_read_char_escape()
+                if (char_code >= 0) then
+                    ch3 = achar(char_code)
+                    if (ch3 == '~') then
+                        key_str = 'home'
+                    else if (ch3 == ';') then
+                        call handle_modified_key(key_str, 1)
+                    end if
+                end if
+            case('8')
+                ! rxvt End: ESC [ 8 ~ or ESC [ 8 ; modifier ~
+                char_code = terminal_read_char_escape()
+                if (char_code >= 0) then
+                    ch3 = achar(char_code)
+                    if (ch3 == '~') then
+                        key_str = 'end'
+                    else if (ch3 == ';') then
+                        call handle_modified_key(key_str, 4)
+                    end if
+                end if
             case('<')
                 ! Mouse event in SGR mode
                 call handle_mouse_event(key_str)
