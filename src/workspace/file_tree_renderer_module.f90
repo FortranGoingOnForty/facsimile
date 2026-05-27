@@ -31,10 +31,11 @@ contains
             git_mode = .false.
         end if
 
-        ! First, clear all rows in the tree pane
-        padding = repeat(' ', width)
+        ! First, clear all rows in the tree pane (start at column 1 to
+        ! overwrite any characters that wrapped from the editor pane)
+        padding = repeat(' ', width + start_col - 1)
         do row = start_row, end_row
-            call terminal_move_cursor(row, start_col)
+            call terminal_move_cursor(row, 1)
             call terminal_write(padding)
         end do
 
@@ -132,6 +133,8 @@ contains
         integer, intent(in) :: end_row, start_col, width
 
         character(len=:), allocatable :: line, new_prefix
+        character(len=:), allocatable :: base_line
+        integer :: visible_len
         type(tree_node_t), pointer :: child
         logical :: is_selected, is_last_child
 
@@ -152,46 +155,50 @@ contains
                 if (.not. node%is_file) then
                     ! Directory - add expand/collapse indicator and / suffix
                     if (associated(node%first_child)) then
-                        ! Directory with children
                         if (node%expanded) then
-                            line = prefix // EXPANDED_DIR // ' ' // trim(node%name) // '/'
+                            base_line = prefix // EXPANDED_DIR // ' ' // trim(node%name) // '/'
                         else
-                            line = prefix // COLLAPSED_DIR // ' ' // trim(node%name) // '/'
+                            base_line = prefix // COLLAPSED_DIR // ' ' // trim(node%name) // '/'
                         end if
                     else
-                        ! Empty directory - no expand/collapse indicator
-                        line = prefix // '  ' // trim(node%name) // '/'
+                        base_line = prefix // '  ' // trim(node%name) // '/'
                     end if
                 else
-                    ! File - just indentation and name
-                    line = prefix // '  ' // trim(node%name)
+                    base_line = prefix // '  ' // trim(node%name)
                 end if
 
-                ! Add status indicators for files only
+                ! Truncate with ellipsis if line overflows tree pane width
+                visible_len = len(base_line)
+                if (visible_len > width) then
+                    line = base_line(1:width - 3) // '...'
+                else
+                    line = base_line
+                end if
+
+                ! Add status indicators for files only (after truncation
+                ! so indicators stay visible at the end)
                 if (node%is_file) then
                     if (node%is_staged) then
-                        line = line // ' ' // ESC // '[32m↑' // ESC // '[0m'  ! Green up arrow
+                        line = line // ' ' // ESC // '[32m↑' // ESC // '[0m'
                     end if
                     if (node%is_unstaged) then
-                        line = line // ' ' // ESC // '[31m✗' // ESC // '[0m'  ! Red X
+                        line = line // ' ' // ESC // '[31m✗' // ESC // '[0m'
                     end if
                     if (node%is_untracked) then
-                        line = line // ' ' // ESC // '[90m✗' // ESC // '[0m'  ! Gray X
+                        line = line // ' ' // ESC // '[90m✗' // ESC // '[0m'
                     end if
                     if (node%has_incoming) then
-                        line = line // ' ' // ESC // '[34m↓' // ESC // '[0m'  ! Blue down arrow
+                        line = line // ' ' // ESC // '[34m↓' // ESC // '[0m'
                     end if
                 end if
 
-                ! Render with selection highlight for files only
+                ! Render with selection highlight
                 call terminal_move_cursor(current_row, start_col)
                 if (is_selected) then
-                    ! Selection highlight (reverse video)
                     call terminal_write(ESC // '[7m' // line // ESC // '[0m')
                 else
-                    ! Grey out directories that only contain hidden files
                     if (.not. node%is_file .and. node%all_children_hidden) then
-                        call terminal_write(ESC // '[90m' // line // ESC // '[0m')  ! Grey
+                        call terminal_write(ESC // '[90m' // line // ESC // '[0m')
                     else
                         call terminal_write(line)
                     end if
@@ -202,20 +209,16 @@ contains
         end if
 
         ! Render children (only if directory is expanded or root)
-        ! Files don't have children, so skip if is_file. For directories, check if expanded or root.
         if ((.not. node%is_file .and. node%expanded) .or. is_root) then
             child => node%first_child
             do while (associated(child))
-            ! Determine if this is the last sibling
             is_last_child = .not. associated(child%next_sibling)
 
-            ! Build prefix for child based on current node's position
             if (is_root) then
-                ! Root's children start with no prefix
                 new_prefix = ''
             else
-                ! Non-root children inherit prefix and add 2-space indentation
-                new_prefix = prefix // '  '
+                ! 1-space indentation per level for compact tree
+                new_prefix = prefix // ' '
             end if
 
             call render_tree_node(child, new_prefix, .false., &
