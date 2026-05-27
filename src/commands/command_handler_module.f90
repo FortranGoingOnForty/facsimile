@@ -165,6 +165,7 @@ contains
         should_quit = .false.
         line_count = buffer_get_line_count(buffer)
         is_edit_action = .false.
+        g_cursor_only_move = .false.
 
         ! Ignore empty key strings (from terminal position reports, etc)
         if (len_trim(key_str) == 0 .and. key_str(1:1) /= ' ') then
