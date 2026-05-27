@@ -605,9 +605,8 @@ contains
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
-        case('alt-left')
+        case('alt-left', 'ctrl-left')
             if (size(editor%cursors) > 1) then
-                ! Move all cursors
                 do i = 1, size(editor%cursors)
                     call move_cursor_word_left(editor%cursors(i), buffer)
                 end do
@@ -617,9 +616,8 @@ contains
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
-        case('alt-right')
+        case('alt-right', 'ctrl-right')
             if (size(editor%cursors) > 1) then
-                ! Move all cursors
                 do i = 1, size(editor%cursors)
                     call move_cursor_word_right(editor%cursors(i), buffer)
                 end do
