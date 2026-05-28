@@ -787,6 +787,7 @@ contains
                 call handle_backspace(editor%cursors(editor%active_cursor), buffer)
             end if
             call sync_editor_to_pane(editor)
+            call update_viewport(editor)
             is_edit_action = .true.
 
         case('delete')
@@ -800,6 +801,7 @@ contains
                 call handle_delete(editor%cursors(editor%active_cursor), buffer)
             end if
             call sync_editor_to_pane(editor)
+            call update_viewport(editor)
             is_edit_action = .true.
 
         case('enter')
@@ -897,6 +899,7 @@ contains
                 call handle_enter(editor%cursors(editor%active_cursor), buffer)
             end if
             call sync_editor_to_pane(editor)
+            call update_viewport(editor)
             is_edit_action = .true.
 
         case('tab')
@@ -917,6 +920,8 @@ contains
                     call handle_tab(editor%cursors(editor%active_cursor), buffer)
                 end if
             end if
+            call sync_editor_to_pane(editor)
+            call update_viewport(editor)
             is_edit_action = .true.
 
         case('shift-tab')
@@ -1941,6 +1946,7 @@ contains
                     call insert_char(editor%cursors(editor%active_cursor), buffer, key_str(1:1))
                 end if
                 call sync_editor_to_pane(editor)
+                call update_viewport(editor)
                 is_edit_action = .true.
 
                 ! Auto-trigger signature help on '(' or ','
