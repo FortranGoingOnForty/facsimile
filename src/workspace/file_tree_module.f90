@@ -247,19 +247,29 @@ contains
         allocate(temp_files(max_files))
         n_files = 0
 
-        ! Try git ls-files first, fall back to find for non-git dirs
+        ! Check if this is a git repo first
         write(cmd, '(A,A,A)') 'cd "', trim(workspace_path), &
-            '" && { git ls-files 2>/dev/null; ' // &
-            'git ls-files --others --exclude .git ' // &
-            '2>/dev/null; } | sort -u > ' // &
-            '/tmp/fac_all_files.txt 2>/dev/null'
-        call execute_command_line(trim(cmd), exitstat=status_code)
+            '" && git rev-parse --git-dir > /dev/null 2>&1'
+        call execute_command_line(trim(cmd), &
+            exitstat=status_code)
 
-        ! If git failed or produced empty output, use find
-        if (status_code /= 0) then
-            write(cmd, '(A,A,A)') 'cd "', trim(workspace_path),&
-                '" && find . -maxdepth 4 -not -path ' // &
-                '"*/.git/*" -not -path "./.*" -type f ' // &
+        if (status_code == 0) then
+            ! Git repo: use git ls-files for speed
+            write(cmd, '(A,A,A)') 'cd "', &
+                trim(workspace_path), &
+                '" && { git ls-files 2>/dev/null; ' // &
+                'git ls-files --others --exclude .git' // &
+                ' 2>/dev/null; } | sort -u > ' // &
+                '/tmp/fac_all_files.txt 2>/dev/null'
+            call execute_command_line(trim(cmd), &
+                exitstat=status_code)
+        else
+            ! Not a git repo: use find
+            write(cmd, '(A,A,A)') 'cd "', &
+                trim(workspace_path), &
+                '" && find . -maxdepth 4 ' // &
+                '-not -path "*/.git/*" ' // &
+                '-not -name ".*" -type f ' // &
                 '| sed "s|^\./||" | sort > ' // &
                 '/tmp/fac_all_files.txt 2>/dev/null'
             call execute_command_line(trim(cmd), &
