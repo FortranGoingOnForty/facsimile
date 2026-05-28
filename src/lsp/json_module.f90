@@ -319,31 +319,43 @@ contains
     function escape_string(str) result(escaped)
         character(len=*), intent(in) :: str
         character(len=:), allocatable :: escaped
-        integer :: i
+        integer :: i, pos, slen
         character :: ch
 
-        escaped = ""
-        do i = 1, len(str)
+        slen = len(str)
+        ! Worst case: every char needs escaping (2x size)
+        allocate(character(len=slen * 2) :: escaped)
+        pos = 0
+        do i = 1, slen
             ch = str(i:i)
             select case(ch)
             case('"')
-                escaped = escaped // '\"'
+                escaped(pos+1:pos+2) = '\"'
+                pos = pos + 2
             case('\')
-                escaped = escaped // '\\'
-            case(char(8))  ! backspace
-                escaped = escaped // '\b'
-            case(char(12)) ! form feed
-                escaped = escaped // '\f'
-            case(char(10)) ! newline
-                escaped = escaped // '\n'
-            case(char(13)) ! carriage return
-                escaped = escaped // '\r'
-            case(char(9))  ! tab
-                escaped = escaped // '\t'
+                escaped(pos+1:pos+2) = '\\'
+                pos = pos + 2
+            case(char(8))
+                escaped(pos+1:pos+2) = '\b'
+                pos = pos + 2
+            case(char(12))
+                escaped(pos+1:pos+2) = '\f'
+                pos = pos + 2
+            case(char(10))
+                escaped(pos+1:pos+2) = '\n'
+                pos = pos + 2
+            case(char(13))
+                escaped(pos+1:pos+2) = '\r'
+                pos = pos + 2
+            case(char(9))
+                escaped(pos+1:pos+2) = '\t'
+                pos = pos + 2
             case default
-                escaped = escaped // ch
+                pos = pos + 1
+                escaped(pos:pos) = ch
             end select
         end do
+        escaped = escaped(1:pos)
     end function escape_string
 
     ! Unescape JSON string escape sequences (inverse of escape_string)
