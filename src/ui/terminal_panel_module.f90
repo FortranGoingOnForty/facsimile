@@ -120,6 +120,20 @@ module terminal_panel_module
             type(c_ptr), intent(inout) :: handle
             integer(c_int) :: p
         end function
+
+        subroutine c_grid_set_pty_fd(handle, fd) &
+            bind(C, name='vt100_grid_set_pty_fd_f')
+            import :: c_ptr, c_int
+            type(c_ptr), intent(inout) :: handle
+            integer(c_int), intent(in) :: fd
+        end subroutine
+
+        function c_pty_get_fd(handle) &
+            bind(C, name='pty_get_fd_f') result(fd)
+            import :: c_ptr, c_int
+            type(c_ptr), intent(inout) :: handle
+            integer(c_int) :: fd
+        end function
     end interface
 
     integer, parameter :: MIN_HEIGHT = 5
@@ -218,8 +232,13 @@ contains
             end if
             panel%pty_alive = .true.
 
-            ! Create grid
+            ! Create grid and give it the PTY fd for inline responses
             call c_grid_create(panel%grid_handle, c_rows, c_cols)
+            block
+                integer(c_int) :: pty_fd
+                pty_fd = c_pty_get_fd(panel%pty_handle)
+                call c_grid_set_pty_fd(panel%grid_handle, pty_fd)
+            end block
         end if
 
         panel%visible = .true.

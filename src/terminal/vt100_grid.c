@@ -3,6 +3,8 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+#include <unistd.h>
 
 // Cell attributes
 #define ATTR_BOLD      0x01
@@ -46,7 +48,8 @@ typedef struct {
     char param_buf[PARAM_BUF_SIZE];
     int param_len;
     int cursor_visible;
-    int cpr_pending;    // 1 if ESC[6n was received, needs response
+    int cpr_pending;
+    int pty_fd;         // PTY fd for inline query responses
 } vt100_grid_t;
 
 // ---- Internal helpers ----
@@ -363,10 +366,15 @@ static void handle_csi(vt100_grid_t *g, char final) {
         g->cursor_col = 0;
         break;
     case 'n': // Device Status Report
-        if (p1 == 6) {
-            // CPR (Cursor Position Report) requested
-            g->cpr_pending = 1;
+        if (p1 == 6 && g->pty_fd >= 0) {
+            // CPR — respond IMMEDIATELY inline
+            char cpr[32];
+            int cpr_len = snprintf(cpr, sizeof(cpr),
+                "\x1b[%d;%dR",
+                g->cursor_row + 1, g->cursor_col + 1);
+            write(g->pty_fd, cpr, cpr_len);
         }
+        g->cpr_pending = 0;
         break;
     case 'h': // Set mode
         if (is_private) {
@@ -557,6 +565,30 @@ static void grid_feed(vt100_grid_t *g, const char *data, int len) {
     }
 }
 
+// Debug: dump grid state
+static void debug_log_grid(vt100_grid_t *g, const char *label) {
+    FILE *f = fopen("/tmp/fac_grid.log", "a");
+    if (!f) return;
+    fprintf(f, "%s: cur=(%d,%d) scrl=(%d-%d) %dx%d\n",
+            label, g->cursor_row, g->cursor_col,
+            g->scroll_top, g->scroll_bottom, g->rows, g->cols);
+    for (int r = 0; r < g->rows; r++) {
+        int has = 0;
+        for (int c = 0; c < g->cols; c++)
+            if (g->cells[r*g->cols+c].ch != ' ') { has=1; break; }
+        if (has) {
+            fprintf(f, "  r%02d:[", r);
+            for (int c = 0; c < g->cols && c < 70; c++) {
+                char ch = g->cells[r*g->cols+c].ch;
+                fputc((ch>=32 && ch<127) ? ch : '.', f);
+            }
+            fprintf(f, "]\n");
+        }
+    }
+    fprintf(f, "---\n");
+    fclose(f);
+}
+
 // ---- Fortran-callable API ----
 
 void vt100_grid_create_f(void **handle, int *rows, int *cols) {
@@ -568,6 +600,7 @@ void vt100_grid_create_f(void **handle, int *rows, int *cols) {
     g->scroll_bottom = *rows - 1;
     g->cursor_visible = 1;
     g->cpr_pending = 0;
+    g->pty_fd = -1;
 
     // Initialize all cells to spaces
     for (int i = 0; i < *rows * *cols; i++) {
@@ -589,6 +622,7 @@ void vt100_grid_feed_f(void **handle, const char *data, int *len) {
     vt100_grid_t *g = (vt100_grid_t *)*handle;
     if (!g || !data || *len <= 0) return;
     grid_feed(g, data, *len);
+    debug_log_grid(g, "feed");
 }
 
 void vt100_grid_resize_f(void **handle, int *rows, int *cols) {
@@ -646,6 +680,11 @@ void vt100_grid_get_cursor_f(void **handle, int *row, int *col) {
     if (!g) { *row = 0; *col = 0; return; }
     *row = g->cursor_row;
     *col = g->cursor_col;
+}
+
+void vt100_grid_set_pty_fd_f(void **handle, int *fd) {
+    vt100_grid_t *g = (vt100_grid_t *)*handle;
+    if (g) g->pty_fd = *fd;
 }
 
 int vt100_grid_cpr_pending_f(void **handle) {

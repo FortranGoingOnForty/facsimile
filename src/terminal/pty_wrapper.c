@@ -417,6 +417,13 @@ int pty_write_f(void **handle, const char *data, int *len) {
     return (int)n;
 }
 
+// Get the PTY master fd (for grid inline responses)
+int pty_get_fd_f(void **handle) {
+    pty_state_t *state = (pty_state_t *)*handle;
+    if (!state) return -1;
+    return state->master_fd;
+}
+
 // Resize PTY
 int pty_resize_f(void **handle, int *rows, int *cols) {
     pty_state_t *state = (pty_state_t *)*handle;
