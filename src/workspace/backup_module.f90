@@ -22,11 +22,13 @@ module backup_module
 contains
 
     !> Create backup of a file
-    subroutine backup_create(workspace_path, file_path, success)
+    subroutine backup_create(workspace_path, file_path, success, &
+                             buffer_content)
         character(len=*), intent(in) :: workspace_path, file_path
         logical, intent(out) :: success
-        character(len=MAX_PATH_LEN) :: backup_dir, backup_file, basename
-        character(len=MAX_PATH_LEN) :: src_file, timestamp_str
+        character(len=*), intent(in), optional :: buffer_content
+        character(len=MAX_PATH_LEN) :: backup_dir, backup_file
+        character(len=MAX_PATH_LEN) :: basename, timestamp_str
         integer :: unit_src, unit_dst, ios, i
         character(len=1024) :: line
 
@@ -34,7 +36,9 @@ contains
 
         ! Create backup directory if needed
         backup_dir = trim(workspace_path) // "/.fac/backups"
-        call execute_command_line("mkdir -p '" // trim(backup_dir) // "'", wait=.true.)
+        call execute_command_line( &
+            "mkdir -p '" // trim(backup_dir) // "'", &
+            wait=.true.)
 
         ! Extract basename from file_path
         basename = file_path
@@ -47,31 +51,45 @@ contains
 
         ! Generate timestamp-based backup filename
         call get_timestamp(timestamp_str)
-        write(backup_file, '(A,A,A,A,A)') trim(backup_dir), '/', trim(basename), '.', trim(timestamp_str)
+        write(backup_file, '(A,A,A,A,A)') &
+            trim(backup_dir), '/', trim(basename), '.', &
+            trim(timestamp_str)
 
-        ! Copy file to backup
-        src_file = file_path
-        open(newunit=unit_src, file=src_file, status='old', action='read', iostat=ios)
-        if (ios /= 0) return
-
-        open(newunit=unit_dst, file=backup_file, status='replace', action='write', iostat=ios)
-        if (ios /= 0) then
+        ! Write backup from buffer content or copy from disk
+        if (present(buffer_content)) then
+            ! Save the in-memory buffer (unsaved edits)
+            open(newunit=unit_dst, file=backup_file, &
+                 status='replace', action='write', &
+                 access='stream', form='unformatted', &
+                 iostat=ios)
+            if (ios /= 0) return
+            if (len(buffer_content) > 0) then
+                write(unit_dst, iostat=ios) buffer_content
+            end if
+            close(unit_dst)
+        else
+            ! Fallback: copy file from disk
+            open(newunit=unit_src, file=file_path, &
+                 status='old', action='read', iostat=ios)
+            if (ios /= 0) return
+            open(newunit=unit_dst, file=backup_file, &
+                 status='replace', action='write', iostat=ios)
+            if (ios /= 0) then
+                close(unit_src)
+                return
+            end if
+            do
+                read(unit_src, '(A)', iostat=ios) line
+                if (ios /= 0) exit
+                write(unit_dst, '(A)') trim(line)
+            end do
             close(unit_src)
-            return
+            close(unit_dst)
         end if
 
-        ! Copy line by line
-        do
-            read(unit_src, '(A)', iostat=ios) line
-            if (ios /= 0) exit
-            write(unit_dst, '(A)') trim(line)
-        end do
-
-        close(unit_src)
-        close(unit_dst)
-
         ! Update metadata
-        call backup_update_metadata(workspace_path, file_path, backup_file, timestamp_str)
+        call backup_update_metadata(workspace_path, file_path, &
+            backup_file, timestamp_str)
 
         success = .true.
     end subroutine backup_create

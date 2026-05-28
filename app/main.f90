@@ -806,10 +806,24 @@ contains
                     end if
 
                 else if (prompt_result%action == 'd') then
-                    ! User wants to discard - create backup for later recovery
-                    ! But skip [Untitled] files - they're in-memory only
-                    if (index(editor%tabs(i)%filename, '[Untitled') /= 1) then
-                        call backup_create(editor%workspace_path, editor%tabs(i)%filename, backup_success)
+                    ! User wants to discard - backup the BUFFER
+                    ! content (unsaved edits) for later recovery
+                    if (index(editor%tabs(i)%filename, &
+                        '[Untitled') /= 1) then
+                        block
+                            use text_buffer_module, only: &
+                                buffer_to_string
+                            character(len=:), allocatable :: &
+                                buf_str
+                            buf_str = buffer_to_string( &
+                                editor%tabs(i)%buffer)
+                            call backup_create( &
+                                editor%workspace_path, &
+                                editor%tabs(i)%filename, &
+                                backup_success, buf_str)
+                            if (allocated(buf_str)) &
+                                deallocate(buf_str)
+                        end block
                     end if
                     ! Clear modified so workspace state doesn't re-trigger backup on next launch
                     editor%tabs(i)%modified = .false.
