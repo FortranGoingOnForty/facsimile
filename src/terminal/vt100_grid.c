@@ -46,6 +46,7 @@ typedef struct {
     char param_buf[PARAM_BUF_SIZE];
     int param_len;
     int cursor_visible;
+    int cpr_pending;    // 1 if ESC[6n was received, needs response
 } vt100_grid_t;
 
 // ---- Internal helpers ----
@@ -361,6 +362,12 @@ static void handle_csi(vt100_grid_t *g, char final) {
         g->cursor_row = 0;
         g->cursor_col = 0;
         break;
+    case 'n': // Device Status Report
+        if (p1 == 6) {
+            // CPR (Cursor Position Report) requested
+            g->cpr_pending = 1;
+        }
+        break;
     case 'h': // Set mode
         if (is_private) {
             if (p1 == 25)
@@ -554,6 +561,7 @@ void vt100_grid_create_f(void **handle, int *rows, int *cols) {
     g->scroll_top = 0;
     g->scroll_bottom = *rows - 1;
     g->cursor_visible = 1;
+    g->cpr_pending = 0;
 
     // Initialize all cells to spaces
     for (int i = 0; i < *rows * *cols; i++) {
@@ -632,6 +640,14 @@ void vt100_grid_get_cursor_f(void **handle, int *row, int *col) {
     if (!g) { *row = 0; *col = 0; return; }
     *row = g->cursor_row;
     *col = g->cursor_col;
+}
+
+int vt100_grid_cpr_pending_f(void **handle) {
+    vt100_grid_t *g = (vt100_grid_t *)*handle;
+    if (!g) return 0;
+    int pending = g->cpr_pending;
+    g->cpr_pending = 0;  // Clear on read
+    return pending;
 }
 
 int vt100_grid_get_rows_f(void **handle) {

@@ -113,6 +113,13 @@ module terminal_panel_module
             type(c_ptr), intent(inout) :: handle
             integer(c_int), intent(out) :: row, col
         end subroutine
+
+        function c_grid_cpr_pending(handle) &
+            bind(C, name='vt100_grid_cpr_pending_f') result(p)
+            import :: c_ptr, c_int
+            type(c_ptr), intent(inout) :: handle
+            integer(c_int) :: p
+        end function
     end interface
 
     integer, parameter :: MIN_HEIGHT = 5
@@ -259,6 +266,23 @@ contains
             c_len = bytes_read
             call c_grid_feed(panel%grid_handle, read_buf, c_len)
             panel%has_new_output = .true.
+
+            ! Check if grid needs a CPR response
+            if (c_grid_cpr_pending(panel%grid_handle) /= 0) then
+                block
+                    integer(c_int) :: cr, cc, cpr_len, cpr_res
+                    character(len=32) :: cpr_resp
+                    call c_grid_get_cursor(panel%grid_handle, &
+                        cr, cc)
+                    ! CPR response: ESC [ row ; col R (1-based)
+                    write(cpr_resp, '(a,i0,a,i0,a)') &
+                        achar(27) // '[', int(cr)+1, ';', &
+                        int(cc)+1, 'R'
+                    cpr_len = int(len_trim(cpr_resp), c_int)
+                    cpr_res = c_pty_write(panel%pty_handle, &
+                        cpr_resp, cpr_len)
+                end block
+            end if
         end do
 
         ! Check if child is still running
