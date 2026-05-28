@@ -362,12 +362,30 @@ static void handle_csi(vt100_grid_t *g, char final) {
         g->cursor_col = 0;
         break;
     case 'h': // Set mode
-        if (is_private && p1 == 25)
-            g->cursor_visible = 1;
+        if (is_private) {
+            if (p1 == 25)
+                g->cursor_visible = 1;
+            else if (p1 == 1049 || p1 == 47) {
+                // Enter alternate screen — clear grid
+                clear_region(g, 0, 0, g->rows-1, g->cols-1);
+                g->cursor_row = 0;
+                g->cursor_col = 0;
+            }
+        }
         break;
     case 'l': // Reset mode
-        if (is_private && p1 == 25)
-            g->cursor_visible = 0;
+        if (is_private) {
+            if (p1 == 25)
+                g->cursor_visible = 0;
+            else if (p1 == 1049 || p1 == 47) {
+                // Leave alternate screen — clear and reset
+                clear_region(g, 0, 0, g->rows-1, g->cols-1);
+                g->cursor_row = 0;
+                g->cursor_col = 0;
+                g->scroll_top = 0;
+                g->scroll_bottom = g->rows - 1;
+            }
+        }
         break;
     case 's': // Save cursor position
         g->saved_row = g->cursor_row;

@@ -508,6 +508,9 @@ contains
         case('ctrl-]')
             send_buf(1:1) = achar(29); send_len = 1
 
+        case(' ', 'space')
+            send_buf(1:1) = ' '; send_len = 1
+
         case default
             ! Single printable character
             if (len_trim(key_str) == 1) then
