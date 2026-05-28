@@ -53,12 +53,82 @@ void pty_close_f(void **handle) {
 #include <sys/wait.h>
 #include <sys/ioctl.h>
 #include <termios.h>
+#include <sys/select.h>
+#include <sys/time.h>
 
 typedef struct {
-    int master_fd;      // PTY master file descriptor
-    pid_t child_pid;    // Child process PID
-    int running;        // 1 if child is alive
+    int master_fd;
+    pid_t child_pid;
+    int running;
 } pty_state_t;
+
+// DA response strings
+static const char DA_PRIMARY[] = "\x1b[?62;22c";
+static const char DA_SECONDARY[] = "\x1b[>41;1;0c";
+
+// Handle terminal capability queries during shell startup.
+// Called synchronously on the blocking fd before it's set non-blocking.
+// Blocks for at most ~1.5 seconds, but returns early once DA is answered.
+static void handle_startup_queries(int fd) {
+    char buf[4096];
+    struct timeval start, now;
+    gettimeofday(&start, NULL);
+
+    for (;;) {
+        gettimeofday(&now, NULL);
+        double elapsed = (now.tv_sec - start.tv_sec) +
+                          (now.tv_usec - start.tv_usec) / 1e6;
+        if (elapsed > 1.5) break;
+
+        fd_set rfds;
+        struct timeval tv;
+        FD_ZERO(&rfds);
+        FD_SET(fd, &rfds);
+        tv.tv_sec = 0;
+        tv.tv_usec = 20000; // 20ms
+
+        int ret = select(fd + 1, &rfds, NULL, NULL, &tv);
+        if (ret <= 0) continue;
+
+        ssize_t n = read(fd, buf, sizeof(buf));
+        if (n <= 0) continue;
+
+        int responded = 0;
+        for (int i = 0; i < n - 1; i++) {
+            if (buf[i] != 0x1b || buf[i+1] != '[') continue;
+
+            if (i + 2 < n && buf[i+2] == 'c') {
+                write(fd, DA_PRIMARY, sizeof(DA_PRIMARY) - 1);
+                responded = 1;
+            }
+            if (i + 2 < n && buf[i+2] == '>') {
+                for (int j = i+3; j < n && j < i+12; j++) {
+                    if (buf[j] == 'c') {
+                        write(fd, DA_SECONDARY,
+                              sizeof(DA_SECONDARY) - 1);
+                        responded = 1;
+                        break;
+                    }
+                }
+            }
+            if (i + 2 < n && buf[i+2] == '?') {
+                for (int j = i+3; j < n && j < i+12; j++) {
+                    if (buf[j] == 'c') {
+                        write(fd, DA_PRIMARY,
+                              sizeof(DA_PRIMARY) - 1);
+                        responded = 1;
+                        break;
+                    }
+                }
+            }
+        }
+        if (responded) {
+            // Give shell a moment to process, then return
+            usleep(50000);
+            break;
+        }
+    }
+}
 
 // Spawn a shell in a new PTY
 void pty_spawn_f(const char *shell, int *shell_len,
@@ -208,7 +278,11 @@ void pty_spawn_f(const char *shell, int *shell_len,
         return;
     }
 
-    // Set master to non-blocking
+    // Handle DA queries synchronously while fd is still blocking.
+    // This catches fish's PDA query and responds before the 2s timeout.
+    handle_startup_queries(master_fd);
+
+    // NOW set master to non-blocking for normal operation
     int flags = fcntl(master_fd, F_GETFL, 0);
     fcntl(master_fd, F_SETFL, flags | O_NONBLOCK);
 

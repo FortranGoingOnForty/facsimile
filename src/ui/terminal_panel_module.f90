@@ -115,14 +115,6 @@ module terminal_panel_module
         end subroutine
     end interface
 
-    ! C usleep for startup polling
-    interface
-        subroutine usleep_c(usec) bind(C, name='usleep')
-            import :: c_int
-            integer(c_int), value, intent(in) :: usec
-        end subroutine
-    end interface
-
     integer, parameter :: MIN_HEIGHT = 5
     integer, parameter :: HEIGHT_PERCENT = 30
     integer, parameter :: READ_BUF_SIZE = 8192
@@ -221,17 +213,6 @@ contains
 
             ! Create grid
             call c_grid_create(panel%grid_handle, c_rows, c_cols)
-
-            ! Aggressive polling during shell startup to catch
-            ! and respond to DA queries before fish times out
-            block
-                integer :: poll_i
-                do poll_i = 1, 200  ! Poll for ~1 second
-                    call terminal_panel_poll(panel)
-                    call usleep_c(5000)  ! 5ms
-                    if (panel%has_new_output) exit
-                end do
-            end block
         end if
 
         panel%visible = .true.
@@ -274,10 +255,6 @@ contains
                                      c_bufsize)
             if (bytes_read <= 0) exit
 
-            ! Scan for terminal queries and respond
-            call respond_to_queries(panel, read_buf, &
-                                    int(bytes_read))
-
             ! Feed to grid
             c_len = bytes_read
             call c_grid_feed(panel%grid_handle, read_buf, c_len)
@@ -290,71 +267,6 @@ contains
         end if
     end subroutine terminal_panel_poll
 
-    ! Scan PTY output for terminal queries and send responses
-    subroutine respond_to_queries(panel, buf, buflen)
-        type(terminal_panel_t), intent(inout) :: panel
-        character(len=1), intent(in) :: buf(:)
-        integer, intent(in) :: buflen
-        integer :: i
-        integer(c_int) :: resp_len, res
-        character(len=32) :: response
-
-        i = 1
-        do while (i <= buflen - 2)
-            ! Look for ESC[ sequences
-            if (ichar(buf(i)) == 27 .and. buf(i+1) == '[') then
-                ! ESC[c — Primary Device Attributes
-                if (i + 2 <= buflen .and. buf(i+2) == 'c') then
-                    response = achar(27) // '[?62;22c'
-                    resp_len = 8_c_int
-                    res = c_pty_write(panel%pty_handle, &
-                        response, resp_len)
-                    i = i + 3
-                    cycle
-                end if
-                ! ESC[?...c — also DA query
-                if (i + 2 <= buflen .and. buf(i+2) == '?') then
-                    ! Scan to 'c' terminator
-                    block
-                        integer :: j
-                        do j = i + 3, min(i + 10, buflen)
-                            if (buf(j) == 'c') then
-                                response = achar(27) // &
-                                    '[?62;22c'
-                                resp_len = 8_c_int
-                                res = c_pty_write( &
-                                    panel%pty_handle, &
-                                    response, resp_len)
-                                i = j + 1
-                                exit
-                            end if
-                        end do
-                    end block
-                    cycle
-                end if
-                ! ESC[>c — Secondary Device Attributes
-                if (i + 2 <= buflen .and. buf(i+2) == '>') then
-                    block
-                        integer :: j
-                        do j = i + 3, min(i + 10, buflen)
-                            if (buf(j) == 'c') then
-                                response = achar(27) // &
-                                    '[>41;1;0c'
-                                resp_len = 9_c_int
-                                res = c_pty_write( &
-                                    panel%pty_handle, &
-                                    response, resp_len)
-                                i = j + 1
-                                exit
-                            end if
-                        end do
-                    end block
-                    cycle
-                end if
-            end if
-            i = i + 1
-        end do
-    end subroutine respond_to_queries
 
     ! Render the terminal panel to screen
     subroutine terminal_panel_render(panel, start_row, cols)
