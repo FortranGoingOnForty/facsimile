@@ -474,12 +474,6 @@ program facsimile
         end if
     end do
 
-    ! IMPORTANT: Save workspace state FIRST, before any prompts or cleanup
-    ! This ensures we capture the current state before tabs might be closed
-    if (should_quit .and. allocated(editor%workspace_path)) then
-        call workspace_save_state(editor, editor%workspace_path, workspace_success)
-    end if
-
     ! Handle unsaved files - prompt for save/backup
     if (allocated(editor%tabs) .and. allocated(editor%workspace_path)) then
         ! Workspace mode - handle all modified tabs
@@ -488,6 +482,12 @@ program facsimile
     else if (buffer%modified .and. allocated(editor%workspace_path) .and. allocated(editor%filename)) then
         ! Single-file mode - handle the current buffer if modified
         call handle_single_file_on_quit(buffer, editor, should_quit)
+    end if
+
+    ! Save workspace state AFTER unsaved-files prompt so modified flags
+    ! reflect save/discard decisions (not stale pre-prompt state)
+    if (should_quit .and. allocated(editor%workspace_path)) then
+        call workspace_save_state(editor, editor%workspace_path, workspace_success)
     end if
 
     ! Only proceed with cleanup if actually quitting
@@ -756,7 +756,8 @@ contains
                     if (index(editor%tabs(i)%filename, '[Untitled') /= 1) then
                         call backup_create(editor%workspace_path, editor%tabs(i)%filename, backup_success)
                     end if
-                    ! Continue even if backup fails
+                    ! Clear modified so workspace state doesn't re-trigger backup on next launch
+                    editor%tabs(i)%modified = .false.
                 end if
             end if
         end do

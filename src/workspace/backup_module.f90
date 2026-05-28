@@ -216,10 +216,10 @@ contains
         call terminal_write('[c]ompare - Show differences between files')
 
         call terminal_move_cursor(8, 1)
-        call terminal_write('Choice: ')
+        call terminal_write('Choice [d]: ')
         call terminal_flush()
 
-        ! Get user input
+        ! Get user input (Enter defaults to delete)
         do
             call get_key_input(key_input, status)
             if (status == 0) then
@@ -227,17 +227,16 @@ contains
                     choice = 'r'
                     exit
                 else if (key_input == 'd' .or. key_input == 'D') then
-                    choice = 'd'  ! Delete backup
+                    choice = 'd'
                     exit
                 else if (key_input == 'c' .or. key_input == 'C') then
-                    choice = 'c'  ! Compare
+                    choice = 'c'
                     exit
-                else if (key_input == 'k' .or. key_input == 'K' .or. key_input == 'i' .or. key_input == 'I') then
-                    ! Accept 'k' and 'i' for backwards compatibility
-                    choice = 'd'  ! Map to delete
+                else if (key_input == 'enter') then
+                    choice = 'd'  ! Enter = delete (default)
                     exit
-                else if (key_input == 'ESCAPE') then
-                    choice = 'd'  ! ESC = delete backup
+                else if (key_input == 'esc' .or. key_input == 'ESCAPE') then
+                    choice = 'd'
                     exit
                 end if
             end if
