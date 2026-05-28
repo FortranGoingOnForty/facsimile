@@ -923,17 +923,15 @@ contains
 
         call terminal_hide_cursor()
 
-        ! Clear screen first to avoid artifacts
-        do row = 1, editor%screen_rows
-            call terminal_move_cursor(row, 1)
-            call terminal_write(repeat(' ', editor%screen_cols))
-        end do
-
         ! Calculate split: 30% for tree, 70% for editor
         tree_width = editor%screen_cols * 30 / 100
         separator_col = tree_width + 1
         editor_start_col = tree_width + 2
         editor_width = editor%screen_cols - editor_start_col + 1
+
+        ! Clear row 1 left side (tree area on tab bar row, not covered by other components)
+        call terminal_move_cursor(1, 1)
+        call terminal_write(repeat(' ', tree_width))
 
         ! Render tab bar if there are any tabs (positioned in editor pane area)
         call render_tab_bar(editor, editor_start_col, editor_width)
