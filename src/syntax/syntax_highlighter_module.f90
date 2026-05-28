@@ -148,7 +148,7 @@ contains
         end if
 
         line_len = len(line)
-        allocate(tokens(line_len))  ! Worst case: each char is a token
+        allocate(tokens(max(1, line_len)))
         token_count = 0
         i = 1
 

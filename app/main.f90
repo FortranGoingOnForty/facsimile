@@ -411,16 +411,25 @@ program facsimile
                 if (g_lsp_modified_buffer) then
                     should_render = .true.
                     g_lsp_modified_buffer = .false.
-                end if
 
-                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
+                    ! Only sync buffers when LSP actually changed them
+                    call copy_buffer(buffer, &
+                        editor%tabs(editor%active_tab_index)%buffer)
 
-                ! Also sync to active pane buffer if panes exist (so pane doesn't overwrite LSP changes)
-                if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
-                    size(editor%tabs(editor%active_tab_index)%panes) > 0) then
-                    status = editor%tabs(editor%active_tab_index)%active_pane_index
-                    if (status > 0 .and. status <= size(editor%tabs(editor%active_tab_index)%panes)) then
-                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(status)%buffer, buffer)
+                    if (allocated(editor%tabs( &
+                        editor%active_tab_index)%panes) .and. &
+                        size(editor%tabs( &
+                        editor%active_tab_index)%panes) > 0) then
+                        status = editor%tabs( &
+                            editor%active_tab_index &
+                            )%active_pane_index
+                        if (status > 0 .and. status <= size( &
+                            editor%tabs( &
+                            editor%active_tab_index)%panes)) then
+                            call copy_buffer(editor%tabs( &
+                                editor%active_tab_index)%panes( &
+                                status)%buffer, buffer)
+                        end if
                     end if
                 end if
             end if

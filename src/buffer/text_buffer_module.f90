@@ -361,11 +361,15 @@ contains
         type(buffer_t), intent(inout) :: dest
         type(buffer_t), intent(in) :: src
 
-        ! Cleanup destination first
-        if (allocated(dest%data)) deallocate(dest%data)
-
-        ! Allocate same size as source
-        allocate(character(len=src%size) :: dest%data)
+        ! Only reallocate if sizes differ
+        if (allocated(dest%data)) then
+            if (len(dest%data) /= src%size) then
+                deallocate(dest%data)
+                allocate(character(len=src%size) :: dest%data)
+            end if
+        else
+            allocate(character(len=src%size) :: dest%data)
+        end if
 
         ! Copy all fields
         dest%data = src%data
