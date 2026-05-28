@@ -19,7 +19,7 @@ module command_handler_module
     use replace_prompt_module, only: show_replace_prompt
     use unified_search_module, only: show_unified_search_prompt
     use undo_stack_module
-    use terminal_io_module, only: terminal_move_cursor, terminal_write, terminal_clear_screen
+    use terminal_io_module, only: terminal_move_cursor, terminal_write, terminal_clear_screen, terminal_flush
     use bracket_matching_module, only: find_matching_bracket
     use file_tree_module
     use git_ops_module
@@ -1654,6 +1654,7 @@ contains
 
                         ! Render the panel
                         call render_workspace_symbols_panel(editor%workspace_symbols_panel, editor%screen_rows)
+                        call terminal_flush()
 
                         call get_key_input(key_input, status)
                         if (status /= 0) cycle
@@ -5751,6 +5752,7 @@ contains
                             call terminal_move_cursor(1, 1)
                             call terminal_write("Error: Could not switch to workspace: " // trim(selected_path))
                             call terminal_write("Press any key to continue...")
+                            call terminal_flush()
                             ! Wait for keypress (simple implementation)
                             call get_key_input(key_input, status)
                         else

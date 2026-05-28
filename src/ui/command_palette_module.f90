@@ -423,6 +423,7 @@ contains
 
         call show_command_palette(palette)
         call render_command_palette(palette, screen_cols)
+        call terminal_flush()
 
         do
             call get_key_input(key_input, status)
@@ -461,6 +462,7 @@ contains
             end if
 
             call render_command_palette(palette, screen_cols)
+            call terminal_flush()
         end do
     end function show_command_palette_interactive
 
