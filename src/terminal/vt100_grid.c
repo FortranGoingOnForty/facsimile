@@ -406,9 +406,17 @@ static void handle_csi(vt100_grid_t *g, char final) {
         g->saved_row = g->cursor_row;
         g->saved_col = g->cursor_col;
         break;
-    case 'u': // Restore cursor position
-        g->cursor_row = g->saved_row;
-        g->cursor_col = g->saved_col;
+    case 'u': // Restore cursor position (only plain ESC[u)
+        if (!is_private && g->param_len > 0 &&
+            g->param_buf[0] != '=') {
+            // ESC[u with no prefix — restore cursor
+            g->cursor_row = g->saved_row;
+            g->cursor_col = g->saved_col;
+        } else if (!is_private && g->param_len == 0) {
+            g->cursor_row = g->saved_row;
+            g->cursor_col = g->saved_col;
+        }
+        // ESC[=Nu and ESC[?Nu — kitty keyboard protocol, ignore
         break;
     default:
         break; // Ignore unknown CSI sequences
@@ -527,7 +535,7 @@ static void grid_feed(vt100_grid_t *g, const char *data, int len) {
 
         case STATE_CSI:
             if ((ch >= '0' && ch <= '9') || ch == ';' || ch == '?' ||
-                ch == '>' || ch == '!') {
+                ch == '>' || ch == '!' || ch == '=' || ch == '<') {
                 if (g->param_len < PARAM_BUF_SIZE - 1) {
                     g->param_buf[g->param_len++] = (char)ch;
                 }
@@ -622,7 +630,6 @@ void vt100_grid_feed_f(void **handle, const char *data, int *len) {
     vt100_grid_t *g = (vt100_grid_t *)*handle;
     if (!g || !data || *len <= 0) return;
     grid_feed(g, data, *len);
-    debug_log_grid(g, "feed");
 }
 
 void vt100_grid_resize_f(void **handle, int *rows, int *cols) {
