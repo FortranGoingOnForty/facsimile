@@ -79,10 +79,13 @@ contains
         type(reference_location_t), intent(in) :: references(:)
         integer, intent(in) :: num_refs
         character(len=*), intent(in), optional :: symbol_name
-        integer :: i
+        integer :: i, entry_len, max_entry_len
+        character(len=100) :: loc_tmp
 
         ! Clear existing references
         call cleanup_references_panel(panel)
+
+        max_entry_len = 0
 
         ! Allocate and copy new references
         if (num_refs > 0) then
@@ -109,6 +112,18 @@ contains
                 panel%references(i)%column = references(i)%column
                 panel%references(i)%end_line = references(i)%end_line
                 panel%references(i)%end_column = references(i)%end_column
+
+                ! Measure display width: " basename:line:col "
+                if (allocated(references(i)%filename)) then
+                    write(loc_tmp, '(A,A,I0,A,I0)') &
+                        trim(get_basename(references(i)%filename)), &
+                        ':', references(i)%line, ':', references(i)%column
+                else
+                    write(loc_tmp, '(I0,A,I0)') &
+                        references(i)%line, ':', references(i)%column
+                end if
+                entry_len = len_trim(loc_tmp) + 3  ! +3 for leading/trailing spaces and margin
+                if (entry_len > max_entry_len) max_entry_len = entry_len
             end do
         end if
 
@@ -118,6 +133,9 @@ contains
             allocate(character(len=len_trim(symbol_name)) :: panel%symbol_name)
             panel%symbol_name = trim(symbol_name)
         end if
+
+        ! Dynamic width: fit longest entry, min 30, max screen width
+        panel%width = max(30, min(max_entry_len + 4, panel%screen_width))
 
         panel%selected_index = 1
         panel%scroll_offset = 0
@@ -131,10 +149,29 @@ contains
     subroutine show_references_panel(panel, screen_width, screen_height)
         type(references_panel_t), intent(inout) :: panel
         integer, intent(in) :: screen_width, screen_height
+        integer :: i, entry_len, max_entry_len
+        character(len=100) :: loc_tmp
 
         panel%screen_width = screen_width
         panel%screen_height = screen_height
         panel%visible = .true.
+
+        ! Recalculate width now that screen_width is known
+        max_entry_len = 0
+        do i = 1, panel%num_references
+            if (allocated(panel%references(i)%filename)) then
+                write(loc_tmp, '(A,A,I0,A,I0)') &
+                    trim(get_basename(panel%references(i)%filename)), &
+                    ':', panel%references(i)%line, &
+                    ':', panel%references(i)%column
+            else
+                write(loc_tmp, '(I0,A,I0)') &
+                    panel%references(i)%line, ':', panel%references(i)%column
+            end if
+            entry_len = len_trim(loc_tmp) + 3
+            if (entry_len > max_entry_len) max_entry_len = entry_len
+        end do
+        panel%width = max(30, min(max_entry_len + 4, screen_width))
     end subroutine show_references_panel
 
     subroutine hide_references_panel(panel)
@@ -238,25 +275,18 @@ contains
                         ":", panel%references(visible_index)%column
                 end if
 
-                ! Truncate location if needed
-                if (len_trim(location_str) > 20) then
-                    location_str = location_str(1:17) // "..."
+                ! Truncate location to fit panel with margin
+                if (len_trim(location_str) > panel%width - 3) then
+                    location_str = location_str(1:panel%width - 6) // "..."
                 end if
 
-                ! Format display line
-                write(line, '(A2,A20,A)') " ", adjustl(location_str), " "
+                ! Build display line: " location_str" padded to panel width
+                line = ' ' // trim(location_str)
 
-                ! Add preview text if available
-                if (allocated(panel%references(visible_index)%preview_text)) then
-                    display_text = trim(panel%references(visible_index)%preview_text)
-                    if (len(display_text) > panel%width - 25) then
-                        display_text = display_text(1:panel%width-28) // "..."
-                    end if
-                    line = trim(line) // display_text
-                end if
-
-                ! Ensure line fits in panel width
-                if (len_trim(line) > panel%width) then
+                ! Pad or truncate to panel width
+                if (len_trim(line) < panel%width) then
+                    line = line(1:len_trim(line)) // repeat(' ', panel%width - len_trim(line))
+                else
                     line = line(1:panel%width)
                 end if
 

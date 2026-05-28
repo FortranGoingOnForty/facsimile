@@ -2193,7 +2193,13 @@ contains
 
         ! Legend
         call terminal_move_cursor(row, start_col)
-        call terminal_write(ESC // '[90mj/k:nav  enter:jump  esc:close' // ESC // '[0m')
+        call terminal_write(ESC // '[90m')
+        if (width >= 31) then
+            call terminal_write('j/k:nav  enter:jump  esc:close')
+        else
+            call terminal_write('j/k enter esc')
+        end if
+        call terminal_write(ESC // '[0m')
         row = row + 1
 
         ! Separator
@@ -2241,21 +2247,16 @@ contains
                         ":", panel%references(visible_index)%column
                 end if
 
-                ! Build line with location and preview
+                ! Build line with location
                 line = " " // trim(adjustl(location_str))
 
-                ! Add preview text if available
-                if (allocated(panel%references(visible_index)%preview_text)) then
-                    display_text = trim(panel%references(visible_index)%preview_text)
-                    if (len(line) + len(display_text) + 2 < width) then
-                        line = trim(line) // " " // display_text
-                    else if (len(line) + 5 < width) then
-                        line = trim(line) // " " // display_text(1:width-len(line)-4) // "..."
-                    end if
+                ! Truncate to fit panel width
+                if (len_trim(line) > width) then
+                    line = line(1:width - 3) // '...'
                 end if
 
                 ! Write line and pad to width
-                call terminal_write(trim(line))
+                call terminal_write(line(1:min(len_trim(line), width)))
                 if (len_trim(line) < width) then
                     call terminal_write(repeat(' ', width - len_trim(line)))
                 end if
