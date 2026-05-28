@@ -815,8 +815,22 @@ contains
                                 buffer_to_string
                             character(len=:), allocatable :: &
                                 buf_str
-                            buf_str = buffer_to_string( &
-                                editor%tabs(i)%buffer)
+                            integer :: pane_i
+                            ! Use pane buffer (has the edits),
+                            ! not tab buffer (may be stale)
+                            pane_i = editor%tabs(i) &
+                                %active_pane_index
+                            if (allocated(editor%tabs(i)%panes) &
+                                .and. pane_i > 0 .and. pane_i &
+                                <= size(editor%tabs(i)%panes)) &
+                                then
+                                buf_str = buffer_to_string( &
+                                    editor%tabs(i)%panes(pane_i) &
+                                    %buffer)
+                            else
+                                buf_str = buffer_to_string( &
+                                    editor%tabs(i)%buffer)
+                            end if
                             call backup_create( &
                                 editor%workspace_path, &
                                 editor%tabs(i)%filename, &
