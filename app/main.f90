@@ -256,8 +256,13 @@ program facsimile
         call get_workspace_path(editor%workspace_path)
     end if
 
-    ! Check for backups and offer restoration (after workspace load, after terminal init)
-    if (is_workspace_mode .and. backup_detect(editor%workspace_path)) then
+    ! Migrate legacy per-workspace backups to global registry
+    if (allocated(editor%workspace_path)) then
+        call backup_migrate_legacy(editor%workspace_path)
+    end if
+
+    ! Check global registry for backups to restore
+    if (backup_detect(editor%workspace_path)) then
         call handle_backup_restoration(editor, buffer)
     end if
 
@@ -815,8 +820,7 @@ contains
                     end if
 
                 else if (prompt_result%action == 'd') then
-                    ! User wants to discard - backup the BUFFER
-                    ! content (unsaved edits) for later recovery
+                    ! User wants to discard - backup buffer
                     if (index(editor%tabs(i)%filename, &
                         '[Untitled') /= 1) then
                         block
@@ -825,8 +829,6 @@ contains
                             character(len=:), allocatable :: &
                                 buf_str
                             integer :: pane_i
-                            ! Use pane buffer (has the edits),
-                            ! not tab buffer (may be stale)
                             pane_i = editor%tabs(i) &
                                 %active_pane_index
                             if (allocated(editor%tabs(i)%panes) &
@@ -841,9 +843,8 @@ contains
                                     editor%tabs(i)%buffer)
                             end if
                             call backup_create( &
-                                editor%workspace_path, &
                                 editor%tabs(i)%filename, &
-                                backup_success, buf_str)
+                                buf_str, backup_success)
                             if (allocated(buf_str)) &
                                 deallocate(buf_str)
                         end block
@@ -881,9 +882,15 @@ contains
                 editor%modified = .false.
             end if
         else if (prompt_result%action == 'n') then
-            ! User wants to skip - create backup
-            call backup_create(editor%workspace_path, editor%filename, backup_success)
-            ! Continue even if backup fails
+            ! User wants to skip - backup buffer content
+            block
+                use text_buffer_module, only: buffer_to_string
+                character(len=:), allocatable :: buf_str
+                buf_str = buffer_to_string(buffer)
+                call backup_create(editor%filename, &
+                    buf_str, backup_success)
+                if (allocated(buf_str)) deallocate(buf_str)
+            end block
         else if (prompt_result%action == 'c') then
             ! User cancelled - don't quit
             should_quit = .false.
@@ -1040,17 +1047,6 @@ contains
                 ! Don't increment i - re-prompt for same file
             end if
         end do
-
-        ! All backups handled — remove metadata file so they don't re-appear
-        block
-            character(len=512) :: meta_path
-            integer :: meta_unit, meta_ios
-            meta_path = trim(editor%workspace_path) // '/.fac/backups/.backup-metadata.json'
-            open(newunit=meta_unit, file=trim(meta_path), status='old', iostat=meta_ios)
-            if (meta_ios == 0) then
-                close(meta_unit, status='delete')
-            end if
-        end block
 
         ! Clear screen after all prompts
         call terminal_clear_screen()
