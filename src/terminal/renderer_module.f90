@@ -238,7 +238,7 @@ contains
 
                 ! Render terminal panel if visible (for panes path)
                 block
-                    integer :: pane_term_h
+                    integer :: pane_term_h, clr_row
                     pane_term_h = get_terminal_panel_height( &
                         editor%terminal_panel)
                     if (pane_term_h > 0) then
@@ -1017,10 +1017,22 @@ contains
         call render_vertical_separator(separator_col, 2, &
             content_bottom)
 
-        ! Render terminal panel if visible
+        ! Render terminal panel if visible, or clear stale area
         if (term_h > 0) then
             call terminal_panel_render(editor%terminal_panel, &
                 editor%screen_rows - term_h, editor%screen_cols)
+        else
+            ! Clear any rows between editor/tree and status bar
+            ! that may have stale terminal content
+            block
+                integer :: clear_row
+                do clear_row = content_bottom + 1, &
+                    editor%screen_rows - 1
+                    call terminal_move_cursor(clear_row, 1)
+                    call terminal_write(repeat(' ', &
+                        editor%screen_cols))
+                end do
+            end block
         end if
         end block
 

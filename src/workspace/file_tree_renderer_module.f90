@@ -45,11 +45,43 @@ contains
         ! Display repo:branch info at top if available
         if (len_trim(state%repo_name) > 0 .and. len_trim(state%branch_name) > 0) then
             call terminal_move_cursor(current_row, start_col)
-            write(status_line, '(A,A,A,A,A,A,A)') &
-                ESC // '[1;36m', trim(state%repo_name), ESC // '[0m', &
-                ':', &
-                ESC // '[1;33m', trim(state%branch_name), ESC // '[0m'
-            call terminal_write(trim(status_line))
+            block
+                character(len=256) :: repo_str, branch_str
+                integer :: vis_len, max_branch
+
+                repo_str = trim(state%repo_name)
+                branch_str = trim(state%branch_name)
+                ! visible length: repo + ':' + branch
+                vis_len = len_trim(repo_str) + 1 + &
+                          len_trim(branch_str)
+
+                if (vis_len > width) then
+                    ! Truncate branch to fit
+                    max_branch = width - len_trim(repo_str) - 4
+                    if (max_branch > 0) then
+                        branch_str = branch_str(1:max_branch) &
+                                     // '...'
+                    else
+                        ! Even repo is too long — truncate it
+                        repo_str = repo_str(1:max(1,width-4)) &
+                                   // '...'
+                        branch_str = ''
+                    end if
+                end if
+
+                if (len_trim(branch_str) > 0) then
+                    write(status_line, '(A,A,A,A,A,A,A)') &
+                        ESC // '[1;36m', trim(repo_str), &
+                        ESC // '[0m', ':', &
+                        ESC // '[1;33m', trim(branch_str), &
+                        ESC // '[0m'
+                else
+                    write(status_line, '(A,A,A)') &
+                        ESC // '[1;36m', trim(repo_str), &
+                        ESC // '[0m'
+                end if
+                call terminal_write(trim(status_line))
+            end block
             current_row = current_row + 2  ! Skip a line
         end if
 
