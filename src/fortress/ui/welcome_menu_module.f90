@@ -164,7 +164,8 @@ contains
         integer :: i, display_row, visible_height, item_count, actual_index
         character(len=64) :: title
 
-        call terminal_clear_screen()
+        ! Clear screen (buffered — no flush until caller flushes)
+        call terminal_write(achar(27) // '[2J' // achar(27) // '[H')
         call terminal_move_cursor(1, 1)
 
         ! Header
