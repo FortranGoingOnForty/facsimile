@@ -13,6 +13,8 @@ program facsimile
     use backup_module
     use save_prompt_module
     use command_palette_module, only: register_command
+    use terminal_panel_module, only: is_terminal_panel_visible, &
+        terminal_panel_poll
     use welcome_menu_module, only: show_welcome_menu
     use fortress_navigator_module, only: open_fortress_navigator
     use binary_prompt_module, only: binary_file_prompt
@@ -367,6 +369,11 @@ program facsimile
     do while (running)
         ! Process any LSP messages
         call process_server_messages(editor%lsp_manager)
+
+        ! Poll integrated terminal for new output
+        if (is_terminal_panel_visible(editor%terminal_panel)) then
+            call terminal_panel_poll(editor%terminal_panel)
+        end if
 
         ! Sync local buffer from tab after LSP processing (in case LSP modified it)
         block
