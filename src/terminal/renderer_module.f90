@@ -236,8 +236,23 @@ contains
                         editor%screen_cols)
                 end if
 
-                ! Skip editor cursor when a modal overlay is active
-                if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel)) then
+                ! Render terminal panel if visible (for panes path)
+                block
+                    integer :: pane_term_h
+                    pane_term_h = get_terminal_panel_height( &
+                        editor%terminal_panel)
+                    if (pane_term_h > 0) then
+                        call terminal_panel_render( &
+                            editor%terminal_panel, &
+                            editor%screen_rows - pane_term_h, &
+                            editor%screen_cols)
+                    end if
+                end block
+
+                ! Skip editor cursor when a modal or terminal is focused
+                if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel) .or. &
+                    (is_terminal_panel_visible(editor%terminal_panel) .and. &
+                     editor%terminal_panel%focused)) then
                     call terminal_hide_cursor()
                     call terminal_flush()
                 else
@@ -1251,7 +1266,14 @@ contains
 
         ! Get screen dimensions
         screen_width = editor%screen_cols
-        screen_height = editor%screen_rows - 2  ! Account for tab bar (row 1) and status bar (last row)
+        screen_height = editor%screen_rows - 2  ! Account for tab bar and status bar
+
+        ! Reduce height if terminal panel is visible
+        block
+            integer :: tp_h
+            tp_h = get_terminal_panel_height(editor%terminal_panel)
+            if (tp_h > 0) screen_height = screen_height - tp_h
+        end block
 
         ! Reduce width if diagnostics panel is visible
         if (editor%diagnostics_panel%visible) then
