@@ -173,7 +173,7 @@ contains
 
     !> Prompt user to restore backup (returns 'r', 'd' (delete), or 'c' (compare))
     function backup_prompt_restore(original_file, current_backup, total_backups, backup_timestamp) result(choice)
-        use terminal_io_module, only: terminal_write, terminal_move_cursor, terminal_clear_screen
+        use terminal_io_module, only: terminal_write, terminal_move_cursor, terminal_clear_screen, terminal_flush
         use input_handler_module, only: get_key_input
         character(len=*), intent(in) :: original_file
         integer, intent(in), optional :: current_backup, total_backups
@@ -217,6 +217,7 @@ contains
 
         call terminal_move_cursor(8, 1)
         call terminal_write('Choice: ')
+        call terminal_flush()
 
         ! Get user input
         do

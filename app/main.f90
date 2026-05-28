@@ -930,6 +930,7 @@ contains
                 end if
                 call terminal_move_cursor(3, 1)
                 call terminal_write('Press any key to continue...')
+                call terminal_flush()
                 call get_key_input(key_input, status)
 
                 i = i + 1  ! Move to next
@@ -973,6 +974,7 @@ contains
         ! Wait for user
         call terminal_move_cursor(24, 1)
         call terminal_write('Press any key to continue...')
+        call terminal_flush()
         call get_key_input(key_input, status)
     end subroutine show_backup_diff
 
