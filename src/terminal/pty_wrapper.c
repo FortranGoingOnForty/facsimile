@@ -56,10 +56,16 @@ void pty_close_f(void **handle) {
 #include <sys/select.h>
 #include <sys/time.h>
 
+#define STARTUP_BUF_SIZE 16384
+
 typedef struct {
     int master_fd;
     pid_t child_pid;
     int running;
+    // Buffered startup data (consumed during DA query handling)
+    char startup_buf[STARTUP_BUF_SIZE];
+    int startup_len;
+    int startup_pos;
 } pty_state_t;
 
 // DA response strings
@@ -67,12 +73,16 @@ static const char DA_PRIMARY[] = "\x1b[?62;22c";
 static const char DA_SECONDARY[] = "\x1b[>41;1;0c";
 
 // Handle terminal capability queries during shell startup.
-// Called synchronously on the blocking fd before it's set non-blocking.
-// Blocks for at most ~1.5 seconds, but returns early once DA is answered.
-static void handle_startup_queries(int fd) {
+// Saves all consumed data to state->startup_buf so pty_read_f
+// can replay it to the grid. Returns early once DA is answered.
+static void handle_startup_queries(pty_state_t *state) {
+    int fd = state->master_fd;
     char buf[4096];
     struct timeval start, now;
     gettimeofday(&start, NULL);
+
+    state->startup_len = 0;
+    state->startup_pos = 0;
 
     for (;;) {
         gettimeofday(&now, NULL);
@@ -85,7 +95,7 @@ static void handle_startup_queries(int fd) {
         FD_ZERO(&rfds);
         FD_SET(fd, &rfds);
         tv.tv_sec = 0;
-        tv.tv_usec = 20000; // 20ms
+        tv.tv_usec = 10000; // 10ms
 
         int ret = select(fd + 1, &rfds, NULL, NULL, &tv);
         if (ret <= 0) continue;
@@ -93,16 +103,23 @@ static void handle_startup_queries(int fd) {
         ssize_t n = read(fd, buf, sizeof(buf));
         if (n <= 0) continue;
 
+        // Save to startup buffer for replay
+        int copy = n;
+        if (state->startup_len + copy > STARTUP_BUF_SIZE)
+            copy = STARTUP_BUF_SIZE - state->startup_len;
+        if (copy > 0) {
+            memcpy(state->startup_buf + state->startup_len,
+                   buf, copy);
+            state->startup_len += copy;
+        }
+
+        // Scan for DA queries and respond
         int responded = 0;
         for (int i = 0; i < n - 1; i++) {
             if (buf[i] != 0x1b || buf[i+1] != '[') continue;
 
-            // Scan forward from ESC[ for DA-like sequences
-            // ending in 'c': ESC[c, ESC[0c, ESC[>0c, ESC[?1c
             for (int j = i + 2; j < n && j < i + 12; j++) {
                 if (buf[j] == 'c') {
-                    // Check if this is a DA query (not a response)
-                    // Queries: ESC[c ESC[0c ESC[>0c ESC[>c
                     if (j == i + 2 || buf[i+2] == '0' ||
                         buf[i+2] == '?') {
                         write(fd, DA_PRIMARY,
@@ -115,13 +132,30 @@ static void handle_startup_queries(int fd) {
                     }
                     break;
                 }
-                // Stop scanning at non-parameter bytes
                 if (buf[j] < '0' || buf[j] > '?') break;
             }
         }
         if (responded) {
-            // Give shell a moment to process, then return
-            usleep(50000);
+            // Read a bit more to capture post-DA output
+            usleep(20000);
+            for (int extra = 0; extra < 5; extra++) {
+                FD_ZERO(&rfds);
+                FD_SET(fd, &rfds);
+                tv.tv_sec = 0;
+                tv.tv_usec = 10000;
+                if (select(fd+1, &rfds, NULL, NULL, &tv) <= 0)
+                    break;
+                n = read(fd, buf, sizeof(buf));
+                if (n <= 0) break;
+                copy = n;
+                if (state->startup_len + copy > STARTUP_BUF_SIZE)
+                    copy = STARTUP_BUF_SIZE - state->startup_len;
+                if (copy > 0) {
+                    memcpy(state->startup_buf + state->startup_len,
+                           buf, copy);
+                    state->startup_len += copy;
+                }
+            }
             break;
         }
     }
@@ -275,38 +309,49 @@ void pty_spawn_f(const char *shell, int *shell_len,
         return;
     }
 
+    // Allocate state first so startup handler can buffer data
+    state = (pty_state_t *)malloc(sizeof(pty_state_t));
+    state->master_fd = master_fd;
+    state->child_pid = pid;
+    state->running = 1;
+    state->startup_len = 0;
+    state->startup_pos = 0;
+
     // Handle DA queries synchronously while fd is still blocking.
-    // This catches fish's PDA query and responds before the 2s timeout.
-    handle_startup_queries(master_fd);
+    handle_startup_queries(state);
 
     // NOW set master to non-blocking for normal operation
     int flags = fcntl(master_fd, F_GETFL, 0);
     fcntl(master_fd, F_SETFL, flags | O_NONBLOCK);
 
-    // Allocate state
-    state = (pty_state_t *)malloc(sizeof(pty_state_t));
-    state->master_fd = master_fd;
-    state->child_pid = pid;
-    state->running = 1;
-
     *handle = state;
 }
 
 // Non-blocking read from PTY
-// Returns bytes read, 0 if no data, -1 on error/EOF
+// Returns buffered startup data first, then live reads.
 int pty_read_f(void **handle, char *buffer, int *bufsize) {
     pty_state_t *state = (pty_state_t *)*handle;
     if (!state || state->master_fd < 0) return -1;
 
+    // Return buffered startup data first
+    if (state->startup_pos < state->startup_len) {
+        int avail = state->startup_len - state->startup_pos;
+        int copy = avail < *bufsize ? avail : *bufsize;
+        memcpy(buffer, state->startup_buf + state->startup_pos,
+               copy);
+        state->startup_pos += copy;
+        return copy;
+    }
+
     ssize_t n = read(state->master_fd, buffer, *bufsize);
     if (n < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return 0; // No data available
+            return 0;
         }
-        return -1; // Error
+        return -1;
     }
     if (n == 0) {
-        return -1; // EOF — child closed
+        return -1;
     }
     return (int)n;
 }
