@@ -303,10 +303,11 @@ contains
         caps(CAP_COMPLETION) = .true.
         caps(CAP_DEFINITION) = .true.
         caps(CAP_REFERENCES) = .true.
+        caps(CAP_RENAME) = .true.
         caps(CAP_HOVER) = .true.
         caps(CAP_DIAGNOSTICS) = .true.
         caps(CAP_DOCUMENT_SYMBOLS) = .true.
-        caps(CAP_CODE_ACTIONS) = .true.  ! fortls has limited code action support
+        caps(CAP_CODE_ACTIONS) = .true.
         call add_config(manager, "fortran", "fortls", "fortls", "*.f90,*.f95,*.f03,*.f08", caps)
 
         ! TODO: Load from config file

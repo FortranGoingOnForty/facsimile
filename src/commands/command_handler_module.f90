@@ -1273,7 +1273,6 @@ contains
 
         case('f12', 'ctrl-\\', 'alt-g')
             ! Go to definition (F12, Ctrl+\, or Alt+G)
-            call terminal_move_cursor(editor%screen_rows, 1)
             block
                 integer :: def_server
                 def_server = get_lsp_server_for_cap(editor, CAP_DEFINITION)
@@ -1302,14 +1301,16 @@ contains
                             lsp_line, lsp_char, handle_definition_response_wrapper)
 
                         if (request_id > 0) then
-                            ! Response will be handled by callback
-                            call terminal_write('Searching for definition...                ')
+                            editor%timed_message = 'Searching for definition...'
+                            editor%timed_message_ms = get_time_ms()
                         else
-                            call terminal_write('[F12] LSP request failed                    ')
+                            editor%timed_message = '[F12] LSP request failed'
+                            editor%timed_message_ms = get_time_ms()
                         end if
                     end block
                 else
-                    call terminal_write('[F12] No LSP server with definition support ')
+                    editor%timed_message = '[F12] No LSP server with definition support'
+                    editor%timed_message_ms = get_time_ms()
                 end if
             end block
 

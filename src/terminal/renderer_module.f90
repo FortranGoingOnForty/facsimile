@@ -567,7 +567,7 @@ contains
     end subroutine render_line_with_selections
 
     subroutine render_status_bar(editor, buffer, match_mode_active, match_case_sens)
-        type(editor_state_t), intent(in) :: editor
+        type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(in) :: buffer
         logical, intent(in), optional :: match_mode_active
         logical, intent(in), optional :: match_case_sens
@@ -592,11 +592,22 @@ contains
                    merge(' [modified]', '           ', buffer%modified), ' '
         end if
 
-        ! Add hint in center - show diagnostic, match mode hint, or help
+        ! Add hint in center - show timed message, diagnostic, match mode hint, or help
         block
             type(diagnostic_t), allocatable :: line_diagnostics(:)
             character(len=256) :: diag_msg
             character(len=:), allocatable :: file_uri
+            integer :: now_ms
+
+            ! Check for timed status message (persists ~2 seconds)
+            now_ms = get_time_ms()
+            if (len_trim(editor%timed_message) > 0 .and. &
+                (now_ms - editor%timed_message_ms) < 2000) then
+                status_center = trim(editor%timed_message)
+                goto 200  ! Skip other center content
+            else if (len_trim(editor%timed_message) > 0) then
+                editor%timed_message = ''  ! Expired, clear it
+            end if
 
             ! Check for diagnostics at cursor position
             if (allocated(editor%filename)) then
@@ -624,6 +635,7 @@ contains
             end if
 
             if (allocated(line_diagnostics)) deallocate(line_diagnostics)
+200         continue
         end block
 
         if (size(editor%cursors) > 1) then

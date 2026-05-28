@@ -142,6 +142,10 @@ module editor_state_module
 
         ! Navigation
         type(jump_stack_t) :: jump_stack
+
+        ! Timed status message (persists for ~2 seconds)
+        character(len=256) :: timed_message = ''
+        integer(int32) :: timed_message_ms = 0  ! timestamp when set
     end type editor_state_t
 
 contains
