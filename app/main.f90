@@ -949,6 +949,17 @@ contains
             end if
         end do
 
+        ! All backups handled — remove metadata file so they don't re-appear
+        block
+            character(len=512) :: meta_path
+            integer :: meta_unit, meta_ios
+            meta_path = trim(editor%workspace_path) // '/.fac/backups/.backup-metadata.json'
+            open(newunit=meta_unit, file=trim(meta_path), status='old', iostat=meta_ios)
+            if (meta_ios == 0) then
+                close(meta_unit, status='delete')
+            end if
+        end block
+
         ! Clear screen after all prompts
         call terminal_clear_screen()
     end subroutine handle_backup_restoration
