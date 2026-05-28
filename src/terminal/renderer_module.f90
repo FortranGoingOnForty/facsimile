@@ -18,6 +18,8 @@ module renderer_module
     use unified_search_module, only: get_matches_on_line, search_mode_active
     use lsp_server_installer_panel_module, only: render_lsp_server_installer_panel, &
                                                   is_lsp_server_installer_panel_visible
+    use terminal_panel_module, only: is_terminal_panel_visible, &
+        terminal_panel_render, get_terminal_panel_height
     implicit none
     private
 
@@ -234,8 +236,23 @@ contains
                         editor%screen_cols)
                 end if
 
-                ! Skip editor cursor when a modal overlay is active
-                if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel)) then
+                ! Render terminal panel if visible (for panes path)
+                block
+                    integer :: pane_term_h, clr_row
+                    pane_term_h = get_terminal_panel_height( &
+                        editor%terminal_panel)
+                    if (pane_term_h > 0) then
+                        call terminal_panel_render( &
+                            editor%terminal_panel, &
+                            editor%screen_rows - pane_term_h, &
+                            editor%screen_cols)
+                    end if
+                end block
+
+                ! Skip editor cursor when a modal or terminal is focused
+                if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel) .or. &
+                    (is_terminal_panel_visible(editor%terminal_panel) .and. &
+                     editor%terminal_panel%focused)) then
                     call terminal_hide_cursor()
                     call terminal_flush()
                 else
@@ -247,7 +264,16 @@ contains
 
         ! Fallback to simple rendering if no tabs/panes
         ! Clear and render each visible line
-        do screen_row = start_row, editor%screen_rows - 1  ! Last row for status bar
+        block
+            integer :: term_h, editor_bottom
+            term_h = get_terminal_panel_height(editor%terminal_panel)
+            ! Editor content ends before terminal panel + separator + status bar
+            if (term_h > 0) then
+                editor_bottom = editor%screen_rows - term_h - 1
+            else
+                editor_bottom = editor%screen_rows - 1
+            end if
+        do screen_row = start_row, editor_bottom
                 buffer_line = editor%viewport_line + screen_row - row_offset_val
 
                 call terminal_move_cursor(screen_row, 1)
@@ -290,6 +316,13 @@ contains
                 call terminal_write(char(27) // '[K')
             end do
 
+        ! Render terminal panel if visible
+        if (term_h > 0) then
+            call terminal_panel_render(editor%terminal_panel, &
+                editor%screen_rows - term_h, editor%screen_cols)
+        end if
+        end block
+
         ! Render status bar
         call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
 
@@ -318,8 +351,10 @@ contains
                 editor%screen_cols)
         end if
 
-        ! Skip editor cursor when a modal overlay is active
-        if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel)) then
+        ! Skip editor cursor when a modal or terminal is focused
+        if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel) .or. &
+            (is_terminal_panel_visible(editor%terminal_panel) .and. &
+             editor%terminal_panel%focused)) then
             call terminal_hide_cursor()
             call terminal_flush()
         else
@@ -959,19 +994,35 @@ contains
         ! Render tab bar if there are any tabs (positioned in editor pane area)
         call render_tab_bar(editor, editor_start_col, editor_width)
 
-        ! Render editor FIRST so its ESC[K (clear-to-end-of-line) can't destroy
-        ! file tree content. When the editor fills to the last column, the cursor
-        ! may wrap to the next row; ESC[K then clears from column 1, wiping anything
-        ! already drawn on that row. By rendering the editor before the tree, the
-        ! tree overwrites any such damage.
+        ! Calculate editor area bottom (accounting for terminal panel)
+        block
+            integer :: term_h, content_bottom
+
+            term_h = get_terminal_panel_height(editor%terminal_panel)
+            if (term_h > 0) then
+                content_bottom = editor%screen_rows - term_h - 1
+            else
+                content_bottom = editor%screen_rows - 1
+            end if
+
+        ! Render editor FIRST so its ESC[K can't destroy file tree content.
         call render_editor_area_with_tree(editor, editor_start_col, editor_width)
 
-        ! Render file tree in left pane (start at row 2 for tab bar)
-        call render_file_tree(tree_state, 2, editor%screen_rows - 1, 2, tree_width - 2, &
-                              editor%fuss_hints_expanded, fuss_git_prefix_active)
+        ! Render file tree in left pane
+        call render_file_tree(tree_state, 2, content_bottom, 2, &
+            tree_width - 2, editor%fuss_hints_expanded, &
+            fuss_git_prefix_active)
 
-        ! Render vertical separator (start at row 2 for tab bar)
-        call render_vertical_separator(separator_col, 2, editor%screen_rows - 1)
+        ! Render vertical separator
+        call render_vertical_separator(separator_col, 2, &
+            content_bottom)
+
+        ! Render terminal panel if visible
+        if (term_h > 0) then
+            call terminal_panel_render(editor%terminal_panel, &
+                editor%screen_rows - term_h, editor%screen_cols)
+        end if
+        end block
 
         ! Render status bar (full width)
         call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
@@ -1001,12 +1052,14 @@ contains
                 editor%screen_cols)
         end if
 
-        ! Skip editor cursor when a modal overlay is active
-        if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel)) then
+        ! Skip editor cursor when a modal or terminal is focused
+        if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel) .or. &
+            (is_terminal_panel_visible(editor%terminal_panel) .and. &
+             editor%terminal_panel%focused)) then
             call terminal_hide_cursor()
             call terminal_flush()
         else
-            ! Position cursor in editor pane (use appropriate method based on pane count)
+            ! Position cursor in editor pane
             if (size(editor%tabs(editor%active_tab_index)%panes) > 1) then
                 call render_cursor_for_panes_with_tree(editor, editor_start_col, editor_width)
             else
@@ -1213,7 +1266,14 @@ contains
 
         ! Get screen dimensions
         screen_width = editor%screen_cols
-        screen_height = editor%screen_rows - 2  ! Account for tab bar (row 1) and status bar (last row)
+        screen_height = editor%screen_rows - 2  ! Account for tab bar and status bar
+
+        ! Reduce height if terminal panel is visible
+        block
+            integer :: tp_h
+            tp_h = get_terminal_panel_height(editor%terminal_panel)
+            if (tp_h > 0) screen_height = screen_height - tp_h
+        end block
 
         ! Reduce width if diagnostics panel is visible
         if (editor%diagnostics_panel%visible) then

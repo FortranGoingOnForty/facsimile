@@ -13,6 +13,9 @@ program facsimile
     use backup_module
     use save_prompt_module
     use command_palette_module, only: register_command
+    use terminal_panel_module, only: is_terminal_panel_visible, &
+        terminal_panel_poll
+    use iso_c_binding, only: c_int
     use welcome_menu_module, only: show_welcome_menu
     use fortress_navigator_module, only: open_fortress_navigator
     use binary_prompt_module, only: binary_file_prompt
@@ -23,6 +26,13 @@ program facsimile
     use app_state_module, only: is_first_run, mark_first_run_complete
     use lsp_server_installer_panel_module, only: show_lsp_server_installer_panel
     implicit none
+
+    interface
+        subroutine c_usleep(usec) bind(C, name='usleep')
+            import :: c_int
+            integer(c_int), value, intent(in) :: usec
+        end subroutine
+    end interface
 
     type(editor_state_t) :: editor
     type(buffer_t) :: buffer
@@ -368,6 +378,23 @@ program facsimile
         ! Process any LSP messages
         call process_server_messages(editor%lsp_manager)
 
+        ! Poll integrated terminal for new output
+        if (is_terminal_panel_visible(editor%terminal_panel)) then
+            call terminal_panel_poll(editor%terminal_panel)
+            ! Re-render immediately if terminal has new output
+            if (editor%terminal_panel%has_new_output) then
+                if (editor%fuss_mode_active) then
+                    call render_screen_with_tree(buffer, editor, &
+                        allocated(search_pattern), &
+                        match_case_sensitive)
+                else
+                    call render_screen(buffer, editor, &
+                        allocated(search_pattern), &
+                        match_case_sensitive)
+                end if
+            end if
+        end if
+
         ! Sync local buffer from tab after LSP processing (in case LSP modified it)
         block
             logical :: should_render
@@ -464,6 +491,25 @@ program facsimile
             if (should_quit) then
                 running = .false.
             else
+                ! Poll terminal for echo before rendering.
+                if (is_terminal_panel_visible(editor%terminal_panel)) then
+                    if (editor%terminal_panel%focused) then
+                        block
+                            integer :: poll_pass
+                            do poll_pass = 1, 3
+                                call c_usleep(1000)
+                                call terminal_panel_poll( &
+                                    editor%terminal_panel)
+                                if (editor%terminal_panel &
+                                    %has_new_output) exit
+                            end do
+                        end block
+                    else
+                        call terminal_panel_poll( &
+                            editor%terminal_panel)
+                    end if
+                end if
+
                 ! Re-render screen after each command
                 if (editor%fuss_mode_active) then
                     call render_screen_with_tree(buffer, editor, allocated(search_pattern), match_case_sensitive)

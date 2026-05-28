@@ -20,6 +20,8 @@ module command_handler_module
     use unified_search_module, only: show_unified_search_prompt
     use undo_stack_module
     use terminal_io_module, only: terminal_move_cursor, terminal_write, terminal_clear_screen, terminal_flush
+    use terminal_panel_module, only: toggle_terminal_panel, &
+        is_terminal_panel_visible, terminal_panel_handle_key
     use bracket_matching_module, only: find_matching_bracket
     use file_tree_module
     use git_ops_module
@@ -180,10 +182,28 @@ contains
             match_case_sensitive = .true.  ! Reset to default
         end if
 
-        ! Route input when in fuss mode (except ctrl-b/ctrl-shift-b/F-keys/Alt-keys/ctrl-q which work in both modes)
+        ! Route keys to integrated terminal when focused (highest priority)
+        if (is_terminal_panel_visible(editor%terminal_panel) .and. &
+            editor%terminal_panel%focused) then
+            if (trim(key_str) == 'f5') then
+                ! F5 hides terminal panel
+                editor%terminal_panel%visible = .false.
+                editor%terminal_panel%focused = .false.
+                ! Buffered clear so next render has no stale content
+                call terminal_write(achar(27) // '[2J')
+                return
+            end if
+            if (terminal_panel_handle_key(editor%terminal_panel, &
+                                          trim(key_str))) then
+                return
+            end if
+        end if
+
+        ! Route input when in fuss mode (except keys that work in both modes)
         if (editor%fuss_mode_active .and. trim(key_str) /= 'ctrl-b' .and. &
             trim(key_str) /= 'ctrl-shift-b' .and. trim(key_str) /= 'f2' .and. &
             trim(key_str) /= 'f3' .and. trim(key_str) /= 'f4' .and. &
+            trim(key_str) /= 'f5' .and. &
             trim(key_str) /= 'f6' .and. trim(key_str) /= 'f8' .and. &
             trim(key_str) /= 'f12' .and. trim(key_str) /= 'shift-f12' .and. &
             trim(key_str) /= 'alt-g' .and. trim(key_str) /= 'alt-o' .and. &
@@ -1121,10 +1141,21 @@ contains
                 end if
             end block
 
-        case('ctrl-j')
+        case('f5')
+            ! Toggle integrated terminal
+            if (is_terminal_panel_visible(editor%terminal_panel)) then
+                ! Visible but unfocused — re-focus
+                editor%terminal_panel%focused = .true.
+            else
+                ! Hidden — open and focus
+                call toggle_terminal_panel(editor%terminal_panel, &
+                    editor%screen_rows, editor%screen_cols)
+            end if
+
+        case('alt-shift-j')
+            ! Join lines
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (size(editor%cursors) > 1) then
-                ! Apply to all cursors
                 do i = 1, size(editor%cursors)
                     call join_lines(editor%cursors(i), buffer)
                 end do

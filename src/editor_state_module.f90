@@ -34,6 +34,8 @@ module editor_state_module
     use lsp_server_installer_panel_module, only: lsp_server_installer_panel_t, &
                                                   init_lsp_server_installer_panel, &
                                                   cleanup_lsp_server_installer_panel
+    use terminal_panel_module, only: terminal_panel_t, &
+        init_terminal_panel, cleanup_terminal_panel
     implicit none
     private
 
@@ -143,6 +145,9 @@ module editor_state_module
         ! Navigation
         type(jump_stack_t) :: jump_stack
 
+        ! Integrated terminal
+        type(terminal_panel_t) :: terminal_panel
+
         ! Timed status message (persists for ~2 seconds)
         character(len=256) :: timed_message = ''
         integer(int64) :: timed_message_ms = 0  ! timestamp when set
@@ -208,6 +213,9 @@ contains
         ! Initialize jump stack
         call init_jump_stack(editor%jump_stack)
 
+        ! Initialize integrated terminal
+        call init_terminal_panel(editor%terminal_panel)
+
         ! Initialize LSP server installer panel
         call init_lsp_server_installer_panel(editor%lsp_installer_panel)
     end subroutine init_editor
@@ -263,6 +271,9 @@ contains
 
         ! Cleanup jump stack
         call cleanup_jump_stack(editor%jump_stack)
+
+        ! Cleanup integrated terminal
+        call cleanup_terminal_panel(editor%terminal_panel)
 
         ! Cleanup LSP server installer panel
         call cleanup_lsp_server_installer_panel(editor%lsp_installer_panel)
