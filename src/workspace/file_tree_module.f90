@@ -731,20 +731,35 @@ contains
         allocate(temp(max_size))
         count = 0
 
-        ! Traverse tree and collect files
-        call collect_files_recursive(root, temp, count, max_size, do_hide)
+        ! Traverse tree and collect files (grows temp as needed)
+        call collect_files_recursive(root, temp, count, &
+                                     max_size, do_hide)
 
         n_selectable = count
         allocate(selectable(n_selectable))
-        if (n_selectable > 0) selectable(1:n_selectable) = temp(1:n_selectable)
+        if (n_selectable > 0) &
+            selectable(1:n_selectable) = temp(1:n_selectable)
         deallocate(temp)
     end subroutine build_selectable_list
 
-    recursive subroutine collect_files_recursive(node, list, count, max_size, hide_dotfiles)
+    subroutine resize_selectable_array(arr, new_size)
+        type(selectable_file_t), allocatable, intent(inout) :: arr(:)
+        integer, intent(in) :: new_size
+        type(selectable_file_t), allocatable :: tmp(:)
+        integer :: old_size
+
+        old_size = size(arr)
+        allocate(tmp(new_size))
+        tmp(1:old_size) = arr(1:old_size)
+        deallocate(arr)
+        call move_alloc(tmp, arr)
+    end subroutine resize_selectable_array
+
+    recursive subroutine collect_files_recursive(node, list, &
+        count, max_size, hide_dotfiles)
         type(tree_node_t), pointer, intent(in) :: node
-        type(selectable_file_t), intent(inout) :: list(:)
-        integer, intent(inout) :: count
-        integer, intent(in) :: max_size
+        type(selectable_file_t), allocatable, intent(inout) :: list(:)
+        integer, intent(inout) :: count, max_size
         logical, intent(in) :: hide_dotfiles
         type(tree_node_t), pointer :: child
 
@@ -757,19 +772,21 @@ contains
         ! Skip root node (name = '.')
         if (trim(node%name) /= '.') then
             count = count + 1
-            if (count <= max_size) then
-                if (node%is_file) then
-                    list(count)%path = node%full_path
-                    list(count)%is_directory = .false.
-                else
-                    list(count)%path = node%name  ! For directories, use name
-                    list(count)%is_directory = .true.
-                end if
-                list(count)%is_staged = node%is_staged
-                list(count)%is_unstaged = node%is_unstaged
-                list(count)%is_untracked = node%is_untracked
-                list(count)%node => node
+            if (count > max_size) then
+                max_size = max_size * 2
+                call resize_selectable_array(list, max_size)
             end if
+            if (node%is_file) then
+                list(count)%path = node%full_path
+                list(count)%is_directory = .false.
+            else
+                list(count)%path = node%name
+                list(count)%is_directory = .true.
+            end if
+            list(count)%is_staged = node%is_staged
+            list(count)%is_unstaged = node%is_unstaged
+            list(count)%is_untracked = node%is_untracked
+            list(count)%node => node
         end if
 
         ! Recursively process children if this node is expanded (always recurse for root)
