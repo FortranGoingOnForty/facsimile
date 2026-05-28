@@ -95,6 +95,24 @@ program facsimile
             stop
         end if
 
+        ! Expand ~ to $HOME
+        if (len_trim(arg) >= 1 .and. arg(1:1) == '~') then
+            block
+                character(len=512) :: home_dir
+                integer :: home_len
+                call get_environment_variable('HOME', &
+                    home_dir, home_len)
+                if (home_len > 0) then
+                    if (len_trim(arg) == 1) then
+                        arg = home_dir(1:home_len)
+                    else
+                        arg = home_dir(1:home_len) // &
+                            arg(2:len_trim(arg))
+                    end if
+                end if
+            end block
+        end if
+
         ! This must be the file/directory argument
         ! Check if argument is a directory (workspace mode)
         ! Use test -d which is POSIX compliant (works on Linux, macOS, BSD)
@@ -261,10 +279,18 @@ program facsimile
         call backup_migrate_legacy(editor%workspace_path)
     end if
 
-    ! Check global registry for backups to restore
-    if (backup_detect('')) then
-        call handle_backup_restoration(editor, buffer)
-    end if
+    ! Check global registry for backups in this workspace
+    block
+        character(len=512) :: ws_filter
+        if (allocated(editor%workspace_path)) then
+            ws_filter = editor%workspace_path
+        else
+            ws_filter = ''
+        end if
+        if (backup_detect(trim(ws_filter))) then
+            call handle_backup_restoration(editor, buffer)
+        end if
+    end block
 
     ! Get terminal size
     call terminal_get_size(rows, cols)
@@ -917,8 +943,16 @@ contains
         logical :: restore_success, found
         integer(int64) :: current_timestamp, best_timestamp
 
-        ! Get ALL backups from global registry (not filtered)
-        call backup_list('', backups, backup_count)
+        ! Get backups scoped to this workspace
+        block
+            character(len=512) :: ws_f
+            if (allocated(editor%workspace_path)) then
+                ws_f = editor%workspace_path
+            else
+                ws_f = ''
+            end if
+            call backup_list(trim(ws_f), backups, backup_count)
+        end block
 
         ! Deduplicate - keep only the most recent backup for each unique file
         allocate(unique_backups(backup_count))
