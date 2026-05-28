@@ -282,6 +282,37 @@ void get_terminal_size(int *rows, int *cols) {
     }
 }
 
+// Output buffering (Windows)
+#define OUTPUT_BUFFER_SIZE (256 * 1024)
+static char output_buf[OUTPUT_BUFFER_SIZE];
+static int output_pos = 0;
+
+void term_buf_write(const char *data, int len) {
+    if (len <= 0) return;
+    if (output_pos + len > OUTPUT_BUFFER_SIZE) {
+        if (output_pos > 0) {
+            DWORD written;
+            WriteFile(hStdout, output_buf, output_pos, &written, NULL);
+            output_pos = 0;
+        }
+    }
+    if (len > OUTPUT_BUFFER_SIZE) {
+        DWORD written;
+        WriteFile(hStdout, data, len, &written, NULL);
+        return;
+    }
+    memcpy(output_buf + output_pos, data, len);
+    output_pos += len;
+}
+
+void term_buf_flush(void) {
+    if (output_pos > 0) {
+        DWORD written;
+        WriteFile(hStdout, output_buf, output_pos, &written, NULL);
+        output_pos = 0;
+    }
+}
+
 #else
 // Unix implementation (original code)
 #include <termios.h>
