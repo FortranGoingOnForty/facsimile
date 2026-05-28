@@ -234,8 +234,13 @@ contains
                         editor%screen_cols)
                 end if
 
-                ! Position cursor for panes
-                call render_cursor_for_panes(editor)
+                ! Skip editor cursor when a modal overlay is active
+                if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel)) then
+                    call terminal_hide_cursor()
+                    call terminal_flush()
+                else
+                    call render_cursor_for_panes(editor)
+                end if
                 return  ! Exit after rendering panes
             end if
         end if
@@ -313,16 +318,22 @@ contains
                 editor%screen_cols)
         end if
 
-        ! Position cursor for panes or regular view
-        if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0 .and. &
-            editor%active_tab_index <= size(editor%tabs)) then
-            if (allocated(editor%tabs(editor%active_tab_index)%panes)) then
-                call render_cursor_for_panes(editor)
+        ! Skip editor cursor when a modal overlay is active
+        if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel)) then
+            call terminal_hide_cursor()
+            call terminal_flush()
+        else
+            ! Position cursor for panes or regular view
+            if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0 .and. &
+                editor%active_tab_index <= size(editor%tabs)) then
+                if (allocated(editor%tabs(editor%active_tab_index)%panes)) then
+                    call render_cursor_for_panes(editor)
+                else
+                    call render_cursor(editor, buffer)
+                end if
             else
                 call render_cursor(editor, buffer)
             end if
-        else
-            call render_cursor(editor, buffer)
         end if
     end subroutine render_screen
 
@@ -978,16 +989,19 @@ contains
                 editor%screen_cols)
         end if
 
-        ! Position cursor in editor pane (use appropriate method based on pane count)
-        if (size(editor%tabs(editor%active_tab_index)%panes) > 1) then
-            ! Multiple panes: use pane-aware cursor rendering with tree offset
-            call render_cursor_for_panes_with_tree(editor, editor_start_col, editor_width)
+        ! Skip editor cursor when a modal overlay is active
+        if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel)) then
+            call terminal_hide_cursor()
+            call terminal_flush()
         else
-            ! Single pane: use simple cursor rendering
-            call render_cursor_in_pane(editor, editor_start_col, editor_width)
+            ! Position cursor in editor pane (use appropriate method based on pane count)
+            if (size(editor%tabs(editor%active_tab_index)%panes) > 1) then
+                call render_cursor_for_panes_with_tree(editor, editor_start_col, editor_width)
+            else
+                call render_cursor_in_pane(editor, editor_start_col, editor_width)
+            end if
+            call terminal_show_cursor()
         end if
-
-        call terminal_show_cursor()
     end subroutine render_screen_with_tree
 
     subroutine render_vertical_separator(col, start_row, end_row)
