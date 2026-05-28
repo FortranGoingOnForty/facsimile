@@ -29,11 +29,11 @@ contains
         viewport_start = 1
         viewport_size = max_rows - 4  ! Leave room for header and footer
 
+        call terminal_hide_cursor()
         done = .false.
         do while (.not. done)
-            ! Clear screen and hide cursor
-            call terminal_clear_screen()
-            call terminal_hide_cursor()
+            ! Clear screen (buffered, no flush — arrives with content atomically)
+            call terminal_write(achar(27) // '[2J' // achar(27) // '[H')
 
             ! Header
             call terminal_move_cursor(1, 1)
@@ -281,9 +281,8 @@ contains
         character(len=32) :: key_input
         integer :: status
 
-        ! Clear screen and hide cursor
-        call terminal_clear_screen()
-        call terminal_hide_cursor()
+        ! Clear screen (buffered) and hide cursor
+        call terminal_write(achar(27) // '[2J' // achar(27) // '[H')
 
         ! Title
         row = 1
@@ -349,9 +348,8 @@ contains
         character(len=32) :: key_input
         integer :: status
 
-        ! Clear screen and hide cursor
-        call terminal_clear_screen()
-        call terminal_hide_cursor()
+        ! Clear screen (buffered) and hide cursor
+        call terminal_write(achar(27) // '[2J' // achar(27) // '[H')
 
         ! Title
         row = 1
@@ -441,9 +439,8 @@ contains
         integer, intent(in) :: n_tags
         integer :: row, i, max_display
 
-        ! Clear screen
-        call terminal_clear_screen()
-        call terminal_hide_cursor()
+        ! Clear screen (buffered)
+        call terminal_write(achar(27) // '[2J' // achar(27) // '[H')
 
         ! Title
         row = 1
