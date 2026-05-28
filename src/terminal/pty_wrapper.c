@@ -123,6 +123,43 @@ static void handle_startup_queries(pty_state_t *state) {
         for (int i = 0; i < n - 1; i++) {
             if (buf[i] != 0x1b) continue;
 
+            // ESC P — DCS sequences (XTGETTCAP etc.)
+            if (buf[i+1] == 'P') {
+                // Find the ST (ESC \) that ends this DCS
+                // and extract the query to respond "not found"
+                if (i + 4 < n && buf[i+2] == '+' &&
+                    buf[i+3] == 'q') {
+                    // XTGETTCAP query: ESC P + q <hexkey> ESC \.
+                    // Extract the hex key
+                    int key_start = i + 4;
+                    int key_end = key_start;
+                    while (key_end < n - 1) {
+                        if (buf[key_end] == 0x1b) break;
+                        if (buf[key_end] == 0x07) break;
+                        key_end++;
+                    }
+                    // Respond "not found": ESC P 0 + r <key> ESC \.
+                    if (key_end > key_start) {
+                        char resp[256];
+                        int rlen = 0;
+                        resp[rlen++] = 0x1b;
+                        resp[rlen++] = 'P';
+                        resp[rlen++] = '0';
+                        resp[rlen++] = '+';
+                        resp[rlen++] = 'r';
+                        int klen = key_end - key_start;
+                        if (klen > 200) klen = 200;
+                        memcpy(resp + rlen, buf + key_start,
+                               klen);
+                        rlen += klen;
+                        resp[rlen++] = 0x1b;
+                        resp[rlen++] = '\\';
+                        write(fd, resp, rlen);
+                        responded = 1;
+                    }
+                }
+            }
+
             // ESC[ sequences
             if (buf[i+1] == '[') {
                 // DA queries ending in 'c'
