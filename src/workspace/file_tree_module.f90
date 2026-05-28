@@ -160,7 +160,7 @@ contains
         n_files = 0
 
         ! Build command to execute git status in workspace directory
-        write(cmd, '(A,A,A)') 'cd "', trim(workspace_path), '" && git status --porcelain > /tmp/fac_git_status.txt 2>&1'
+        write(cmd, '(A,A,A)') 'cd "', trim(workspace_path), '" && git status --porcelain > /tmp/fac_git_status.txt 2>/dev/null'
         call execute_command_line(trim(cmd), exitstat=status_code)
 
         if (status_code /= 0) then
