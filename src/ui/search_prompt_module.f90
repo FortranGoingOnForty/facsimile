@@ -74,6 +74,7 @@ contains
                     call terminal_move_cursor(editor%screen_rows, 1)
                     call terminal_write(prompt // input_buffer(1:input_pos))
                     call terminal_move_cursor(editor%screen_rows, len_trim(prompt) + input_pos + 1)
+                    call terminal_flush()
                     in_alt_sequence = .false.
                 else if (ch == iachar('w') .or. ch == iachar('W')) then
                     ! Alt+W - toggle whole word
@@ -85,6 +86,7 @@ contains
                     call terminal_move_cursor(editor%screen_rows, 1)
                     call terminal_write(prompt // input_buffer(1:input_pos))
                     call terminal_move_cursor(editor%screen_rows, len_trim(prompt) + input_pos + 1)
+                    call terminal_flush()
                     in_alt_sequence = .false.
                 else
                     ! Unknown Alt sequence, ignore
@@ -142,6 +144,7 @@ contains
                     call terminal_move_cursor(editor%screen_rows, 1)
                     call terminal_write(prompt // input_buffer(1:input_pos) // ' ')
                     call terminal_move_cursor(editor%screen_rows, len(prompt) + input_pos + 1)
+                    call terminal_flush()
 
                     ! Incremental search with reduced pattern
                     if (input_pos > 0) then
@@ -153,6 +156,7 @@ contains
                     input_pos = input_pos + 1
                     input_buffer(input_pos:input_pos) = char(ch)
                     call terminal_write(char(ch))
+                    call terminal_flush()
 
                     ! Incremental search - search as user types
                     if (input_pos > 0) then

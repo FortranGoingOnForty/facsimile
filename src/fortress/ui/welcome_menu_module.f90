@@ -3,7 +3,7 @@
 
 module welcome_menu_module
     use iso_fortran_env, only: int32
-    use terminal_io_module, only: terminal_write, terminal_move_cursor, terminal_clear_screen
+    use terminal_io_module, only: terminal_write, terminal_move_cursor, terminal_clear_screen, terminal_flush
     use input_handler_module, only: get_key_input
     use favorites_module, only: favorite_t, favorites_load, favorites_remove
     use recents_module, only: recent_t, recents_load, recents_remove
@@ -52,6 +52,7 @@ contains
             ! Render menu
             call render_welcome_menu(favorites, fav_count, recents, rec_count, &
                 showing_favorites, selected_index, scroll_offset, rows, cwd)
+            call terminal_flush()
 
             ! Get input
             call get_key_input(key_input, status)

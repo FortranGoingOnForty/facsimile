@@ -12,7 +12,7 @@ contains
     !> Prompt user about opening a binary file
     !> Returns .true. to open in hex view, .false. to cancel
     function binary_file_prompt(filename) result(open_anyway)
-        use terminal_io_module, only: terminal_write, terminal_move_cursor, terminal_clear_screen
+        use terminal_io_module, only: terminal_write, terminal_move_cursor, terminal_clear_screen, terminal_flush
         use input_handler_module, only: get_key_input
         character(len=*), intent(in) :: filename
         logical :: open_anyway
@@ -75,6 +75,7 @@ contains
 
         call terminal_move_cursor(18, 1)
         call terminal_write('Choice: ')
+        call terminal_flush()
 
         ! Get user input
         do

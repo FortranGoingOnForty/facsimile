@@ -5,7 +5,7 @@ module fortress_navigator_module
     use iso_fortran_env, only: output_unit, input_unit
     use fortress_fs_module
     use fortress_display_module
-    use terminal_io_module, only: terminal_read_char, terminal_write, terminal_move_cursor
+    use terminal_io_module, only: terminal_read_char, terminal_write, terminal_move_cursor, terminal_flush
     use favorites_module, only: favorites_add
     implicit none
     private
@@ -102,6 +102,8 @@ contains
                                              current_files, current_is_dir, current_is_exec, current_count, &
                                              parent_files, parent_is_dir, parent_count, &
                                              selected, parent_selected, scroll_offset, parent_scroll_offset, first_draw)
+
+                call terminal_flush()
 
                 ! Update tracking variables
                 last_selected = selected

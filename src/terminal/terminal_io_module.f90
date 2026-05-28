@@ -14,7 +14,7 @@ module terminal_io_module
     public :: terminal_init, terminal_cleanup, terminal_clear_screen
     public :: terminal_move_cursor, terminal_hide_cursor, terminal_show_cursor
     public :: terminal_get_size, terminal_enable_raw_mode, terminal_disable_raw_mode
-    public :: terminal_write, terminal_enable_mouse, terminal_disable_mouse
+    public :: terminal_write, terminal_flush, terminal_enable_mouse, terminal_disable_mouse
     public :: terminal_input_available, terminal_read_char
     public :: terminal_read_char_escape, terminal_input_available_count
 
@@ -55,7 +55,6 @@ contains
 
         write(seq, '(a,i0,a,i0,a)') CSI, row, ';', col, 'H'
         write(output_unit, '(a)', advance='no') trim(seq)
-        flush(output_unit)
     end subroutine terminal_move_cursor
 
     subroutine terminal_hide_cursor()
@@ -121,8 +120,11 @@ contains
     subroutine terminal_write(text)
         character(len=*), intent(in) :: text
         write(output_unit, '(a)', advance='no') text
-        flush(output_unit)
     end subroutine terminal_write
+
+    subroutine terminal_flush()
+        flush(output_unit)
+    end subroutine terminal_flush
 
     subroutine terminal_enable_mouse()
         ! Enable mouse tracking modes:

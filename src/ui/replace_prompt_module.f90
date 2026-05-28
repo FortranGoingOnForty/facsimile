@@ -81,6 +81,7 @@ contains
                         call terminal_write(prompt // replace_buffer(1:input_pos) // ' ')
                     end if
                     call terminal_move_cursor(editor%screen_rows, len(prompt) + input_pos + 1)
+                    call terminal_flush()
                 end if
             else if (ch >= 32 .and. ch <= 126) then  ! Printable characters
                 if (input_pos < 256) then
@@ -91,6 +92,7 @@ contains
                         replace_buffer(input_pos:input_pos) = char(ch)
                     end if
                     call terminal_write(char(ch))
+                    call terminal_flush()
                 end if
             end if
         end do

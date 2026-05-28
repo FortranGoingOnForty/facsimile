@@ -16,7 +16,7 @@ contains
     !> Prompt user to save a file
     !> Returns 's' to save, 'd' to discard (backup), 'a' to save all, 'c' to cancel quit
     subroutine save_prompt(filename, result, current_index, total_count)
-        use terminal_io_module, only: terminal_write, terminal_move_cursor, terminal_clear_screen
+        use terminal_io_module, only: terminal_write, terminal_move_cursor, terminal_clear_screen, terminal_flush
         use input_handler_module, only: get_key_input
         character(len=*), intent(in) :: filename
         type(save_prompt_result_t), intent(out) :: result
@@ -81,6 +81,7 @@ contains
             call terminal_move_cursor(9, 1)
         end if
         call terminal_write('Choice: ')
+        call terminal_flush()
 
         ! Get user input
         result%action = 'c'  ! Default to cancel

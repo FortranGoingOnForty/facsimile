@@ -53,6 +53,7 @@ contains
                     call terminal_write(achar(27) // '[2K')  ! Clear entire line
                     call terminal_move_cursor(screen_rows, 1)
                     call terminal_write(trim(prompt_text) // input_buffer(1:input_pos))
+                    call terminal_flush()
                 end if
             else if (ch >= 32 .and. ch <= 126) then  ! Printable characters
                 if (input_pos < len(input_buffer)) then
@@ -60,6 +61,7 @@ contains
                     input_buffer(input_pos:input_pos) = achar(ch)
                     ! Write character
                     call terminal_write(achar(ch))
+                    call terminal_flush()
                 end if
             end if
         end do

@@ -71,12 +71,14 @@ contains
                     call terminal_move_cursor(editor%screen_rows, 1)
                     call terminal_write(prompt // input_buffer(1:input_pos) // ' ')
                     call terminal_move_cursor(editor%screen_rows, len(prompt) + input_pos + 1)
+                    call terminal_flush()
                 end if
             else if (ch >= 32 .and. ch <= 126) then  ! Printable characters
                 if (input_pos < 256) then
                     input_pos = input_pos + 1
                     input_buffer(input_pos:input_pos) = char(ch)
                     call terminal_write(char(ch))
+                    call terminal_flush()
                 end if
             end if
         end do
