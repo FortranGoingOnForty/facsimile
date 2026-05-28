@@ -483,6 +483,11 @@ program facsimile
             if (should_quit) then
                 running = .false.
             else
+                ! Poll terminal for echo before rendering
+                if (is_terminal_panel_visible(editor%terminal_panel)) then
+                    call terminal_panel_poll(editor%terminal_panel)
+                end if
+
                 ! Re-render screen after each command
                 if (editor%fuss_mode_active) then
                     call render_screen_with_tree(buffer, editor, allocated(search_pattern), match_case_sensitive)

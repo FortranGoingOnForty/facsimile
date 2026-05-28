@@ -97,29 +97,26 @@ static void handle_startup_queries(int fd) {
         for (int i = 0; i < n - 1; i++) {
             if (buf[i] != 0x1b || buf[i+1] != '[') continue;
 
-            if (i + 2 < n && buf[i+2] == 'c') {
-                write(fd, DA_PRIMARY, sizeof(DA_PRIMARY) - 1);
-                responded = 1;
-            }
-            if (i + 2 < n && buf[i+2] == '>') {
-                for (int j = i+3; j < n && j < i+12; j++) {
-                    if (buf[j] == 'c') {
-                        write(fd, DA_SECONDARY,
-                              sizeof(DA_SECONDARY) - 1);
-                        responded = 1;
-                        break;
-                    }
-                }
-            }
-            if (i + 2 < n && buf[i+2] == '?') {
-                for (int j = i+3; j < n && j < i+12; j++) {
-                    if (buf[j] == 'c') {
+            // Scan forward from ESC[ for DA-like sequences
+            // ending in 'c': ESC[c, ESC[0c, ESC[>0c, ESC[?1c
+            for (int j = i + 2; j < n && j < i + 12; j++) {
+                if (buf[j] == 'c') {
+                    // Check if this is a DA query (not a response)
+                    // Queries: ESC[c ESC[0c ESC[>0c ESC[>c
+                    if (j == i + 2 || buf[i+2] == '0' ||
+                        buf[i+2] == '?') {
                         write(fd, DA_PRIMARY,
                               sizeof(DA_PRIMARY) - 1);
                         responded = 1;
-                        break;
+                    } else if (buf[i+2] == '>') {
+                        write(fd, DA_SECONDARY,
+                              sizeof(DA_SECONDARY) - 1);
+                        responded = 1;
                     }
+                    break;
                 }
+                // Stop scanning at non-parameter bytes
+                if (buf[j] < '0' || buf[j] > '?') break;
             }
         }
         if (responded) {
