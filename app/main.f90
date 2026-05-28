@@ -261,18 +261,10 @@ program facsimile
         call backup_migrate_legacy(editor%workspace_path)
     end if
 
-    ! Check global registry for backups to restore (CWD-independent)
-    block
-        character(len=512) :: detect_path
-        if (allocated(editor%workspace_path)) then
-            detect_path = editor%workspace_path
-        else
-            detect_path = ''
-        end if
-        if (backup_detect(trim(detect_path))) then
-            call handle_backup_restoration(editor, buffer)
-        end if
-    end block
+    ! Check global registry for backups to restore
+    if (backup_detect('')) then
+        call handle_backup_restoration(editor, buffer)
+    end if
 
     ! Get terminal size
     call terminal_get_size(rows, cols)
@@ -925,8 +917,8 @@ contains
         logical :: restore_success, found
         integer(int64) :: current_timestamp, best_timestamp
 
-        ! Get list of backups
-        call backup_list(editor%workspace_path, backups, backup_count)
+        ! Get ALL backups from global registry (not filtered)
+        call backup_list('', backups, backup_count)
 
         ! Deduplicate - keep only the most recent backup for each unique file
         allocate(unique_backups(backup_count))
