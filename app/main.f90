@@ -38,7 +38,8 @@ program facsimile
     type(buffer_t) :: buffer
     character(len=32) :: key_input
     character(len=512) :: filename, arg, workspace_dir, lsp_workspace
-    logical :: running, should_quit, is_workspace_mode, workspace_success
+    logical :: running, should_quit, quit_confirmed
+    logical :: is_workspace_mode, workspace_success
     logical :: welcome_cancelled, is_browse, nav_cancelled, is_directory
     logical :: explicit_lsp_workspace
     character(len=:), allocatable :: selected_path
@@ -373,6 +374,10 @@ program facsimile
     ! Initial render
     call render_screen(buffer, editor, allocated(search_pattern), match_case_sensitive)
 
+    ! Outer loop: allows cancel-quit to resume editing
+    quit_confirmed = .false.
+    do while (.not. quit_confirmed)
+
     ! Main event loop
     do while (running)
         ! Process any LSP messages
@@ -539,31 +544,35 @@ program facsimile
         call handle_single_file_on_quit(buffer, editor, should_quit)
     end if
 
-    ! Save workspace state AFTER unsaved-files prompt so modified flags
-    ! reflect save/discard decisions (not stale pre-prompt state)
+    ! Save workspace state AFTER unsaved-files prompt
     if (should_quit .and. allocated(editor%workspace_path)) then
         call workspace_save_state(editor, editor%workspace_path, workspace_success)
     end if
 
-    ! Only proceed with cleanup if actually quitting
     if (should_quit) then
-
-        ! Cleanup
-        call cleanup_renderer()
-        call cleanup_command_handler()
-        call terminal_cleanup()
-        call cleanup_editor(editor)
-        call cleanup_buffer(buffer)
+        quit_confirmed = .true.
     else
-        ! User cancelled quit - re-render and continue
+        ! User cancelled quit - resume editing
         running = .true.
+        should_quit = .false.
         call terminal_clear_screen()
         if (editor%fuss_mode_active) then
-            call render_screen_with_tree(buffer, editor, allocated(search_pattern), match_case_sensitive)
+            call render_screen_with_tree(buffer, editor, &
+                allocated(search_pattern), match_case_sensitive)
         else
-            call render_screen(buffer, editor, allocated(search_pattern), match_case_sensitive)
+            call render_screen(buffer, editor, &
+                allocated(search_pattern), match_case_sensitive)
         end if
     end if
+
+    end do  ! outer quit_confirmed loop
+
+    ! Cleanup
+    call cleanup_renderer()
+    call cleanup_command_handler()
+    call terminal_cleanup()
+    call cleanup_editor(editor)
+    call cleanup_buffer(buffer)
 
 contains
 
