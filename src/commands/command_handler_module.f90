@@ -204,6 +204,8 @@ contains
                 ! F5 hides terminal panel
                 editor%terminal_panel%visible = .false.
                 editor%terminal_panel%focused = .false.
+                ! Buffered clear so next render has no stale content
+                call terminal_write(achar(27) // '[2J')
                 return
             end if
             if (terminal_panel_handle_key(editor%terminal_panel, &

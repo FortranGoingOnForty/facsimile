@@ -1017,22 +1017,10 @@ contains
         call render_vertical_separator(separator_col, 2, &
             content_bottom)
 
-        ! Render terminal panel if visible, or clear stale area
+        ! Render terminal panel if visible
         if (term_h > 0) then
             call terminal_panel_render(editor%terminal_panel, &
                 editor%screen_rows - term_h, editor%screen_cols)
-        else
-            ! Clear any rows between editor/tree and status bar
-            ! that may have stale terminal content
-            block
-                integer :: clear_row
-                do clear_row = content_bottom + 1, &
-                    editor%screen_rows - 1
-                    call terminal_move_cursor(clear_row, 1)
-                    call terminal_write(repeat(' ', &
-                        editor%screen_cols))
-                end do
-            end block
         end if
         end block
 
