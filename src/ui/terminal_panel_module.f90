@@ -114,6 +114,13 @@ module terminal_panel_module
             integer(c_int), intent(out) :: row, col
         end subroutine
 
+        function c_grid_app_cursor(handle) &
+            bind(C, name='vt100_grid_app_cursor_f') result(m)
+            import :: c_ptr, c_int
+            type(c_ptr), intent(inout) :: handle
+            integer(c_int) :: m
+        end function
+
         function c_grid_cpr_pending(handle) &
             bind(C, name='vt100_grid_cpr_pending_f') result(p)
             import :: c_ptr, c_int
@@ -483,24 +490,54 @@ contains
         case('esc')
             send_buf(1:1) = achar(27); send_len = 1
 
-        ! Arrow keys
+        ! Arrow keys (application mode sends ESC O, normal sends ESC [)
         case('up')
-            send_buf(1:3) = achar(27) // '[A'
+            if (c_associated(panel%grid_handle) .and. &
+                c_grid_app_cursor(panel%grid_handle) /= 0) then
+                send_buf(1:3) = achar(27) // 'OA'
+            else
+                send_buf(1:3) = achar(27) // '[A'
+            end if
             send_len = 3
         case('down')
-            send_buf(1:3) = achar(27) // '[B'
+            if (c_associated(panel%grid_handle) .and. &
+                c_grid_app_cursor(panel%grid_handle) /= 0) then
+                send_buf(1:3) = achar(27) // 'OB'
+            else
+                send_buf(1:3) = achar(27) // '[B'
+            end if
             send_len = 3
         case('right')
-            send_buf(1:3) = achar(27) // '[C'
+            if (c_associated(panel%grid_handle) .and. &
+                c_grid_app_cursor(panel%grid_handle) /= 0) then
+                send_buf(1:3) = achar(27) // 'OC'
+            else
+                send_buf(1:3) = achar(27) // '[C'
+            end if
             send_len = 3
         case('left')
-            send_buf(1:3) = achar(27) // '[D'
+            if (c_associated(panel%grid_handle) .and. &
+                c_grid_app_cursor(panel%grid_handle) /= 0) then
+                send_buf(1:3) = achar(27) // 'OD'
+            else
+                send_buf(1:3) = achar(27) // '[D'
+            end if
             send_len = 3
         case('home')
-            send_buf(1:3) = achar(27) // '[H'
+            if (c_associated(panel%grid_handle) .and. &
+                c_grid_app_cursor(panel%grid_handle) /= 0) then
+                send_buf(1:3) = achar(27) // 'OH'
+            else
+                send_buf(1:3) = achar(27) // '[H'
+            end if
             send_len = 3
         case('end')
-            send_buf(1:3) = achar(27) // '[F'
+            if (c_associated(panel%grid_handle) .and. &
+                c_grid_app_cursor(panel%grid_handle) /= 0) then
+                send_buf(1:3) = achar(27) // 'OF'
+            else
+                send_buf(1:3) = achar(27) // '[F'
+            end if
             send_len = 3
         case('pageup')
             send_buf(1:4) = achar(27) // '[5~'

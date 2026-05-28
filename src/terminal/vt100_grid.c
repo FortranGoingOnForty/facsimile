@@ -50,6 +50,7 @@ typedef struct {
     int cursor_visible;
     int cpr_pending;
     int pty_fd;         // PTY fd for inline query responses
+    int app_cursor_keys; // DECCKM: 1=application mode (ESC O), 0=normal (ESC [)
 } vt100_grid_t;
 
 // ---- Internal helpers ----
@@ -378,7 +379,9 @@ static void handle_csi(vt100_grid_t *g, char final) {
         break;
     case 'h': // Set mode
         if (is_private) {
-            if (p1 == 25)
+            if (p1 == 1)
+                g->app_cursor_keys = 1;  // DECCKM
+            else if (p1 == 25)
                 g->cursor_visible = 1;
             else if (p1 == 1049 || p1 == 47) {
                 // Enter alternate screen — clear grid
@@ -390,7 +393,9 @@ static void handle_csi(vt100_grid_t *g, char final) {
         break;
     case 'l': // Reset mode
         if (is_private) {
-            if (p1 == 25)
+            if (p1 == 1)
+                g->app_cursor_keys = 0;  // DECCKM off
+            else if (p1 == 25)
                 g->cursor_visible = 0;
             else if (p1 == 1049 || p1 == 47) {
                 // Leave alternate screen — clear and reset
@@ -609,6 +614,7 @@ void vt100_grid_create_f(void **handle, int *rows, int *cols) {
     g->cursor_visible = 1;
     g->cpr_pending = 0;
     g->pty_fd = -1;
+    g->app_cursor_keys = 0;
 
     // Initialize all cells to spaces
     for (int i = 0; i < *rows * *cols; i++) {
@@ -687,6 +693,11 @@ void vt100_grid_get_cursor_f(void **handle, int *row, int *col) {
     if (!g) { *row = 0; *col = 0; return; }
     *row = g->cursor_row;
     *col = g->cursor_col;
+}
+
+int vt100_grid_app_cursor_f(void **handle) {
+    vt100_grid_t *g = (vt100_grid_t *)*handle;
+    return g ? g->app_cursor_keys : 0;
 }
 
 void vt100_grid_set_pty_fd_f(void **handle, int *fd) {
