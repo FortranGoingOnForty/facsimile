@@ -38,6 +38,11 @@ void pty_close_f(void **handle) {
     (void)handle;
 }
 
+int pty_get_fd_f(void **handle) {
+    (void)handle;
+    return -1;
+}
+
 #else
 // Unix implementation
 
