@@ -4902,7 +4902,9 @@ contains
                         tree_state%selectable_files(tree_state%selected_index)%node%expanded = .true.
                         ! Rebuild selectable list
                         if (allocated(tree_state%selectable_files)) deallocate(tree_state%selectable_files)
-                        call build_selectable_list(tree_state%root, tree_state%selectable_files, tree_state%n_selectable, tree_state%hide_dotfiles)
+                        call build_selectable_list(tree_state%root, &
+                    tree_state%selectable_files, tree_state%n_selectable, &
+                    tree_state%hide_dotfiles)
                     end if
                     ! Find first child in selectable list (look for item whose parent is current node)
                     do i = tree_state%selected_index + 1, tree_state%n_selectable
@@ -4928,7 +4930,9 @@ contains
                         .not. tree_state%selectable_files(tree_state%selected_index)%node%expanded
                     ! Rebuild selectable list
                     if (allocated(tree_state%selectable_files)) deallocate(tree_state%selectable_files)
-                    call build_selectable_list(tree_state%root, tree_state%selectable_files, tree_state%n_selectable, tree_state%hide_dotfiles)
+                    call build_selectable_list(tree_state%root, &
+                    tree_state%selectable_files, tree_state%n_selectable, &
+                    tree_state%hide_dotfiles)
                     ! Clamp selection
                     if (tree_state%selected_index > tree_state%n_selectable .and. tree_state%n_selectable > 0) then
                         tree_state%selected_index = tree_state%n_selectable
