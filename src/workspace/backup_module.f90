@@ -276,10 +276,12 @@ contains
         success = .true.
     end subroutine backup_create
 
-    !> Detect if any backups exist (optionally filtered by
-    !> workspace prefix)
-    function backup_detect(workspace_path) result(has_backups)
+    !> Detect if any backups exist (filtered by workspace
+    !> prefix and/or specific file path)
+    function backup_detect(workspace_path, file_path) &
+        result(has_backups)
         character(len=*), intent(in) :: workspace_path
+        character(len=*), intent(in), optional :: file_path
         logical :: has_backups
         type(backup_info_t) :: entries(MAX_REGISTRY)
         integer :: count, i
@@ -287,31 +289,43 @@ contains
         has_backups = .false.
         call registry_load(entries, count)
 
-        if (len_trim(workspace_path) == 0) then
+        if (len_trim(workspace_path) == 0 &
+            .and. .not. present(file_path)) then
             has_backups = (count > 0)
             return
         end if
 
-        ! Check if any backup's original_file is within workspace
         do i = 1, count
-            if (index(trim(entries(i)%original_file), &
-                trim(workspace_path)) == 1) then
+            ! Match by workspace prefix
+            if (len_trim(workspace_path) > 0 .and. &
+                index(trim(entries(i)%original_file), &
+                    trim(workspace_path)) == 1) then
                 has_backups = .true.
                 return
             end if
+            ! Match by exact file path
+            if (present(file_path)) then
+                if (trim(entries(i)%original_file) &
+                    == trim(file_path)) then
+                    has_backups = .true.
+                    return
+                end if
+            end if
         end do
-
-        ! Also check for any backups at all (for single-file mode)
-        has_backups = (count > 0)
     end function backup_detect
 
-    !> List backups (optionally filtered by workspace prefix)
-    subroutine backup_list(workspace_path, backups, count)
+    !> List backups (filtered by workspace prefix and/or
+    !> specific file path)
+    subroutine backup_list(workspace_path, backups, count, &
+        file_path)
         character(len=*), intent(in) :: workspace_path
-        type(backup_info_t), allocatable, intent(out) :: backups(:)
+        type(backup_info_t), allocatable, intent(out) :: &
+            backups(:)
         integer, intent(out) :: count
+        character(len=*), intent(in), optional :: file_path
         type(backup_info_t) :: entries(MAX_REGISTRY)
         integer :: total, i
+        logical :: match
 
         call registry_load(entries, total)
 
@@ -319,11 +333,26 @@ contains
         count = 0
 
         do i = 1, total
-            ! Include all if no workspace filter, or if file
-            ! path starts with workspace path
-            if (len_trim(workspace_path) == 0 .or. &
+            match = .false.
+            ! No filters: include all
+            if (len_trim(workspace_path) == 0 &
+                .and. .not. present(file_path)) then
+                match = .true.
+            end if
+            ! Workspace prefix match
+            if (len_trim(workspace_path) > 0 .and. &
                 index(trim(entries(i)%original_file), &
                     trim(workspace_path)) == 1) then
+                match = .true.
+            end if
+            ! Exact file match
+            if (present(file_path)) then
+                if (trim(entries(i)%original_file) &
+                    == trim(file_path)) then
+                    match = .true.
+                end if
+            end if
+            if (match) then
                 count = count + 1
                 backups(count) = entries(i)
             end if

@@ -279,19 +279,6 @@ program facsimile
         call backup_migrate_legacy(editor%workspace_path)
     end if
 
-    ! Check global registry for backups in this workspace
-    block
-        character(len=512) :: ws_filter
-        if (allocated(editor%workspace_path)) then
-            ws_filter = editor%workspace_path
-        else
-            ws_filter = ''
-        end if
-        if (backup_detect(trim(ws_filter))) then
-            call handle_backup_restoration(editor, buffer)
-        end if
-    end block
-
     ! Get terminal size
     call terminal_get_size(rows, cols)
     editor%screen_rows = rows
@@ -392,6 +379,29 @@ program facsimile
             call init_buffer(buffer)
         end if
     end if
+
+    ! Check global registry for backups (after file loading
+    ! so handle_restored_file can find existing tabs)
+    block
+        character(len=512) :: ws_filter
+        if (allocated(editor%workspace_path)) then
+            ws_filter = editor%workspace_path
+        else
+            ws_filter = ''
+        end if
+        if (len_trim(filename) > 0) then
+            if (backup_detect(trim(ws_filter), &
+                trim(filename))) then
+                call handle_backup_restoration( &
+                    editor, buffer, trim(filename))
+            end if
+        else
+            if (backup_detect(trim(ws_filter))) then
+                call handle_backup_restoration( &
+                    editor, buffer)
+            end if
+        end if
+    end block
 
     ! Save initial file state for undo (position 0)
     call save_initial_state_for_undo(buffer, editor)
@@ -886,7 +896,8 @@ contains
 
     !> Handle a restored file - open in tab or reload existing tab
     subroutine handle_restored_file(editor, buffer, restored_file)
-        use text_buffer_module, only: buffer_load_file
+        use text_buffer_module, only: buffer_load_file, &
+            copy_buffer
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         character(len=*), intent(in) :: restored_file
@@ -904,8 +915,15 @@ contains
                         call switch_to_tab_with_buffer(editor, tab_idx, buffer)
                         call buffer_load_file(buffer, restored_file, status)
                         if (status == 0) then
+                            ! Sync to tab and pane buffers
+                            call copy_buffer(editor%tabs(tab_idx)%buffer, buffer)
+                            if (allocated(editor%tabs(tab_idx)%panes) .and. &
+                                size(editor%tabs(tab_idx)%panes) > 0) then
+                                call copy_buffer(editor%tabs(tab_idx)%panes(1)%buffer, buffer)
+                            end if
                             buffer%modified = .false.
                             editor%tabs(tab_idx)%modified = .false.
+                            editor%modified = .false.
                         end if
                         exit
                     end if
@@ -932,18 +950,22 @@ contains
     end subroutine handle_restored_file
 
     !> Handle backup restoration on workspace load
-    subroutine handle_backup_restoration(editor, buffer)
-        use backup_module, only: backup_list, backup_info_t, backup_restore, backup_delete
+    subroutine handle_backup_restoration(editor, buffer, &
+        file_path)
+        use backup_module, only: backup_list, &
+            backup_info_t, backup_restore, backup_delete
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
-        type(backup_info_t), allocatable :: backups(:), unique_backups(:)
+        character(len=*), intent(in), optional :: file_path
+        type(backup_info_t), allocatable :: &
+            backups(:), unique_backups(:)
         integer :: backup_count, unique_count, i, j, status
         character :: choice
         character(len=32) :: key_input
         logical :: restore_success, found
         integer(int64) :: current_timestamp, best_timestamp
 
-        ! Get backups scoped to this workspace
+        ! Get backups scoped to workspace and/or file
         block
             character(len=512) :: ws_f
             if (allocated(editor%workspace_path)) then
@@ -951,7 +973,13 @@ contains
             else
                 ws_f = ''
             end if
-            call backup_list(trim(ws_f), backups, backup_count)
+            if (present(file_path)) then
+                call backup_list(trim(ws_f), backups, &
+                    backup_count, trim(file_path))
+            else
+                call backup_list(trim(ws_f), backups, &
+                    backup_count)
+            end if
         end block
 
         ! Deduplicate - keep only the most recent backup for each unique file
