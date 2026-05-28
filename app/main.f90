@@ -261,10 +261,18 @@ program facsimile
         call backup_migrate_legacy(editor%workspace_path)
     end if
 
-    ! Check global registry for backups to restore
-    if (backup_detect(editor%workspace_path)) then
-        call handle_backup_restoration(editor, buffer)
-    end if
+    ! Check global registry for backups to restore (CWD-independent)
+    block
+        character(len=512) :: detect_path
+        if (allocated(editor%workspace_path)) then
+            detect_path = editor%workspace_path
+        else
+            detect_path = ''
+        end if
+        if (backup_detect(trim(detect_path))) then
+            call handle_backup_restoration(editor, buffer)
+        end if
+    end block
 
     ! Get terminal size
     call terminal_get_size(rows, cols)
@@ -539,14 +547,10 @@ program facsimile
         end if
     end do
 
-    ! Handle unsaved files - prompt for save/backup
-    if (allocated(editor%tabs) .and. allocated(editor%workspace_path)) then
-        ! Workspace mode - handle all modified tabs
-        call handle_unsaved_files_on_quit(editor, buffer, should_quit)
-        ! If user cancelled (should_quit = .false.), skip cleanup and restart loop
-    else if (buffer%modified .and. allocated(editor%workspace_path) .and. allocated(editor%filename)) then
-        ! Single-file mode - handle the current buffer if modified
-        call handle_single_file_on_quit(buffer, editor, should_quit)
+    ! Handle unsaved files - unified for workspace and single-file
+    if (allocated(editor%tabs) .and. size(editor%tabs) > 0) then
+        call handle_unsaved_files_on_quit(editor, buffer, &
+            should_quit)
     end if
 
     ! Save workspace state AFTER unsaved-files prompt
@@ -859,47 +863,8 @@ contains
         should_quit = .true.
     end subroutine handle_unsaved_files_on_quit
 
-    !> Handle single file on quit (for non-workspace mode)
-    subroutine handle_single_file_on_quit(buffer, editor, should_quit)
-        type(buffer_t), intent(inout) :: buffer
-        type(editor_state_t), intent(inout) :: editor
-        logical, intent(inout) :: should_quit
-        type(save_prompt_result_t) :: prompt_result
-        integer :: save_status
-        logical :: backup_success
-
-        if (.not. buffer%modified) return
-        if (.not. allocated(editor%filename)) return
-
-        ! Prompt user for this file
-        call save_prompt(editor%filename, prompt_result)
-
-        if (prompt_result%action == 'y') then
-            ! User wants to save
-            call buffer_save_file(buffer, editor%filename, save_status)
-            if (save_status == 0) then
-                buffer%modified = .false.
-                editor%modified = .false.
-            end if
-        else if (prompt_result%action == 'n') then
-            ! User wants to skip - backup buffer content
-            block
-                use text_buffer_module, only: buffer_to_string
-                character(len=:), allocatable :: buf_str
-                buf_str = buffer_to_string(buffer)
-                call backup_create(editor%filename, &
-                    buf_str, backup_success)
-                if (allocated(buf_str)) deallocate(buf_str)
-            end block
-        else if (prompt_result%action == 'c') then
-            ! User cancelled - don't quit
-            should_quit = .false.
-            return
-        end if
-
-        ! Proceed with quit
-        should_quit = .true.
-    end subroutine handle_single_file_on_quit
+    ! handle_single_file_on_quit removed — unified into
+    ! handle_unsaved_files_on_quit which iterates all tabs
 
     !> Handle a restored file - open in tab or reload existing tab
     subroutine handle_restored_file(editor, buffer, restored_file)
