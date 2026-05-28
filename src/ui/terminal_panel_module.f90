@@ -211,6 +211,18 @@ contains
             end if
             panel%pty_alive = .true.
 
+            ! Send Primary Device Attributes response immediately
+            ! so fish shell doesn't wait 2 seconds for it.
+            ! Response: VT220-compatible terminal with 256 colors
+            block
+                character(len=32) :: da_response
+                integer(c_int) :: da_len, da_res
+                da_response = achar(27) // '[?62;22c'
+                da_len = 8_c_int
+                da_res = c_pty_write(panel%pty_handle, &
+                    da_response, da_len)
+            end block
+
             ! Create grid
             call c_grid_create(panel%grid_handle, c_rows, c_cols)
         end if

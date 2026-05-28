@@ -16,6 +16,7 @@
 #define STATE_ESC    1
 #define STATE_CSI    2
 #define STATE_OSC    3
+#define STATE_DCS    4
 
 #define MAX_PARAMS 16
 #define PARAM_BUF_SIZE 128
@@ -441,6 +442,10 @@ static void grid_feed(vt100_grid_t *g, const char *data, int len) {
             } else if (ch == ']') {
                 g->parse_state = STATE_OSC;
                 g->param_len = 0;
+            } else if (ch == 'P') {
+                // DCS (Device Control String) — consume until ST
+                g->parse_state = STATE_DCS;
+                g->param_len = 0;
             } else if (ch == '7') {
                 // Save cursor
                 g->saved_row = g->cursor_row;
@@ -506,6 +511,16 @@ static void grid_feed(vt100_grid_t *g, const char *data, int len) {
                 // For simplicity, just exit OSC on ESC
                 g->parse_state = STATE_NORMAL;
             }
+            break;
+
+        case STATE_DCS:
+            // Consume DCS (XTGETTCAP etc.) until ST (ESC \) or BEL
+            if (ch == 0x07) {
+                g->parse_state = STATE_NORMAL;
+            } else if (ch == 0x1B) {
+                g->parse_state = STATE_NORMAL;
+            }
+            // All other bytes silently consumed
             break;
         }
     }
