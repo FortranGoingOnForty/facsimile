@@ -765,8 +765,8 @@ contains
 
         if (.not. associated(node)) return
 
-        ! Skip hidden files when hide_dotfiles is enabled (match renderer logic)
-        if (hide_dotfiles .and. node%is_file .and. (node%is_dotfile .or. node%is_gitignored)) return
+        ! Skip hidden entries when hide_dotfiles is enabled (match renderer)
+        if (hide_dotfiles .and. (node%is_dotfile .or. node%is_gitignored)) return
 
         ! Add both files and directories to selectable list
         ! Skip root node (name = '.')

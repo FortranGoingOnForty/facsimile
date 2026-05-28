@@ -163,8 +163,8 @@ contains
 
         ! Don't print root node
         if (.not. is_root) then
-            ! Skip hidden files when hide_dotfiles is enabled (dotfiles or gitignored)
-            if (state%hide_dotfiles .and. node%is_file .and. (node%is_dotfile .or. node%is_gitignored)) then
+            ! Skip hidden entries when hide_dotfiles is enabled
+            if (state%hide_dotfiles .and. (node%is_dotfile .or. node%is_gitignored)) then
                 return
             end if
 
