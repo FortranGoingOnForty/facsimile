@@ -20,6 +20,8 @@ module command_handler_module
     use unified_search_module, only: show_unified_search_prompt
     use undo_stack_module
     use terminal_io_module, only: terminal_move_cursor, terminal_write, terminal_clear_screen, terminal_flush
+    use terminal_panel_module, only: toggle_terminal_panel, &
+        is_terminal_panel_visible, terminal_panel_handle_key
     use bracket_matching_module, only: find_matching_bracket
     use file_tree_module
     use git_ops_module
@@ -192,6 +194,20 @@ contains
             trim(key_str) /= 'ctrl-q') then
             call handle_fuss_input(key_str, editor, buffer)
             return
+        end if
+
+        ! Route keys to integrated terminal when focused
+        if (is_terminal_panel_visible(editor%terminal_panel) .and. &
+            editor%terminal_panel%focused) then
+            if (trim(key_str) == 'ctrl-j') then
+                ! Ctrl+J unfocuses terminal, returns to editor
+                editor%terminal_panel%focused = .false.
+                return
+            end if
+            if (terminal_panel_handle_key(editor%terminal_panel, &
+                                          trim(key_str))) then
+                return
+            end if
         end if
 
         ! Route keys to diagnostics panel when visible (j/k/arrows for navigation)
@@ -1122,9 +1138,14 @@ contains
             end block
 
         case('ctrl-j')
+            ! Toggle integrated terminal
+            call toggle_terminal_panel(editor%terminal_panel, &
+                editor%screen_rows, editor%screen_cols)
+
+        case('alt-shift-j')
+            ! Join lines (moved from ctrl-j)
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (size(editor%cursors) > 1) then
-                ! Apply to all cursors
                 do i = 1, size(editor%cursors)
                     call join_lines(editor%cursors(i), buffer)
                 end do

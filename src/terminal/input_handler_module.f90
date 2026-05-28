@@ -61,8 +61,10 @@ contains
             call handle_escape_sequence(key_str)
         case(9)  ! Tab
             key_str = 'tab'
-        case(10, 13)  ! Enter
+        case(13)  ! Enter (CR)
             key_str = 'enter'
+        case(10)  ! Ctrl-J (LF)
+            key_str = 'ctrl-j'
         case(8)  ! Ctrl-H
             key_str = 'ctrl-h'
         case(26)  ! Ctrl-Z
