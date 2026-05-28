@@ -455,6 +455,12 @@ static void grid_feed(vt100_grid_t *g, const char *data, int len) {
                 g->cursor_col = next_tab;
             } else if (ch == 0x07) {
                 // BEL — ignore
+            } else if (ch >= 0x80 && ch <= 0xBF) {
+                // UTF-8 continuation byte — skip (don't advance cursor)
+            } else if (ch >= 0xC0 && ch <= 0xFD) {
+                // UTF-8 lead byte — put a space placeholder
+                // (real terminals render multi-byte chars as 1-2 columns)
+                put_char(g, ' ');
             } else if (ch >= 32 && ch != 127) {
                 put_char(g, (char)ch);
             }
