@@ -186,6 +186,7 @@ contains
         if (editor%fuss_mode_active .and. trim(key_str) /= 'ctrl-b' .and. &
             trim(key_str) /= 'ctrl-shift-b' .and. trim(key_str) /= 'f2' .and. &
             trim(key_str) /= 'f3' .and. trim(key_str) /= 'f4' .and. &
+            trim(key_str) /= 'f5' .and. &
             trim(key_str) /= 'f6' .and. trim(key_str) /= 'f8' .and. &
             trim(key_str) /= 'f12' .and. trim(key_str) /= 'shift-f12' .and. &
             trim(key_str) /= 'alt-g' .and. trim(key_str) /= 'alt-o' .and. &
@@ -199,8 +200,8 @@ contains
         ! Route keys to integrated terminal when focused
         if (is_terminal_panel_visible(editor%terminal_panel) .and. &
             editor%terminal_panel%focused) then
-            if (trim(key_str) == 'ctrl-j') then
-                ! Ctrl+J unfocuses terminal, returns to editor
+            if (trim(key_str) == 'f5') then
+                ! F5 unfocuses terminal, returns to editor
                 editor%terminal_panel%focused = .false.
                 return
             end if
@@ -1137,13 +1138,13 @@ contains
                 end if
             end block
 
-        case('ctrl-j')
+        case('f5')
             ! Toggle integrated terminal
             call toggle_terminal_panel(editor%terminal_panel, &
                 editor%screen_rows, editor%screen_cols)
 
         case('alt-shift-j')
-            ! Join lines (moved from ctrl-j)
+            ! Join lines
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (size(editor%cursors) > 1) then
                 do i = 1, size(editor%cursors)
