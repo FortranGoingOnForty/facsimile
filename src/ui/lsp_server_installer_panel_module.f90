@@ -209,7 +209,7 @@ contains
         row = start_row + 1
         call terminal_move_cursor(row, start_col)
         call terminal_write('│' // CYAN // ' Language Server Manager' // RESET)
-        call terminal_write(repeat(' ', content_width - 31) // DIM // 'Alt+M' // RESET // ' │')
+        call terminal_write(repeat(' ', content_width - 32) // DIM // 'Alt+M' // RESET // ' │')
 
         ! Draw separator
         row = row + 1
@@ -298,7 +298,7 @@ contains
             call terminal_write(repeat(' ', max(0, content_width - len_trim(panel%status_message) - 4)) // ' │')
         else
             call terminal_write('│' // DIM // ' ↑↓ Navigate  Enter Install  r Refresh  Esc Close' // RESET)
-            call terminal_write(repeat(' ', content_width - 52) // '│')
+            call terminal_write(repeat(' ', content_width - 51) // '│')
         end if
 
         ! Draw bottom border
