@@ -245,11 +245,32 @@ contains
         write(unit, '(A)') '  "last_opened": "' // trim(timestamp) // '",'
         write(unit, '(A)') '  "tabs": ['
 
-        ! Write tabs
+        ! Write tabs (deduplicate by filename)
         if (allocated(editor%tabs)) then
             ws_len = len_trim(dir_path)
             do i = 1, size(editor%tabs)
-                ! Write tab start - must be on its own line for parser
+                ! Skip duplicate filenames (keep first occurrence)
+                block
+                    logical :: is_dup
+                    integer :: k
+                    is_dup = .false.
+                    if (allocated(editor%tabs(i)%filename)) then
+                        do k = 1, i - 1
+                            if (allocated(editor%tabs(k)%filename)) &
+                                then
+                                if (trim(editor%tabs(k)%filename) &
+                                    == trim(editor%tabs(i) &
+                                    %filename)) then
+                                    is_dup = .true.
+                                    exit
+                                end if
+                            end if
+                        end do
+                    end if
+                    if (is_dup) cycle
+                end block
+
+                ! Write tab start
                 write(unit, '(A)') '    {'
 
                 ! Determine if we should use relative path
