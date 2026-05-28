@@ -573,6 +573,24 @@ contains
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
+        case('alt-a')
+            ! Select all: selection start at (1,1), cursor at end of file
+            editor%cursors(editor%active_cursor)%has_selection = .true.
+            editor%cursors(editor%active_cursor)%selection_start_line = 1
+            editor%cursors(editor%active_cursor)%selection_start_col = 1
+            editor%cursors(editor%active_cursor)%line = line_count
+            block
+                character(len=:), allocatable :: last_line
+                last_line = buffer_get_line(buffer, line_count)
+                editor%cursors(editor%active_cursor)%column = &
+                    len(last_line) + 1
+                editor%cursors(editor%active_cursor)%desired_column =&
+                    editor%cursors(editor%active_cursor)%column
+                if (allocated(last_line)) deallocate(last_line)
+            end block
+            call sync_editor_to_pane(editor)
+            call update_viewport(editor)
+
         case('shift-home', 'ctrl-shift-a')
             call extend_selection_home(editor%cursors(editor%active_cursor))
             call sync_editor_to_pane(editor)
