@@ -359,13 +359,13 @@ contains
         call terminal_move_cursor(row, start_col)
         call terminal_write('│' // repeat(' ', content_width - 2) // '│')
 
-        ! Yes/No buttons
+        ! Yes/No buttons (13 visible chars: [Y]es    [N]o)
         row = row + 1
         call terminal_move_cursor(row, start_col)
-        call terminal_write('│' // repeat(' ', (content_width - 20) / 2))
+        call terminal_write('│' // repeat(' ', (content_width - 15) / 2))
         call terminal_write('[' // GREEN // 'Y' // RESET // ']es    ')
         call terminal_write('[' // RED // 'N' // RESET // ']o')
-        call terminal_write(repeat(' ', (content_width - 20) / 2) // '│')
+        call terminal_write(repeat(' ', content_width - 15 - (content_width - 15) / 2) // '│')
 
         ! Bottom border
         row = row + 1
