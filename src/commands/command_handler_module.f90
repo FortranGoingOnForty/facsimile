@@ -182,22 +182,7 @@ contains
             match_case_sensitive = .true.  ! Reset to default
         end if
 
-        ! Route input when in fuss mode (except ctrl-b/ctrl-shift-b/F-keys/Alt-keys/ctrl-q which work in both modes)
-        if (editor%fuss_mode_active .and. trim(key_str) /= 'ctrl-b' .and. &
-            trim(key_str) /= 'ctrl-shift-b' .and. trim(key_str) /= 'f2' .and. &
-            trim(key_str) /= 'f3' .and. trim(key_str) /= 'f4' .and. &
-            trim(key_str) /= 'f5' .and. &
-            trim(key_str) /= 'f6' .and. trim(key_str) /= 'f8' .and. &
-            trim(key_str) /= 'f12' .and. trim(key_str) /= 'shift-f12' .and. &
-            trim(key_str) /= 'alt-g' .and. trim(key_str) /= 'alt-o' .and. &
-            trim(key_str) /= 'alt-p' .and. trim(key_str) /= 'alt-e' .and. &
-            trim(key_str) /= 'alt-r' .and. trim(key_str) /= 'ctrl-\\' .and. &
-            trim(key_str) /= 'ctrl-q') then
-            call handle_fuss_input(key_str, editor, buffer)
-            return
-        end if
-
-        ! Route keys to integrated terminal when focused
+        ! Route keys to integrated terminal when focused (highest priority)
         if (is_terminal_panel_visible(editor%terminal_panel) .and. &
             editor%terminal_panel%focused) then
             if (trim(key_str) == 'f5') then
@@ -212,6 +197,21 @@ contains
                                           trim(key_str))) then
                 return
             end if
+        end if
+
+        ! Route input when in fuss mode (except keys that work in both modes)
+        if (editor%fuss_mode_active .and. trim(key_str) /= 'ctrl-b' .and. &
+            trim(key_str) /= 'ctrl-shift-b' .and. trim(key_str) /= 'f2' .and. &
+            trim(key_str) /= 'f3' .and. trim(key_str) /= 'f4' .and. &
+            trim(key_str) /= 'f5' .and. &
+            trim(key_str) /= 'f6' .and. trim(key_str) /= 'f8' .and. &
+            trim(key_str) /= 'f12' .and. trim(key_str) /= 'shift-f12' .and. &
+            trim(key_str) /= 'alt-g' .and. trim(key_str) /= 'alt-o' .and. &
+            trim(key_str) /= 'alt-p' .and. trim(key_str) /= 'alt-e' .and. &
+            trim(key_str) /= 'alt-r' .and. trim(key_str) /= 'ctrl-\\' .and. &
+            trim(key_str) /= 'ctrl-q') then
+            call handle_fuss_input(key_str, editor, buffer)
+            return
         end if
 
         ! Route keys to diagnostics panel when visible (j/k/arrows for navigation)
