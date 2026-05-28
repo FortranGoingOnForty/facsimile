@@ -373,6 +373,18 @@ program facsimile
         ! Poll integrated terminal for new output
         if (is_terminal_panel_visible(editor%terminal_panel)) then
             call terminal_panel_poll(editor%terminal_panel)
+            ! Re-render immediately if terminal has new output
+            if (editor%terminal_panel%has_new_output) then
+                if (editor%fuss_mode_active) then
+                    call render_screen_with_tree(buffer, editor, &
+                        allocated(search_pattern), &
+                        match_case_sensitive)
+                else
+                    call render_screen(buffer, editor, &
+                        allocated(search_pattern), &
+                        match_case_sensitive)
+                end if
+            end if
         end if
 
         ! Sync local buffer from tab after LSP processing (in case LSP modified it)

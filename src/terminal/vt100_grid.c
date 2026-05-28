@@ -507,9 +507,9 @@ static void grid_feed(vt100_grid_t *g, const char *data, int len) {
             if (ch == 0x07) {
                 g->parse_state = STATE_NORMAL;
             } else if (ch == 0x1B) {
-                // Check for ST (ESC \) — next byte
-                // For simplicity, just exit OSC on ESC
-                g->parse_state = STATE_NORMAL;
+                // ESC starts the ST (ESC \). Go to ESC state so
+                // the '\' is consumed as part of the sequence.
+                g->parse_state = STATE_ESC;
             }
             break;
 
@@ -518,7 +518,7 @@ static void grid_feed(vt100_grid_t *g, const char *data, int len) {
             if (ch == 0x07) {
                 g->parse_state = STATE_NORMAL;
             } else if (ch == 0x1B) {
-                g->parse_state = STATE_NORMAL;
+                g->parse_state = STATE_ESC;
             }
             // All other bytes silently consumed
             break;
