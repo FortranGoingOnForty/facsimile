@@ -218,22 +218,42 @@ contains
             if (trim(key_str) == 'enter') then
                 block
                     use iso_fortran_env, only: int32
-                    character(len=:), allocatable :: uri
-                    integer(int32) :: ref_line, ref_col
+                    use editor_state_module, only: switch_to_tab_with_buffer
+                    character(len=:), allocatable :: uri, ref_path
+                    integer(int32) :: ref_line, ref_col, ti
 
                     if (get_selected_reference_location(editor%references_panel, uri, ref_line, ref_col)) then
-                        ! Convert URI to file path and navigate
                         if (len(uri) >= 7 .and. uri(1:7) == "file://") then
-                            ! Jump to the reference location
-                            editor%cursors(editor%active_cursor)%line = ref_line
-                            editor%cursors(editor%active_cursor)%column = ref_col
-                            ! Center the view on the target line
+                            ref_path = uri(8:)
+
+                            if (allocated(editor%filename) .and. &
+                                trim(ref_path) == trim(editor%filename)) then
+                                ! Same file
+                                editor%cursors(editor%active_cursor)%line = ref_line
+                                editor%cursors(editor%active_cursor)%column = ref_col
+                            else
+                                ! Find open tab or open new
+                                do ti = 1, size(editor%tabs)
+                                    if (trim(editor%tabs(ti)%filename) == trim(ref_path)) then
+                                        call switch_to_tab_with_buffer(editor, ti, buffer)
+                                        exit
+                                    end if
+                                end do
+                                if (.not. allocated(editor%filename) .or. &
+                                    trim(editor%filename) /= trim(ref_path)) then
+                                    call open_file_in_editor(ref_path, editor, buffer)
+                                end if
+                                editor%cursors(editor%active_cursor)%line = ref_line
+                                editor%cursors(editor%active_cursor)%column = ref_col
+                            end if
+                            editor%cursors(editor%active_cursor)%desired_column = ref_col
+                            editor%cursors(editor%active_cursor)%has_selection = .false.
                             editor%viewport_line = max(1, ref_line - editor%screen_rows / 2)
-                            ! Hide the panel after jumping
                             call hide_references_panel(editor%references_panel)
                         end if
                     end if
                 end block
+                call sync_editor_to_pane(editor)
                 return
             end if
             if (references_panel_handle_key(editor%references_panel, trim(key_str))) then
@@ -1384,22 +1404,44 @@ contains
                                         ! Navigate to selected reference
                                         block
                                             use references_panel_module, only: get_selected_reference_location
-                                            character(len=:), allocatable :: ref_uri
-                                            integer :: ref_line, ref_col
+                                            use editor_state_module, only: switch_to_tab_with_buffer
+                                            character(len=:), allocatable :: ref_uri, ref_path
+                                            integer :: ref_line, ref_col, ti
 
                                             if (get_selected_reference_location( &
                                                 editor%references_panel, &
                                                 ref_uri, ref_line, ref_col)) then
                                                 if (len(ref_uri) >= 7 .and. ref_uri(1:7) == "file://") then
-                                                    ! Jump to the reference location
-                                                    editor%cursors(editor%active_cursor)%line = ref_line
-                                                    editor%cursors(editor%active_cursor)%column = ref_col
-                                                    ! Center the view on the target line
+                                                    ref_path = ref_uri(8:)
+
+                                                    ! Check if same file as current
+                                                    if (allocated(editor%filename) .and. &
+                                                        trim(ref_path) == trim(editor%filename)) then
+                                                        ! Same file — just move cursor
+                                                        editor%cursors(editor%active_cursor)%line = ref_line
+                                                        editor%cursors(editor%active_cursor)%column = ref_col
+                                                    else
+                                                        ! Different file — find open tab or open new
+                                                        do ti = 1, size(editor%tabs)
+                                                            if (trim(editor%tabs(ti)%filename) == trim(ref_path)) then
+                                                                call switch_to_tab_with_buffer(editor, ti, buffer)
+                                                                exit
+                                                            end if
+                                                        end do
+                                                        ! If no tab found, open the file
+                                                        if (.not. allocated(editor%filename) .or. &
+                                                            trim(editor%filename) /= trim(ref_path)) then
+                                                            call open_file_in_editor(ref_path, editor, buffer)
+                                                        end if
+                                                        editor%cursors(editor%active_cursor)%line = ref_line
+                                                        editor%cursors(editor%active_cursor)%column = ref_col
+                                                    end if
+                                                    editor%cursors(editor%active_cursor)%desired_column = ref_col
+                                                    editor%cursors(editor%active_cursor)%has_selection = .false.
                                                     editor%viewport_line = max(1, ref_line - editor%screen_rows / 2)
                                                 end if
                                             end if
                                         end block
-                                        ! Sync editor cursor to pane before rendering
                                         call sync_editor_to_pane(editor)
                                         call hide_references_panel(editor%references_panel)
                                         call render_screen(buffer, editor)
@@ -5127,8 +5169,10 @@ contains
         character(len=:), allocatable :: full_path
         integer :: status
 
-        ! Build full path
-        if (allocated(editor%workspace_path)) then
+        ! Build full path (skip workspace prefix if already absolute)
+        if (len_trim(file_path) > 0 .and. file_path(1:1) == '/') then
+            full_path = trim(file_path)
+        else if (allocated(editor%workspace_path)) then
             full_path = trim(editor%workspace_path) // '/' // trim(file_path)
         else
             full_path = trim(file_path)
