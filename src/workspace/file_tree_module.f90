@@ -104,6 +104,18 @@ contains
         end if
         if (allocated(state%selectable_files)) deallocate(state%selectable_files)
 
+        ! Check if this is a git repository
+        block
+            logical :: is_git_repo
+            integer :: git_check
+            character(len=1024) :: git_cmd
+            write(git_cmd, '(A,A,A)') 'cd "', &
+                trim(workspace_path), &
+                '" && git rev-parse --git-dir > /dev/null 2>&1'
+            call execute_command_line(trim(git_cmd), &
+                exitstat=git_check)
+            is_git_repo = (git_check == 0)
+
         ! First: Get ALL files from filesystem
         call get_all_files(workspace_path, all_files, n_all_files)
 
@@ -111,28 +123,37 @@ contains
         if (n_all_files > 0) then
             call build_tree(all_files, n_all_files, state%root)
 
-            ! Second: Get dirty files from git status and overlay markers
-            call get_dirty_files(workspace_path, dirty_files, n_dirty_files)
-            if (n_dirty_files > 0) then
-                call overlay_git_status(state%root, dirty_files, n_dirty_files)
-                state%files = dirty_files
-                state%n_files = n_dirty_files
+            ! Git operations only if in a git repo
+            if (is_git_repo) then
+                ! Get dirty files from git status and overlay
+                call get_dirty_files(workspace_path, &
+                    dirty_files, n_dirty_files)
+                if (n_dirty_files > 0) then
+                    call overlay_git_status(state%root, &
+                        dirty_files, n_dirty_files)
+                    state%files = dirty_files
+                    state%n_files = n_dirty_files
+                else
+                    allocate(state%files(0))
+                    state%n_files = 0
+                end if
+
+                call mark_gitignored_files(state%root, &
+                    workspace_path)
+
+                call collapse_tree_smart(state%root)
             else
                 allocate(state%files(0))
                 state%n_files = 0
             end if
-
-            ! Mark gitignored files (batch mode - single git command)
-            call mark_gitignored_files(state%root, workspace_path)
-
-            ! Collapse tree smartly - only expand dirs with dirty files
-            call collapse_tree_smart(state%root)
 
             ! Build selectable files list in tree traversal order
             call build_selectable_list(state%root, state%selectable_files, state%n_selectable, state%hide_dotfiles)
         else
             state%n_selectable = 0
         end if
+
+        end block  ! is_git_repo block
 
         if (allocated(all_files)) deallocate(all_files)
 
@@ -226,12 +247,24 @@ contains
         allocate(temp_files(max_files))
         n_files = 0
 
-        ! Use git ls-files for tracked files, then add ALL untracked files (except .git)
-        ! This is fast because it uses git's index for most files
-        ! We don't use --exclude-standard so gitignored files are included (can be hidden with ".")
+        ! Try git ls-files first, fall back to find for non-git dirs
         write(cmd, '(A,A,A)') 'cd "', trim(workspace_path), &
-            '" && { git ls-files; git ls-files --others --exclude .git; } | sort -u > /tmp/fac_all_files.txt 2>/dev/null'
+            '" && { git ls-files 2>/dev/null; ' // &
+            'git ls-files --others --exclude .git ' // &
+            '2>/dev/null; } | sort -u > ' // &
+            '/tmp/fac_all_files.txt 2>/dev/null'
         call execute_command_line(trim(cmd), exitstat=status_code)
+
+        ! If git failed or produced empty output, use find
+        if (status_code /= 0) then
+            write(cmd, '(A,A,A)') 'cd "', trim(workspace_path),&
+                '" && find . -maxdepth 4 -not -path ' // &
+                '"*/.git/*" -not -path "./.*" -type f ' // &
+                '| sed "s|^\./||" | sort > ' // &
+                '/tmp/fac_all_files.txt 2>/dev/null'
+            call execute_command_line(trim(cmd), &
+                exitstat=status_code)
+        end if
 
         if (status_code /= 0) then
             allocate(files(0))
