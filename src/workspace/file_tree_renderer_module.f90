@@ -32,8 +32,9 @@ contains
         end if
 
         ! First, clear all rows in the tree pane (start at column 1 to
-        ! overwrite any characters that wrapped from the editor pane)
-        padding = repeat(' ', width + start_col - 1)
+        ! overwrite any characters that wrapped from the editor pane,
+        ! and cover through the column just before the separator)
+        padding = repeat(' ', width + start_col)
         do row = start_row, end_row
             call terminal_move_cursor(row, 1)
             call terminal_write(padding)
