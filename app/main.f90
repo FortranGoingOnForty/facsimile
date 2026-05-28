@@ -492,19 +492,22 @@ program facsimile
                 running = .false.
             else
                 ! Poll terminal for echo before rendering.
-                ! Small delay lets the shell process and echo the key.
-                if (is_terminal_panel_visible(editor%terminal_panel) .and. &
-                    editor%terminal_panel%focused) then
-                    block
-                        integer :: poll_pass
-                        do poll_pass = 1, 3
-                            call c_usleep(1000)  ! 1ms
-                            call terminal_panel_poll(editor%terminal_panel)
-                            if (editor%terminal_panel%has_new_output) exit
-                        end do
-                    end block
-                else if (is_terminal_panel_visible(editor%terminal_panel)) then
-                    call terminal_panel_poll(editor%terminal_panel)
+                if (is_terminal_panel_visible(editor%terminal_panel)) then
+                    if (editor%terminal_panel%focused) then
+                        block
+                            integer :: poll_pass
+                            do poll_pass = 1, 3
+                                call c_usleep(1000)
+                                call terminal_panel_poll( &
+                                    editor%terminal_panel)
+                                if (editor%terminal_panel &
+                                    %has_new_output) exit
+                            end do
+                        end block
+                    else
+                        call terminal_panel_poll( &
+                            editor%terminal_panel)
+                    end if
                 end if
 
                 ! Re-render screen after each command

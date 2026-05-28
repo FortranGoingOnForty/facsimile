@@ -201,7 +201,8 @@ contains
         if (is_terminal_panel_visible(editor%terminal_panel) .and. &
             editor%terminal_panel%focused) then
             if (trim(key_str) == 'f5') then
-                ! F5 unfocuses terminal, returns to editor
+                ! F5 hides terminal panel
+                editor%terminal_panel%visible = .false.
                 editor%terminal_panel%focused = .false.
                 return
             end if
@@ -1140,8 +1141,14 @@ contains
 
         case('f5')
             ! Toggle integrated terminal
-            call toggle_terminal_panel(editor%terminal_panel, &
-                editor%screen_rows, editor%screen_cols)
+            if (is_terminal_panel_visible(editor%terminal_panel)) then
+                ! Visible but unfocused — re-focus
+                editor%terminal_panel%focused = .true.
+            else
+                ! Hidden — open and focus
+                call toggle_terminal_panel(editor%terminal_panel, &
+                    editor%screen_rows, editor%screen_cols)
+            end if
 
         case('alt-shift-j')
             ! Join lines

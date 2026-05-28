@@ -77,6 +77,85 @@ static const char KEYBOARD_PROTO[] = "\x1b[?0u";
 // Background color response (dark theme)
 static const char BG_COLOR[] = "\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\";
 
+// Scan a buffer for terminal queries and respond to them.
+// Called on EVERY read from the PTY, not just startup.
+static void respond_to_queries(int fd, const char *buf, int n) {
+    for (int i = 0; i < n - 1; i++) {
+        if (buf[i] != 0x1b) continue;
+
+        // DCS: ESC P+q<hex>ESC\ — XTGETTCAP
+        if (buf[i+1] == 'P' && i + 4 < n &&
+            buf[i+2] == '+' && buf[i+3] == 'q') {
+            int key_start = i + 4;
+            int key_end = key_start;
+            while (key_end < n - 1) {
+                if (buf[key_end] == 0x1b || buf[key_end] == 0x07)
+                    break;
+                key_end++;
+            }
+            if (key_end > key_start) {
+                char resp[256];
+                int rlen = 0;
+                resp[rlen++] = 0x1b; resp[rlen++] = 'P';
+                resp[rlen++] = '0'; resp[rlen++] = '+';
+                resp[rlen++] = 'r';
+                int klen = key_end - key_start;
+                if (klen > 200) klen = 200;
+                memcpy(resp + rlen, buf + key_start, klen);
+                rlen += klen;
+                resp[rlen++] = 0x1b; resp[rlen++] = '\\';
+                write(fd, resp, rlen);
+            }
+        }
+
+        // CSI sequences
+        if (buf[i+1] == '[') {
+            // DA queries ending in 'c'
+            for (int j = i+2; j < n && j < i+12; j++) {
+                if (buf[j] == 'c') {
+                    if (j == i+2 || buf[i+2] == '0' ||
+                        buf[i+2] == '?') {
+                        write(fd, DA_PRIMARY,
+                              sizeof(DA_PRIMARY) - 1);
+                    } else if (buf[i+2] == '>') {
+                        write(fd, DA_SECONDARY,
+                              sizeof(DA_SECONDARY) - 1);
+                    }
+                    break;
+                }
+                if (buf[j] < '0' || buf[j] > '?') break;
+            }
+            // ESC[?u — keyboard protocol query
+            if (i+2 < n && buf[i+2] == '?') {
+                for (int j = i+3; j < n && j < i+8; j++) {
+                    if (buf[j] == 'u') {
+                        write(fd, KEYBOARD_PROTO,
+                              sizeof(KEYBOARD_PROTO) - 1);
+                        break;
+                    }
+                }
+            }
+            // ESC[>...q — XTVERSION
+            if (i+2 < n && buf[i+2] == '>') {
+                for (int j = i+3; j < n && j < i+8; j++) {
+                    if (buf[j] == 'q') {
+                        write(fd, XTVERSION,
+                              sizeof(XTVERSION) - 1);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // OSC: ESC]11;? — background color query
+        if (buf[i+1] == ']' && i+4 < n &&
+            buf[i+2] == '1' && buf[i+3] == '1' &&
+            buf[i+4] == ';') {
+            write(fd, BG_COLOR, sizeof(BG_COLOR) - 1);
+        }
+    }
+}
+
 // Handle terminal capability queries during shell startup.
 // Saves all consumed data to state->startup_buf so pty_read_f
 // can replay it to the grid. Returns early once DA is answered.
@@ -89,11 +168,12 @@ static void handle_startup_queries(pty_state_t *state) {
     state->startup_len = 0;
     state->startup_pos = 0;
 
+    int idle_count = 0;
     for (;;) {
         gettimeofday(&now, NULL);
         double elapsed = (now.tv_sec - start.tv_sec) +
                           (now.tv_usec - start.tv_usec) / 1e6;
-        if (elapsed > 1.5) break;
+        if (elapsed > 3.0) break;
 
         fd_set rfds;
         struct timeval tv;
@@ -103,8 +183,13 @@ static void handle_startup_queries(pty_state_t *state) {
         tv.tv_usec = 10000; // 10ms
 
         int ret = select(fd + 1, &rfds, NULL, NULL, &tv);
-        if (ret <= 0) continue;
+        if (ret <= 0) {
+            idle_count++;
+            if (idle_count > 30) break; // 300ms of silence = done
+            continue;
+        }
 
+        idle_count = 0;
         ssize_t n = read(fd, buf, sizeof(buf));
         if (n <= 0) continue;
 
@@ -118,123 +203,8 @@ static void handle_startup_queries(pty_state_t *state) {
             state->startup_len += copy;
         }
 
-        // Scan for ALL terminal queries and respond
-        int responded = 0;
-        for (int i = 0; i < n - 1; i++) {
-            if (buf[i] != 0x1b) continue;
-
-            // ESC P — DCS sequences (XTGETTCAP etc.)
-            if (buf[i+1] == 'P') {
-                // Find the ST (ESC \) that ends this DCS
-                // and extract the query to respond "not found"
-                if (i + 4 < n && buf[i+2] == '+' &&
-                    buf[i+3] == 'q') {
-                    // XTGETTCAP query: ESC P + q <hexkey> ESC \.
-                    // Extract the hex key
-                    int key_start = i + 4;
-                    int key_end = key_start;
-                    while (key_end < n - 1) {
-                        if (buf[key_end] == 0x1b) break;
-                        if (buf[key_end] == 0x07) break;
-                        key_end++;
-                    }
-                    // Respond "not found": ESC P 0 + r <key> ESC \.
-                    if (key_end > key_start) {
-                        char resp[256];
-                        int rlen = 0;
-                        resp[rlen++] = 0x1b;
-                        resp[rlen++] = 'P';
-                        resp[rlen++] = '0';
-                        resp[rlen++] = '+';
-                        resp[rlen++] = 'r';
-                        int klen = key_end - key_start;
-                        if (klen > 200) klen = 200;
-                        memcpy(resp + rlen, buf + key_start,
-                               klen);
-                        rlen += klen;
-                        resp[rlen++] = 0x1b;
-                        resp[rlen++] = '\\';
-                        write(fd, resp, rlen);
-                        responded = 1;
-                    }
-                }
-            }
-
-            // ESC[ sequences
-            if (buf[i+1] == '[') {
-                // DA queries ending in 'c'
-                for (int j = i + 2; j < n && j < i + 12; j++) {
-                    if (buf[j] == 'c') {
-                        if (j == i+2 || buf[i+2] == '0' ||
-                            buf[i+2] == '?') {
-                            write(fd, DA_PRIMARY,
-                                  sizeof(DA_PRIMARY) - 1);
-                        } else if (buf[i+2] == '>') {
-                            write(fd, DA_SECONDARY,
-                                  sizeof(DA_SECONDARY) - 1);
-                        }
-                        responded = 1;
-                        break;
-                    }
-                    if (buf[j] < '0' || buf[j] > '?') break;
-                }
-                // ESC[?u — keyboard protocol query
-                if (i + 2 < n && buf[i+2] == '?') {
-                    for (int j = i+3; j < n && j < i+8; j++) {
-                        if (buf[j] == 'u') {
-                            write(fd, KEYBOARD_PROTO,
-                                  sizeof(KEYBOARD_PROTO) - 1);
-                            responded = 1;
-                            break;
-                        }
-                    }
-                }
-                // ESC[>0q — XTVERSION query
-                if (i + 2 < n && buf[i+2] == '>') {
-                    for (int j = i+3; j < n && j < i+8; j++) {
-                        if (buf[j] == 'q') {
-                            write(fd, XTVERSION,
-                                  sizeof(XTVERSION) - 1);
-                            responded = 1;
-                            break;
-                        }
-                    }
-                }
-            }
-            // ESC] — OSC queries
-            else if (buf[i+1] == ']') {
-                // ESC]11;? — background color query
-                if (i + 4 < n && buf[i+2] == '1' &&
-                    buf[i+3] == '1' && buf[i+4] == ';') {
-                    write(fd, BG_COLOR,
-                          sizeof(BG_COLOR) - 1);
-                    responded = 1;
-                }
-            }
-        }
-        if (responded) {
-            // Read a bit more to capture post-DA output
-            usleep(20000);
-            for (int extra = 0; extra < 5; extra++) {
-                FD_ZERO(&rfds);
-                FD_SET(fd, &rfds);
-                tv.tv_sec = 0;
-                tv.tv_usec = 10000;
-                if (select(fd+1, &rfds, NULL, NULL, &tv) <= 0)
-                    break;
-                n = read(fd, buf, sizeof(buf));
-                if (n <= 0) break;
-                copy = n;
-                if (state->startup_len + copy > STARTUP_BUF_SIZE)
-                    copy = STARTUP_BUF_SIZE - state->startup_len;
-                if (copy > 0) {
-                    memcpy(state->startup_buf + state->startup_len,
-                           buf, copy);
-                    state->startup_len += copy;
-                }
-            }
-            break;
-        }
+        // Respond to queries using shared helper
+        respond_to_queries(fd, buf, (int)n);
     }
 }
 
@@ -430,6 +400,10 @@ int pty_read_f(void **handle, char *buffer, int *bufsize) {
     if (n == 0) {
         return -1;
     }
+
+    // Respond to any terminal queries in live data too
+    respond_to_queries(state->master_fd, buffer, (int)n);
+
     return (int)n;
 }
 
