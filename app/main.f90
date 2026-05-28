@@ -15,6 +15,7 @@ program facsimile
     use command_palette_module, only: register_command
     use terminal_panel_module, only: is_terminal_panel_visible, &
         terminal_panel_poll
+    use iso_c_binding, only: c_int
     use welcome_menu_module, only: show_welcome_menu
     use fortress_navigator_module, only: open_fortress_navigator
     use binary_prompt_module, only: binary_file_prompt
@@ -25,6 +26,13 @@ program facsimile
     use app_state_module, only: is_first_run, mark_first_run_complete
     use lsp_server_installer_panel_module, only: show_lsp_server_installer_panel
     implicit none
+
+    interface
+        subroutine c_usleep(usec) bind(C, name='usleep')
+            import :: c_int
+            integer(c_int), value, intent(in) :: usec
+        end subroutine
+    end interface
 
     type(editor_state_t) :: editor
     type(buffer_t) :: buffer
@@ -483,8 +491,19 @@ program facsimile
             if (should_quit) then
                 running = .false.
             else
-                ! Poll terminal for echo before rendering
-                if (is_terminal_panel_visible(editor%terminal_panel)) then
+                ! Poll terminal for echo before rendering.
+                ! Small delay lets the shell process and echo the key.
+                if (is_terminal_panel_visible(editor%terminal_panel) .and. &
+                    editor%terminal_panel%focused) then
+                    block
+                        integer :: poll_pass
+                        do poll_pass = 1, 3
+                            call c_usleep(1000)  ! 1ms
+                            call terminal_panel_poll(editor%terminal_panel)
+                            if (editor%terminal_panel%has_new_output) exit
+                        end do
+                    end block
+                else if (is_terminal_panel_visible(editor%terminal_panel)) then
                     call terminal_panel_poll(editor%terminal_panel)
                 end if
 
