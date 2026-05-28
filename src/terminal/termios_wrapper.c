@@ -495,6 +495,41 @@ void flush_input_buffer(void) {
     flush_input();
 }
 
+// ============================================================
+// Output buffering for flicker-free rendering
+// ============================================================
+
+#define OUTPUT_BUFFER_SIZE (256 * 1024)  // 256KB - enough for any frame
+static char output_buf[OUTPUT_BUFFER_SIZE];
+static int output_pos = 0;
+
+// Append data to the output buffer
+void term_buf_write(const char *data, int len) {
+    if (len <= 0) return;
+    // If this write would overflow, flush first
+    if (output_pos + len > OUTPUT_BUFFER_SIZE) {
+        if (output_pos > 0) {
+            write(STDOUT_FILENO, output_buf, output_pos);
+            output_pos = 0;
+        }
+    }
+    // If single write is larger than buffer, write directly
+    if (len > OUTPUT_BUFFER_SIZE) {
+        write(STDOUT_FILENO, data, len);
+        return;
+    }
+    memcpy(output_buf + output_pos, data, len);
+    output_pos += len;
+}
+
+// Flush the output buffer to stdout in one write() syscall
+void term_buf_flush(void) {
+    if (output_pos > 0) {
+        write(STDOUT_FILENO, output_buf, output_pos);
+        output_pos = 0;
+    }
+}
+
 // Get terminal size using ioctl (no escape sequences needed)
 void get_terminal_size(int *rows, int *cols) {
     struct winsize ws;
