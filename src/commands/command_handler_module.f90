@@ -6377,8 +6377,8 @@ contains
         result_str = json_stringify(response%result)
 
         if (.not. allocated(result_str) .or. result_str == 'null' .or. len_trim(result_str) == 0) then
-            call terminal_move_cursor(saved_editor_for_callback%screen_rows, 1)
-            call terminal_write('Rename failed or not supported                ')
+            saved_editor_for_callback%timed_message = 'Rename failed or not supported'
+            saved_editor_for_callback%timed_message_ms = get_time_ms()
             if (allocated(result_str)) deallocate(result_str)
             return
         end if
@@ -6386,16 +6386,16 @@ contains
         ! Apply workspace edit
         call apply_workspace_edit(saved_editor_for_callback, result_str, changes_applied)
 
-        call terminal_move_cursor(saved_editor_for_callback%screen_rows, 1)
         if (changes_applied > 0) then
             block
                 character(len=64) :: msg
                 write(msg, '(A,I0,A)') 'Renamed symbol (', changes_applied, ' changes applied)'
-                call terminal_write(trim(msg) // '                    ')
+                saved_editor_for_callback%timed_message = trim(msg)
             end block
         else
-            call terminal_write('No changes applied                         ')
+            saved_editor_for_callback%timed_message = 'No changes applied'
         end if
+        saved_editor_for_callback%timed_message_ms = get_time_ms()
 
         if (allocated(result_str)) deallocate(result_str)
     end subroutine handle_rename_response_wrapper
@@ -6567,9 +6567,26 @@ contains
         end if
 
         ! Fall back to changes format (older format - map of URI to edits)
+        ! Format: {"changes": {"file:///path": [TextEdit, ...], ...}}
         if (json_has_key(edit_obj, 'changes')) then
-            call terminal_move_cursor(editor%screen_rows, 1)
-            call terminal_write('Workspace edit (changes format) not fully supported')
+            block
+                type(json_value_t) :: changes_obj
+                integer :: ci
+
+                changes_obj = json_get_object(edit_obj, 'changes')
+                if (associated(changes_obj%object_value)) then
+                    do ci = 1, changes_obj%object_value%count
+                        uri = changes_obj%object_value%pairs(ci)%key
+                        call apply_file_edits_obj(editor, uri, &
+                            changes_obj%object_value%pairs(ci)%value, &
+                            changes_applied)
+                    end do
+                end if
+            end block
+
+            if (changes_applied > 0) then
+                g_lsp_modified_buffer = .true.
+            end if
             return
         end if
 
