@@ -68,9 +68,14 @@ typedef struct {
     int startup_pos;
 } pty_state_t;
 
-// DA response strings
+// Terminal query response strings
 static const char DA_PRIMARY[] = "\x1b[?62;22c";
 static const char DA_SECONDARY[] = "\x1b[>41;1;0c";
+static const char XTVERSION[] = "\x1bP>|facsimile(0.10)\x1b\\";
+// Keyboard protocol: not supported (mode 0)
+static const char KEYBOARD_PROTO[] = "\x1b[?0u";
+// Background color response (dark theme)
+static const char BG_COLOR[] = "\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\";
 
 // Handle terminal capability queries during shell startup.
 // Saves all consumed data to state->startup_buf so pty_read_f
@@ -113,26 +118,61 @@ static void handle_startup_queries(pty_state_t *state) {
             state->startup_len += copy;
         }
 
-        // Scan for DA queries and respond
+        // Scan for ALL terminal queries and respond
         int responded = 0;
         for (int i = 0; i < n - 1; i++) {
-            if (buf[i] != 0x1b || buf[i+1] != '[') continue;
+            if (buf[i] != 0x1b) continue;
 
-            for (int j = i + 2; j < n && j < i + 12; j++) {
-                if (buf[j] == 'c') {
-                    if (j == i + 2 || buf[i+2] == '0' ||
-                        buf[i+2] == '?') {
-                        write(fd, DA_PRIMARY,
-                              sizeof(DA_PRIMARY) - 1);
+            // ESC[ sequences
+            if (buf[i+1] == '[') {
+                // DA queries ending in 'c'
+                for (int j = i + 2; j < n && j < i + 12; j++) {
+                    if (buf[j] == 'c') {
+                        if (j == i+2 || buf[i+2] == '0' ||
+                            buf[i+2] == '?') {
+                            write(fd, DA_PRIMARY,
+                                  sizeof(DA_PRIMARY) - 1);
+                        } else if (buf[i+2] == '>') {
+                            write(fd, DA_SECONDARY,
+                                  sizeof(DA_SECONDARY) - 1);
+                        }
                         responded = 1;
-                    } else if (buf[i+2] == '>') {
-                        write(fd, DA_SECONDARY,
-                              sizeof(DA_SECONDARY) - 1);
-                        responded = 1;
+                        break;
                     }
-                    break;
+                    if (buf[j] < '0' || buf[j] > '?') break;
                 }
-                if (buf[j] < '0' || buf[j] > '?') break;
+                // ESC[?u — keyboard protocol query
+                if (i + 2 < n && buf[i+2] == '?') {
+                    for (int j = i+3; j < n && j < i+8; j++) {
+                        if (buf[j] == 'u') {
+                            write(fd, KEYBOARD_PROTO,
+                                  sizeof(KEYBOARD_PROTO) - 1);
+                            responded = 1;
+                            break;
+                        }
+                    }
+                }
+                // ESC[>0q — XTVERSION query
+                if (i + 2 < n && buf[i+2] == '>') {
+                    for (int j = i+3; j < n && j < i+8; j++) {
+                        if (buf[j] == 'q') {
+                            write(fd, XTVERSION,
+                                  sizeof(XTVERSION) - 1);
+                            responded = 1;
+                            break;
+                        }
+                    }
+                }
+            }
+            // ESC] — OSC queries
+            else if (buf[i+1] == ']') {
+                // ESC]11;? — background color query
+                if (i + 4 < n && buf[i+2] == '1' &&
+                    buf[i+3] == '1' && buf[i+4] == ';') {
+                    write(fd, BG_COLOR,
+                          sizeof(BG_COLOR) - 1);
+                    responded = 1;
+                }
             }
         }
         if (responded) {
