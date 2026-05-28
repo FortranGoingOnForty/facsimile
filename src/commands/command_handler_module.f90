@@ -6010,25 +6010,20 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(in) :: buffer
         character(len=:), allocatable :: full_content
-        integer :: i, line_count
 
         ! Only notify if we have an active tab with LSP support
-        if (editor%active_tab_index < 1 .or. editor%active_tab_index > size(editor%tabs)) return
-        if (editor%tabs(editor%active_tab_index)%num_lsp_servers < 1) return
+        if (editor%active_tab_index < 1 .or. &
+            editor%active_tab_index > size(editor%tabs)) return
+        if (editor%tabs(editor%active_tab_index) &
+            %num_lsp_servers < 1) return
 
-        ! Build full document content
-        line_count = buffer_get_line_count(buffer)
-        full_content = ''
-        do i = 1, line_count
-            if (i > 1) then
-                full_content = full_content // char(10)  ! LF
-            end if
-            full_content = full_content // buffer_get_line(buffer, i)
-        end do
+        ! Get full content in O(n) via gap buffer extraction
+        full_content = buffer_to_string(buffer)
 
-        ! Notify document sync of the change
-        call notify_document_change(editor%tabs(editor%active_tab_index)%document_sync, &
-                                   full_content)
+        call notify_document_change( &
+            editor%tabs(editor%active_tab_index)%document_sync, &
+            full_content)
+        if (allocated(full_content)) deallocate(full_content)
     end subroutine notify_buffer_change
 
     ! TODO: Handle LSP textDocument/definition response
