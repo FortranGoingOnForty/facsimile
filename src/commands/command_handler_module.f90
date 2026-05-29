@@ -3906,7 +3906,7 @@ contains
         character(len=:), allocatable :: line
         integer :: line_count
         integer :: tab_idx, pane_idx, i
-        integer :: pane_row, pane_col
+        integer :: pane_row
         logical :: in_pane
 
         line_count = buffer_get_line_count(buffer)
@@ -3954,15 +3954,15 @@ contains
 
                     ! Now use the active pane's data
                     associate(pane => editor%tabs(tab_idx)%panes(pane_idx))
-                        ! Calculate position relative to pane
-                        ! Note: screen_row is where the click occurred, pane%screen_row is top of pane
-                        ! We want 0-based offset into the pane
+                        ! Invert the renderer's forward mapping
+                        !   screen_row = pane%screen_row
+                        !              + (line - viewport_line)
+                        !   screen_col = pane%screen_col + col_offset
+                        !              + (column - viewport_column)
                         pane_row = screen_row - pane%screen_row
-                        pane_col = screen_col - pane%screen_col + 1
-
-                        ! Convert pane position to buffer position using pane's viewport
                         target_line = pane%viewport_line + pane_row
-                        target_col = pane%viewport_column + max(1, pane_col - col_offset)
+                        target_col = pane%viewport_column + &
+                            (screen_col - pane%screen_col - col_offset)
                         in_pane = .true.
                     end associate
                     exit
@@ -3973,9 +3973,11 @@ contains
                 return  ! Click outside of any pane
             end if
         else
-            ! No panes, use editor viewport
+            ! No panes, use editor viewport. Text begins one cell
+            ! after the gutter (screen column col_offset + 1).
             target_line = editor%viewport_line + screen_row - row_offset
-            target_col = editor%viewport_column + max(1, screen_col - col_offset)
+            target_col = editor%viewport_column + &
+                (screen_col - col_offset - 1)
         end if
 
         ! Clamp to valid range
