@@ -140,6 +140,11 @@ contains
         call buf_write_str(CSI // '?1000h')
         call buf_write_str(CSI // '?1002h')
         call buf_write_str(CSI // '?1006h')
+        ! Disable alternate scroll: in the alternate screen some
+        ! terminals turn the wheel into arrow keys, which would feed
+        ! shell history instead of our scrollback. Force real mouse
+        ! wheel events (button 64/65) instead.
+        call buf_write_str(CSI // '?1007l')
         call c_term_buf_flush()
     end subroutine terminal_enable_mouse
 
@@ -147,6 +152,9 @@ contains
         call buf_write_str(CSI // '?1006l')
         call buf_write_str(CSI // '?1002l')
         call buf_write_str(CSI // '?1000l')
+        ! Restore alternate scroll (the common terminal default) so
+        ! the wheel keeps working in pagers like less after we exit.
+        call buf_write_str(CSI // '?1007h')
         call c_term_buf_flush()
     end subroutine terminal_disable_mouse
 
