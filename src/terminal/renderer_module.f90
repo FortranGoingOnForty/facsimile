@@ -517,13 +517,14 @@ contains
 
             ! Render character with or without highlighting
             if (is_active_cell) then
-                ! Hollow caret: underline (no reverse) marks the active
-                ! end as an empty box within the uniform selection
+                ! Hollow caret: render the active cell plain (no reverse)
+                ! so it reads as an empty "hole" within the selection.
+                ! Leading reset clears the prior cell's reverse state.
                 if (len(token_color) > 0) then
-                    call terminal_write(char(27) // '[4m' // token_color // &
+                    call terminal_write(char(27) // '[0m' // token_color // &
                         utf8_ch // char(27) // '[0m')
                 else
-                    call terminal_write(char(27) // '[4m' // utf8_ch // char(27) // '[0m')
+                    call terminal_write(char(27) // '[0m' // utf8_ch // char(27) // '[0m')
                 end if
             else if (in_selection) then
                 ! Highlight selected text with reverse video (highest priority)
