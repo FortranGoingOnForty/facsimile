@@ -215,8 +215,8 @@ contains
         ! Route keys to integrated terminal when focused (highest priority)
         if (is_terminal_panel_visible(editor%terminal_panel) .and. &
             editor%terminal_panel%focused) then
-            if (trim(key_str) == 'f5') then
-                ! F5 hides terminal panel
+            if (trim(key_str) == 'f5' .or. trim(key_str) == 'alt-t') then
+                ! F5 / Alt-T hides terminal panel
                 editor%terminal_panel%visible = .false.
                 editor%terminal_panel%focused = .false.
                 ! Buffered clear so next render has no stale content
@@ -252,8 +252,8 @@ contains
             trim(key_str) /= 'f12' .and. trim(key_str) /= 'shift-f12' .and. &
             trim(key_str) /= 'alt-g' .and. trim(key_str) /= 'alt-o' .and. &
             trim(key_str) /= 'alt-p' .and. trim(key_str) /= 'alt-e' .and. &
-            trim(key_str) /= 'alt-r' .and. trim(key_str) /= 'ctrl-\\' .and. &
-            trim(key_str) /= 'ctrl-q') then
+            trim(key_str) /= 'alt-r' .and. trim(key_str) /= 'alt-t' .and. &
+            trim(key_str) /= 'ctrl-\\' .and. trim(key_str) /= 'ctrl-q') then
             call handle_fuss_input(key_str, editor, buffer)
             return
         end if
@@ -1208,8 +1208,8 @@ contains
                 end if
             end block
 
-        case('f5')
-            ! Toggle integrated terminal
+        case('f5', 'alt-t')
+            ! Toggle integrated terminal (F5 or Alt-T)
             if (is_terminal_panel_visible(editor%terminal_panel)) then
                 ! Visible but unfocused — re-focus
                 editor%terminal_panel%focused = .true.
