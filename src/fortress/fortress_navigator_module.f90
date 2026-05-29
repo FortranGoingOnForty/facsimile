@@ -88,9 +88,14 @@ contains
             if (selected > current_count) selected = current_count
             if (current_count == 0) selected = 1
 
-            ! Adjust scroll offsets
+            ! Adjust scroll offsets. The current pane keeps a margin so
+            ! the cursor stays off the edges. The parent pane is anchored
+            ! to the top: all siblings list from row 1 down, scrolling
+            ! only if the current directory would fall below the fold
+            ! (no centering margin) — matches reference fortress.
             call adjust_scroll(selected, scroll_offset, rows - 4)
-            call adjust_scroll(parent_selected, parent_scroll_offset, rows - 4)
+            call adjust_parent_scroll(parent_selected, &
+                parent_scroll_offset, parent_count, rows - 4)
 
             ! Check if we need to redraw (directory changed, selection changed, or scroll changed)
             need_redraw = dir_changed .or. first_draw .or. &
@@ -214,6 +219,27 @@ contains
         ! Ensure offset is not negative
         if (offset < 0) offset = 0
     end subroutine adjust_scroll
+
+    !> Top-anchored scroll for the parent pane: keep the list pinned to
+    !! the top so all siblings render from row 1 down, scrolling only
+    !! when the selection would otherwise fall outside the visible area.
+    subroutine adjust_parent_scroll(sel, offset, total, visible_height)
+        integer, intent(in) :: sel, total, visible_height
+        integer, intent(inout) :: offset
+
+        if (sel <= 0) then
+            offset = 0
+            return
+        end if
+
+        ! Scroll up only if the selection is above the window
+        if (sel < offset + 1) offset = sel - 1
+        ! Scroll down only if the selection is below the window
+        if (sel > offset + visible_height) offset = sel - visible_height
+
+        ! Clamp so we never scroll past the end or before the top
+        offset = max(0, min(offset, max(0, total - visible_height)))
+    end subroutine adjust_parent_scroll
 
     !> Check if ESC is start of arrow key sequence
     function check_arrow_key(key) result(is_arrow)
