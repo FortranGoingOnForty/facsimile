@@ -380,8 +380,6 @@ contains
         integer :: i, char_idx, byte_pos, token_idx, char_count, display_col, char_width
         integer :: sel_start_line, sel_start_col, sel_end_line, sel_end_col
         logical :: in_selection, is_bracket_match, is_current_line, is_search_match
-        logical :: is_active_cell, active_sel
-        integer :: acur_line, acur_col
         type(token_t), allocatable :: tokens(:)
         character(len=:), allocatable :: token_color
         integer :: search_matches(2, 50)  ! Up to 50 matches per line (start, end pairs)
@@ -412,13 +410,6 @@ contains
         ! Check if this is the current line
         is_current_line = (line_num == editor%cursors(editor%active_cursor)%line) .and. highlight_current_line
 
-        ! Active cursor cell — drawn as a hollow box (underline, no
-        ! reverse) during a selection so it reads as a caret without
-        ! the clashing solid block over the highlight.
-        active_sel = editor%cursors(editor%active_cursor)%has_selection
-        acur_line = editor%cursors(editor%active_cursor)%line
-        acur_col = editor%cursors(editor%active_cursor)%column
-
         ! Render each UTF-8 character with selection highlighting
         ! char_idx = 1-based character index (for selection logic)
         ! display_col = screen column position (for width tracking)
@@ -429,8 +420,6 @@ contains
         do while (char_idx <= char_count .and. display_col < width)
             in_selection = .false.
             is_bracket_match = .false.
-            is_active_cell = active_sel .and. line_num == acur_line &
-                             .and. char_idx == acur_col
 
             ! Get the UTF-8 character at this position
             utf8_ch = utf8_char_at(line, char_idx)
@@ -516,17 +505,7 @@ contains
             end if
 
             ! Render character with or without highlighting
-            if (is_active_cell) then
-                ! Hollow caret: render the active cell plain (no reverse)
-                ! so it reads as an empty "hole" within the selection.
-                ! Leading reset clears the prior cell's reverse state.
-                if (len(token_color) > 0) then
-                    call terminal_write(char(27) // '[0m' // token_color // &
-                        utf8_ch // char(27) // '[0m')
-                else
-                    call terminal_write(char(27) // '[0m' // utf8_ch // char(27) // '[0m')
-                end if
-            else if (in_selection) then
+            if (in_selection) then
                 ! Highlight selected text with reverse video (highest priority)
                 call terminal_write(char(27) // '[7m' // utf8_ch // char(27) // '[0m')
             else if (is_bracket_match) then
