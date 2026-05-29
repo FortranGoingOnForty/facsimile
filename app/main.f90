@@ -417,23 +417,22 @@ program facsimile
         end if
     end if
 
-    ! Check global registry for backups (after file loading
-    ! so handle_restored_file can find existing tabs)
+    ! Check global registry for backups (after file loading so
+    ! handle_restored_file can find existing tabs). Scoping rule:
+    !   - opening a specific file -> only that file's backup
+    !   - opening a workspace      -> backups under the workspace
+    ! The single-file workspace path (e.g. $HOME) is only a
+    ! file-tree root and must NOT scope backups, or it would
+    ! over-match every backup beneath it.
     block
-        character(len=512) :: ws_filter
-        if (allocated(editor%workspace_path)) then
-            ws_filter = editor%workspace_path
-        else
-            ws_filter = ''
-        end if
         if (len_trim(filename) > 0) then
-            if (backup_detect(trim(ws_filter), &
-                trim(filename))) then
+            if (backup_detect('', trim(filename))) then
                 call handle_backup_restoration( &
                     editor, buffer, trim(filename))
             end if
-        else
-            if (backup_detect(trim(ws_filter))) then
+        else if (is_workspace_mode .and. &
+                 allocated(editor%workspace_path)) then
+            if (backup_detect(trim(editor%workspace_path))) then
                 call handle_backup_restoration( &
                     editor, buffer)
             end if
@@ -1005,20 +1004,20 @@ contains
         logical :: restore_success, found
         integer(int64) :: current_timestamp, best_timestamp
 
-        ! Get backups scoped to workspace and/or file
+        ! Scope backups to the specific file when one is given,
+        ! otherwise to the workspace prefix. Never list every
+        ! backup in the registry.
         block
-            character(len=512) :: ws_f
-            if (allocated(editor%workspace_path)) then
-                ws_f = editor%workspace_path
-            else
-                ws_f = ''
-            end if
             if (present(file_path)) then
-                call backup_list(trim(ws_f), backups, &
+                call backup_list('', backups, &
                     backup_count, trim(file_path))
+            else if (allocated(editor%workspace_path)) then
+                call backup_list( &
+                    trim(editor%workspace_path), &
+                    backups, backup_count)
             else
-                call backup_list(trim(ws_f), backups, &
-                    backup_count)
+                allocate(backups(0))
+                backup_count = 0
             end if
         end block
 
