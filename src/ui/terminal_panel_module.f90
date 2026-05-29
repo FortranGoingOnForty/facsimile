@@ -834,9 +834,11 @@ contains
         if (gc < 0) gc = 0
         if (gc > panel%pty_cols - 1) gc = panel%pty_cols - 1
 
+        ! Left button: plain click is code 0, a left-button drag has
+        ! the SGR motion bit set (code 32) — both have low bits 0.
         select case(trim(event_type))
         case('mouse-click')
-            if (button == 0) then
+            if (iand(button, 3) == 0) then
                 ! Focus terminal and start a fresh selection anchor
                 panel%focused = .true.
                 panel%sel_active = .false.
@@ -846,7 +848,7 @@ contains
                 panel%sel_end_col = gc
             end if
         case('mouse-drag')
-            if (button == 0) then
+            if (iand(button, 3) == 0) then
                 panel%sel_end_row = gr
                 panel%sel_end_col = gc
                 if (gr /= panel%sel_anchor_row .or. &
