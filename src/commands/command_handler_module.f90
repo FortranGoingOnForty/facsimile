@@ -23,7 +23,7 @@ module command_handler_module
     use terminal_panel_module, only: toggle_terminal_panel, &
         is_terminal_panel_visible, terminal_panel_handle_key, &
         terminal_panel_handle_mouse, terminal_panel_in_region, &
-        terminal_panel_paste
+        terminal_panel_paste, terminal_panel_scroll
     use input_handler_module, only: get_paste_text
     use bracket_matching_module, only: find_matching_bracket
     use file_tree_module
@@ -227,6 +227,14 @@ contains
                 ! Send pasted text to the shell as one chunk
                 call terminal_panel_paste(editor%terminal_panel, &
                     get_paste_text())
+                return
+            end if
+            if (trim(key_str) == 'mouse-scroll-up') then
+                call terminal_panel_scroll(editor%terminal_panel, 3)
+                return
+            end if
+            if (trim(key_str) == 'mouse-scroll-down') then
+                call terminal_panel_scroll(editor%terminal_panel, -3)
                 return
             end if
             if (terminal_panel_handle_key(editor%terminal_panel, &

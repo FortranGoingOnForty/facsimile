@@ -22,6 +22,7 @@
 
 #define MAX_PARAMS 16
 #define PARAM_BUF_SIZE 128
+#define SCROLLBACK_MAX 2000
 
 typedef struct {
     char ch;
@@ -29,6 +30,12 @@ typedef struct {
     unsigned char bg;   // 0 = default
     unsigned char attr;
 } vt100_cell_t;
+
+// One line of scrollback history
+typedef struct {
+    vt100_cell_t *cells;
+    int width;
+} sb_line_t;
 
 typedef struct {
     vt100_cell_t *cells;
@@ -52,6 +59,12 @@ typedef struct {
     int pty_fd;         // PTY fd for inline query responses
     int app_cursor_keys; // DECCKM: 1=application mode (ESC O), 0=normal (ESC [)
     int bracketed_paste; // mode 2004: 1=child wants pastes wrapped in ESC[200~/201~
+    // Scrollback history (ring buffer of lines pushed off the top)
+    sb_line_t scrollback[SCROLLBACK_MAX];
+    int sb_count;        // number of valid scrollback lines
+    int sb_head;         // ring index of the oldest line
+    int view_offset;     // 0 = live bottom; >0 = lines scrolled up
+    int alt_screen;      // 1 while in the alternate screen buffer
 } vt100_grid_t;
 
 // ---- Internal helpers ----
@@ -78,9 +91,37 @@ static void clear_region(vt100_grid_t *g, int r1, int c1, int r2, int c2) {
     }
 }
 
+// Append a copy of a cell row to the scrollback ring
+static void sb_push_line(vt100_grid_t *g, vt100_cell_t *row, int width) {
+    int idx;
+    if (g->sb_count < SCROLLBACK_MAX) {
+        idx = (g->sb_head + g->sb_count) % SCROLLBACK_MAX;
+        g->sb_count++;
+    } else {
+        // Buffer full: reuse oldest slot and advance head
+        idx = g->sb_head;
+        free(g->scrollback[idx].cells);
+        g->sb_head = (g->sb_head + 1) % SCROLLBACK_MAX;
+    }
+    g->scrollback[idx].cells =
+        (vt100_cell_t *)malloc(width * sizeof(vt100_cell_t));
+    if (!g->scrollback[idx].cells) { g->scrollback[idx].width = 0; return; }
+    memcpy(g->scrollback[idx].cells, row, width * sizeof(vt100_cell_t));
+    g->scrollback[idx].width = width;
+}
+
 static void scroll_up(vt100_grid_t *g, int top, int bottom, int n) {
     if (n <= 0 || top > bottom) return;
     if (n > bottom - top + 1) n = bottom - top + 1;
+
+    // Capture lines leaving the top of the screen into scrollback.
+    // Only for full-screen scrolling (top==0) outside the alternate
+    // screen — scroll-region scrolls (e.g. status bars) aren't history.
+    if (top == 0 && !g->alt_screen) {
+        for (int r = 0; r < n; r++) {
+            sb_push_line(g, &g->cells[r * g->cols], g->cols);
+        }
+    }
 
     // Move lines up
     for (int r = top; r <= bottom - n; r++) {
@@ -391,6 +432,8 @@ static void handle_csi(vt100_grid_t *g, char final) {
                 clear_region(g, 0, 0, g->rows-1, g->cols-1);
                 g->cursor_row = 0;
                 g->cursor_col = 0;
+                g->alt_screen = 1;
+                g->view_offset = 0;
             }
         }
         break;
@@ -409,6 +452,8 @@ static void handle_csi(vt100_grid_t *g, char final) {
                 g->cursor_col = 0;
                 g->scroll_top = 0;
                 g->scroll_bottom = g->rows - 1;
+                g->alt_screen = 0;
+                g->view_offset = 0;
             }
         }
         break;
@@ -622,6 +667,10 @@ void vt100_grid_create_f(void **handle, int *rows, int *cols) {
     g->pty_fd = -1;
     g->app_cursor_keys = 0;
     g->bracketed_paste = 0;
+    g->sb_count = 0;
+    g->sb_head = 0;
+    g->view_offset = 0;
+    g->alt_screen = 0;
 
     // Initialize all cells to spaces
     for (int i = 0; i < *rows * *cols; i++) {
@@ -634,6 +683,10 @@ void vt100_grid_create_f(void **handle, int *rows, int *cols) {
 void vt100_grid_destroy_f(void **handle) {
     vt100_grid_t *g = (vt100_grid_t *)*handle;
     if (!g) return;
+    for (int i = 0; i < g->sb_count; i++) {
+        int idx = (g->sb_head + i) % SCROLLBACK_MAX;
+        free(g->scrollback[idx].cells);
+    }
     if (g->cells) free(g->cells);
     free(g);
     *handle = NULL;
@@ -642,6 +695,8 @@ void vt100_grid_destroy_f(void **handle) {
 void vt100_grid_feed_f(void **handle, const char *data, int *len) {
     vt100_grid_t *g = (vt100_grid_t *)*handle;
     if (!g || !data || *len <= 0) return;
+    // New output snaps the view back to the live bottom
+    g->view_offset = 0;
     grid_feed(g, data, *len);
 }
 
@@ -710,6 +765,55 @@ int vt100_grid_app_cursor_f(void **handle) {
 int vt100_grid_bracketed_paste_f(void **handle) {
     vt100_grid_t *g = (vt100_grid_t *)*handle;
     return g ? g->bracketed_paste : 0;
+}
+
+// Scroll the view into history. delta>0 scrolls up (older), delta<0
+// scrolls down (newer). Clamped to [0, sb_count].
+void vt100_grid_scroll_view_f(void **handle, int *delta) {
+    vt100_grid_t *g = (vt100_grid_t *)*handle;
+    if (!g) return;
+    g->view_offset += *delta;
+    if (g->view_offset < 0) g->view_offset = 0;
+    if (g->view_offset > g->sb_count) g->view_offset = g->sb_count;
+}
+
+// Snap the view back to the live bottom
+void vt100_grid_reset_view_f(void **handle) {
+    vt100_grid_t *g = (vt100_grid_t *)*handle;
+    if (g) g->view_offset = 0;
+}
+
+int vt100_grid_view_offset_f(void **handle) {
+    vt100_grid_t *g = (vt100_grid_t *)*handle;
+    return g ? g->view_offset : 0;
+}
+
+// Get a cell for display row drow (0..rows-1), honoring view_offset.
+// When scrolled up, the upper rows come from scrollback history.
+void vt100_grid_get_view_cell_f(void **handle, int *drow, int *col,
+                                 char *ch, int *fg, int *bg, int *attr) {
+    vt100_grid_t *g = (vt100_grid_t *)*handle;
+    *ch = ' '; *fg = 0; *bg = 0; *attr = 0;
+    if (!g) return;
+
+    // Logical index into [scrollback... | live grid]
+    int li = (g->sb_count - g->view_offset) + *drow;
+    if (li < g->sb_count) {
+        // Scrollback line
+        int idx = (g->sb_head + li) % SCROLLBACK_MAX;
+        sb_line_t *line = &g->scrollback[idx];
+        if (line->cells && *col < line->width) {
+            *ch = line->cells[*col].ch;
+            *fg = line->cells[*col].fg;
+            *bg = line->cells[*col].bg;
+            *attr = line->cells[*col].attr;
+        }
+    } else {
+        // Live grid row
+        int gr = li - g->sb_count;
+        vt100_cell_t *c = cell_at(g, gr, *col);
+        if (c) { *ch = c->ch; *fg = c->fg; *bg = c->bg; *attr = c->attr; }
+    }
 }
 
 void vt100_grid_set_pty_fd_f(void **handle, int *fd) {

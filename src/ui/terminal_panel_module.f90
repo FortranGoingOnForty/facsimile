@@ -14,6 +14,7 @@ module terminal_panel_module
     public :: terminal_panel_paste
     public :: terminal_panel_handle_mouse
     public :: terminal_panel_in_region
+    public :: terminal_panel_scroll
     public :: terminal_panel_resize
     public :: get_terminal_panel_height
 
@@ -131,6 +132,36 @@ module terminal_panel_module
             type(c_ptr), intent(inout) :: handle
             integer(c_int) :: m
         end function
+
+        subroutine c_grid_scroll_view(handle, delta) &
+            bind(C, name='vt100_grid_scroll_view_f')
+            import :: c_ptr, c_int
+            type(c_ptr), intent(inout) :: handle
+            integer(c_int), intent(in) :: delta
+        end subroutine
+
+        subroutine c_grid_reset_view(handle) &
+            bind(C, name='vt100_grid_reset_view_f')
+            import :: c_ptr
+            type(c_ptr), intent(inout) :: handle
+        end subroutine
+
+        function c_grid_view_offset(handle) &
+            bind(C, name='vt100_grid_view_offset_f') result(o)
+            import :: c_ptr, c_int
+            type(c_ptr), intent(inout) :: handle
+            integer(c_int) :: o
+        end function
+
+        subroutine c_grid_get_view_cell(handle, row, col, &
+                                         ch, fg, bg, attr) &
+            bind(C, name='vt100_grid_get_view_cell_f')
+            import :: c_ptr, c_char, c_int
+            type(c_ptr), intent(inout) :: handle
+            integer(c_int), intent(in) :: row, col
+            character(kind=c_char), intent(out) :: ch
+            integer(c_int), intent(out) :: fg, bg, attr
+        end subroutine
 
         function c_grid_cpr_pending(handle) &
             bind(C, name='vt100_grid_cpr_pending_f') result(p)
@@ -349,9 +380,13 @@ contains
         integer :: cursor_r, cursor_c
         integer(c_int) :: cc_row, cc_col
         character(len=32) :: ansi_seq
+        logical :: at_bottom
 
         if (.not. panel%visible) return
         if (.not. c_associated(panel%grid_handle)) return
+
+        ! Cursor is only meaningful when viewing the live bottom
+        at_bottom = (c_grid_view_offset(panel%grid_handle) == 0)
 
         ! Record on-screen geometry for mouse coordinate mapping
         panel%screen_start_row = start_row
@@ -396,7 +431,7 @@ contains
             do c = 0, grid_cols - 1
                 c_row = int(r, c_int)
                 c_col = int(c, c_int)
-                call c_grid_get_cell(panel%grid_handle, &
+                call c_grid_get_view_cell(panel%grid_handle, &
                     c_row, c_col, ch, c_fg, c_bg, c_attr)
 
                 ! Emit ANSI codes only when style changes
@@ -459,8 +494,8 @@ contains
 
                 ! Reverse-video for a selected cell or the cursor
                 if (cell_selected(panel, r, c) .or. &
-                    (panel%focused .and. r == cursor_r .and. &
-                     c == cursor_c)) then
+                    (at_bottom .and. panel%focused .and. &
+                     r == cursor_r .and. c == cursor_c)) then
                     call terminal_write(ESC_CH // '[7m')
                     call terminal_write(ch)
                     call terminal_write(ESC_CH // '[27m')
@@ -627,11 +662,25 @@ contains
         if (send_len > 0) then
             c_len = int(send_len, c_int)
             res = c_pty_write(panel%pty_handle, send_buf, c_len)
-            ! Typing invalidates any mouse selection highlight
+            ! Typing invalidates selection and snaps view to bottom
             panel%sel_active = .false.
+            if (c_associated(panel%grid_handle)) then
+                call c_grid_reset_view(panel%grid_handle)
+            end if
             handled = .true.
         end if
     end function terminal_panel_handle_key
+
+    ! Scroll the terminal view through scrollback history.
+    ! delta>0 scrolls up (older lines), delta<0 scrolls down.
+    subroutine terminal_panel_scroll(panel, delta)
+        type(terminal_panel_t), intent(inout) :: panel
+        integer, intent(in) :: delta
+        integer(c_int) :: c_delta
+        if (.not. c_associated(panel%grid_handle)) return
+        c_delta = int(delta, c_int)
+        call c_grid_scroll_view(panel%grid_handle, c_delta)
+    end subroutine terminal_panel_scroll
 
     ! Write pasted text to the PTY as a single chunk. When the
     ! child enabled bracketed paste (mode 2004) the text is wrapped
@@ -781,7 +830,7 @@ contains
             do c = c0, c1
                 c_row = int(r, c_int)
                 c_col = int(c, c_int)
-                call c_grid_get_cell(panel%grid_handle, &
+                call c_grid_get_view_cell(panel%grid_handle, &
                     c_row, c_col, ch, c_fg, c_bg, c_attr)
                 line(c - c0 + 1:c - c0 + 1) = ch
             end do
