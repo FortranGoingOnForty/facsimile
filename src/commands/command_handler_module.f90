@@ -21,7 +21,8 @@ module command_handler_module
     use undo_stack_module
     use terminal_io_module, only: terminal_move_cursor, terminal_write, terminal_clear_screen, terminal_flush
     use terminal_panel_module, only: toggle_terminal_panel, &
-        is_terminal_panel_visible, terminal_panel_handle_key
+        is_terminal_panel_visible, terminal_panel_handle_key, &
+        terminal_panel_handle_mouse, terminal_panel_in_region
     use bracket_matching_module, only: find_matching_bracket
     use file_tree_module
     use git_ops_module
@@ -180,6 +181,33 @@ contains
         if (trim(key_str) /= 'ctrl-d' .and. trim(key_str) /= 'alt-c' .and. allocated(search_pattern)) then
             deallocate(search_pattern)
             match_case_sensitive = .true.  ! Reset to default
+        end if
+
+        ! Route mouse events to the terminal panel when visible: a
+        ! click/drag inside the terminal region focuses it and drives
+        ! text selection; a click above it returns focus to the editor.
+        if (is_terminal_panel_visible(editor%terminal_panel) .and. &
+            index(key_str, 'mouse-') == 1) then
+            block
+                character(len=16) :: ev
+                integer :: btn, mrow, mcol
+                logical :: ok, copied
+                call parse_mouse_event(key_str, ev, btn, &
+                    mrow, mcol, ok)
+                if (ok) then
+                    if (terminal_panel_in_region( &
+                        editor%terminal_panel, mrow)) then
+                        call terminal_panel_handle_mouse( &
+                            editor%terminal_panel, trim(ev), &
+                            btn, mrow, mcol, copied)
+                        return
+                    else if (trim(ev) == 'mouse-click') then
+                        ! Click in the editor area: hand focus back
+                        editor%terminal_panel%focused = .false.
+                        editor%terminal_panel%sel_active = .false.
+                    end if
+                end if
+            end block
         end if
 
         ! Route keys to integrated terminal when focused (highest priority)
@@ -3597,6 +3625,35 @@ contains
         cursor%selection_start_line = 1
         cursor%selection_start_col = 1
     end subroutine init_cursor
+
+    ! Parse "mouse-type:button:row:col" into parts. ok=.false. for
+    ! events without the colon form (e.g. mouse-scroll-up).
+    subroutine parse_mouse_event(key_str, event_type, button, &
+        row, col, ok)
+        character(len=*), intent(in) :: key_str
+        character(len=*), intent(out) :: event_type
+        integer, intent(out) :: button, row, col
+        logical, intent(out) :: ok
+        integer :: c1, c2, c3, ios
+
+        ok = .false.
+        button = 0; row = 0; col = 0; event_type = ''
+        c1 = index(key_str, ':')
+        if (c1 == 0) return
+        c2 = index(key_str(c1+1:), ':') + c1
+        if (c2 == c1) return
+        c3 = index(key_str(c2+1:), ':') + c2
+        if (c3 == c2) return
+
+        event_type = key_str(1:c1-1)
+        read(key_str(c1+1:c2-1), '(i10)', iostat=ios) button
+        if (ios /= 0) return
+        read(key_str(c2+1:c3-1), '(i10)', iostat=ios) row
+        if (ios /= 0) return
+        read(key_str(c3+1:), '(i10)', iostat=ios) col
+        if (ios /= 0) return
+        ok = .true.
+    end subroutine parse_mouse_event
 
     subroutine handle_mouse_event_action(key_str, editor, buffer)
         use editor_state_module, only: get_active_pane_indices

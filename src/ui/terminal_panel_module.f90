@@ -11,6 +11,8 @@ module terminal_panel_module
     public :: toggle_terminal_panel, is_terminal_panel_visible
     public :: terminal_panel_poll, terminal_panel_render
     public :: terminal_panel_handle_key
+    public :: terminal_panel_handle_mouse
+    public :: terminal_panel_in_region
     public :: terminal_panel_resize
     public :: get_terminal_panel_height
 
@@ -159,6 +161,16 @@ module terminal_panel_module
         integer :: pty_cols = 0
         logical :: pty_alive = .false.
         logical :: has_new_output = .false.
+        ! On-screen geometry (1-based), recorded each render so
+        ! mouse coordinates can be mapped to grid cells.
+        integer :: screen_start_row = 0  ! separator-bar row
+        integer :: screen_cols = 0
+        ! Mouse text selection (grid coordinates, 0-based).
+        logical :: sel_active = .false.
+        integer :: sel_anchor_row = 0
+        integer :: sel_anchor_col = 0
+        integer :: sel_end_row = 0
+        integer :: sel_end_col = 0
     end type terminal_panel_t
 
 contains
@@ -332,6 +344,10 @@ contains
         if (.not. panel%visible) return
         if (.not. c_associated(panel%grid_handle)) return
 
+        ! Record on-screen geometry for mouse coordinate mapping
+        panel%screen_start_row = start_row
+        panel%screen_cols = cols
+
         grid_rows = panel%pty_rows
         grid_cols = min(panel%pty_cols, cols)
 
@@ -432,9 +448,10 @@ contains
                     end if
                 end if
 
-                ! Render cursor position with reverse video
-                if (panel%focused .and. r == cursor_r .and. &
-                    c == cursor_c) then
+                ! Reverse-video for a selected cell or the cursor
+                if (cell_selected(panel, r, c) .or. &
+                    (panel%focused .and. r == cursor_r .and. &
+                     c == cursor_c)) then
                     call terminal_write(ESC_CH // '[7m')
                     call terminal_write(ch)
                     call terminal_write(ESC_CH // '[27m')
@@ -601,6 +618,8 @@ contains
         if (send_len > 0) then
             c_len = int(send_len, c_int)
             res = c_pty_write(panel%pty_handle, send_buf, c_len)
+            ! Typing invalidates any mouse selection highlight
+            panel%sel_active = .false.
             handled = .true.
         end if
     end function terminal_panel_handle_key
@@ -632,5 +651,172 @@ contains
             res = c_pty_resize(panel%pty_handle, c_rows, c_cols)
         end if
     end subroutine terminal_panel_resize
+
+    ! True if a screen row (1-based) falls inside the panel area
+    function terminal_panel_in_region(panel, screen_row) &
+        result(inside)
+        type(terminal_panel_t), intent(in) :: panel
+        integer, intent(in) :: screen_row
+        logical :: inside
+        inside = .false.
+        if (.not. panel%visible) return
+        if (panel%screen_start_row <= 0) return
+        inside = (screen_row >= panel%screen_start_row)
+    end function terminal_panel_in_region
+
+    ! Normalize the selection so (sr,sc) precedes (er,ec)
+    subroutine selection_bounds(panel, sr, sc, er, ec)
+        type(terminal_panel_t), intent(in) :: panel
+        integer, intent(out) :: sr, sc, er, ec
+        if (panel%sel_anchor_row < panel%sel_end_row .or. &
+            (panel%sel_anchor_row == panel%sel_end_row .and. &
+             panel%sel_anchor_col <= panel%sel_end_col)) then
+            sr = panel%sel_anchor_row
+            sc = panel%sel_anchor_col
+            er = panel%sel_end_row
+            ec = panel%sel_end_col
+        else
+            sr = panel%sel_end_row
+            sc = panel%sel_end_col
+            er = panel%sel_anchor_row
+            ec = panel%sel_anchor_col
+        end if
+    end subroutine selection_bounds
+
+    ! True if grid cell (r,c) is within the active selection
+    function cell_selected(panel, r, c) result(sel)
+        type(terminal_panel_t), intent(in) :: panel
+        integer, intent(in) :: r, c
+        logical :: sel
+        integer :: sr, sc, er, ec
+        sel = .false.
+        if (.not. panel%sel_active) return
+        call selection_bounds(panel, sr, sc, er, ec)
+        if (r < sr .or. r > er) return
+        if (sr == er) then
+            sel = (c >= sc .and. c <= ec)
+        else if (r == sr) then
+            sel = (c >= sc)
+        else if (r == er) then
+            sel = (c <= ec)
+        else
+            sel = .true.
+        end if
+    end function cell_selected
+
+    ! Extract the selected grid text, trimming trailing spaces
+    ! per row and joining rows with newlines.
+    subroutine extract_selection(panel, text)
+        type(terminal_panel_t), intent(inout) :: panel
+        character(len=:), allocatable, intent(out) :: text
+        integer :: sr, sc, er, ec, r, c0, c1, c
+        integer(c_int) :: c_row, c_col, c_fg, c_bg, c_attr
+        character(len=1) :: ch
+        character(len=:), allocatable :: line
+
+        text = ''
+        if (.not. panel%sel_active) return
+        if (.not. c_associated(panel%grid_handle)) return
+        call selection_bounds(panel, sr, sc, er, ec)
+
+        do r = sr, er
+            if (r == sr) then
+                c0 = sc
+            else
+                c0 = 0
+            end if
+            if (r == er) then
+                c1 = ec
+            else
+                c1 = panel%pty_cols - 1
+            end if
+
+            allocate(character(len=c1 - c0 + 1) :: line)
+            do c = c0, c1
+                c_row = int(r, c_int)
+                c_col = int(c, c_int)
+                call c_grid_get_cell(panel%grid_handle, &
+                    c_row, c_col, ch, c_fg, c_bg, c_attr)
+                line(c - c0 + 1:c - c0 + 1) = ch
+            end do
+
+            ! Trim trailing spaces from this row's slice
+            if (r < er) then
+                text = text // trim_trailing(line) // achar(10)
+            else
+                text = text // trim_trailing(line)
+            end if
+            deallocate(line)
+        end do
+    end subroutine extract_selection
+
+    ! Strip trailing spaces but keep at least an empty string
+    function trim_trailing(s) result(out)
+        character(len=*), intent(in) :: s
+        character(len=:), allocatable :: out
+        integer :: n
+        n = len(s)
+        do while (n > 0)
+            if (s(n:n) /= ' ') exit
+            n = n - 1
+        end do
+        out = s(1:n)
+    end function trim_trailing
+
+    ! Handle a mouse event over the terminal panel. srow/scol are
+    ! 1-based screen coordinates. Sets focus, tracks selection, and
+    ! copies to the clipboard on release. Returns copied=.true. if
+    ! text was placed on the clipboard.
+    subroutine terminal_panel_handle_mouse(panel, event_type, &
+        button, srow, scol, copied)
+        use clipboard_module, only: copy_to_clipboard
+        type(terminal_panel_t), intent(inout) :: panel
+        character(len=*), intent(in) :: event_type
+        integer, intent(in) :: button, srow, scol
+        logical, intent(out) :: copied
+        integer :: gr, gc
+        character(len=:), allocatable :: sel_text
+
+        copied = .false.
+        if (.not. panel%visible) return
+
+        ! Map screen coords to grid coords (0-based), clamped
+        gr = srow - (panel%screen_start_row + 1)
+        gc = scol - 1
+        if (gr < 0) gr = 0
+        if (gr > panel%pty_rows - 1) gr = panel%pty_rows - 1
+        if (gc < 0) gc = 0
+        if (gc > panel%pty_cols - 1) gc = panel%pty_cols - 1
+
+        select case(trim(event_type))
+        case('mouse-click')
+            if (button == 0) then
+                ! Focus terminal and start a fresh selection anchor
+                panel%focused = .true.
+                panel%sel_active = .false.
+                panel%sel_anchor_row = gr
+                panel%sel_anchor_col = gc
+                panel%sel_end_row = gr
+                panel%sel_end_col = gc
+            end if
+        case('mouse-drag')
+            if (button == 0) then
+                panel%sel_end_row = gr
+                panel%sel_end_col = gc
+                if (gr /= panel%sel_anchor_row .or. &
+                    gc /= panel%sel_anchor_col) then
+                    panel%sel_active = .true.
+                end if
+            end if
+        case('mouse-release')
+            if (panel%sel_active) then
+                call extract_selection(panel, sel_text)
+                if (len(sel_text) > 0) then
+                    call copy_to_clipboard(sel_text)
+                    copied = .true.
+                end if
+            end if
+        end select
+    end subroutine terminal_panel_handle_mouse
 
 end module terminal_panel_module
