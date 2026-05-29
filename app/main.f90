@@ -125,12 +125,31 @@ program facsimile
             is_workspace_mode = .true.
             call workspace_get_path(trim(arg), workspace_dir)
         else
-            ! File - check if parent directory has a workspace
-            workspace_dir = workspace_detect_from_file(trim(arg))
+            ! File argument: resolve to an absolute path so the
+            ! workspace is deduced from the file's location, not
+            ! the shell's current directory.
+            block
+                character(len=512) :: dir_part, abs_dir, base_part
+                integer :: slash
+                slash = index(trim(arg), '/', back=.true.)
+                if (slash > 0) then
+                    dir_part = arg(1:slash-1)
+                    if (len_trim(dir_part) == 0) dir_part = '/'
+                    base_part = arg(slash+1:len_trim(arg))
+                else
+                    dir_part = '.'
+                    base_part = trim(arg)
+                end if
+                call workspace_get_path(trim(dir_part), abs_dir)
+                if (len_trim(abs_dir) == 0) abs_dir = trim(dir_part)
+                filename = trim(abs_dir) // '/' // trim(base_part)
+            end block
+
+            ! Detect an enclosing workspace by walking parents
+            workspace_dir = workspace_detect_from_file(trim(filename))
             if (len_trim(workspace_dir) > 0) then
                 is_workspace_mode = .true.
             end if
-            filename = arg
         end if
         i = i + 1
     end do
@@ -270,8 +289,26 @@ program facsimile
             end if
         end if
     else
-        ! Single-file mode - use current directory
-        call get_workspace_path(editor%workspace_path)
+        ! Single-file mode with no enclosing workspace: root the
+        ! file tree on the file's own directory (display only; not
+        ! persisted), NOT the shell's current directory.
+        if (len_trim(filename) > 0) then
+            block
+                character(len=512) :: dir_part
+                integer :: slash
+                slash = index(trim(filename), '/', back=.true.)
+                if (slash > 0) then
+                    dir_part = filename(1:slash-1)
+                    if (len_trim(dir_part) == 0) dir_part = '/'
+                else
+                    dir_part = '.'
+                end if
+                editor%workspace_path = trim(dir_part)
+            end block
+        else
+            ! No file argument at all - fall back to CWD
+            call get_workspace_path(editor%workspace_path)
+        end if
     end if
 
     ! Migrate legacy per-workspace backups to global registry
@@ -581,8 +618,11 @@ program facsimile
             should_quit)
     end if
 
-    ! Save workspace state AFTER unsaved-files prompt
-    if (should_quit .and. allocated(editor%workspace_path)) then
+    ! Save workspace state AFTER unsaved-files prompt — only for
+    ! real workspaces, so single-file opens never write a
+    ! .fac/workspace.json into the file's directory.
+    if (should_quit .and. is_workspace_mode .and. &
+        allocated(editor%workspace_path)) then
         call workspace_save_state(editor, editor%workspace_path, workspace_success)
     end if
 
