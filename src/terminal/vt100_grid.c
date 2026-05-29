@@ -578,7 +578,8 @@ static void grid_feed(vt100_grid_t *g, const char *data, int len) {
     }
 }
 
-// Debug: dump grid state
+// Debug: dump grid state (retained for diagnostics)
+__attribute__((unused))
 static void debug_log_grid(vt100_grid_t *g, const char *label) {
     FILE *f = fopen("/tmp/fac_grid.log", "a");
     if (!f) return;

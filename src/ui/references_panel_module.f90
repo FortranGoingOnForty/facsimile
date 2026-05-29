@@ -197,7 +197,6 @@ contains
         integer :: i, visible_index, max_visible
         character(len=256) :: line
         character(len=100) :: header, location_str
-        character(len=:), allocatable :: display_text
 
         if (.not. panel%visible) return
 

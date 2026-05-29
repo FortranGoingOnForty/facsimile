@@ -146,10 +146,11 @@ contains
     subroutine registry_add(original_file, backup_file, timestamp)
         character(len=*), intent(in) :: original_file
         character(len=*), intent(in) :: backup_file, timestamp
-        type(backup_info_t) :: entries(MAX_REGISTRY)
+        type(backup_info_t), allocatable :: entries(:)
         integer :: count, i
         logical :: replaced
 
+        allocate(entries(MAX_REGISTRY))
         call registry_load(entries, count)
 
         ! Replace existing entry for same file
@@ -180,9 +181,10 @@ contains
     !> Remove an entry from the global registry by backup_file
     subroutine registry_remove(backup_file)
         character(len=*), intent(in) :: backup_file
-        type(backup_info_t) :: entries(MAX_REGISTRY)
+        type(backup_info_t), allocatable :: entries(:)
         integer :: count, i, j
 
+        allocate(entries(MAX_REGISTRY))
         call registry_load(entries, count)
 
         ! Find and remove
@@ -283,10 +285,11 @@ contains
         character(len=*), intent(in) :: workspace_path
         character(len=*), intent(in), optional :: file_path
         logical :: has_backups
-        type(backup_info_t) :: entries(MAX_REGISTRY)
+        type(backup_info_t), allocatable :: entries(:)
         integer :: count, i
 
         has_backups = .false.
+        allocate(entries(MAX_REGISTRY))
         call registry_load(entries, count)
 
         if (len_trim(workspace_path) == 0 &
@@ -323,10 +326,11 @@ contains
             backups(:)
         integer, intent(out) :: count
         character(len=*), intent(in), optional :: file_path
-        type(backup_info_t) :: entries(MAX_REGISTRY)
+        type(backup_info_t), allocatable :: entries(:)
         integer :: total, i
         logical :: match
 
+        allocate(entries(MAX_REGISTRY))
         call registry_load(entries, total)
 
         allocate(backups(total))

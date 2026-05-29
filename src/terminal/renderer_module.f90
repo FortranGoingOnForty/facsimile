@@ -238,7 +238,7 @@ contains
 
                 ! Render terminal panel if visible (for panes path)
                 block
-                    integer :: pane_term_h, clr_row
+                    integer :: pane_term_h
                     pane_term_h = get_terminal_panel_height( &
                         editor%terminal_panel)
                     if (pane_term_h > 0) then
@@ -632,7 +632,7 @@ contains
             type(diagnostic_t), allocatable :: line_diagnostics(:)
             character(len=256) :: diag_msg
             character(len=:), allocatable :: file_uri
-            integer :: now_ms
+            integer(int64) :: now_ms
 
             ! Check for timed status message (persists ~2 seconds)
             now_ms = get_time_ms()
@@ -977,7 +977,6 @@ contains
         logical, intent(in), optional :: match_case_sens
         integer :: tree_width, editor_start_col, editor_width
         integer :: separator_col
-        integer :: row
 
         call terminal_hide_cursor()
 
@@ -2223,7 +2222,7 @@ contains
         integer :: row, i, visible_index, max_visible
         character(len=256) :: line
         character(len=100) :: header, location_str
-        character(len=:), allocatable :: display_text, filename_display
+        character(len=:), allocatable :: filename_display
         character(len=1), parameter :: ESC = achar(27)
 
         ! Clear panel area

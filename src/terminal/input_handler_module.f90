@@ -85,7 +85,7 @@ contains
 
     subroutine handle_escape_sequence(key_str)
         character(len=*), intent(out) :: key_str
-        character :: ch, ch1, ch2, ch3, modifier_ch
+        character :: ch, ch1, ch2, ch3
         integer :: char_code, ios
 
         key_str = 'esc'
@@ -529,69 +529,6 @@ contains
             end select
         end if
     end subroutine handle_modified_key
-
-    subroutine handle_alternate_modified_key(key_str, modifier_char)
-        character(len=*), intent(out) :: key_str
-        character, intent(in) :: modifier_char
-        character :: ch
-        integer :: char_code, modifier
-
-        key_str = ''
-
-        ! The modifier_char ('2', '4', '7', '8') indicates the modifier
-        read(modifier_char, '(i1)') modifier
-
-        ! Read the next character - might be the key or a semicolon
-        char_code = terminal_read_char_escape()
-        if (char_code < 0) return
-        ch = achar(char_code)
-
-        ! Check if there's a semicolon (ESC [ 2 ; A format) or direct key (ESC [ 2 A)
-        if (ch == ';') then
-            ! Read the actual key
-            char_code = terminal_read_char_escape()
-            if (char_code < 0) return
-            ch = achar(char_code)
-        end if
-
-        ! Map modifier to key prefix
-        select case(modifier)
-        case(2)  ! Shift
-            key_str = 'shift-'
-        case(3)  ! Alt
-            key_str = 'alt-'
-        case(4)  ! Alt+Shift
-            key_str = 'alt-shift-'
-        case(5)  ! Ctrl
-            key_str = 'ctrl-'
-        case(6)  ! Ctrl+Shift
-            key_str = 'ctrl-shift-'
-        case(7)  ! Alt+Ctrl
-            key_str = 'alt-ctrl-'
-        case(8)  ! Alt+Shift (alternate)
-            key_str = 'alt-shift-'
-        case default
-            return
-        end select
-
-        ! Append the key type
-        select case(ch)
-        case('A')
-            key_str = trim(key_str) // 'up'
-        case('B')
-            key_str = trim(key_str) // 'down'
-        case('C')
-            key_str = trim(key_str) // 'right'
-        case('D')
-            key_str = trim(key_str) // 'left'
-        case('H')
-            key_str = trim(key_str) // 'home'
-        case('F')
-            key_str = trim(key_str) // 'end'
-        case default
-            key_str = ''
-        end select
-    end subroutine handle_alternate_modified_key
 
     subroutine handle_alt_modified_key(key_str)
         character(len=*), intent(out) :: key_str

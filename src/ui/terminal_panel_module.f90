@@ -193,7 +193,7 @@ contains
         type(terminal_panel_t), intent(inout) :: panel
         integer, intent(in) :: screen_rows, screen_cols
         character(len=512) :: shell_path
-        integer :: shell_len, error
+        integer :: shell_len
         integer(c_int) :: c_rows, c_cols, c_shell_len, c_error
 
         if (panel%visible) then
@@ -274,7 +274,6 @@ contains
         type(terminal_panel_t), intent(inout) :: panel
         character(len=1) :: read_buf(READ_BUF_SIZE)
         integer(c_int) :: bytes_read, c_bufsize, c_len
-        integer :: i
 
         if (.not. c_associated(panel%pty_handle)) return
         if (.not. panel%pty_alive) return
