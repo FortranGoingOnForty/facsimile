@@ -381,12 +381,15 @@ contains
         integer(c_int) :: cc_row, cc_col
         character(len=32) :: ansi_seq
         logical :: at_bottom
+        integer :: vo
+        character(len=40) :: scroll_lbl
 
         if (.not. panel%visible) return
         if (.not. c_associated(panel%grid_handle)) return
 
         ! Cursor is only meaningful when viewing the live bottom
-        at_bottom = (c_grid_view_offset(panel%grid_handle) == 0)
+        vo = int(c_grid_view_offset(panel%grid_handle))
+        at_bottom = (vo == 0)
 
         ! Record on-screen geometry for mouse coordinate mapping
         panel%screen_start_row = start_row
@@ -395,17 +398,28 @@ contains
         grid_rows = panel%pty_rows
         grid_cols = min(panel%pty_cols, cols)
 
-        ! Draw separator bar
+        ! Draw separator bar. When scrolled back into history, show a
+        ! bright SCROLLBACK marker so it's unmistakable the view is not
+        ! the live prompt (and the live cursor is hidden).
         call terminal_move_cursor(start_row, 1)
-        call terminal_write(ESC_CH // '[90m')
-        call terminal_write(repeat('-', min(cols, 6)))
-        if (cols > 14) then
-            if (panel%focused) then
-                call terminal_write(' TERMINAL ')
-            else
-                call terminal_write(' terminal ')
+        if (vo > 0 .and. cols > 24) then
+            write(scroll_lbl, '(a,i0,a)') ' SCROLLBACK -', vo, ' '
+            call terminal_write(ESC_CH // '[93m')   ! bright yellow
+            call terminal_write(repeat('-', 6))
+            call terminal_write(trim(scroll_lbl))
+            call terminal_write(repeat('-', &
+                max(0, cols - 6 - len_trim(scroll_lbl))))
+        else
+            call terminal_write(ESC_CH // '[90m')
+            call terminal_write(repeat('-', min(cols, 6)))
+            if (cols > 14) then
+                if (panel%focused) then
+                    call terminal_write(' TERMINAL ')
+                else
+                    call terminal_write(' terminal ')
+                end if
+                call terminal_write(repeat('-', cols - 16))
             end if
-            call terminal_write(repeat('-', cols - 16))
         end if
         call terminal_write(ESC_CH // '[0m')
 
