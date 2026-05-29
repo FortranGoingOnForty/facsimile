@@ -104,7 +104,55 @@ contains
 
         ! Filter out "." and ".." entries
         call filter_dot_entries(files, is_dir, is_exec, count)
+
+        ! List directories before files (preserving alphabetical
+        ! order within each group)
+        call sort_dirs_first(files, is_dir, is_exec, count)
     end subroutine get_file_list
+
+    !> Stable partition: move directories ahead of files while
+    !! keeping the existing (alphabetical) order within each group.
+    subroutine sort_dirs_first(files, is_dir, is_exec, count)
+        character(len=*), dimension(*), intent(inout) :: files
+        logical, dimension(*), intent(inout) :: is_dir, is_exec
+        integer, intent(in) :: count
+        character(len=MAX_PATH), allocatable :: tf(:)
+        logical, allocatable :: td(:), tx(:)
+        integer :: i, j
+
+        if (count <= 1) return
+
+        allocate(tf(count), td(count), tx(count))
+        j = 0
+
+        ! Directories first, in their current order
+        do i = 1, count
+            if (is_dir(i)) then
+                j = j + 1
+                tf(j) = files(i)
+                td(j) = is_dir(i)
+                tx(j) = is_exec(i)
+            end if
+        end do
+
+        ! Then everything else, in their current order
+        do i = 1, count
+            if (.not. is_dir(i)) then
+                j = j + 1
+                tf(j) = files(i)
+                td(j) = is_dir(i)
+                tx(j) = is_exec(i)
+            end if
+        end do
+
+        do i = 1, count
+            files(i) = tf(i)
+            is_dir(i) = td(i)
+            is_exec(i) = tx(i)
+        end do
+
+        deallocate(tf, td, tx)
+    end subroutine sort_dirs_first
 
     !> Filter out "." and ".." from file list
     subroutine filter_dot_entries(files, is_dir, is_exec, count)
