@@ -51,6 +51,7 @@ typedef struct {
     int cpr_pending;
     int pty_fd;         // PTY fd for inline query responses
     int app_cursor_keys; // DECCKM: 1=application mode (ESC O), 0=normal (ESC [)
+    int bracketed_paste; // mode 2004: 1=child wants pastes wrapped in ESC[200~/201~
 } vt100_grid_t;
 
 // ---- Internal helpers ----
@@ -383,6 +384,8 @@ static void handle_csi(vt100_grid_t *g, char final) {
                 g->app_cursor_keys = 1;  // DECCKM
             else if (p1 == 25)
                 g->cursor_visible = 1;
+            else if (p1 == 2004)
+                g->bracketed_paste = 1;  // child wants bracketed paste
             else if (p1 == 1049 || p1 == 47) {
                 // Enter alternate screen — clear grid
                 clear_region(g, 0, 0, g->rows-1, g->cols-1);
@@ -397,6 +400,8 @@ static void handle_csi(vt100_grid_t *g, char final) {
                 g->app_cursor_keys = 0;  // DECCKM off
             else if (p1 == 25)
                 g->cursor_visible = 0;
+            else if (p1 == 2004)
+                g->bracketed_paste = 0;  // bracketed paste off
             else if (p1 == 1049 || p1 == 47) {
                 // Leave alternate screen — clear and reset
                 clear_region(g, 0, 0, g->rows-1, g->cols-1);
@@ -616,6 +621,7 @@ void vt100_grid_create_f(void **handle, int *rows, int *cols) {
     g->cpr_pending = 0;
     g->pty_fd = -1;
     g->app_cursor_keys = 0;
+    g->bracketed_paste = 0;
 
     // Initialize all cells to spaces
     for (int i = 0; i < *rows * *cols; i++) {
@@ -699,6 +705,11 @@ void vt100_grid_get_cursor_f(void **handle, int *row, int *col) {
 int vt100_grid_app_cursor_f(void **handle) {
     vt100_grid_t *g = (vt100_grid_t *)*handle;
     return g ? g->app_cursor_keys : 0;
+}
+
+int vt100_grid_bracketed_paste_f(void **handle) {
+    vt100_grid_t *g = (vt100_grid_t *)*handle;
+    return g ? g->bracketed_paste : 0;
 }
 
 void vt100_grid_set_pty_fd_f(void **handle, int *fd) {

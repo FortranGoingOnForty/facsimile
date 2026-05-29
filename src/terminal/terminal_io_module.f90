@@ -42,6 +42,10 @@ contains
         call buf_write_str(ESC // '[?1049h')
         call c_term_buf_flush()
         call terminal_enable_mouse()
+        ! Bracketed paste: outer terminal wraps pasted text in
+        ! ESC[200~/ESC[201~ so it arrives as one event, not a
+        ! keystroke stream that could auto-execute.
+        call buf_write_str(ESC // '[?2004h')
         call terminal_clear_screen()
         call terminal_hide_cursor()
     end subroutine terminal_init
@@ -49,6 +53,8 @@ contains
     subroutine terminal_cleanup()
         call terminal_show_cursor()
         call terminal_disable_mouse()
+        ! Disable bracketed paste
+        call buf_write_str(ESC // '[?2004l')
         ! Leave alternate screen buffer to restore original shell view
         call buf_write_str(ESC // '[?1049l')
         call c_term_buf_flush()

@@ -11,6 +11,7 @@ module terminal_panel_module
     public :: toggle_terminal_panel, is_terminal_panel_visible
     public :: terminal_panel_poll, terminal_panel_render
     public :: terminal_panel_handle_key
+    public :: terminal_panel_paste
     public :: terminal_panel_handle_mouse
     public :: terminal_panel_in_region
     public :: terminal_panel_resize
@@ -118,6 +119,14 @@ module terminal_panel_module
 
         function c_grid_app_cursor(handle) &
             bind(C, name='vt100_grid_app_cursor_f') result(m)
+            import :: c_ptr, c_int
+            type(c_ptr), intent(inout) :: handle
+            integer(c_int) :: m
+        end function
+
+        function c_grid_bracketed_paste(handle) &
+            bind(C, name='vt100_grid_bracketed_paste_f') &
+            result(m)
             import :: c_ptr, c_int
             type(c_ptr), intent(inout) :: handle
             integer(c_int) :: m
@@ -623,6 +632,43 @@ contains
             handled = .true.
         end if
     end function terminal_panel_handle_key
+
+    ! Write pasted text to the PTY as a single chunk. When the
+    ! child enabled bracketed paste (mode 2004) the text is wrapped
+    ! in ESC[200~/ESC[201~ so the shell inserts it literally
+    ! (highlighted, not executed) instead of running each line.
+    subroutine terminal_panel_paste(panel, text)
+        type(terminal_panel_t), intent(inout) :: panel
+        character(len=*), intent(in) :: text
+        character(len=:), allocatable :: payload
+        integer :: total, off
+        integer(c_int) :: c_len, written
+
+        if (.not. c_associated(panel%pty_handle)) return
+        if (.not. panel%pty_alive) return
+        if (len(text) == 0) return
+
+        if (c_associated(panel%grid_handle) .and. &
+            c_grid_bracketed_paste(panel%grid_handle) /= 0) then
+            payload = ESC_CH // '[200~' // text // &
+                      ESC_CH // '[201~'
+        else
+            payload = text
+        end if
+
+        ! Sending input invalidates any selection highlight
+        panel%sel_active = .false.
+
+        total = len(payload)
+        off = 1
+        do while (off <= total)
+            c_len = int(total - off + 1, c_int)
+            written = c_pty_write(panel%pty_handle, &
+                payload(off:), c_len)
+            if (written <= 0) exit
+            off = off + int(written)
+        end do
+    end subroutine terminal_panel_paste
 
     ! Resize the terminal panel
     subroutine terminal_panel_resize(panel, screen_rows, &

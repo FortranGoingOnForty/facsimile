@@ -5,6 +5,11 @@ module input_handler_module
     private
 
     public :: get_key_input, key_type, mouse_event_t
+    public :: get_paste_text
+
+    ! Holds the most recent bracketed-paste payload; retrieved by
+    ! the command handler when a 'paste' key event is delivered.
+    character(len=:), allocatable :: g_paste_buffer
 
     ! Key type constants
     enum, bind(C)
@@ -82,6 +87,61 @@ contains
         end select
 
     end subroutine get_key_input
+
+    ! Return the most recent bracketed-paste payload
+    function get_paste_text() result(text)
+        character(len=:), allocatable :: text
+        if (allocated(g_paste_buffer)) then
+            text = g_paste_buffer
+        else
+            text = ''
+        end if
+    end function get_paste_text
+
+    ! Read raw bytes after ESC[200~ until the ESC[201~ terminator,
+    ! storing the payload in g_paste_buffer. Emits key_str='paste'.
+    subroutine capture_bracketed_paste(key_str)
+        character(len=*), intent(out) :: key_str
+        integer :: cc, n, cap, misses
+        character(len=:), allocatable :: buf, tmp
+        character(len=6), parameter :: term_seq = ESC // '[201~'
+
+        cap = 256
+        allocate(character(len=cap) :: buf)
+        n = 0
+        misses = 0
+
+        do
+            cc = terminal_read_char_escape()
+            if (cc < 0) then
+                ! Tolerate brief gaps mid-paste; bail if truly idle
+                misses = misses + 1
+                if (misses > 40) exit
+                cycle
+            end if
+            misses = 0
+
+            if (n == cap) then
+                cap = cap * 2
+                allocate(character(len=cap) :: tmp)
+                tmp(1:n) = buf(1:n)
+                call move_alloc(tmp, buf)
+            end if
+            n = n + 1
+            buf(n:n) = achar(cc)
+
+            if (n >= 6) then
+                if (buf(n-5:n) == term_seq) then
+                    n = n - 6  ! strip terminator
+                    exit
+                end if
+            end if
+        end do
+
+        if (allocated(g_paste_buffer)) deallocate(g_paste_buffer)
+        g_paste_buffer = buf(1:n)
+        key_str = 'paste'
+    end subroutine capture_bracketed_paste
 
     subroutine handle_escape_sequence(key_str)
         character(len=*), intent(out) :: key_str
@@ -239,6 +299,13 @@ contains
                             else if (ch == ';') then
                                 ! Modified F9-F12: ESC [ 2 X ; modifier ~
                                 call handle_modified_function_key(key_str, '2', ch3)
+                            else if (ch3 == '0' .and. ch == '0') then
+                                ! ESC [ 2 0 0 ~ : bracketed paste begins
+                                char_code = terminal_read_char_escape()
+                                if (char_code >= 0 .and. &
+                                    achar(char_code) == '~') then
+                                    call capture_bracketed_paste(key_str)
+                                end if
                             end if
                         end if
                     else if (ch3 == ';') then

@@ -22,7 +22,9 @@ module command_handler_module
     use terminal_io_module, only: terminal_move_cursor, terminal_write, terminal_clear_screen, terminal_flush
     use terminal_panel_module, only: toggle_terminal_panel, &
         is_terminal_panel_visible, terminal_panel_handle_key, &
-        terminal_panel_handle_mouse, terminal_panel_in_region
+        terminal_panel_handle_mouse, terminal_panel_in_region, &
+        terminal_panel_paste
+    use input_handler_module, only: get_paste_text
     use bracket_matching_module, only: find_matching_bracket
     use file_tree_module
     use git_ops_module
@@ -219,6 +221,12 @@ contains
                 editor%terminal_panel%focused = .false.
                 ! Buffered clear so next render has no stale content
                 call terminal_write(achar(27) // '[2J')
+                return
+            end if
+            if (trim(key_str) == 'paste') then
+                ! Send pasted text to the shell as one chunk
+                call terminal_panel_paste(editor%terminal_panel, &
+                    get_paste_text())
                 return
             end if
             if (terminal_panel_handle_key(editor%terminal_panel, &
@@ -1958,6 +1966,23 @@ contains
                 is_edit_action = .true.
             end if
 
+        case('paste')
+            ! Bracketed paste into the editor: insert the whole
+            ! block as a single undo unit.
+            block
+                character(len=:), allocatable :: ptext
+                ptext = get_paste_text()
+                if (len(ptext) > 0) then
+                    call save_undo_state(buffer, editor)
+                    call insert_text_block( &
+                        editor%cursors(editor%active_cursor), &
+                        buffer, ptext)
+                    call sync_editor_to_pane(editor)
+                    call update_viewport(editor)
+                    is_edit_action = .true.
+                end if
+            end block
+
         case default
             ! Check for mouse events
             if (index(key_str, 'mouse-') == 1) then
@@ -3297,6 +3322,38 @@ contains
             deallocate(text)
         end if
     end subroutine copy_selection_or_line
+
+    ! Insert a block of text at the cursor, treating LF, CR, and
+    ! CRLF as line breaks. Caller is responsible for the undo state.
+    subroutine insert_text_block(cursor, buffer, text)
+        type(cursor_t), intent(inout) :: cursor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=*), intent(in) :: text
+        integer :: i
+
+        i = 1
+        do while (i <= len(text))
+            if (text(i:i) == char(13)) then
+                call buffer_insert_newline(buffer, cursor)
+                cursor%line = cursor%line + 1
+                cursor%column = 1
+                ! Swallow the LF of a CRLF pair
+                if (i < len(text)) then
+                    if (text(i+1:i+1) == char(10)) i = i + 1
+                end if
+            else if (text(i:i) == char(10)) then
+                call buffer_insert_newline(buffer, cursor)
+                cursor%line = cursor%line + 1
+                cursor%column = 1
+            else
+                call buffer_insert_char(buffer, cursor, text(i:i))
+                cursor%column = cursor%column + 1
+            end if
+            i = i + 1
+        end do
+        cursor%desired_column = cursor%column
+        buffer%modified = .true.
+    end subroutine insert_text_block
 
     subroutine paste_clipboard(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
