@@ -380,6 +380,8 @@ contains
         integer :: i, char_idx, byte_pos, token_idx, char_count, display_col, char_width
         integer :: sel_start_line, sel_start_col, sel_end_line, sel_end_col
         logical :: in_selection, is_bracket_match, is_current_line, is_search_match
+        logical :: is_active_cell, active_sel
+        integer :: acur_line, acur_col
         type(token_t), allocatable :: tokens(:)
         character(len=:), allocatable :: token_color
         integer :: search_matches(2, 50)  ! Up to 50 matches per line (start, end pairs)
@@ -410,6 +412,13 @@ contains
         ! Check if this is the current line
         is_current_line = (line_num == editor%cursors(editor%active_cursor)%line) .and. highlight_current_line
 
+        ! Active cursor cell — drawn as a hollow box (underline, no
+        ! reverse) during a selection so it reads as a caret without
+        ! the clashing solid block over the highlight.
+        active_sel = editor%cursors(editor%active_cursor)%has_selection
+        acur_line = editor%cursors(editor%active_cursor)%line
+        acur_col = editor%cursors(editor%active_cursor)%column
+
         ! Render each UTF-8 character with selection highlighting
         ! char_idx = 1-based character index (for selection logic)
         ! display_col = screen column position (for width tracking)
@@ -420,6 +429,8 @@ contains
         do while (char_idx <= char_count .and. display_col < width)
             in_selection = .false.
             is_bracket_match = .false.
+            is_active_cell = active_sel .and. line_num == acur_line &
+                             .and. char_idx == acur_col
 
             ! Get the UTF-8 character at this position
             utf8_ch = utf8_char_at(line, char_idx)
@@ -505,7 +516,16 @@ contains
             end if
 
             ! Render character with or without highlighting
-            if (in_selection) then
+            if (is_active_cell) then
+                ! Hollow caret: underline (no reverse) marks the active
+                ! end as an empty box within the uniform selection
+                if (len(token_color) > 0) then
+                    call terminal_write(char(27) // '[4m' // token_color // &
+                        utf8_ch // char(27) // '[0m')
+                else
+                    call terminal_write(char(27) // '[4m' // utf8_ch // char(27) // '[0m')
+                end if
+            else if (in_selection) then
                 ! Highlight selected text with reverse video (highest priority)
                 call terminal_write(char(27) // '[7m' // utf8_ch // char(27) // '[0m')
             else if (is_bracket_match) then
@@ -735,6 +755,28 @@ contains
         call terminal_write(char(27) // '[0m')  ! Reset attributes
     end subroutine render_status_bar
 
+    ! True when the active cursor has a selection. During a selection
+    ! the hardware cursor is hidden and a hollow-box caret is drawn by
+    ! the line renderer instead, so the highlight reads uniformly.
+    logical function active_has_sel(editor)
+        type(editor_state_t), intent(in) :: editor
+        active_has_sel = .false.
+        if (allocated(editor%cursors) .and. editor%active_cursor >= 1 .and. &
+            editor%active_cursor <= size(editor%cursors)) then
+            active_has_sel = editor%cursors(editor%active_cursor)%has_selection
+        end if
+    end function active_has_sel
+
+    ! Show or hide the hardware cursor based on selection state
+    subroutine show_caret_unless_selecting(editor)
+        type(editor_state_t), intent(in) :: editor
+        if (active_has_sel(editor)) then
+            call terminal_hide_cursor()
+        else
+            call terminal_show_cursor()
+        end if
+    end subroutine show_caret_unless_selecting
+
     subroutine render_cursor(editor, buffer)
         type(editor_state_t), intent(in) :: editor
         type(buffer_t), intent(in) :: buffer
@@ -826,7 +868,7 @@ contains
             if (screen_row >= min_row .and. screen_row < editor%screen_rows .and. &
                 screen_col >= 1 .and. screen_col <= editor%screen_cols) then
                 call terminal_move_cursor(screen_row, screen_col)
-                call terminal_show_cursor()
+                call show_caret_unless_selecting(editor)
             end if
         else
             ! Single cursor mode
@@ -840,7 +882,7 @@ contains
             if (screen_row >= min_row .and. screen_row < editor%screen_rows .and. &
                 screen_col >= 1 .and. screen_col <= editor%screen_cols) then
                 call terminal_move_cursor(screen_row, screen_col)
-                call terminal_show_cursor()
+                call show_caret_unless_selecting(editor)
             end if
         end if
     end subroutine render_cursor
@@ -1064,7 +1106,7 @@ contains
             else
                 call render_cursor_in_pane(editor, editor_start_col, editor_width)
             end if
-            call terminal_show_cursor()
+            call show_caret_unless_selecting(editor)
         end if
     end subroutine render_screen_with_tree
 
@@ -1813,8 +1855,8 @@ contains
             call terminal_move_cursor(pane_row, pane_col + col_offset)
         end if
 
-        ! Always show cursor
-        call terminal_show_cursor()
+        ! Show the caret unless a selection is active (hollow box then)
+        call show_caret_unless_selecting(editor)
     end subroutine render_cursor_for_panes
 
     subroutine render_cursor_for_panes_with_tree(editor, tree_offset, editor_width)
@@ -1877,7 +1919,7 @@ contains
             call terminal_move_cursor(pane_row, pane_col + col_offset)
         end if
 
-        call terminal_show_cursor()
+        call show_caret_unless_selecting(editor)
     end subroutine render_cursor_for_panes_with_tree
 
     subroutine render_cursor_in_pane(editor, pane_start_col, pane_width)
@@ -1912,7 +1954,7 @@ contains
         if (screen_row >= min_row .and. screen_row < editor%screen_rows .and. &
             screen_col >= pane_start_col .and. screen_col <= pane_start_col + pane_width) then
             call terminal_move_cursor(screen_row, screen_col)
-            call terminal_show_cursor()
+            call show_caret_unless_selecting(editor)
         end if
     end subroutine render_cursor_in_pane
 
