@@ -84,11 +84,16 @@ contains
                     parent_name = parent_name(1:left_w)
                 end if
 
-                ! Write parent item with color
+                ! Active directory stands out (bold + underlined);
+                ! other siblings are dimmed but still visible — dirs in
+                ! blue, files in default. (The old DIM+GREY rendered as
+                ! near-invisible dark-on-dark, hiding all siblings.)
                 if (parent_idx == parent_selected) then
-                    write(output_unit, '(a)', advance='no') DIM // BOLD // BLUE // trim(parent_name) // RESET
+                    write(output_unit, '(a)', advance='no') BOLD // UNDERLINE // BLUE // trim(parent_name) // RESET
+                else if (parent_is_dir(parent_idx)) then
+                    write(output_unit, '(a)', advance='no') DIM // BLUE // trim(parent_name) // RESET
                 else
-                    write(output_unit, '(a)', advance='no') DIM // GREY // trim(parent_name) // RESET
+                    write(output_unit, '(a)', advance='no') DIM // trim(parent_name) // RESET
                 end if
             end if
 
