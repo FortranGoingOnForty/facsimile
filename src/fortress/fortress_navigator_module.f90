@@ -20,6 +20,11 @@ module fortress_navigator_module
     integer :: selected, parent_selected
     integer :: scroll_offset, parent_scroll_offset
 
+    ! Fuzzy search state
+    character(len=32) :: search_buffer = ''
+    integer :: search_len = 0
+    integer(8) :: last_search_tick = 0
+
 contains
 
     !> Main entry point: open fortress navigator and return selection
@@ -119,56 +124,80 @@ contains
             ! Read key using raw terminal input
             ! Note: terminal_read_char is non-blocking, returns -1 if no input
             ios = terminal_read_char()
-            if (ios < 0) then
-                ! No input available - With conditional redraw optimization above,
-                ! we won't redraw unnecessarily, so this tight loop is acceptable
-                cycle
-            end if
+            if (ios < 0) cycle
             key = achar(ios)
 
-            ! Handle input
+            ! Fuzzy search: printable chars are type-to-jump
+            ! (processed before control keys so letters aren't
+            ! consumed by single-key bindings)
+            if ((ios >= ichar('a') .and. ios <= ichar('z')) .or. &
+                (ios >= ichar('A') .and. ios <= ichar('Z')) .or. &
+                (ios >= ichar('0') .and. ios <= ichar('9')) .or. &
+                key == '-' .or. key == '_' .or. key == '.') then
+                call fortress_fuzzy_search(key)
+                cycle
+            end if
+
+            ! Backspace removes last search character
+            if (ios == 127 .or. ios == 8) then
+                if (search_len > 0) then
+                    search_len = search_len - 1
+                    if (search_len > 0) then
+                        call fortress_fuzzy_jump( &
+                            search_buffer(1:search_len))
+                    end if
+                end if
+                cycle
+            end if
+
+            ! Handle control/special keys
             select case (key)
                 case (char(27))  ! ESC
-                    ! Check if arrow key or standalone ESC
+                    ! Clear search if active, then check arrow
+                    search_len = 0; search_buffer = ''
                     if (check_arrow_key(key)) then
-                        call handle_arrow_key(key, selected, current_dir, temp_dir, current_files, &
-                                             current_is_dir, current_count)
+                        call handle_arrow_key(key, selected, &
+                            current_dir, temp_dir, &
+                            current_files, &
+                            current_is_dir, current_count)
                     else
-                        ! Standalone ESC - quit
                         cancelled = .true.
                         running = .false.
                     end if
 
-                case ('q', 'Q')  ! Quit
+                case (char(17))  ! Ctrl-Q — quit
                     cancelled = .true.
                     running = .false.
 
-                case (char(10), char(13))  ! Enter - select current item (file or directory)
+                case (char(10), char(13))  ! Enter
                     if (current_count > 0) then
                         if (current_is_dir(selected)) then
-                            ! Select directory and exit
-                            selected_path = join_path(current_dir, trim(current_files(selected)))
+                            selected_path = join_path(current_dir, &
+                                trim(current_files(selected)))
                             is_directory = .true.
                             running = .false.
                         else
-                            ! Select file and exit
-                            selected_path = join_path(current_dir, trim(current_files(selected)))
+                            selected_path = join_path(current_dir, &
+                                trim(current_files(selected)))
                             is_directory = .false.
                             running = .false.
                         end if
                     end if
 
                 case ('~')  ! Jump to home
-                    call get_environment_variable("HOME", current_dir)
+                    call get_environment_variable("HOME", &
+                        current_dir)
                     selected = 1
                     scroll_offset = 0
+                    search_len = 0; search_buffer = ''
 
                 case ('/')  ! Jump to root
                     current_dir = "/"
                     selected = 1
                     scroll_offset = 0
+                    search_len = 0; search_buffer = ''
 
-                case ('f', 'F')  ! Add current directory to favorites
+                case (char(6))  ! Ctrl-F — add to favorites
                     call add_to_favorites(current_dir, rows)
 
             end select
@@ -286,12 +315,14 @@ contains
                     temp_dir = curr_dir
                     curr_dir = join_path(curr_dir, trim(files(sel)))
                     sel = 1
+                    search_len = 0; search_buffer = ''
                 end if
 
             case ('D')  ! Left arrow - go to parent
                 temp_dir = curr_dir
                 curr_dir = get_parent_path(curr_dir)
                 sel = find_in_parent(temp_dir, files, file_count)
+                search_len = 0; search_buffer = ''
         end select
     end subroutine handle_arrow_key
 
@@ -338,6 +369,81 @@ contains
         ! Pause briefly so user can see message
         call sleep_ms(800)
     end subroutine add_to_favorites
+
+    !> Accumulate a character into the search buffer and jump
+    subroutine fortress_fuzzy_search(ch)
+        character(len=1), intent(in) :: ch
+        integer(8) :: tick, rate
+
+        call system_clock(tick, rate)
+        if (rate <= 0) rate = 1000
+
+        ! Reset buffer after 500ms timeout
+        if (search_len > 0 .and. last_search_tick > 0) then
+            if (tick - last_search_tick > rate / 2) then
+                search_len = 0
+                search_buffer = ''
+            end if
+        end if
+
+        ! Append character
+        if (search_len < 32) then
+            search_len = search_len + 1
+            search_buffer(search_len:search_len) = ch
+            last_search_tick = tick
+            call fortress_fuzzy_jump(search_buffer(1:search_len))
+        end if
+    end subroutine fortress_fuzzy_search
+
+    !> Jump to the best prefix match in the current file list.
+    !! Stays on the current selection if it still matches (no
+    !! bouncing between items with the same prefix).
+    subroutine fortress_fuzzy_jump(pattern)
+        character(len=*), intent(in) :: pattern
+        integer :: i, plen
+        character(len=256) :: name_lower, pat_lower
+
+        plen = len_trim(pattern)
+        if (plen == 0) return
+        if (current_count == 0) return
+
+        pat_lower = to_lower_str(pattern(1:plen))
+
+        ! Check current selection first (sticky)
+        if (selected >= 1 .and. selected <= current_count) then
+            name_lower = to_lower_str( &
+                trim(current_files(selected)))
+            if (len_trim(name_lower) >= plen) then
+                if (name_lower(1:plen) == pat_lower(1:plen)) return
+            end if
+        end if
+
+        ! Scan from current+1 with wrap
+        do i = 1, current_count
+            name_lower = to_lower_str( &
+                trim(current_files(i)))
+            if (len_trim(name_lower) >= plen) then
+                if (name_lower(1:plen) == pat_lower(1:plen)) then
+                    selected = i
+                    return
+                end if
+            end if
+        end do
+    end subroutine fortress_fuzzy_jump
+
+    !> Simple lowercase conversion for short strings
+    function to_lower_str(s) result(low)
+        character(len=*), intent(in) :: s
+        character(len=256) :: low
+        integer :: i, ic
+        low = s
+        do i = 1, len_trim(s)
+            ic = ichar(s(i:i))
+            if (ic >= ichar('A') .and. ic <= ichar('Z')) then
+                low(i:i) = achar(ic + 32)
+            end if
+        end do
+    end function to_lower_str
 
     !> Sleep for specified milliseconds
     subroutine sleep_ms(milliseconds)
