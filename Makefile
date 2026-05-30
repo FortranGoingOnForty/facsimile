@@ -217,6 +217,23 @@ info:
 	@echo "Default CFLAGS: $(CFLAGS)"
 	@echo "Dev CFLAGS: $(CFLAGS_DEV)"
 
+# Installation (supports DESTDIR and PREFIX for packaging)
+PREFIX ?= /usr/local
+BINDIR ?= $(PREFIX)/bin
+DOCDIR ?= $(PREFIX)/share/doc/facsimile
+
+install: $(TARGET)
+	@echo "Installing to $(DESTDIR)$(BINDIR)..."
+	install -d "$(DESTDIR)$(BINDIR)"
+	install -m755 "$(TARGET)" "$(DESTDIR)$(BINDIR)/fac"
+	ln -sf fac "$(DESTDIR)$(BINDIR)/facsimile"
+	install -d "$(DESTDIR)$(DOCDIR)"
+	install -m644 README.md "$(DESTDIR)$(DOCDIR)/README.md"
+
+uninstall:
+	rm -f "$(DESTDIR)$(BINDIR)/fac" "$(DESTDIR)$(BINDIR)/facsimile"
+	rm -rf "$(DESTDIR)$(DOCDIR)"
+
 # Version management targets
 bump-patch:
 	@echo "Current version: $(VERSION)"
@@ -295,4 +312,4 @@ lsp-dev: clean-lsp
 	@echo "Building LSP modules with debug flags..."
 	@$(MAKE) lsp-modules FFLAGS="$(FFLAGS_DEBUG)" CFLAGS="$(CFLAGS_DEV)"
 
-.PHONY: all clean dev debug info bump-patch bump-minor bump-major version release lsp-modules test-lsp test-lsp-editor clean-lsp lsp-dev
+.PHONY: all clean dev debug info install uninstall bump-patch bump-minor bump-major version release lsp-modules test-lsp test-lsp-editor clean-lsp lsp-dev
