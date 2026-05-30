@@ -662,6 +662,120 @@ contains
         case('ctrl-]')
             send_buf(1:1) = achar(29); send_len = 1
 
+        ! Missing ctrl keys used by readline/shells
+        case('ctrl-j')
+            send_buf(1:1) = achar(10); send_len = 1
+        case('ctrl-v')
+            send_buf(1:1) = achar(22); send_len = 1
+        case('ctrl-x')
+            send_buf(1:1) = achar(24); send_len = 1
+        case('ctrl-y')
+            send_buf(1:1) = achar(25); send_len = 1
+
+        ! Alt+letter: ESC followed by the letter byte
+        case('alt-a')
+            send_buf(1:2) = achar(27) // 'a'; send_len = 2
+        case('alt-b')
+            send_buf(1:2) = achar(27) // 'b'; send_len = 2
+        case('alt-c')
+            send_buf(1:2) = achar(27) // 'c'; send_len = 2
+        case('alt-d')
+            send_buf(1:2) = achar(27) // 'd'; send_len = 2
+        case('alt-e')
+            send_buf(1:2) = achar(27) // 'e'; send_len = 2
+        case('alt-f')
+            send_buf(1:2) = achar(27) // 'f'; send_len = 2
+        case('alt-g')
+            send_buf(1:2) = achar(27) // 'g'; send_len = 2
+        case('alt-h')
+            send_buf(1:2) = achar(27) // 'h'; send_len = 2
+        case('alt-i')
+            send_buf(1:2) = achar(27) // 'i'; send_len = 2
+        case('alt-j')
+            send_buf(1:2) = achar(27) // 'j'; send_len = 2
+        case('alt-k')
+            send_buf(1:2) = achar(27) // 'k'; send_len = 2
+        case('alt-l')
+            send_buf(1:2) = achar(27) // 'l'; send_len = 2
+        case('alt-m')
+            send_buf(1:2) = achar(27) // 'm'; send_len = 2
+        case('alt-n')
+            send_buf(1:2) = achar(27) // 'n'; send_len = 2
+        case('alt-o')
+            send_buf(1:2) = achar(27) // 'o'; send_len = 2
+        case('alt-p')
+            send_buf(1:2) = achar(27) // 'p'; send_len = 2
+        case('alt-q')
+            send_buf(1:2) = achar(27) // 'q'; send_len = 2
+        case('alt-r')
+            send_buf(1:2) = achar(27) // 'r'; send_len = 2
+        case('alt-s')
+            send_buf(1:2) = achar(27) // 's'; send_len = 2
+        case('alt-u')
+            send_buf(1:2) = achar(27) // 'u'; send_len = 2
+        case('alt-v')
+            send_buf(1:2) = achar(27) // 'v'; send_len = 2
+        case('alt-w')
+            send_buf(1:2) = achar(27) // 'w'; send_len = 2
+        case('alt-x')
+            send_buf(1:2) = achar(27) // 'x'; send_len = 2
+        case('alt-y')
+            send_buf(1:2) = achar(27) // 'y'; send_len = 2
+        case('alt-z')
+            send_buf(1:2) = achar(27) // 'z'; send_len = 2
+
+        ! Alt+punctuation
+        case('alt-.')
+            send_buf(1:2) = achar(27) // '.'; send_len = 2
+        case('alt-backspace')
+            send_buf(1:2) = achar(27) // achar(127); send_len = 2
+
+        ! Alt+arrows (ESC ESC [ A/B/C/D)
+        case('alt-left')
+            send_buf(1:4) = achar(27) // achar(27) // '[D'
+            send_len = 4
+        case('alt-right')
+            send_buf(1:4) = achar(27) // achar(27) // '[C'
+            send_len = 4
+        case('alt-up')
+            send_buf(1:4) = achar(27) // achar(27) // '[A'
+            send_len = 4
+        case('alt-down')
+            send_buf(1:4) = achar(27) // achar(27) // '[B'
+            send_len = 4
+
+        ! Shift+tab (reverse completion)
+        case('shift-tab')
+            send_buf(1:3) = achar(27) // '[Z'; send_len = 3
+
+        ! Insert key
+        case('insert')
+            send_buf(1:4) = achar(27) // '[2~'; send_len = 4
+
+        ! Function keys
+        case('f1')
+            send_buf(1:5) = achar(27) // '[11~'; send_len = 5
+        case('f2')
+            send_buf(1:5) = achar(27) // '[12~'; send_len = 5
+        case('f3')
+            send_buf(1:5) = achar(27) // '[13~'; send_len = 5
+        case('f4')
+            send_buf(1:5) = achar(27) // '[14~'; send_len = 5
+        case('f6')
+            send_buf(1:5) = achar(27) // '[17~'; send_len = 5
+        case('f7')
+            send_buf(1:5) = achar(27) // '[18~'; send_len = 5
+        case('f8')
+            send_buf(1:5) = achar(27) // '[19~'; send_len = 5
+        case('f9')
+            send_buf(1:5) = achar(27) // '[20~'; send_len = 5
+        case('f10')
+            send_buf(1:5) = achar(27) // '[21~'; send_len = 5
+        case('f11')
+            send_buf(1:5) = achar(27) // '[23~'; send_len = 5
+        case('f12')
+            send_buf(1:5) = achar(27) // '[24~'; send_len = 5
+
         case(' ', 'space')
             send_buf(1:1) = ' '; send_len = 1
 
