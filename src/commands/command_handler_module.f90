@@ -5211,7 +5211,7 @@ contains
                 call handle_fuss_fuzzy_search(key_str)
             end if
 
-        case('enter', 'o')
+        case('enter')
             ! Open file in editor (only for files, not directories)
             if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
                 if (.not. tree_state%selectable_files(tree_state%selected_index)%is_directory) then
