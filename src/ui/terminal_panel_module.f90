@@ -730,19 +730,15 @@ contains
         case('alt-backspace')
             send_buf(1:2) = achar(27) // achar(127); send_len = 2
 
-        ! Alt+arrows (ESC ESC [ A/B/C/D)
+        ! Alt+arrows (CSI modifier form: ESC [ 1 ; 3 A/B/C/D)
         case('alt-left')
-            send_buf(1:4) = achar(27) // achar(27) // '[D'
-            send_len = 4
+            send_buf(1:6) = achar(27) // '[1;3D'; send_len = 6
         case('alt-right')
-            send_buf(1:4) = achar(27) // achar(27) // '[C'
-            send_len = 4
+            send_buf(1:6) = achar(27) // '[1;3C'; send_len = 6
         case('alt-up')
-            send_buf(1:4) = achar(27) // achar(27) // '[A'
-            send_len = 4
+            send_buf(1:6) = achar(27) // '[1;3A'; send_len = 6
         case('alt-down')
-            send_buf(1:4) = achar(27) // achar(27) // '[B'
-            send_len = 4
+            send_buf(1:6) = achar(27) // '[1;3B'; send_len = 6
 
         ! Shift+tab (reverse completion)
         case('shift-tab')
@@ -752,15 +748,16 @@ contains
         case('insert')
             send_buf(1:4) = achar(27) // '[2~'; send_len = 4
 
-        ! Function keys
+        ! Function keys: F1-F4 use SS3 encoding (ESC O P/Q/R/S),
+        ! F5+ use vt220 CSI encoding (ESC [ N N ~)
         case('f1')
-            send_buf(1:5) = achar(27) // '[11~'; send_len = 5
+            send_buf(1:3) = achar(27) // 'OP'; send_len = 3
         case('f2')
-            send_buf(1:5) = achar(27) // '[12~'; send_len = 5
+            send_buf(1:3) = achar(27) // 'OQ'; send_len = 3
         case('f3')
-            send_buf(1:5) = achar(27) // '[13~'; send_len = 5
+            send_buf(1:3) = achar(27) // 'OR'; send_len = 3
         case('f4')
-            send_buf(1:5) = achar(27) // '[14~'; send_len = 5
+            send_buf(1:3) = achar(27) // 'OS'; send_len = 3
         case('f6')
             send_buf(1:5) = achar(27) // '[17~'; send_len = 5
         case('f7')
