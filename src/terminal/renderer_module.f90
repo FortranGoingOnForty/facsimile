@@ -2437,29 +2437,51 @@ contains
         if (search_len == 0) return
         if (tree_state%n_selectable == 0) return
 
-        ! Convert search string to lowercase for case-insensitive matching
         search_lower = to_lower(trim(search_str))
 
-        ! Start searching from current position + 1, wrap around
+        ! If the current selection still matches the (now longer)
+        ! search string, stay put — don't bounce between items
+        ! that share a prefix.
         start_idx = tree_state%selected_index
+        if (start_idx >= 1 .and. &
+            start_idx <= tree_state%n_selectable) then
+            if (associated( &
+                tree_state%selectable_files(start_idx)%node)) then
+                item_name = trim( &
+                    tree_state%selectable_files(start_idx)%node%name)
+            else
+                item_name = trim( &
+                    tree_state%selectable_files(start_idx)%path)
+            end if
+            name_lower = to_lower(trim(item_name))
+            if (len_trim(name_lower) >= search_len) then
+                if (name_lower(1:search_len) == &
+                    search_lower(1:search_len)) then
+                    found = .true.
+                    return
+                end if
+            end if
+        end if
+
+        ! Current item doesn't match — scan forward, wrapping
         do i = 1, tree_state%n_selectable
-            ! Wrap around index
             start_idx = start_idx + 1
             if (start_idx > tree_state%n_selectable) start_idx = 1
 
-            ! Get item name (extract basename from path for files)
-            if (associated(tree_state%selectable_files(start_idx)%node)) then
-                item_name = trim(tree_state%selectable_files(start_idx)%node%name)
+            if (associated( &
+                tree_state%selectable_files(start_idx)%node)) then
+                item_name = trim( &
+                    tree_state%selectable_files(start_idx)%node%name)
             else
-                item_name = trim(tree_state%selectable_files(start_idx)%path)
+                item_name = trim( &
+                    tree_state%selectable_files(start_idx)%path)
             end if
 
-            ! Convert to lowercase for comparison
             name_lower = to_lower(trim(item_name))
 
-            ! Check if name starts with search string (prefix match)
             if (len_trim(name_lower) >= search_len) then
-                if (name_lower(1:search_len) == search_lower(1:search_len)) then
+                if (name_lower(1:search_len) == &
+                    search_lower(1:search_len)) then
                     tree_state%selected_index = start_idx
                     found = .true.
                     return
