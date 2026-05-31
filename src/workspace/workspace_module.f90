@@ -434,6 +434,11 @@ contains
         success = .false.
         workspace_file = trim(dir_path) // "/.fac/workspace.json"
 
+        ! Clear existing tabs so a workspace switch starts clean
+        if (allocated(editor%tabs)) deallocate(editor%tabs)
+        allocate(editor%tabs(0))
+        editor%active_tab_index = 0
+
         ! Open workspace file
         open(newunit=unit, file=workspace_file, status='old', iostat=ios)
         if (ios /= 0) then
