@@ -152,8 +152,7 @@ contains
 
             ! Handle control/special keys
             select case (key)
-                case (char(27))  ! ESC
-                    ! Clear search if active, then check arrow
+                case (char(27))  ! ESC — arrow key or quit
                     search_len = 0; search_buffer = ''
                     if (check_arrow_key(key)) then
                         call handle_arrow_key(key, selected, &
@@ -161,6 +160,7 @@ contains
                             current_files, &
                             current_is_dir, current_count)
                     else
+                        ! Standalone ESC — always quit
                         cancelled = .true.
                         running = .false.
                     end if
@@ -203,23 +203,18 @@ contains
             end select
         end do
 
-        ! Set outputs based on result
+        ! Set outputs based on result. The loop already sets
+        ! selected_path and is_directory correctly for both
+        ! file and directory selections — don't override them.
         if (.not. cancelled) then
-            ! Check if selected_path was already set (file selection in loop)
             if (.not. allocated(selected_path)) then
-                ! Directory selection or other exit - set to current directory
+                ! No explicit selection — treat current directory
+                ! as the selection (e.g. user navigated into it
+                ! via arrows but didn't press Enter on an item)
                 selected_path = trim(current_dir)
-            end if
-            ! Determine if the selected path is a directory
-            if (allocated(selected_path)) then
-                if (selected_path == trim(current_dir)) then
-                    is_directory = .true.
-                else
-                    is_directory = .false.  ! Already set in loop for files
-                end if
+                is_directory = .true.
             end if
         else
-            ! Cancelled - set empty path
             selected_path = ""
             is_directory = .false.
         end if
