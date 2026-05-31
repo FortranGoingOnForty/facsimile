@@ -5981,10 +5981,36 @@ contains
                             call terminal_write("Error: Could not switch to workspace: " // trim(selected_path))
                             call terminal_write("Press any key to continue...")
                             call terminal_flush()
-                            ! Wait for keypress (simple implementation)
                             call get_key_input(key_input, status)
                         else
-                            ! Phase 7: Update file tree if it's active after successful workspace switch
+                            ! Sync the main buffer to the restored
+                            ! workspace tabs, or create a blank
+                            ! Untitled tab for a new/empty workspace.
+                            if (allocated(editor%tabs) .and. &
+                                editor%active_tab_index > 0 .and. &
+                                editor%active_tab_index <= size(editor%tabs)) then
+                                if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
+                                    size(editor%tabs(editor%active_tab_index)%panes) > 0) then
+                                    call copy_buffer(buffer, &
+                                        editor%tabs(editor%active_tab_index)%panes(1)%buffer)
+                                else
+                                    call copy_buffer(buffer, &
+                                        editor%tabs(editor%active_tab_index)%buffer)
+                                end if
+                                if (allocated(editor%tabs(editor%active_tab_index)%filename)) then
+                                    if (allocated(editor%filename)) deallocate(editor%filename)
+                                    editor%filename = editor%tabs(editor%active_tab_index)%filename
+                                end if
+                            else
+                                ! No restored tabs — create blank Untitled
+                                call init_buffer(buffer)
+                                call create_tab(editor, '[Untitled]')
+                                buffer%modified = .false.
+                                if (allocated(editor%filename)) deallocate(editor%filename)
+                                editor%filename = '[Untitled]'
+                            end if
+
+                            ! Update file tree if active
                             if (editor%fuss_mode_active .and. allocated(editor%workspace_path)) then
                                 call refresh_tree_state(tree_state, editor%workspace_path)
                             end if
