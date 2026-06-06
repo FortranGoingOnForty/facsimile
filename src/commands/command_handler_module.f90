@@ -26,6 +26,8 @@ module command_handler_module
         terminal_panel_paste, terminal_panel_scroll
     use input_handler_module, only: get_paste_text
     use bracket_matching_module, only: find_matching_bracket
+    use utf8_module, only: utf8_char_to_byte_index, &
+        utf8_byte_to_char_index, utf8_char_count
     use file_tree_module
     use git_ops_module
     use text_prompt_module, only: show_text_prompt, show_yes_no_prompt
@@ -707,7 +709,7 @@ contains
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
-        case('alt-left', 'ctrl-left')
+        case('alt-left', 'ctrl-left', 'alt-b')
             if (size(editor%cursors) > 1) then
                 do i = 1, size(editor%cursors)
                     call move_cursor_word_left(editor%cursors(i), buffer)
@@ -718,7 +720,7 @@ contains
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
-        case('alt-right', 'ctrl-right')
+        case('alt-right', 'ctrl-right', 'alt-f')
             if (size(editor%cursors) > 1) then
                 do i = 1, size(editor%cursors)
                     call move_cursor_word_right(editor%cursors(i), buffer)
@@ -2239,19 +2241,17 @@ contains
         character(len=:), allocatable :: line
         integer :: pos, line_len
 
-        cursor%has_selection = .false.  ! Clear selection
+        cursor%has_selection = .false.
         line = buffer_get_line(buffer, cursor%line)
         line_len = len(line)
-        pos = cursor%column
 
-        ! Handle empty lines
         if (line_len == 0) then
             if (cursor%line > 1) then
-                ! Move to end of previous line
                 cursor%line = cursor%line - 1
                 if (allocated(line)) deallocate(line)
                 line = buffer_get_line(buffer, cursor%line)
-                cursor%column = len(line) + 1
+                cursor%column = &
+                    utf8_char_count(line) + 1
             else
                 cursor%column = 1
             end if
@@ -2260,41 +2260,40 @@ contains
             return
         end if
 
+        pos = utf8_char_to_byte_index(line, &
+            cursor%column)
+        if (pos == 0) pos = line_len + 1
+
         if (pos > 1 .and. line_len > 0) then
-            ! Simple algorithm: move left one position at a time until we find a word start
-            ! A word start is: a word char that's either at position 1 OR preceded by a non-word char
+            pos = pos - 1
 
-            pos = pos - 1  ! Move left one position
-
-            ! Skip any whitespace
             do while (pos > 1 .and. pos <= line_len)
                 if (line(pos:pos) /= ' ') exit
                 pos = pos - 1
             end do
 
-            ! If we're on a word character, go to the start of this word
             if (pos >= 1 .and. pos <= line_len) then
                 if (is_word_char(line(pos:pos))) then
-                    ! Move to the start of the current word
                     do while (pos > 1)
-                        if (pos-1 < 1) exit  ! Safety check
-                        if (.not. is_word_char(line(pos-1:pos-1))) exit
+                        if (pos-1 < 1) exit
+                        if (.not. is_word_char( &
+                            line(pos-1:pos-1))) exit
                         pos = pos - 1
                     end do
                 end if
             end if
 
-            ! Clamp to valid range
             if (pos < 1) pos = 1
             if (pos > line_len + 1) pos = line_len + 1
 
-            cursor%column = pos
+            cursor%column = &
+                utf8_byte_to_char_index(line, pos)
         else if (cursor%line > 1) then
-            ! Move to end of previous line
             cursor%line = cursor%line - 1
             if (allocated(line)) deallocate(line)
             line = buffer_get_line(buffer, cursor%line)
-            cursor%column = len(line) + 1
+            cursor%column = &
+                utf8_char_count(line) + 1
         else
             cursor%column = 1
         end if
@@ -2307,55 +2306,64 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
         character(len=:), allocatable :: line
-        integer :: pos, line_count, line_len
+        integer :: pos, line_count, line_len, char_len
 
-        cursor%has_selection = .false.  ! Clear selection
+        cursor%has_selection = .false.
         line = buffer_get_line(buffer, cursor%line)
         line_count = buffer_get_line_count(buffer)
         line_len = len(line)
-        pos = cursor%column
+        char_len = utf8_char_count(line)
+
+        pos = utf8_char_to_byte_index(line, cursor%column)
+        if (pos == 0) pos = line_len + 1
 
         if (pos <= line_len) then
-            ! VSCode-style word navigation: stop after each word OR punctuation group
             if (line(pos:pos) == ' ') then
-                ! On whitespace - skip all whitespace
                 do while (pos < line_len)
-                    if (pos+1 <= line_len .and. line(pos+1:pos+1) == ' ') then
+                    if (pos+1 <= line_len .and. &
+                        line(pos+1:pos+1) == ' ') then
                         pos = pos + 1
                     else
                         exit
                     end if
                 end do
-                pos = pos + 1  ! Move past whitespace
+                pos = pos + 1
             else if (is_word_char(line(pos:pos))) then
-                ! We're on a word character - skip to end of this word
                 do while (pos < line_len)
                     if (pos+1 <= line_len) then
-                        if (.not. is_word_char(line(pos+1:pos+1))) exit
+                        if (.not. is_word_char( &
+                            line(pos+1:pos+1))) exit
                     end if
                     pos = pos + 1
                 end do
-                pos = pos + 1  ! Move past the word
+                pos = pos + 1
+                do while (pos <= line_len)
+                    if (line(pos:pos) /= ' ') exit
+                    pos = pos + 1
+                end do
             else
-                ! We're on punctuation - skip to end of punctuation group
-                ! e.g., "##" should be treated as one group
                 do while (pos < line_len)
                     if (pos+1 <= line_len) then
-                        ! Stop if next char is word char or space
-                        if (is_word_char(line(pos+1:pos+1)) .or. line(pos+1:pos+1) == ' ') exit
+                        if (is_word_char( &
+                            line(pos+1:pos+1)) .or. &
+                            line(pos+1:pos+1) == ' ') exit
                     end if
                     pos = pos + 1
                 end do
-                pos = pos + 1  ! Move past punctuation
+                pos = pos + 1
+                do while (pos <= line_len)
+                    if (line(pos:pos) /= ' ') exit
+                    pos = pos + 1
+                end do
             end if
 
-            cursor%column = pos
+            cursor%column = &
+                utf8_byte_to_char_index(line, pos)
         else if (cursor%line < line_count) then
-            ! Move to start of next line
             cursor%line = cursor%line + 1
             cursor%column = 1
         else
-            cursor%column = len(line) + 1
+            cursor%column = char_len + 1
         end if
 
         cursor%desired_column = cursor%column
@@ -4670,7 +4678,6 @@ contains
         character(len=:), allocatable :: line
         integer :: pos, line_len
 
-        ! Initialize selection if not already started
         if (.not. cursor%has_selection) then
             cursor%has_selection = .true.
             cursor%selection_start_line = cursor%line
@@ -4679,15 +4686,14 @@ contains
 
         line = buffer_get_line(buffer, cursor%line)
         line_len = len(line)
-        pos = cursor%column
 
-        ! Handle empty lines
         if (line_len == 0) then
             if (cursor%line > 1) then
                 cursor%line = cursor%line - 1
                 if (allocated(line)) deallocate(line)
                 line = buffer_get_line(buffer, cursor%line)
-                cursor%column = len(line) + 1
+                cursor%column = &
+                    utf8_char_count(line) + 1
             else
                 cursor%column = 1
             end if
@@ -4696,39 +4702,40 @@ contains
             return
         end if
 
-        if (pos > 1 .and. line_len > 0) then
-            ! Simple algorithm: move left one position at a time until we find a word start
-            pos = pos - 1  ! Move left one position
+        pos = utf8_char_to_byte_index(line, &
+            cursor%column)
+        if (pos == 0) pos = line_len + 1
 
-            ! Skip any whitespace
+        if (pos > 1 .and. line_len > 0) then
+            pos = pos - 1
+
             do while (pos > 1 .and. pos <= line_len)
                 if (line(pos:pos) /= ' ') exit
                 pos = pos - 1
             end do
 
-            ! If we're on a word character, go to the start of this word
             if (pos >= 1 .and. pos <= line_len) then
                 if (is_word_char(line(pos:pos))) then
-                    ! Move to the start of the current word
                     do while (pos > 1)
-                        if (pos-1 < 1) exit  ! Safety check
-                        if (.not. is_word_char(line(pos-1:pos-1))) exit
+                        if (pos-1 < 1) exit
+                        if (.not. is_word_char( &
+                            line(pos-1:pos-1))) exit
                         pos = pos - 1
                     end do
                 end if
             end if
 
-            ! Clamp to valid range
             if (pos < 1) pos = 1
             if (pos > line_len + 1) pos = line_len + 1
 
-            cursor%column = pos
+            cursor%column = &
+                utf8_byte_to_char_index(line, pos)
         else if (cursor%line > 1) then
-            ! Move to end of previous line
             cursor%line = cursor%line - 1
             if (allocated(line)) deallocate(line)
             line = buffer_get_line(buffer, cursor%line)
-            cursor%column = len(line) + 1
+            cursor%column = &
+                utf8_char_count(line) + 1
         else
             cursor%column = 1
         end if
@@ -4741,9 +4748,8 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
         character(len=:), allocatable :: line
-        integer :: pos, line_count, line_len
+        integer :: pos, line_count, line_len, char_len
 
-        ! Initialize selection if not already started
         if (.not. cursor%has_selection) then
             cursor%has_selection = .true.
             cursor%selection_start_line = cursor%line
@@ -4753,63 +4759,68 @@ contains
         line = buffer_get_line(buffer, cursor%line)
         line_count = buffer_get_line_count(buffer)
         line_len = len(line)
-        pos = cursor%column
+        char_len = utf8_char_count(line)
 
-        ! Clamp position to valid range
-        if (pos > line_len + 1) pos = line_len + 1
+        pos = utf8_char_to_byte_index(line, &
+            cursor%column)
+        if (pos == 0) pos = line_len + 1
         if (pos < 1) pos = 1
 
         if (line_len == 0 .or. pos > line_len) then
-            ! At end of line or empty line - move to next line
             if (cursor%line < line_count) then
                 cursor%line = cursor%line + 1
                 cursor%column = 1
             else
-                cursor%column = line_len + 1
+                cursor%column = char_len + 1
             end if
         else if (pos >= 1 .and. pos <= line_len) then
-            ! Check what we're currently on (with bounds checking)
-            if (is_word_char(line(pos:pos))) then
-                ! We're on a word character - skip to end of word
+            if (line(pos:pos) == ' ') then
                 do while (pos < line_len)
-                    if (pos+1 <= line_len) then
-                        if (.not. is_word_char(line(pos+1:pos+1))) exit
-                    end if
-                    pos = pos + 1
-                end do
-                pos = pos + 1  ! Move past the word
-            else
-                ! We're on whitespace or punctuation - skip to next word
-                ! Skip non-word characters
-                do while (pos < line_len)
-                    if (pos+1 <= line_len) then
-                        if (is_word_char(line(pos+1:pos+1))) exit
-                    end if
-                    pos = pos + 1
-                end do
-
-                ! If we found a word, move to its end
-                if (pos < line_len .and. pos+1 <= line_len) then
-                    pos = pos + 1  ! Move to start of word
-                    do while (pos < line_len)
-                        if (pos+1 <= line_len) then
-                            if (.not. is_word_char(line(pos+1:pos+1))) exit
-                        end if
+                    if (pos+1 <= line_len .and. &
+                        line(pos+1:pos+1) == ' ') then
                         pos = pos + 1
-                    end do
-                    pos = pos + 1  ! Move past the word
-                else
-                    pos = line_len + 1  ! At end of line
-                end if
+                    else
+                        exit
+                    end if
+                end do
+                pos = pos + 1
+            else if (is_word_char(line(pos:pos))) then
+                do while (pos < line_len)
+                    if (pos+1 <= line_len) then
+                        if (.not. is_word_char( &
+                            line(pos+1:pos+1))) exit
+                    end if
+                    pos = pos + 1
+                end do
+                pos = pos + 1
+                do while (pos <= line_len)
+                    if (line(pos:pos) /= ' ') exit
+                    pos = pos + 1
+                end do
+            else
+                do while (pos < line_len)
+                    if (pos+1 <= line_len) then
+                        if (is_word_char( &
+                            line(pos+1:pos+1)) .or. &
+                            line(pos+1:pos+1) == ' ') &
+                            exit
+                    end if
+                    pos = pos + 1
+                end do
+                pos = pos + 1
+                do while (pos <= line_len)
+                    if (line(pos:pos) /= ' ') exit
+                    pos = pos + 1
+                end do
             end if
 
-            cursor%column = pos
+            cursor%column = &
+                utf8_byte_to_char_index(line, pos)
         else if (cursor%line < line_count) then
-            ! Move to start of next line
             cursor%line = cursor%line + 1
             cursor%column = 1
         else
-            cursor%column = line_len + 1
+            cursor%column = char_len + 1
         end if
 
         cursor%desired_column = cursor%column
@@ -4824,39 +4835,44 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: line
-        integer :: start_col, end_col, line_len
+        integer :: start_col, end_col, line_len, char_len
         logical :: in_word
 
         line = buffer_get_line(buffer, cursor%line)
         line_len = len(line)
-        start_col = cursor%column
-        end_col = start_col
+        char_len = utf8_char_count(line)
 
-        ! If cursor is past end of line, do nothing (can't delete forward from past the line end)
-        if (start_col > line_len + 1) then
+        if (cursor%column > char_len + 1) then
             if (allocated(line)) deallocate(line)
             return
         end if
 
+        start_col = utf8_char_to_byte_index(line, &
+            cursor%column)
+        if (start_col == 0) start_col = line_len + 1
+        end_col = start_col
+
         if (end_col <= line_len) then
-            ! Skip current word (use nested ifs to avoid bounds issues)
-            in_word = is_word_char(line(end_col:end_col))
+            in_word = is_word_char( &
+                line(end_col:end_col))
             do while (end_col < line_len)
-                if (is_word_char(line(end_col:end_col)) .eqv. in_word) then
+                if (is_word_char( &
+                    line(end_col:end_col)) &
+                    .eqv. in_word) then
                     end_col = end_col + 1
                 else
                     exit
                 end if
             end do
 
-            ! Check if we're still on the same word type at end_col
             if (end_col <= line_len) then
-                if (is_word_char(line(end_col:end_col)) .eqv. in_word) then
+                if (is_word_char( &
+                    line(end_col:end_col)) &
+                    .eqv. in_word) then
                     end_col = end_col + 1
                 end if
             end if
 
-            ! Skip trailing whitespace
             do while (end_col <= line_len)
                 if (line(end_col:end_col) == ' ') then
                     end_col = end_col + 1
@@ -4865,9 +4881,10 @@ contains
                 end if
             end do
 
-            ! Delete from cursor to end position
             if (end_col > start_col) then
-                call delete_range(buffer, cursor%line, start_col, cursor%line, end_col - 1)
+                call delete_range(buffer, &
+                    cursor%line, start_col, &
+                    cursor%line, end_col - 1)
                 buffer%modified = .true.
             end if
         end if
@@ -4880,15 +4897,20 @@ contains
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: line
         integer :: start_col, end_col, line_len
+        integer :: byte_cursor
         logical :: in_word
 
         line = buffer_get_line(buffer, cursor%line)
         line_len = len(line)
-        end_col = cursor%column - 1
+
+        byte_cursor = utf8_char_to_byte_index(line, &
+            cursor%column)
+        if (byte_cursor == 0) byte_cursor = line_len + 1
+        end_col = byte_cursor - 1
         start_col = end_col
 
-        ! Skip whitespace to the left (use nested ifs for safety)
-        do while (start_col > 0 .and. start_col <= line_len)
+        do while (start_col > 0 .and. &
+                  start_col <= line_len)
             if (line(start_col:start_col) == ' ') then
                 start_col = start_col - 1
             else
@@ -4896,11 +4918,14 @@ contains
             end if
         end do
 
-        ! Delete word to the left
-        if (start_col > 0 .and. start_col <= line_len) then
-            in_word = is_word_char(line(start_col:start_col))
+        if (start_col > 0 .and. &
+            start_col <= line_len) then
+            in_word = is_word_char( &
+                line(start_col:start_col))
             do while (start_col > 1)
-                if (is_word_char(line(start_col-1:start_col-1)) .eqv. in_word) then
+                if (is_word_char( &
+                    line(start_col-1:start_col-1)) &
+                    .eqv. in_word) then
                     start_col = start_col - 1
                 else
                     exit
@@ -4908,13 +4933,15 @@ contains
             end do
         end if
 
-        ! Clamp to valid 1-based column
         if (start_col < 1) start_col = 1
 
-        ! Delete from start position to cursor
         if (start_col <= end_col) then
-            call delete_range(buffer, cursor%line, start_col, cursor%line, end_col)
-            cursor%column = start_col
+            call delete_range(buffer, &
+                cursor%line, start_col, &
+                cursor%line, end_col)
+            cursor%column = &
+                utf8_byte_to_char_index(line, &
+                start_col)
             cursor%desired_column = cursor%column
             buffer%modified = .true.
         end if
