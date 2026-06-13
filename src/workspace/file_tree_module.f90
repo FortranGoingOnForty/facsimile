@@ -116,8 +116,9 @@ contains
                 exitstat=git_check)
             is_git_repo = (git_check == 0)
 
-        ! First: Get ALL files from filesystem
-        call get_all_files(workspace_path, all_files, n_all_files)
+        ! Get all files from filesystem
+        call get_all_files(workspace_path, &
+            all_files, n_all_files, is_git_repo)
 
         ! Build tree from ALL files (not just dirty ones)
         if (n_all_files > 0) then
@@ -137,9 +138,6 @@ contains
                     allocate(state%files(0))
                     state%n_files = 0
                 end if
-
-                call mark_gitignored_files(state%root, &
-                    workspace_path)
 
                 call collapse_tree_smart(state%root)
             else
@@ -233,10 +231,12 @@ contains
         deallocate(temp_files)
     end subroutine get_dirty_files
 
-    subroutine get_all_files(workspace_path, files, n_files)
+    subroutine get_all_files(workspace_path, files, &
+        n_files, is_git)
         character(len=*), intent(in) :: workspace_path
         type(file_entry_t), allocatable, intent(out) :: files(:)
         integer, intent(out) :: n_files
+        logical, intent(in) :: is_git
         integer :: iostat, unit_num, status_code
         character(len=1024) :: line, cmd
         character(len=1024) :: file_path
@@ -247,19 +247,14 @@ contains
         allocate(temp_files(max_files))
         n_files = 0
 
-        ! Check if this is a git repo first
-        write(cmd, '(A,A,A)') 'cd "', trim(workspace_path), &
-            '" && git rev-parse --git-dir > /dev/null 2>&1'
-        call execute_command_line(trim(cmd), &
-            exitstat=status_code)
-
-        if (status_code == 0) then
+        if (is_git) then
             ! Git repo: use git ls-files for speed
             write(cmd, '(A,A,A)') 'cd "', &
                 trim(workspace_path), &
                 '" && { git ls-files 2>/dev/null; ' // &
-                'git ls-files --others --exclude .git' // &
-                ' 2>/dev/null; } | sort -u > ' // &
+                'git ls-files --others ' // &
+                '--exclude-standard 2>/dev/null; }' // &
+                ' | sort -u > ' // &
                 '/tmp/fac_all_files.txt 2>/dev/null'
             call execute_command_line(trim(cmd), &
                 exitstat=status_code)
@@ -379,8 +374,6 @@ contains
         integer, intent(in) :: n_files
         type(tree_node_t), pointer, intent(out) :: root
         integer :: i
-        integer :: debug_unit
-
         ! Create root
         allocate(root)
         root%name = '.'
@@ -399,22 +392,10 @@ contains
         call sort_tree(root)
 
         ! Mark directories that only contain hidden files
-        i = 0  ! Dummy variable
+        i = 0
         if (mark_empty_directories(root)) then
-            i = 1  ! Dummy assignment to use function result
+            i = 1
         end if
-
-        ! DEBUG: Write tree structure to file (unconditional)
-        open(newunit=debug_unit, file='/tmp/fac_tree_debug.txt', status='replace', action='write')
-        write(debug_unit, '(A)') '=== FINAL TREE STRUCTURE ==='
-        call debug_print_tree(root, '', debug_unit)
-        close(debug_unit)
-
-        ! Also write to a simpler path
-        open(10, file='fac_debug.txt', status='replace', action='write')
-        write(10, '(A)') '=== FINAL TREE STRUCTURE ==='
-        call debug_print_tree(root, '', 10)
-        close(10)
     end subroutine build_tree
 
     ! Recursively mark directories that only contain hidden files
@@ -452,41 +433,6 @@ contains
         node%all_children_hidden = all_hidden
 
     end function mark_empty_directories
-
-    ! Mark files that are gitignored
-    subroutine mark_gitignored_files(root, workspace_path)
-        type(tree_node_t), pointer, intent(inout) :: root
-        character(len=*), intent(in) :: workspace_path
-        character(len=1024) :: cmd
-        integer :: status, iostat, unit_num
-        character(len=512) :: line
-
-        ! Run git check-ignore ONCE with all files (MUCH faster than per-file)
-        ! Create temp file with all file paths, then batch check
-        write(cmd, '(A,A,A)') 'cd "', trim(workspace_path), &
-            '" && git ls-files --others --exclude .git | git check-ignore --stdin > /tmp/fac_ignored_files.txt 2>/dev/null'
-        call execute_command_line(trim(cmd), exitstat=status)
-
-        if (status /= 0) then
-            ! No ignored files or command failed - nothing to mark
-            return
-        end if
-
-        ! Read the list of ignored files
-        open(newunit=unit_num, file='/tmp/fac_ignored_files.txt', status='old', action='read', iostat=iostat)
-        if (iostat /= 0) return
-
-        ! Mark each ignored file in the tree
-        do
-            read(unit_num, '(A)', iostat=iostat) line
-            if (iostat /= 0) exit
-            if (len_trim(line) > 0) then
-                call mark_file_as_ignored(root, trim(line))
-            end if
-        end do
-
-        close(unit_num, status='delete')
-    end subroutine mark_gitignored_files
 
     ! Collapse tree intelligently - only expand directories with dirty files
     subroutine collapse_tree_smart(root)
@@ -535,45 +481,6 @@ contains
             node%expanded = has_dirty  ! Only expand if has dirty files
         end if
     end function has_dirty_files
-
-    recursive subroutine mark_file_as_ignored(node, path)
-        type(tree_node_t), pointer, intent(inout) :: node
-        character(len=*), intent(in) :: path
-        type(tree_node_t), pointer :: child
-
-        if (.not. associated(node)) return
-
-        ! Check if this node matches the path
-        if (node%is_file .and. trim(node%full_path) == trim(path)) then
-            node%is_gitignored = .true.
-            return
-        end if
-
-        ! Recurse to children
-        child => node%first_child
-        do while (associated(child))
-            call mark_file_as_ignored(child, path)
-            child => child%next_sibling
-        end do
-    end subroutine mark_file_as_ignored
-
-    recursive subroutine debug_print_tree(node, prefix, unit)
-        type(tree_node_t), pointer, intent(in) :: node
-        character(len=*), intent(in) :: prefix
-        integer, intent(in) :: unit
-        type(tree_node_t), pointer :: child
-
-        if (.not. associated(node)) return
-
-        write(unit, '(A,A,A,L1,A,L1)') trim(prefix), trim(node%name), &
-            ' is_file=', node%is_file, ' has_next_sib=', associated(node%next_sibling)
-
-        child => node%first_child
-        do while (associated(child))
-            call debug_print_tree(child, prefix // '  ', unit)
-            child => child%next_sibling
-        end do
-    end subroutine debug_print_tree
 
     subroutine add_to_tree(root, path, is_staged, is_unstaged, is_untracked, has_incoming)
         type(tree_node_t), pointer, intent(inout) :: root
