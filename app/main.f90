@@ -44,6 +44,8 @@ program facsimile
     logical :: explicit_lsp_workspace
     character(len=:), allocatable :: selected_path
     integer :: status, argc, rows, cols, i
+    integer :: prev_active_tab, prev_active_pane
+    logical :: active_view_changed
 
 
     ! Get command line arguments
@@ -566,12 +568,35 @@ program facsimile
                 end if
             end if
 
+            ! Remember which view is active so we can detect whether the
+            ! command switched panes/tabs. `buffer` holds the pre-command
+            ! active pane's content; writing it back after a switch would
+            ! clobber the newly focused pane with the old one's text.
+            prev_active_tab = editor%active_tab_index
+            prev_active_pane = 0
+            if (prev_active_tab > 0 .and. prev_active_tab <= size(editor%tabs)) then
+                if (allocated(editor%tabs(prev_active_tab)%panes)) then
+                    prev_active_pane = editor%tabs(prev_active_tab)%active_pane_index
+                end if
+            end if
+
             ! Process input
             call handle_key_command(key_input, editor, buffer, should_quit)
 
-            ! Sync back to active pane and other instances
-            ! Skip buffer sync for cursor-only moves (buffer content unchanged)
-            if (.not. g_cursor_only_move) then
+            ! Did the command move focus to a different tab or pane?
+            active_view_changed = (editor%active_tab_index /= prev_active_tab)
+            if (.not. active_view_changed .and. editor%active_tab_index > 0 .and. &
+                editor%active_tab_index <= size(editor%tabs)) then
+                if (allocated(editor%tabs(editor%active_tab_index)%panes)) then
+                    active_view_changed = &
+                        (editor%tabs(editor%active_tab_index)%active_pane_index /= prev_active_pane)
+                end if
+            end if
+
+            ! Sync back to active pane and other instances. Skip for cursor-only
+            ! moves (buffer unchanged) and for focus switches (a switch does not
+            ! edit; the target pane already holds its own content).
+            if (.not. g_cursor_only_move .and. .not. active_view_changed) then
                 if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
                     if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
                         size(editor%tabs(editor%active_tab_index)%panes) > 0) then
