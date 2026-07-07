@@ -1536,17 +1536,22 @@ contains
                 end do
             end if
 
-            ! Apply pane background for inactive panes
-            if (.not. pane%is_active) then
-                call terminal_write(char(27) // '[48;5;234m')  ! Dark gray background
-            end if
-
-            if (is_current_line .and. pane%is_active) then
-                call terminal_write(char(27) // '[1;33m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
-                                  // char(27) // '[0m ')
+            if (pane%is_active) then
+                ! Active pane: line number on the default background.
+                if (is_current_line) then
+                    call terminal_write(char(27) // '[1;33m' // &
+                        adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) // char(27) // '[0m ')
+                else
+                    call terminal_write(char(27) // '[90m' // &
+                        adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) // char(27) // '[0m ')
+                end if
             else
-                call terminal_write(char(27) // '[90m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
-                                  // char(27) // '[0m ')
+                ! Inactive pane: keep the dim background continuous across the
+                ! whole gutter (number + separator) so no default-background
+                ! stripe shows through, and use a fixed gray (not [90m, whose
+                ! shade varies by terminal and can vanish into the background).
+                call terminal_write(char(27) // '[48;5;234m' // char(27) // '[38;5;245m' // &
+                    adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) // ' ' // char(27) // '[0m')
             end if
 
             ! Continue with pane background for content
