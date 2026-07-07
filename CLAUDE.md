@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Facsimile (`fac`) is a terminal text editor written in modern Fortran with VSCode-style keybindings. It uses a gap buffer for text storage and pure ANSI escape sequences for terminal rendering.
+Facsimile (`fac`) is a terminal text editor written in modern Fortran with VSCode-style keybindings. It uses a gap buffer for text storage and pure ANSI escape sequences for terminal rendering. Low-level terminal/PTY/regex/LSP-process work is done in small C wrappers bound via `iso_c_binding`.
 
 ## Build Commands
 
 ```bash
-# Standard build (recommended)
+# Standard build (recommended) — produces ./fac
 make
 
 # Clean and rebuild
@@ -21,13 +21,17 @@ make dev
 # Debug build with runtime checks
 make debug
 
-# Show compiler info
+# Show detected compiler and flags
 make info
 ```
 
 The Makefile auto-detects the platform:
 - **macOS arm64**: Uses gfortran-15 or flang-new from Homebrew
 - **macOS Intel/Linux**: Uses standard gfortran
+
+An fpm build also exists (`fpm build`, `fpm run -- [filename]`), driven by `fpm.toml`. The Makefile is the primary/release path; fpm is used by `run_tests.sh`. The version in `fpm.toml` is not kept in sync with `VERSION`.
+
+**When adding a new module**: add it to the `SOURCES` list in the Makefile in dependency order (modules must be compiled before modules that `use` them — the `.NOTPARALLEL` directive enforces sequential builds). New C files go in `C_SOURCES`.
 
 ## Version Management
 
@@ -46,6 +50,43 @@ make release
 
 The `VERSION` file is the single source of truth. The Makefile auto-generates `src/version_module.f90`.
 
+## Testing
+
+```bash
+# Full test suite: fpm build + fpm test, then Python/pexpect integration tests
+./run_tests.sh
+
+# Fortran unit tests only (test/*.f90, auto-discovered by fpm)
+fpm test
+
+# Integration tests only (requires: pip3 install pexpect)
+python3 test/integration_test.py
+
+# LSP module tests (compiles and runs tests/lsp/test_json.f90, test_lsp_init.f90)
+make test-lsp
+
+# Smoke-test LSP inside the editor (opens tests/lsp/sample.c, needs clangd)
+make test-lsp-editor
+
+# Manual escape-sequence inspection (what your terminal actually sends)
+./test_keys.sh
+./test_raw_keys.sh
+```
+
+Unit tests live in `test/` (fpm-discovered); LSP test programs, expect scripts, and sample files for various languages live in `tests/lsp/`.
+
+## Running
+
+```bash
+./fac [filename]         # Open file
+./fac <directory>        # Open directory in fortress navigator
+./fac -w <dir>           # Workspace mode
+./fac --version          # Show version
+./fac --help             # Show help
+```
+
+Run with no arguments to get the welcome menu (fortress). Key bindings follow VSCode conventions: Ctrl-S save, Ctrl-Q quit, Ctrl-B file tree, Ctrl-F search, Ctrl-Z undo. Full list in README.md and `docs/KEYBINDINGS.md`.
+
 ## Architecture
 
 ### Core Data Flow
@@ -54,30 +95,29 @@ The `VERSION` file is the single source of truth. The Makefile auto-generates `s
 Input → input_handler_module → command_handler_module → buffer operations → renderer_module → Terminal
 ```
 
+The main loop in `app/main.f90` polls keys, dispatches to `handle_key_command`, pumps LSP server messages, and re-renders.
+
 ### Key Modules
 
 - **`src/buffer/text_buffer_module.f90`**: Gap buffer implementation for text storage. All operations maintain gap position for efficient insertions.
 
 - **`src/editor_state_module.f90`**: Central state management. Contains `editor_state_t` with tabs, panes, cursors, LSP state, and UI panels. This is the "god object" that gets passed around.
 
+- **`src/commands/command_handler_module.f90`**: Main command dispatch (~7,500 lines). Maps key inputs to editor actions.
+
 - **`src/terminal/input_handler_module.f90`**: Raw keyboard input processing. Handles escape sequences, mouse events, and key combinations.
 
 - **`src/terminal/renderer_module.f90`**: Screen rendering with ANSI escape sequences. Handles syntax highlighting, status bar, and split panes.
 
-- **`src/commands/command_handler_module.f90`**: Main command dispatch. Maps key inputs to editor actions (~7000 lines).
+- **C wrappers**: `src/terminal/termios_wrapper.c` (raw mode), `src/terminal/pty_wrapper.c` + `vt100_grid.c` (integrated terminal panel), `src/utils/regex_wrapper.c` (POSIX regex), `src/utils/platform_wrapper.c`, `src/lsp/lsp_process_wrapper.c` (LSP server subprocess I/O).
 
-- **`src/terminal/termios_wrapper.c`**: C wrapper for terminal raw mode via termios.
+### Subsystems
 
-### Module Dependency Order
-
-The Makefile's `SOURCES` list defines the required compilation order. Fortran modules must be compiled before modules that `use` them. The `.NOTPARALLEL` directive enforces sequential builds.
-
-### UTF-8 Handling
-
-All cursor positions use CHARACTER indices, not byte indices. The `utf8_module` provides conversion functions:
-- `utf8_char_count()` - count characters in string
-- `buffer_byte_to_char_col()` - convert byte position to character column
-- `buffer_char_to_byte_col()` - convert character column to byte position
+- **`src/fortress/`**: The welcome menu and full-screen directory navigator shown when `fac` is launched with no file or with a directory argument.
+- **`src/workspace/`**: File tree ("fuss mode", Ctrl-B) with git status integration, plus config, favorites, recents, session/app state, and backup handling.
+- **`src/ui/`**: Modal panels and prompts (command palette, search/replace, completion popup, diagnostics panel, hover/signature tooltips, integrated terminal panel, etc.). Each is its own module with show/handle/render entry points.
+- **`src/undo/`**, **`src/clipboard/`**, **`src/navigation/`**: Undo stack, system clipboard + Emacs-style yank stack, and jump stack.
+- **`src/syntax/syntax_highlighter_module.f90`**: Syntax highlighting.
 
 ### Pane/Tab Architecture
 
@@ -90,12 +130,22 @@ editor_state_t
             └── viewport (scroll position)
 ```
 
+### UTF-8 Handling
+
+All cursor positions use CHARACTER indices, not byte indices. The `utf8_module` provides conversion functions:
+- `utf8_char_count()` - count characters in string
+- `buffer_byte_to_char_col()` - convert byte position to character column
+- `buffer_char_to_byte_col()` - convert character column to byte position
+
 ### LSP Integration
 
 Located in `src/lsp/`. Communicates with language servers via JSON-RPC over stdio:
 - `lsp_server_manager_module.f90` - Server lifecycle management
 - `json_module.f90` - JSON parsing/generation
 - `lsp_client_module.f90` - Request/response handling
+- `server_detection_module.f90` / `server_installer_module.f90` - Detecting and installing servers per language
+
+See `docs/LSP_GUIDE.md` for details.
 
 ## Fortran-Specific Constraints
 
@@ -123,27 +173,3 @@ The project is distributed via three channels:
 - **RPM**: Spec file at `~/rpmbuild/SPECS/facsimile.spec`
 
 When releasing, update all three with the new version and SHA256 hash from the GitHub release tarball.
-
-## Testing
-
-```bash
-# LSP module tests
-make test-lsp
-
-# Test LSP with editor
-make test-lsp-editor
-
-# Manual key testing
-./keytest      # Basic key codes
-./keytest_fac  # With fac's termios settings
-```
-
-## Running
-
-```bash
-./fac [filename]        # Open file
-./fac --version         # Show version
-./fac --help            # Show help
-```
-
-Key bindings follow VSCode conventions: Ctrl-S save, Ctrl-Q quit, Ctrl-B file tree, Ctrl-F search, Ctrl-Z undo.
