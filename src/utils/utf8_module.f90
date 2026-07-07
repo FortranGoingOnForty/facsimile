@@ -196,20 +196,24 @@ contains
     end function utf8_is_valid_start
 
     ! Decode UTF-8 character to Unicode code point
-    pure function utf8_decode_char(str, pos, len) result(code_point)
+    pure function utf8_decode_char(str, pos, nbytes) result(code_point)
         character(len=*), intent(in) :: str
-        integer, intent(in) :: pos, len
+        integer, intent(in) :: pos, nbytes
         integer :: code_point
         integer :: byte1, byte2, byte3, byte4
 
-        if (len < 1 .or. pos + len - 1 > len_trim(str)) then
+        ! Bound by len(str), not len_trim: a trailing space (or a lone ' '
+        ! passed per-char by the renderer) has len_trim 0 and would decode
+        ! as code point 0 - a control char with display width 0. That
+        ! undercount made rendered rows overflow their pane width.
+        if (nbytes < 1 .or. pos + nbytes - 1 > len(str)) then
             code_point = 0
             return
         end if
 
         byte1 = iachar(str(pos:pos))
 
-        select case(len)
+        select case(nbytes)
         case(1)
             code_point = byte1
         case(2)
