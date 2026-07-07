@@ -780,7 +780,7 @@ contains
         integer :: i
         integer :: col_offset, row_offset, min_row
         character(len=:), allocatable :: line
-        character :: cursor_char
+        character(len=:), allocatable :: cursor_char  ! Full UTF-8 char, not one byte
 
         ! Calculate column offset for line numbers
         if (show_line_numbers) then
@@ -804,6 +804,11 @@ contains
             do i = 1, size(editor%cursors)
                 if (i /= editor%active_cursor) then
                     cursor = editor%cursors(i)
+
+                    ! Selection highlight already marks selected cursors; a
+                    ! block caret here would highlight the char past the
+                    ! selection end (e.g. the '.' after a ctrl-d word select)
+                    if (cursor%has_selection) cycle
 
                     ! Calculate screen position from buffer position
                     screen_row = cursor%line - editor%viewport_line + row_offset
@@ -1771,7 +1776,7 @@ contains
         integer :: screen_width, screen_height
         integer :: col_offset
         character(len=:), allocatable :: line
-        character :: cursor_char
+        character(len=:), allocatable :: cursor_char  ! Full UTF-8 char, not one byte
 
         tab_idx = editor%active_tab_index
         if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
@@ -1825,6 +1830,12 @@ contains
                 if (i /= pane%active_cursor) then
                     cursor = pane%cursors(i)
 
+                    ! Skip the block caret when this cursor has a selection:
+                    ! the selection highlight already marks it, and the caret
+                    ! sits one past the selection end (e.g. on the '.' after
+                    ! a ctrl-d word select), reading as a bogus extra highlight
+                    if (cursor%has_selection) cycle
+
                     ! Calculate cursor position within the pane
                     screen_row = pane_row + (cursor%line - pane%viewport_line)
                     screen_col = pane_col + col_offset + (cursor%column - pane%viewport_column)
@@ -1833,9 +1844,10 @@ contains
                     if (screen_row >= pane_row .and. screen_row < pane_row + pane_height .and. &
                         screen_col >= pane_col + col_offset .and. screen_col < pane_col + pane_width) then
                         ! Get the character at this cursor position
+                        ! (cursor%column is a character index, not a byte index)
                         line = buffer_get_line(pane%buffer, cursor%line)
-                        if (cursor%column <= len(line)) then
-                            cursor_char = line(cursor%column:cursor%column)
+                        if (cursor%column <= utf8_char_count(line)) then
+                            cursor_char = utf8_char_at(line, cursor%column)
                         else
                             cursor_char = ' '  ! End of line
                         end if
