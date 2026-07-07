@@ -994,6 +994,11 @@ contains
             else
                 call dedent_current_line(editor%cursors(editor%active_cursor), buffer)
             end if
+            ! Sync so the caret moves on screen this frame; the renderer draws
+            ! the pane's cursors, not the editor-level ones (on a whitespace-only
+            ! line the caret is the only visible sign the dedent fired)
+            call sync_editor_to_pane(editor)
+            call update_viewport(editor)
             is_edit_action = .true.
 
         ! Editing keybinds
