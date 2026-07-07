@@ -2,6 +2,7 @@ module lsp_server_installer_panel_module
     use terminal_io_module
     use server_detection_module, only: detected_server_t, detect_all_servers, check_server_installed
     use server_installer_module, only: run_install_command, install_result_t
+    use clipboard_module, only: copy_to_clipboard
     implicit none
     private
 
@@ -114,6 +115,14 @@ contains
                 end if
                 panel%confirm_mode = .false.
 
+            case('c', 'C')
+                ! Copy the command instead of running it
+                call copy_to_clipboard(trim( &
+                    panel%servers(panel%confirm_server_index)%install_cmd))
+                panel%status_message = 'Copied: ' // &
+                    trim(panel%servers(panel%confirm_server_index)%install_cmd)
+                panel%confirm_mode = .false.
+
             case('n', 'N', 'esc', 'escape')
                 panel%confirm_mode = .false.
                 panel%status_message = ''
@@ -147,12 +156,24 @@ contains
         case('enter')
             ! Only allow install for non-installed servers
             if (panel%num_servers > 0 .and. panel%selected_index <= panel%num_servers) then
-                if (.not. panel%servers(panel%selected_index)%is_installed) then
+                if (panel%servers(panel%selected_index)%is_installed) then
+                    panel%status_message = trim(panel%servers(panel%selected_index)%name) // ' is already installed'
+                else if (panel%servers(panel%selected_index)%install_cmd(1:1) == '#') then
+                    ! No runnable command (manual install) — offer copy instead
+                    panel%status_message = 'Manual install — press c to copy'
+                else
                     panel%confirm_mode = .true.
                     panel%confirm_server_index = panel%selected_index
-                else
-                    panel%status_message = trim(panel%servers(panel%selected_index)%name) // ' is already installed'
                 end if
+            end if
+
+        case('c', 'C')
+            ! Copy the selected server's install command to the clipboard
+            if (panel%num_servers > 0 .and. panel%selected_index <= panel%num_servers) then
+                call copy_to_clipboard(trim( &
+                    panel%servers(panel%selected_index)%install_cmd))
+                panel%status_message = 'Copied: ' // &
+                    trim(panel%servers(panel%selected_index)%install_cmd)
             end if
 
         case('r', 'R')
@@ -297,8 +318,8 @@ contains
             call terminal_write('│ ' // YELLOW // trim(panel%status_message) // RESET)
             call terminal_write(repeat(' ', max(0, content_width - len_trim(panel%status_message) - 4)) // ' │')
         else
-            call terminal_write('│' // DIM // ' ↑↓ Navigate  Enter Install  r Refresh  Esc Close' // RESET)
-            call terminal_write(repeat(' ', content_width - 51) // '│')
+            call terminal_write('│' // DIM // ' ↑↓ Navigate  Enter Install  c Copy  r Refresh  Esc Close' // RESET)
+            call terminal_write(repeat(' ', max(0, content_width - 59)) // '│')
         end if
 
         ! Draw bottom border
@@ -359,13 +380,14 @@ contains
         call terminal_move_cursor(row, start_col)
         call terminal_write('│' // repeat(' ', content_width - 2) // '│')
 
-        ! Yes/No buttons (13 visible chars: [Y]es    [N]o)
+        ! Yes/Copy/No buttons (21 visible chars: [Y]es   [C]opy   [N]o)
         row = row + 1
         call terminal_move_cursor(row, start_col)
-        call terminal_write('│' // repeat(' ', (content_width - 15) / 2))
-        call terminal_write('[' // GREEN // 'Y' // RESET // ']es    ')
+        call terminal_write('│' // repeat(' ', max(0, (content_width - 23) / 2)))
+        call terminal_write('[' // GREEN // 'Y' // RESET // ']es   ')
+        call terminal_write('[' // CYAN // 'C' // RESET // ']opy   ')
         call terminal_write('[' // RED // 'N' // RESET // ']o')
-        call terminal_write(repeat(' ', content_width - 15 - (content_width - 15) / 2) // '│')
+        call terminal_write(repeat(' ', max(0, content_width - 23 - (content_width - 23) / 2)) // '│')
 
         ! Bottom border
         row = row + 1

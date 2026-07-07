@@ -6,6 +6,7 @@ module platform_module
     public :: get_temp_dir, get_home_dir, get_path_separator, is_windows
     public :: get_config_dir, get_cwd
     public :: platform_copy_to_clipboard, platform_paste_from_clipboard
+    public :: detect_system_pkg_mgr, detect_priv_prefix
 
     interface
         subroutine get_temp_dir_c(buffer, buffer_len, result_len) bind(C, name='get_temp_dir_f')
@@ -129,6 +130,87 @@ contains
             text = trim(buffer(1:result_len))
         else
             text = ''
+        end if
+    end function
+
+    ! True if `name` is an executable on PATH (POSIX `command -v`).
+    function have_command(name) result(present)
+        character(len=*), intent(in) :: name
+        logical :: present
+        integer :: st
+
+        call execute_command_line('command -v ' // trim(name) // &
+            ' >/dev/null 2>&1', wait=.true., exitstat=st)
+        present = (st == 0)
+    end function
+
+    ! Detect the system package manager, native managers before brew so a
+    ! Linux box with Homebrew still prefers apt/dnf/etc. Cached after first
+    ! probe. Returns a lowercase token, or 'none' if nothing is found.
+    function detect_system_pkg_mgr() result(mgr)
+        character(len=:), allocatable :: mgr
+        character(len=8), save :: cached = ''
+        logical, save :: done = .false.
+
+        if (done) then
+            mgr = trim(cached)
+            return
+        end if
+
+        if (have_command('pkg')) then
+            cached = 'pkg'
+        else if (have_command('pkg_add')) then
+            cached = 'pkg_add'
+        else if (have_command('apt')) then
+            cached = 'apt'
+        else if (have_command('dnf')) then
+            cached = 'dnf'
+        else if (have_command('yum')) then
+            cached = 'yum'
+        else if (have_command('pacman')) then
+            cached = 'pacman'
+        else if (have_command('zypper')) then
+            cached = 'zypper'
+        else if (have_command('apk')) then
+            cached = 'apk'
+        else if (have_command('xbps-install')) then
+            cached = 'xbps'
+        else if (have_command('brew')) then
+            cached = 'brew'
+        else
+            cached = 'none'
+        end if
+
+        done = .true.
+        mgr = trim(cached)
+    end function
+
+    ! Privilege-escalation prefix for system-package installs: prefer doas,
+    ! then sudo, else empty (assume root / manual). Cached after first probe.
+    ! Includes a trailing space so it can be concatenated directly.
+    function detect_priv_prefix() result(prefix)
+        character(len=:), allocatable :: prefix
+        character(len=8), save :: cached = ''
+        logical, save :: done = .false.
+
+        if (done) then
+            prefix = trim(cached)
+            return
+        end if
+
+        if (have_command('doas')) then
+            cached = 'doas'
+        else if (have_command('sudo')) then
+            cached = 'sudo'
+        else
+            cached = ''
+        end if
+
+        done = .true.
+        if (len_trim(cached) > 0) then
+            prefix = trim(cached) // ' '
+        else
+            prefix = ''
         end if
     end function
 

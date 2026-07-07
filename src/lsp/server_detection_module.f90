@@ -1,4 +1,5 @@
 module server_detection_module
+    use platform_module, only: detect_system_pkg_mgr, detect_priv_prefix
     implicit none
     private
 
@@ -45,6 +46,12 @@ contains
     subroutine init_known_servers(servers)
         type(detected_server_t), intent(inout) :: servers(:)
         integer :: i
+        character(len=:), allocatable :: mgr, priv
+
+        ! Detect the system package manager and privilege prefix once so
+        ! native-package servers resolve to the right command for this host.
+        mgr = detect_system_pkg_mgr()
+        priv = detect_priv_prefix()
 
         i = 1
 
@@ -75,7 +82,7 @@ contains
         ! C/C++ - clangd
         servers(i)%name = 'clangd'
         servers(i)%language = 'C/C++'
-        servers(i)%install_cmd = 'brew install llvm'
+        servers(i)%install_cmd = resolve_native_cmd('clangd', mgr, priv)
         servers(i)%description = 'C/C++ language server from LLVM'
         servers(i)%check_cmd = 'clangd'
         i = i + 1
@@ -115,7 +122,8 @@ contains
         ! Lua - lua-language-server
         servers(i)%name = 'lua-language-server'
         servers(i)%language = 'Lua'
-        servers(i)%install_cmd = 'brew install lua-language-server'
+        servers(i)%install_cmd = &
+            resolve_native_cmd('lua-language-server', mgr, priv)
         servers(i)%description = 'Lua language server by sumneko'
         servers(i)%check_cmd = 'lua-language-server'
         i = i + 1
@@ -131,7 +139,7 @@ contains
         ! Java - jdtls
         servers(i)%name = 'jdtls'
         servers(i)%language = 'Java'
-        servers(i)%install_cmd = 'brew install jdtls'
+        servers(i)%install_cmd = resolve_native_cmd('jdtls', mgr, priv)
         servers(i)%description = 'Eclipse JDT Language Server'
         servers(i)%check_cmd = 'jdtls'
         i = i + 1
@@ -171,7 +179,7 @@ contains
         ! Zig - zls
         servers(i)%name = 'zls'
         servers(i)%language = 'Zig'
-        servers(i)%install_cmd = 'brew install zls'
+        servers(i)%install_cmd = resolve_native_cmd('zls', mgr, priv)
         servers(i)%description = 'Zig language server'
         servers(i)%check_cmd = 'zls'
         i = i + 1
@@ -179,7 +187,8 @@ contains
         ! Swift - sourcekit-lsp
         servers(i)%name = 'sourcekit-lsp'
         servers(i)%language = 'Swift'
-        servers(i)%install_cmd = '# Included with Xcode'
+        servers(i)%install_cmd = &
+            resolve_native_cmd('sourcekit-lsp', mgr, priv)
         servers(i)%description = 'Swift/Obj-C language server'
         servers(i)%check_cmd = 'sourcekit-lsp'
         i = i + 1
@@ -195,7 +204,8 @@ contains
         ! Terraform - terraform-ls
         servers(i)%name = 'terraform-ls'
         servers(i)%language = 'Terraform'
-        servers(i)%install_cmd = 'brew install hashicorp/tap/terraform-ls'
+        servers(i)%install_cmd = &
+            resolve_native_cmd('terraform-ls', mgr, priv)
         servers(i)%description = 'Terraform language server'
         servers(i)%check_cmd = 'terraform-ls'
         i = i + 1
@@ -217,13 +227,121 @@ contains
         installed = .false.
         if (len_trim(cmd_name) == 0) return
 
-        ! Use 'which' on Unix to check if command exists
-        ! Redirect output to /dev/null to suppress it
-        check_command = 'which ' // trim(cmd_name) // ' > /dev/null 2>&1'
+        ! POSIX `command -v` (portable across Linux/BSD/macOS shells)
+        check_command = 'command -v ' // trim(cmd_name) // ' > /dev/null 2>&1'
 
         call execute_command_line(trim(check_command), wait=.true., exitstat=exit_status)
 
         installed = (exit_status == 0)
     end function check_server_installed
+
+    ! Build a system-package install command for the detected manager.
+    ! The privilege prefix is applied to every manager except brew, which
+    ! refuses to run as root.
+    function pkg_cmd(mgr, priv, pkg_name) result(cmd)
+        character(len=*), intent(in) :: mgr, priv, pkg_name
+        character(len=:), allocatable :: cmd
+
+        select case (trim(mgr))
+        case ('brew')
+            cmd = 'brew install ' // trim(pkg_name)
+        case ('apt')
+            cmd = trim(priv) // 'apt install -y ' // trim(pkg_name)
+        case ('dnf')
+            cmd = trim(priv) // 'dnf install -y ' // trim(pkg_name)
+        case ('yum')
+            cmd = trim(priv) // 'yum install -y ' // trim(pkg_name)
+        case ('pacman')
+            cmd = trim(priv) // 'pacman -S --noconfirm ' // trim(pkg_name)
+        case ('zypper')
+            cmd = trim(priv) // 'zypper install -y ' // trim(pkg_name)
+        case ('apk')
+            cmd = trim(priv) // 'apk add ' // trim(pkg_name)
+        case ('pkg')
+            cmd = trim(priv) // 'pkg install -y ' // trim(pkg_name)
+        case ('pkg_add')
+            cmd = trim(priv) // 'pkg_add ' // trim(pkg_name)
+        case ('xbps')
+            cmd = trim(priv) // 'xbps-install -Sy ' // trim(pkg_name)
+        case default
+            cmd = ''
+        end select
+    end function pkg_cmd
+
+    ! Resolve a native-package server to the right command for this host.
+    ! Package names differ per manager; where no native package exists the
+    ! result is a '# ...' hint pointing at the upstream install page rather
+    ! than a command that would fail.
+    function resolve_native_cmd(name, mgr, priv) result(cmd)
+        character(len=*), intent(in) :: name, mgr, priv
+        character(len=:), allocatable :: cmd
+        character(len=:), allocatable :: pkg
+
+        cmd = ''
+
+        select case (trim(name))
+        case ('clangd')
+            select case (trim(mgr))
+            case ('brew', 'pkg', 'pkg_add')
+                pkg = 'llvm'
+            case ('apt')
+                pkg = 'clangd'
+            case ('dnf', 'yum', 'xbps')
+                pkg = 'clang-tools-extra'
+            case ('pacman')
+                pkg = 'clang'
+            case ('zypper')
+                pkg = 'clang-tools'
+            case ('apk')
+                pkg = 'clang-extra-tools'
+            case default
+                pkg = ''
+            end select
+            if (len(pkg) > 0) cmd = pkg_cmd(mgr, priv, pkg)
+            if (len_trim(cmd) == 0) &
+                cmd = '# see releases.llvm.org (install clangd)'
+
+        case ('lua-language-server')
+            select case (trim(mgr))
+            case ('brew', 'dnf', 'pacman', 'pkg')
+                cmd = pkg_cmd(mgr, priv, 'lua-language-server')
+            case default
+                cmd = '# see github.com/LuaLS/lua-language-server'
+            end select
+
+        case ('zls')
+            if (trim(mgr) == 'brew') then
+                cmd = pkg_cmd(mgr, priv, 'zls')
+            else
+                cmd = '# see github.com/zigtools/zls/releases'
+            end if
+
+        case ('jdtls')
+            if (trim(mgr) == 'brew') then
+                cmd = pkg_cmd(mgr, priv, 'jdtls')
+            else
+                cmd = '# see github.com/eclipse-jdtls/eclipse.jdt.ls'
+            end if
+
+        case ('terraform-ls')
+            if (trim(mgr) == 'brew') then
+                cmd = 'brew install hashicorp/tap/terraform-ls'
+            else
+                cmd = &
+                    '# see developer.hashicorp.com/terraform/language-server'
+            end if
+
+        case ('sourcekit-lsp')
+            if (trim(mgr) == 'brew') then
+                cmd = '# included with Xcode'
+            else
+                cmd = &
+                    '# included with the Swift toolchain (swift.org/install)'
+            end if
+
+        case default
+            cmd = ''
+        end select
+    end function resolve_native_cmd
 
 end module server_detection_module
