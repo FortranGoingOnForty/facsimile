@@ -38,6 +38,7 @@ module renderer_module
     logical :: show_line_numbers = .true.
     logical :: highlight_current_line = .true.
     integer, parameter :: LINE_NUMBER_WIDTH = 5  ! Width for line number display
+    integer, parameter :: TAB_WIDTH = 4  ! Columns a tab expands to when rendering
 
     ! Bracket matching state
     integer :: bracket_line = 0
@@ -424,6 +425,14 @@ contains
             ! Get the UTF-8 character at this position
             utf8_ch = utf8_char_at(line, char_idx)
             char_width = utf8_display_width(utf8_ch)
+
+            ! Expand tabs to spaces so display_col stays exact (a raw tab would
+            ! advance the terminal to its own tab stop and desync the count).
+            if (utf8_ch == char(9)) then
+                char_width = min(TAB_WIDTH - mod(display_col, TAB_WIDTH), &
+                                 width - display_col)
+                utf8_ch = repeat(' ', char_width)
+            end if
 
             ! Get byte position for token lookup
             byte_pos = utf8_char_to_byte_index(line, char_idx)
@@ -1592,6 +1601,16 @@ contains
             ! Get the UTF-8 character at this position
             utf8_ch = utf8_char_at(line, char_idx)
             char_width = utf8_display_width(utf8_ch)
+
+            ! Expand tabs to spaces so column accounting is exact. Writing a raw
+            ! tab would let the terminal advance to its own tab stop (which
+            ! depends on the pane's absolute column), desyncing display_col and
+            ! spilling the line into the neighbouring pane.
+            if (utf8_ch == char(9)) then
+                char_width = min(TAB_WIDTH - mod(display_col, TAB_WIDTH), &
+                                 content_width - display_col)
+                utf8_ch = repeat(' ', char_width)
+            end if
 
             ! Check if this position is in any cursor's selection (use pane's cursors)
             if (allocated(pane%cursors)) then
