@@ -457,6 +457,24 @@ program facsimile
 
     ! Main event loop
     do while (running)
+        ! Detect terminal resize and reflow. The size is otherwise only read
+        ! at startup, so resizing would leave stale dimensions — e.g. split
+        ! panes cramped into a sub-region with the rest of the screen unused.
+        call terminal_get_size(rows, cols)
+        if (rows > 0 .and. cols > 0 .and. &
+            (rows /= editor%screen_rows .or. cols /= editor%screen_cols)) then
+            editor%screen_rows = rows
+            editor%screen_cols = cols
+            call update_viewport(editor)
+            if (editor%fuss_mode_active) then
+                call render_screen_with_tree(buffer, editor, &
+                    allocated(search_pattern), match_case_sensitive)
+            else
+                call render_screen(buffer, editor, &
+                    allocated(search_pattern), match_case_sensitive)
+            end if
+        end if
+
         ! Process any LSP messages
         call process_server_messages(editor%lsp_manager)
 
