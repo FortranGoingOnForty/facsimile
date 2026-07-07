@@ -134,14 +134,19 @@ contains
     end function
 
     ! True if `name` is an executable on PATH (POSIX `command -v`).
+    ! cmdstat is mandatory: on shells where `command -v <missing>` exits 127
+    ! (e.g. FreeBSD /bin/sh), execute_command_line would otherwise abort the
+    ! program with "Invalid command line" instead of reporting not-found.
     function have_command(name) result(present)
         character(len=*), intent(in) :: name
         logical :: present
-        integer :: st
+        integer :: st, cmd_st
 
+        st = -1
+        cmd_st = 0
         call execute_command_line('command -v ' // trim(name) // &
-            ' >/dev/null 2>&1', wait=.true., exitstat=st)
-        present = (st == 0)
+            ' >/dev/null 2>&1', wait=.true., exitstat=st, cmdstat=cmd_st)
+        present = (cmd_st == 0 .and. st == 0)
     end function
 
     ! Detect the system package manager, native managers before brew so a
@@ -193,20 +198,19 @@ contains
         character(len=8), save :: cached = ''
         logical, save :: done = .false.
 
-        if (done) then
-            prefix = trim(cached)
-            return
+        ! Cache the bare tool name (no trailing space); the space is appended
+        ! on every return so the cached path matches the first-call path.
+        if (.not. done) then
+            if (have_command('doas')) then
+                cached = 'doas'
+            else if (have_command('sudo')) then
+                cached = 'sudo'
+            else
+                cached = ''
+            end if
+            done = .true.
         end if
 
-        if (have_command('doas')) then
-            cached = 'doas'
-        else if (have_command('sudo')) then
-            cached = 'sudo'
-        else
-            cached = ''
-        end if
-
-        done = .true.
         if (len_trim(cached) > 0) then
             prefix = trim(cached) // ' '
         else

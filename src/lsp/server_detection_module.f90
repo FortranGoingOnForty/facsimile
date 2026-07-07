@@ -222,17 +222,22 @@ contains
         character(len=*), intent(in) :: cmd_name
         logical :: installed
         character(len=512) :: check_command
-        integer :: exit_status
+        integer :: exit_status, cmd_status
 
         installed = .false.
         if (len_trim(cmd_name) == 0) return
 
-        ! POSIX `command -v` (portable across Linux/BSD/macOS shells)
+        ! POSIX `command -v` (portable across Linux/BSD/macOS shells).
+        ! cmdstat is mandatory: on FreeBSD /bin/sh `command -v <missing>`
+        ! exits 127, which aborts execute_command_line unless cmdstat is
+        ! present. Treat any non-zero cmdstat/exit as "not installed".
         check_command = 'command -v ' // trim(cmd_name) // ' > /dev/null 2>&1'
 
-        call execute_command_line(trim(check_command), wait=.true., exitstat=exit_status)
+        cmd_status = 0
+        call execute_command_line(trim(check_command), wait=.true., &
+            exitstat=exit_status, cmdstat=cmd_status)
 
-        installed = (exit_status == 0)
+        installed = (cmd_status == 0 .and. exit_status == 0)
     end function check_server_installed
 
     ! Build a system-package install command for the detected manager.
@@ -246,23 +251,23 @@ contains
         case ('brew')
             cmd = 'brew install ' // trim(pkg_name)
         case ('apt')
-            cmd = trim(priv) // 'apt install -y ' // trim(pkg_name)
+            cmd = priv //'apt install -y ' // trim(pkg_name)
         case ('dnf')
-            cmd = trim(priv) // 'dnf install -y ' // trim(pkg_name)
+            cmd = priv //'dnf install -y ' // trim(pkg_name)
         case ('yum')
-            cmd = trim(priv) // 'yum install -y ' // trim(pkg_name)
+            cmd = priv //'yum install -y ' // trim(pkg_name)
         case ('pacman')
-            cmd = trim(priv) // 'pacman -S --noconfirm ' // trim(pkg_name)
+            cmd = priv //'pacman -S --noconfirm ' // trim(pkg_name)
         case ('zypper')
-            cmd = trim(priv) // 'zypper install -y ' // trim(pkg_name)
+            cmd = priv //'zypper install -y ' // trim(pkg_name)
         case ('apk')
-            cmd = trim(priv) // 'apk add ' // trim(pkg_name)
+            cmd = priv //'apk add ' // trim(pkg_name)
         case ('pkg')
-            cmd = trim(priv) // 'pkg install -y ' // trim(pkg_name)
+            cmd = priv //'pkg install -y ' // trim(pkg_name)
         case ('pkg_add')
-            cmd = trim(priv) // 'pkg_add ' // trim(pkg_name)
+            cmd = priv //'pkg_add ' // trim(pkg_name)
         case ('xbps')
-            cmd = trim(priv) // 'xbps-install -Sy ' // trim(pkg_name)
+            cmd = priv //'xbps-install -Sy ' // trim(pkg_name)
         case default
             cmd = ''
         end select
