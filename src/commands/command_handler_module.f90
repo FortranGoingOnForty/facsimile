@@ -5069,14 +5069,14 @@ contains
         integer :: i
 
         select case(trim(key_str))
-        case('j', 'down')
-            ! Move down in tree
+        case('down')
+            ! Move down in tree (arrows only; j/k are fuzzy-search)
             call tree_move_down(tree_state)
             ! Update viewport to keep selection visible (estimate ~18 visible lines)
             call update_tree_viewport(tree_state, 18)
 
-        case('k', 'up')
-            ! Move up in tree
+        case('up')
+            ! Move up in tree (arrows only; j/k are fuzzy-search)
             call tree_move_up(tree_state)
             ! Update viewport to keep selection visible (estimate ~18 visible lines)
             call update_tree_viewport(tree_state, 18)
