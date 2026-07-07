@@ -200,8 +200,9 @@ contains
             if (check_string_start(highlighter, line, i)) then
                 call process_string(highlighter, line, tokens, token_count, i)
 
-            ! Check for number
-            else if (is_digit(ch) .or. (ch == '.' .and. i + 1 <= line_len .and. is_digit(line(i+1:i+1)))) then
+            ! Check for number (guard the next-char peek: .and. is not
+            ! short-circuit, so a trailing '.' would read out of bounds)
+            else if (is_digit(ch) .or. (ch == '.' .and. next_is_digit(line, i, line_len))) then
                 call process_number(line, tokens, token_count, i)
 
             ! Check for word (keyword, type, identifier)
@@ -384,6 +385,16 @@ contains
         res = is_alpha(ch) .or. is_digit(ch) .or. ch == '_'
     end function is_alnum
 
+    ! True if the character after position i is a digit. Bounds-guarded so
+    ! it never reads past the end of the line (.and. is not short-circuit).
+    function next_is_digit(line, i, line_len) result(res)
+        character(len=*), intent(in) :: line
+        integer, intent(in) :: i, line_len
+        logical :: res
+        res = .false.
+        if (i + 1 <= line_len) res = is_digit(line(i+1:i+1))
+    end function next_is_digit
+
     function is_operator_char(highlighter, ch) result(res)
         type(syntax_highlighter_t), intent(in) :: highlighter
         character(len=1), intent(in) :: ch
@@ -545,8 +556,10 @@ contains
             else if ((line(pos:pos) == 'e' .or. line(pos:pos) == 'E') .and. .not. has_e) then
                 has_e = .true.
                 pos = pos + 1
-                if (pos <= len(line) .and. (line(pos:pos) == '+' .or. line(pos:pos) == '-')) then
-                    pos = pos + 1
+                if (pos <= len(line)) then
+                    if (line(pos:pos) == '+' .or. line(pos:pos) == '-') then
+                        pos = pos + 1
+                    end if
                 end if
             else
                 exit
@@ -570,8 +583,11 @@ contains
 
         start_pos = pos
 
-        ! Find end of word
-        do while (pos <= len(line) .and. is_alnum(line(pos:pos)))
+        ! Find end of word. NB: Fortran does not short-circuit .and., so the
+        ! bounds check and the substring access must be in separate tests or
+        ! line(pos:pos) is evaluated out of bounds when the word ends the line.
+        do while (pos <= len(line))
+            if (.not. is_alnum(line(pos:pos))) exit
             pos = pos + 1
         end do
         end_pos = pos - 1
