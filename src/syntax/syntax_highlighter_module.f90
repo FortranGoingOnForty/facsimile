@@ -97,13 +97,28 @@ contains
     subroutine detect_language(highlighter, filename)
         type(syntax_highlighter_t), intent(inout) :: highlighter
         character(len=*), intent(in) :: filename
-        character(len=:), allocatable :: extension
-        integer :: dot_pos
+        character(len=:), allocatable :: extension, basename
+        integer :: dot_pos, slash_pos
+
+        ! Strip directory to get the basename
+        slash_pos = index(filename, '/', back=.true.)
+        if (slash_pos > 0) then
+            basename = filename(slash_pos+1:)
+        else
+            basename = filename
+        end if
+
+        ! Extensionless filenames matched by name (Makefile, etc.)
+        select case(basename)
+        case('Makefile', 'makefile', 'GNUmakefile')
+            call load_makefile_syntax(highlighter)
+            return
+        end select
 
         ! Find file extension
-        dot_pos = index(filename, '.', back=.true.)
+        dot_pos = index(basename, '.', back=.true.)
         if (dot_pos > 0) then
-            extension = filename(dot_pos:)
+            extension = basename(dot_pos:)
 
             select case(extension)
             case('.f90', '.f95', '.f03', '.f08', '.f18')
@@ -126,6 +141,8 @@ contains
                 call load_bash_syntax(highlighter)
             case('.md', '.markdown')
                 call load_markdown_syntax(highlighter)
+            case('.mk', '.mak')
+                call load_makefile_syntax(highlighter)
             case default
                 highlighter%enabled = .false.
             end select
@@ -979,6 +996,45 @@ contains
 
         highlighter%enabled = .true.
     end subroutine load_markdown_syntax
+
+    ! Makefile support
+    subroutine load_makefile_syntax(highlighter)
+        type(syntax_highlighter_t), intent(inout) :: highlighter
+
+        highlighter%current_lang%name = "makefile"
+        highlighter%current_lang%case_sensitive = .true.
+
+        ! Directives and built-in functions treated as keywords
+        allocate(highlighter%current_lang%keywords(24))
+        highlighter%current_lang%keywords = [ &
+            "include     ", "-include    ", "sinclude    ", "define      ", &
+            "endef       ", "ifdef       ", "ifndef      ", "ifeq        ", &
+            "ifneq       ", "else        ", "endif       ", "export      ", &
+            "unexport    ", "override    ", "vpath       ", "wildcard    ", &
+            "patsubst    ", "foreach     ", "shell       ", "subst       ", &
+            "filter      ", "notdir      ", "basename    ", "addprefix   " &
+        ]
+
+        ! Automatic variables and common special targets as types
+        allocate(highlighter%current_lang%types(12))
+        highlighter%current_lang%types = [ &
+            "$@          ", "$<          ", "$^          ", "$?          ", &
+            "$*          ", "$+          ", "$|          ", ".PHONY      ", &
+            ".DEFAULT    ", ".PRECIOUS   ", ".SUFFIXES   ", ".NOTPARALLEL" &
+        ]
+
+        highlighter%current_lang%comment_single = "#"
+
+        allocate(highlighter%current_lang%string_delimiters(2))
+        highlighter%current_lang%string_delimiters = ['"', "'"]
+
+        allocate(highlighter%current_lang%operators(7))
+        highlighter%current_lang%operators = [ &
+            "=   ", ":=  ", "?=  ", "+=  ", ":   ", "@   ", "|   " &
+        ]
+
+        highlighter%enabled = .true.
+    end subroutine load_makefile_syntax
 
     ! Handle multiline comment start (when we encounter /* on a line)
     subroutine process_multiline_comment_start(highlighter, line, tokens, token_count, pos)
