@@ -20,6 +20,8 @@ module renderer_module
                                                   is_lsp_server_installer_panel_visible
     use terminal_panel_module, only: is_terminal_panel_visible, &
         terminal_panel_render, get_terminal_panel_height
+    use completion_popup_module, only: render_completion_popup
+    use ghost_text_module, only: ghost_is_active, ghost_suffix
     implicit none
     private
 
@@ -257,6 +259,8 @@ contains
                     call terminal_hide_cursor()
                     call terminal_flush()
                 else
+                    call render_ghost_text(editor, buffer)
+                    call render_completion_popup(editor%completion_popup)
                     call render_cursor_for_panes(editor)
                 end if
                 return  ! Exit after rendering panes
@@ -359,6 +363,8 @@ contains
             call terminal_hide_cursor()
             call terminal_flush()
         else
+            call render_ghost_text(editor, buffer)
+            call render_completion_popup(editor%completion_popup)
             ! Position cursor for panes or regular view
             if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0 .and. &
                 editor%active_tab_index <= size(editor%tabs)) then
@@ -1862,6 +1868,115 @@ contains
         ! Show the caret unless a selection is active (hollow box then)
         call show_caret_unless_selecting(editor)
     end subroutine render_cursor_for_panes
+
+    ! Draw the inline shadow-text suggestion (dim gray) at the active cursor.
+    ! Only rendered when the cursor sits at end-of-line, so everything to the
+    ! right of it is fill space that can be safely overdrawn. Drawn just before
+    ! cursor placement each frame; the next full redraw self-clears stale text.
+    ! Screen-position math mirrors render_cursor_for_panes / render_cursor so
+    ! the ghost stays aligned with the caret.
+    subroutine render_ghost_text(editor, buffer)
+        use editor_state_module, only: pane_t
+        type(editor_state_t), intent(in) :: editor
+        type(buffer_t), intent(in) :: buffer
+        type(pane_t) :: pane
+        type(cursor_t) :: cursor
+        character(len=:), allocatable :: suffix
+        integer :: tab_idx, pane_idx, col_offset
+        integer :: screen_row, screen_col, avail
+        integer :: screen_width, screen_height
+        integer :: pane_col, pane_row, pane_width, pane_height
+        integer :: row_offset, min_row
+        logical :: use_panes
+
+        if (.not. ghost_is_active(editor%ghost)) return
+        if (editor%completion_popup%visible) return
+
+        suffix = ghost_suffix(editor%ghost)
+        if (len(suffix) == 0) return
+
+        if (show_line_numbers) then
+            col_offset = LINE_NUMBER_WIDTH + 1
+        else
+            col_offset = 0
+        end if
+
+        ! Width available to editor content (matches cursor rendering)
+        screen_width = editor%screen_cols
+        if (editor%diagnostics_panel%visible) then
+            screen_width = screen_width - editor%diagnostics_panel%width
+        end if
+        if (editor%references_panel%visible) then
+            screen_width = screen_width - editor%references_panel%width
+        end if
+
+        use_panes = .false.
+        tab_idx = editor%active_tab_index
+        if (size(editor%tabs) > 0 .and. tab_idx >= 1 .and. tab_idx <= size(editor%tabs)) then
+            use_panes = allocated(editor%tabs(tab_idx)%panes)
+        end if
+
+        if (use_panes) then
+            pane_idx = editor%tabs(tab_idx)%active_pane_index
+            if (pane_idx < 1 .or. pane_idx > size(editor%tabs(tab_idx)%panes)) return
+            pane = editor%tabs(tab_idx)%panes(pane_idx)
+            if (.not. allocated(pane%cursors)) return
+            if (size(pane%cursors) /= 1) return
+            if (pane%active_cursor < 1 .or. pane%active_cursor > size(pane%cursors)) return
+            cursor = pane%cursors(pane%active_cursor)
+
+            ! Suggestion must still be anchored at the cursor, at end of line
+            if (cursor%line /= editor%ghost%anchor_line .or. &
+                cursor%column /= editor%ghost%anchor_col) return
+            if (cursor%column <= buffer_get_line_char_count(pane%buffer, cursor%line)) return
+
+            ! Pane geometry (same formulas as render_cursor_for_panes)
+            screen_height = editor%screen_rows - 2
+            pane_col = 1 + int(pane%x_start * real(screen_width))
+            pane_width = int((pane%x_end - pane%x_start) * real(screen_width))
+            if (pane_idx < size(editor%tabs(tab_idx)%panes)) then
+                pane_width = pane_width - 1  ! Reserve space for separator
+            end if
+            pane_row = 2 + int(pane%y_start * real(screen_height))
+            pane_height = int((pane%y_end - pane%y_start) * real(screen_height))
+            if (size(editor%tabs(tab_idx)%panes) > 1) then
+                pane_row = pane_row + 1
+                pane_height = pane_height - 1
+            end if
+
+            screen_row = pane_row + (cursor%line - pane%viewport_line)
+            screen_col = pane_col + col_offset + (cursor%column - pane%viewport_column)
+            if (screen_row < pane_row .or. screen_row >= pane_row + pane_height) return
+            if (screen_col < pane_col + col_offset .or. screen_col >= pane_col + pane_width) return
+            avail = pane_col + pane_width - screen_col
+        else
+            if (size(editor%cursors) /= 1) return
+            cursor = editor%cursors(editor%active_cursor)
+            if (cursor%line /= editor%ghost%anchor_line .or. &
+                cursor%column /= editor%ghost%anchor_col) return
+            if (cursor%column <= buffer_get_line_char_count(buffer, cursor%line)) return
+
+            if (size(editor%tabs) > 0) then
+                row_offset = 2
+                min_row = 2
+            else
+                row_offset = 1
+                min_row = 1
+            end if
+            screen_row = cursor%line - editor%viewport_line + row_offset
+            screen_col = cursor%column - editor%viewport_column + 1 + col_offset
+            if (screen_row < min_row .or. screen_row >= editor%screen_rows) return
+            if (screen_col < 1 .or. screen_col > screen_width) return
+            avail = screen_width - screen_col + 1
+        end if
+
+        if (avail < 1) return
+        if (len(suffix) > avail) suffix = suffix(1:avail)
+
+        call terminal_move_cursor(screen_row, screen_col)
+        call terminal_write(char(27) // '[2m' // char(27) // '[90m' // &
+                            suffix // char(27) // '[0m')
+    end subroutine render_ghost_text
 
     subroutine render_cursor_for_panes_with_tree(editor, tree_offset, editor_width)
         use editor_state_module, only: pane_t

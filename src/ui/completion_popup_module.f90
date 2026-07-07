@@ -11,6 +11,7 @@ module completion_popup_module
     public :: completion_popup_t
     public :: init_completion_popup, cleanup_completion_popup
     public :: show_completion_popup, hide_completion_popup
+    public :: render_completion_popup
     public :: handle_completion_response
     public :: navigate_completion_up, navigate_completion_down
     public :: get_selected_completion, is_completion_visible
@@ -167,14 +168,24 @@ contains
     subroutine show_completion_popup(popup, row, col)
         type(completion_popup_t), intent(inout) :: popup
         integer, intent(in) :: row, col
-        integer :: i, display_row, start_idx, end_idx
-        character(len=256) :: line
 
         if (popup%item_count == 0) return
 
         popup%row = row
         popup%col = col
         popup%visible = .true.
+
+        call render_completion_popup(popup)
+    end subroutine show_completion_popup
+
+    ! Draw the popup at its stored position. Also called from render_screen
+    ! each frame so the box survives full-screen redraws.
+    subroutine render_completion_popup(popup)
+        type(completion_popup_t), intent(in) :: popup
+        integer :: i, display_row, start_idx, end_idx
+        character(len=256) :: line
+
+        if (.not. popup%visible .or. popup%item_count == 0) return
 
         ! Calculate visible range
         start_idx = popup%scroll_offset + 1
@@ -210,7 +221,7 @@ contains
         call terminal_move_cursor(display_row, popup%col)
         call terminal_write("└" // repeat("─", popup%width - 2) // "┘")
 
-    end subroutine show_completion_popup
+    end subroutine render_completion_popup
 
     subroutine hide_completion_popup(popup)
         type(completion_popup_t), intent(inout) :: popup

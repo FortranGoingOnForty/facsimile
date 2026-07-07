@@ -124,6 +124,7 @@ SOURCES = src/version_module.f90 \
           src/ui/workspace_symbols_panel_module.f90 \
           src/ui/lsp_server_installer_panel_module.f90 \
           src/ui/terminal_panel_module.f90 \
+          src/ui/ghost_text_module.f90 \
           src/editor_state_module.f90 \
           src/undo/undo_stack_module.f90 \
           src/workspace/file_tree_module.f90 \

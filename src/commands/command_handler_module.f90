@@ -45,6 +45,9 @@ module command_handler_module
                                         handle_completion_response, navigate_completion_up, &
                                         navigate_completion_down, get_selected_completion, &
                                         is_completion_visible
+    use ghost_text_module, only: ghost_clear, ghost_clear_pending, &
+                                 ghost_get_prefix_at_cursor, ghost_update_from_buffer, &
+                                 ghost_apply_lsp_result, ghost_suffix, ghost_is_active
     use hover_tooltip_module, only: show_hover_tooltip, hide_hover_tooltip, &
                                      handle_hover_response, is_hover_visible
     use diagnostics_panel_module, only: toggle_panel => toggle_diagnostics_panel, &
@@ -359,6 +362,20 @@ contains
                 return
             end if
         end if
+
+        ! Ghost text: tab/right accepts the shadow suggestion; any other key
+        ! clears it before normal dispatch (recomputed in the edit tail below).
+        ! Placed after all panel routing so panels keep key priority.
+        if (ghost_is_active(editor%ghost) .and. &
+            .not. is_completion_visible(editor%completion_popup) .and. &
+            size(editor%cursors) == 1 .and. &
+            .not. editor%cursors(editor%active_cursor)%has_selection) then
+            if (trim(key_str) == 'tab' .or. trim(key_str) == 'right') then
+                call accept_ghost_suggestion(editor, buffer)
+                return
+            end if
+        end if
+        call ghost_clear(editor%ghost)
 
         select case(trim(key_str))
         ! File operations
@@ -1271,7 +1288,7 @@ contains
 
         ! LSP features
         case('ctrl-space')
-            ! Trigger code completion
+            ! Trigger code completion (popup shows when the response arrives)
             block
                 integer :: completion_server
                 completion_server = get_lsp_server_for_cap(editor, CAP_COMPLETION)
@@ -1283,17 +1300,26 @@ contains
                         lsp_line = editor%cursors(editor%active_cursor)%line - 1
                         lsp_char = editor%cursors(editor%active_cursor)%column - 1
 
+                        ! Popup and ghost text never coexist
+                        call ghost_clear(editor%ghost)
+                        call ghost_clear_pending(editor%ghost)
+
+                        ! Flush debounced document sync so completions are
+                        ! computed against the current text
+                        block
+                            use document_sync_module, only: flush_pending_changes
+                            call flush_pending_changes( &
+                                editor%tabs(editor%active_tab_index)%document_sync, &
+                                editor%lsp_manager, .true.)
+                        end block
+
+                        saved_editor_for_callback => editor
+
                         request_id = request_completion(editor%lsp_manager, &
                             completion_server, &
                             editor%tabs(editor%active_tab_index)%filename, &
-                            lsp_line, lsp_char)
-
-                        if (request_id > 0) then
-                            ! Show popup at cursor position (will populate when response arrives)
-                            call show_completion_popup(editor%completion_popup, &
-                                editor%cursors(editor%active_cursor)%line - editor%viewport_line + 2, &
-                                editor%cursors(editor%active_cursor)%column - editor%viewport_column + 1)
-                        end if
+                            lsp_line, lsp_char, &
+                            handle_popup_completion_response_wrapper)
                     end block
                 end if
             end block
@@ -2055,6 +2081,9 @@ contains
         ! Notify LSP of document changes if buffer was modified
         if (is_edit_action) then
             call notify_buffer_change(editor, buffer)
+            ! Recompute the ghost suggestion after the LSP sync so a
+            ! completion request sees the up-to-date document
+            call update_ghost_suggestion(editor, buffer, key_str)
         end if
     end subroutine handle_key_command
 
@@ -6209,9 +6238,192 @@ contains
         if (allocated(full_content)) deallocate(full_content)
     end subroutine notify_buffer_change
 
-    ! TODO: Handle LSP textDocument/definition response
-    ! This needs to be integrated with the main event loop callback system
-    ! The response parsing logic is ready but needs proper callback integration
+    ! Insert the not-yet-typed remainder of the ghost suggestion at the cursor
+    subroutine accept_ghost_suggestion(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: suffix
+        integer :: i
+
+        ! Revalidate: the suggestion must still be anchored at the live
+        ! cursor, which must still sit at end of line
+        if (editor%cursors(editor%active_cursor)%line /= editor%ghost%anchor_line .or. &
+            editor%cursors(editor%active_cursor)%column /= editor%ghost%anchor_col .or. &
+            editor%cursors(editor%active_cursor)%column <= &
+                buffer_get_line_char_count(buffer, editor%cursors(editor%active_cursor)%line)) then
+            call ghost_clear(editor%ghost)
+            return
+        end if
+
+        suffix = ghost_suffix(editor%ghost)
+        if (len(suffix) == 0) then
+            call ghost_clear(editor%ghost)
+            return
+        end if
+
+        if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+        do i = 1, len(suffix)
+            call buffer_insert_char(buffer, editor%cursors(editor%active_cursor), suffix(i:i))
+            editor%cursors(editor%active_cursor)%column = &
+                editor%cursors(editor%active_cursor)%column + 1
+        end do
+        editor%cursors(editor%active_cursor)%desired_column = &
+            editor%cursors(editor%active_cursor)%column
+        call sync_editor_to_pane(editor)
+        call update_viewport(editor)
+        call ghost_clear(editor%ghost)
+
+        ! We return before handle_key_command's common tail, so update the
+        ! edit-coalescing state and notify LSP here
+        last_action_was_edit = .true.
+        call notify_buffer_change(editor, buffer)
+    end subroutine accept_ghost_suggestion
+
+    ! Recompute the shadow suggestion after an edit keystroke. The word-scan
+    ! result shows immediately; an LSP completion request may upgrade it when
+    ! the async response arrives.
+    subroutine update_ghost_suggestion(editor, buffer, key_str)
+        type(editor_state_t), intent(inout), target :: editor
+        type(buffer_t), intent(inout), target :: buffer
+        character(len=*), intent(in) :: key_str
+        character(len=:), allocatable :: prefix
+        integer :: completion_server, request_id, cur_line, cur_col
+        logical :: trigger_key
+
+        if (.not. editor%ghost%enabled) return
+
+        ! Only word-char typing and backspace produce/refresh a suggestion
+        trigger_key = .false.
+        if (len_trim(key_str) == 1) then
+            trigger_key = is_word_char(key_str(1:1))
+        else if (trim(key_str) == 'backspace') then
+            trigger_key = .true.
+        end if
+        if (.not. trigger_key) return
+
+        if (size(editor%cursors) /= 1) return
+        if (editor%cursors(editor%active_cursor)%has_selection) return
+        if (is_completion_visible(editor%completion_popup)) return
+
+        cur_line = editor%cursors(editor%active_cursor)%line
+        cur_col = editor%cursors(editor%active_cursor)%column
+
+        ! Only suggest at end of line (a mid-line ghost would shift real text)
+        if (cur_col <= buffer_get_line_char_count(buffer, cur_line)) return
+
+        call ghost_get_prefix_at_cursor(buffer, cur_line, cur_col, prefix)
+        if (len(prefix) == 0) return
+
+        ! Instant suggestion from words in this file
+        call ghost_update_from_buffer(editor%ghost, buffer, prefix, cur_line, cur_col)
+
+        ! Ask LSP for a (better) completion; the response is validated and
+        ! applied asynchronously by the wrapper below
+        completion_server = get_lsp_server_for_cap(editor, CAP_COMPLETION)
+        if (completion_server > 0) then
+            ! Document sync is debounced (~500ms); force-flush so the server
+            ! completes against the just-edited document, not a stale one
+            block
+                use document_sync_module, only: flush_pending_changes
+                call flush_pending_changes( &
+                    editor%tabs(editor%active_tab_index)%document_sync, &
+                    editor%lsp_manager, .true.)
+            end block
+            saved_editor_for_callback => editor
+            saved_buffer_for_callback => buffer
+            request_id = request_completion(editor%lsp_manager, completion_server, &
+                editor%tabs(editor%active_tab_index)%filename, &
+                cur_line - 1, cur_col - 1, &
+                handle_ghost_completion_response_wrapper)
+            if (request_id > 0) then
+                editor%ghost%pending_request_id = request_id
+                editor%ghost%pending_prefix = prefix
+            end if
+        end if
+    end subroutine update_ghost_suggestion
+
+    ! Wrapper callback matching the LSP callback signature (ghost text)
+    subroutine handle_ghost_completion_response_wrapper(request_id, response)
+        use lsp_protocol_module, only: lsp_message_t
+        integer, intent(in) :: request_id
+        type(lsp_message_t), intent(in) :: response
+
+        if (associated(saved_editor_for_callback) .and. &
+            associated(saved_buffer_for_callback)) then
+            call handle_ghost_completion_response_impl(saved_editor_for_callback, &
+                saved_buffer_for_callback, request_id, response)
+        end if
+    end subroutine handle_ghost_completion_response_wrapper
+
+    subroutine handle_ghost_completion_response_impl(editor, buffer, request_id, response)
+        use lsp_protocol_module, only: lsp_message_t
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: request_id
+        type(lsp_message_t), intent(in) :: response
+        character(len=:), allocatable :: pend, prefix, before
+        integer :: cur_line, cur_col
+
+        ! Only the most recent request may update the ghost
+        if (request_id /= editor%ghost%pending_request_id) return
+        if (allocated(editor%ghost%pending_prefix)) then
+            pend = editor%ghost%pending_prefix
+        else
+            pend = ''
+        end if
+        call ghost_clear_pending(editor%ghost)
+
+        ! Revalidate against current editor state: the user may have moved,
+        ! edited, or opened the popup while the request was in flight
+        if (is_completion_visible(editor%completion_popup)) return
+        if (size(editor%cursors) /= 1) return
+        if (editor%cursors(editor%active_cursor)%has_selection) return
+        cur_line = editor%cursors(editor%active_cursor)%line
+        cur_col = editor%cursors(editor%active_cursor)%column
+        if (cur_col <= buffer_get_line_char_count(buffer, cur_line)) return
+        call ghost_get_prefix_at_cursor(buffer, cur_line, cur_col, prefix)
+        if (len(prefix) == 0) return
+        if (prefix /= pend) return
+
+        if (ghost_is_active(editor%ghost)) before = editor%ghost%suggestion
+        call ghost_apply_lsp_result(editor%ghost, response%result, prefix, cur_line, cur_col)
+
+        ! Redraw (without a keypress) only if the suggestion actually changed
+        if (ghost_is_active(editor%ghost)) then
+            if (.not. allocated(before)) then
+                g_lsp_ui_changed = .true.
+            else if (editor%ghost%suggestion /= before) then
+                g_lsp_ui_changed = .true.
+            end if
+        end if
+    end subroutine handle_ghost_completion_response_impl
+
+    ! Wrapper callback matching the LSP callback signature (ctrl-space popup)
+    subroutine handle_popup_completion_response_wrapper(unused_request_id, response)
+        use lsp_protocol_module, only: lsp_message_t
+        integer, intent(in) :: unused_request_id
+        type(lsp_message_t), intent(in) :: response
+
+        if (.false.) print *, unused_request_id  ! Silence unused warning
+
+        if (associated(saved_editor_for_callback)) then
+            call handle_popup_completion_response_impl(saved_editor_for_callback, response)
+        end if
+    end subroutine handle_popup_completion_response_wrapper
+
+    subroutine handle_popup_completion_response_impl(editor, response)
+        use lsp_protocol_module, only: lsp_message_t
+        type(editor_state_t), intent(inout) :: editor
+        type(lsp_message_t), intent(in) :: response
+
+        call handle_completion_response(editor%completion_popup, response%result)
+        if (editor%completion_popup%item_count > 0) then
+            call show_completion_popup(editor%completion_popup, &
+                editor%cursors(editor%active_cursor)%line - editor%viewport_line + 2, &
+                editor%cursors(editor%active_cursor)%column - editor%viewport_column + 1)
+            g_lsp_ui_changed = .true.
+        end if
+    end subroutine handle_popup_completion_response_impl
 
     ! Wrapper callback that matches the LSP callback signature
     subroutine handle_references_response_wrapper(unused_request_id, response)
