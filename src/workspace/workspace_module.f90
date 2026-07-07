@@ -568,11 +568,15 @@ contains
                                 allocate(character(len=len_trim(pane_filename)) :: editor%tabs(tab_idx)%panes(1)%filename)
                                 editor%tabs(tab_idx)%panes(1)%filename = trim(pane_filename)
 
-                                ! Set pane coordinates
-                                editor%tabs(tab_idx)%panes(1)%x_start = x_start
-                                editor%tabs(tab_idx)%panes(1)%y_start = y_start
-                                editor%tabs(tab_idx)%panes(1)%x_end = x_end
-                                editor%tabs(tab_idx)%panes(1)%y_end = y_end
+                                ! Only the first pane is restored, so it must
+                                ! fill the tab. The persisted x/y bounds may come
+                                ! from a multi-pane split (e.g. 0.0-0.25); using
+                                ! them would leave a lone pane occupying a sliver
+                                ! that can no longer be split.
+                                editor%tabs(tab_idx)%panes(1)%x_start = 0.0
+                                editor%tabs(tab_idx)%panes(1)%y_start = 0.0
+                                editor%tabs(tab_idx)%panes(1)%x_end = 1.0
+                                editor%tabs(tab_idx)%panes(1)%y_end = 1.0
 
                                 if (allocated(editor%tabs(tab_idx)%panes(1)%cursors) .and. &
                                     size(editor%tabs(tab_idx)%panes(1)%cursors) > 0) then
@@ -625,11 +629,14 @@ contains
                             if (allocated(editor%tabs(tab_idx)%panes) .and. size(editor%tabs(tab_idx)%panes) > 0) then
                                 call buffer_load_file(editor%tabs(tab_idx)%panes(1)%buffer, trim(full_path), load_status)
 
-                                ! Set pane coordinates (even if only 1 pane for now)
-                                editor%tabs(tab_idx)%panes(1)%x_start = x_start
-                                editor%tabs(tab_idx)%panes(1)%y_start = y_start
-                                editor%tabs(tab_idx)%panes(1)%x_end = x_end
-                                editor%tabs(tab_idx)%panes(1)%y_end = y_end
+                                ! Only the first pane is restored, so force it to
+                                ! fill the tab. Persisted bounds may belong to a
+                                ! multi-pane split and would leave a lone pane in
+                                ! a sliver that cannot be split (alt-v/alt-s).
+                                editor%tabs(tab_idx)%panes(1)%x_start = 0.0
+                                editor%tabs(tab_idx)%panes(1)%y_start = 0.0
+                                editor%tabs(tab_idx)%panes(1)%x_end = 1.0
+                                editor%tabs(tab_idx)%panes(1)%y_end = 1.0
 
                                 if (allocated(editor%tabs(tab_idx)%panes(1)%cursors) .and. &
                                     size(editor%tabs(tab_idx)%panes(1)%cursors) > 0) then

@@ -574,6 +574,16 @@ contains
         ! Check pane limit (maximum 6 panes per tab)
         if (n_panes >= 6) return
 
+        ! A lone pane must fill the tab. A stale sub-full width (from a restored
+        ! layout or a prior mis-normalization) would make the split fail the
+        ! minimum-size check below, so normalize first.
+        if (n_panes == 1) then
+            editor%tabs(tab_idx)%panes(pane_idx)%x_start = 0.0
+            editor%tabs(tab_idx)%panes(pane_idx)%x_end = 1.0
+            editor%tabs(tab_idx)%panes(pane_idx)%y_start = 0.0
+            editor%tabs(tab_idx)%panes(pane_idx)%y_end = 1.0
+        end if
+
         ! Ensure active pane has cursors from editor state
         if (.not. allocated(editor%tabs(tab_idx)%panes(pane_idx)%cursors)) then
             allocate(editor%tabs(tab_idx)%panes(pane_idx)%cursors(size(editor%cursors)))
@@ -683,6 +693,16 @@ contains
 
         ! Check pane limit (maximum 6 panes per tab)
         if (n_panes >= 6) return
+
+        ! A lone pane must fill the tab. A stale sub-full width (from a restored
+        ! layout or a prior mis-normalization) would make the split fail the
+        ! minimum-size check below, so normalize first.
+        if (n_panes == 1) then
+            editor%tabs(tab_idx)%panes(pane_idx)%x_start = 0.0
+            editor%tabs(tab_idx)%panes(pane_idx)%x_end = 1.0
+            editor%tabs(tab_idx)%panes(pane_idx)%y_start = 0.0
+            editor%tabs(tab_idx)%panes(pane_idx)%y_end = 1.0
+        end if
 
         ! Ensure active pane has cursors from editor state
         if (.not. allocated(editor%tabs(tab_idx)%panes(pane_idx)%cursors)) then
