@@ -165,14 +165,32 @@ contains
         end if
     end subroutine handle_completion_response
 
-    subroutine show_completion_popup(popup, row, col)
+    subroutine show_completion_popup(popup, row, col, screen_rows, screen_cols)
         type(completion_popup_t), intent(inout) :: popup
         integer, intent(in) :: row, col
+        integer, intent(in), optional :: screen_rows, screen_cols
 
         if (popup%item_count == 0) return
 
         popup%row = row
         popup%col = col
+
+        ! Clamp the box inside the screen when dimensions are known —
+        ! near the bottom/right edge (or at small terminals) an unclamped
+        ! popup draws off-screen or wraps onto the next line
+        if (present(screen_rows)) then
+            if (popup%row + popup%height - 1 > screen_rows) then
+                popup%row = screen_rows - popup%height + 1
+            end if
+            if (popup%row < 1) popup%row = 1
+        end if
+        if (present(screen_cols)) then
+            if (popup%col + popup%width - 1 > screen_cols) then
+                popup%col = screen_cols - popup%width + 1
+            end if
+            if (popup%col < 1) popup%col = 1
+        end if
+
         popup%visible = .true.
 
         call render_completion_popup(popup)

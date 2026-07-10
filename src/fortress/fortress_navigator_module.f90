@@ -62,11 +62,22 @@ contains
             current_dir = get_pwd()
         end if
 
-        ! Get terminal size once (assumes terminal doesn't resize during navigation)
+        ! Get terminal size (re-polled each iteration below so a resize
+        ! during navigation reflows the panes)
         call get_term_size(rows, cols)
 
         ! Main navigation loop
         do while (running)
+            ! Detect terminal resize and force a full redraw
+            block
+                integer :: nrows, ncols
+                call get_term_size(nrows, ncols)
+                if (nrows /= rows .or. ncols /= cols) then
+                    rows = nrows
+                    cols = ncols
+                    first_draw = .true.  ! full clear at the new size
+                end if
+            end block
             ! Only refresh directory listings if directory changed
             dir_changed = (current_dir /= last_dir)
             if (dir_changed) then

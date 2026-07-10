@@ -302,6 +302,10 @@ contains
 
         panel%visible = .true.
         panel%focused = .true.
+
+        ! A PTY kept alive while hidden may hold stale dimensions if the
+        ! screen was resized in the meantime — reapply them on show
+        call terminal_panel_resize(panel, screen_rows, screen_cols)
     end subroutine toggle_terminal_panel
 
     function is_terminal_panel_visible(panel) result(vis)

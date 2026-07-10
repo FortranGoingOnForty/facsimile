@@ -26,6 +26,7 @@ module renderer_module
     private
 
     public :: render_screen, update_viewport, init_renderer, cleanup_renderer
+    public :: resize_renderer
     public :: render_status_bar, render_cursor
     public :: show_line_numbers, LINE_NUMBER_WIDTH
     public :: render_screen_with_tree, render_screen_with_lsp_panel
@@ -35,6 +36,7 @@ module renderer_module
     public :: fuss_search_buffer, fuss_search_len, fuss_search_last_time
     public :: fuss_fuzzy_jump, fuss_reset_search, get_time_ms
     public :: fuss_git_prefix_active
+    public :: display_offset_of, char_col_at_offset
 
     ! Configuration
     logical :: show_line_numbers = .true.
@@ -104,6 +106,25 @@ contains
         call cleanup_highlighter(syntax_highlighter)
     end subroutine cleanup_renderer
 
+    ! Reallocate the screen buffer for a new terminal size (init_renderer
+    ! sized it once at startup; a resize would otherwise leave stale dims)
+    subroutine resize_renderer(rows, cols)
+        integer, intent(in) :: rows, cols
+        integer :: i
+
+        if (rows == screen_buffer%rows .and. cols == screen_buffer%cols) return
+
+        screen_buffer%rows = rows
+        screen_buffer%cols = cols
+        screen_buffer%needs_full_redraw = .true.
+
+        if (allocated(screen_buffer%lines)) deallocate(screen_buffer%lines)
+        allocate(character(len=cols) :: screen_buffer%lines(rows))
+        do i = 1, rows
+            screen_buffer%lines(i) = repeat(' ', cols)
+        end do
+    end subroutine resize_renderer
+
     ! Update syntax highlighter for a new filename/language
     subroutine update_syntax_highlighter(filename)
         character(len=*), intent(in) :: filename
@@ -141,23 +162,19 @@ contains
         ! Render tab bar if there are any tabs
         call render_tab_bar(editor)
 
-        ! Check if cursor is on a bracket and find its match
+        ! Check if cursor is on a bracket and find its match. The cursor
+        ! column is a char index; utf8_char_at handles bounds and returns
+        ! '' (padded to a space) past EOL. Multibyte chars truncate to
+        ! their lead byte, which is never an ASCII bracket.
         cursor = editor%cursors(editor%active_cursor)
         line_content = buffer_get_line(buffer, cursor%line)
-        if (cursor%column >= 1 .and. cursor%column <= len(line_content)) then
-            cursor_char = line_content(cursor%column:cursor%column)
-            if (is_opening_bracket(cursor_char) .or. is_closing_bracket(cursor_char)) then
-                bracket_line = cursor%line
-                bracket_col = cursor%column
-                call find_matching_bracket(buffer, bracket_line, bracket_col, &
-                                         found_match, matching_bracket_line, matching_bracket_col)
-                if (.not. found_match) then
-                    matching_bracket_line = 0
-                    matching_bracket_col = 0
-                end if
-            else
-                bracket_line = 0
-                bracket_col = 0
+        cursor_char = utf8_char_at(line_content, cursor%column)
+        if (is_opening_bracket(cursor_char) .or. is_closing_bracket(cursor_char)) then
+            bracket_line = cursor%line
+            bracket_col = cursor%column
+            call find_matching_bracket(buffer, bracket_line, bracket_col, &
+                                     found_match, matching_bracket_line, matching_bracket_col)
+            if (.not. found_match) then
                 matching_bracket_line = 0
                 matching_bracket_col = 0
             end if
@@ -308,14 +325,8 @@ contains
                     call render_line_with_selections(buffer, editor, buffer_line, &
                                                     editor%viewport_column, content_width)
                 else
-                    ! Render empty line indicator
-                    if (buffer_line == line_count + 1 .and. line_count == 0) then
-                        ! Empty file
-                        call terminal_write('~' // repeat(' ', content_width - 1))
-                    else
-                        ! Beyond file content
-                        call terminal_write('~' // repeat(' ', content_width - 1))
-                    end if
+                    ! Beyond file content: '~' only, the ESC[K below clears
+                    call terminal_write('~')
                 end if
                 ! Clear to end of line to prevent stale content when scrolling
                 call terminal_write(char(27) // '[K')
@@ -389,6 +400,7 @@ contains
         logical :: in_selection, is_bracket_match, is_current_line, is_search_match
         type(token_t), allocatable :: tokens(:)
         character(len=:), allocatable :: token_color
+        character(len=:), allocatable :: style, last_style
         integer :: search_matches(2, 50)  ! Up to 50 matches per line (start, end pairs)
         integer :: num_search_matches, match_idx
         integer :: line_byte_len
@@ -421,8 +433,12 @@ contains
         ! char_idx = 1-based character index (for selection logic)
         ! display_col = screen column position (for width tracking)
         ! byte_pos = byte position in string (for token lookup)
+        ! Style codes are emitted only when they CHANGE between characters:
+        ! wrapping every char in color+reset made frame size scale with the
+        ! terminal area (~7x larger than needed at wide terminals).
         display_col = 0
         char_idx = start_col
+        last_style = ''
 
         do while (char_idx <= char_count .and. display_col < width)
             in_selection = .false.
@@ -519,39 +535,57 @@ contains
                 end do
             end if
 
-            ! Render character with or without highlighting
+            ! Determine this character's style (priority order preserved)
             if (in_selection) then
-                ! Highlight selected text with reverse video (highest priority)
-                call terminal_write(char(27) // '[7m' // utf8_ch // char(27) // '[0m')
+                ! Selected text: reverse video (highest priority)
+                style = char(27) // '[7m'
             else if (is_bracket_match) then
-                ! Highlight matching brackets with cyan background
-                call terminal_write(char(27) // '[46m' // utf8_ch // char(27) // '[0m')
+                ! Matching brackets: cyan background
+                style = char(27) // '[46m'
             else if (is_search_match) then
-                ! Highlight search matches with yellow background
-                if (len(token_color) > 0) then
-                    call terminal_write(token_color // char(27) // '[43m' // utf8_ch // char(27) // '[0m')
-                else
-                    call terminal_write(char(27) // '[43m' // utf8_ch // char(27) // '[0m')
-                end if
+                ! Search matches: yellow background (+ syntax color)
+                style = token_color // char(27) // '[43m'
             else if (is_current_line) then
-                ! Subtle background for current line with syntax color
-                if (len(token_color) > 0) then
-                    call terminal_write(token_color // char(27) // '[48;5;236m' // utf8_ch // char(27) // '[0m')
-                else
-                    call terminal_write(char(27) // '[48;5;236m' // utf8_ch // char(27) // '[0m')
-                end if
-            else if (len(token_color) > 0) then
-                ! Apply syntax highlighting
-                call terminal_write(token_color // utf8_ch // char(27) // '[0m')
+                ! Current line: subtle background (+ syntax color)
+                style = token_color // char(27) // '[48;5;236m'
             else
-                call terminal_write(utf8_ch)
+                ! Syntax color only (empty for plain text)
+                style = token_color
             end if
+
+            if (style /= last_style) then
+                call terminal_write(char(27) // '[0m')
+                if (len(style) > 0) call terminal_write(style)
+                last_style = style
+            end if
+            call terminal_write(utf8_ch)
 
             display_col = display_col + char_width
             char_idx = char_idx + 1
         end do
 
-        ! Fill remaining width with spaces
+        ! Fill remaining width. When the tail needs no styling (no
+        ! current-line background, no selection anywhere), skip it: both
+        ! callers follow this routine with ESC[K, which clears the same
+        ! cells with default attributes at a fraction of the bytes.
+        block
+            logical :: fill_styled
+            fill_styled = is_current_line
+            if (.not. fill_styled) then
+                do i = 1, size(editor%cursors)
+                    if (editor%cursors(i)%has_selection) then
+                        fill_styled = .true.
+                        exit
+                    end if
+                end do
+            end if
+            if (.not. fill_styled) then
+                if (len(last_style) > 0) call terminal_write(char(27) // '[0m')
+                if (allocated(line)) deallocate(line)
+                if (allocated(utf8_ch)) deallocate(utf8_ch)
+                return
+            end if
+        end block
         do while (display_col < width)
             in_selection = .false.
 
@@ -602,15 +636,27 @@ contains
             end do
 
             if (in_selection) then
-                call terminal_write(char(27) // '[7m ' // char(27) // '[0m')
+                style = char(27) // '[7m'
             else if (is_current_line) then
-                call terminal_write(char(27) // '[48;5;236m ' // char(27) // '[0m')
+                style = char(27) // '[48;5;236m'
             else
-                call terminal_write(' ')
+                style = ''
             end if
+
+            if (style /= last_style) then
+                call terminal_write(char(27) // '[0m')
+                if (len(style) > 0) call terminal_write(style)
+                last_style = style
+            end if
+            call terminal_write(' ')
+
             display_col = display_col + 1
             char_idx = char_idx + 1
         end do
+
+        ! Leave the terminal in a clean state (the caller's ESC[K must not
+        ! inherit a lingering background)
+        if (len(last_style) > 0) call terminal_write(char(27) // '[0m')
 
         if (allocated(line)) deallocate(line)
         if (allocated(utf8_ch)) deallocate(utf8_ch)
@@ -621,8 +667,10 @@ contains
         type(buffer_t), intent(in) :: buffer
         logical, intent(in), optional :: match_mode_active
         logical, intent(in), optional :: match_case_sens
-        character(len=256) :: status_left, status_center, status_right, status_bar
-        integer :: padding_len, left_pad, right_pad
+        character(len=256) :: status_left, status_center, status_right
+        character(len=:), allocatable :: status_bar
+        character(len=200) :: fname_disp
+        integer :: padding_len, left_pad, right_pad, fname_len
         type(cursor_t) :: cursor
         logical :: show_match_hint
 
@@ -633,9 +681,19 @@ contains
         ! Move to status bar position
         call terminal_move_cursor(editor%screen_rows, 1)
 
-        ! Prepare status bar content
+        ! Prepare status bar content. The filename is truncated to what the
+        ! 256-char section buffer can hold: an internal write that overflows
+        ! the record is a runtime error, so a very long path must never be
+        ! formatted in unbounded.
         if (allocated(editor%filename)) then
-            write(status_left, '(a,a,a,a)') ' ctrl-b:fuss | ', trim(editor%filename), &
+            fname_len = len_trim(editor%filename)
+            if (fname_len > len(fname_disp)) then
+                fname_disp = '...' // &
+                    editor%filename(fname_len - len(fname_disp) + 4:fname_len)
+            else
+                fname_disp = editor%filename
+            end if
+            write(status_left, '(a,a,a,a)') ' ctrl-b:fuss | ', trim(fname_disp), &
                    merge(' [modified]', '           ', buffer%modified), ' '
         else
             write(status_left, '(a,a,a)') ' ctrl-b:fuss | [No Name]', &
@@ -744,11 +802,81 @@ contains
             end if
         end if
 
+        ! Pad to the full width before slicing: the bar was previously a
+        ! fixed 256-char buffer, so terminals wider than 256 columns read
+        ! past its end (out-of-bounds substring) and lost the right section.
+        if (len(status_bar) < editor%screen_cols) then
+            status_bar = status_bar // &
+                repeat(' ', editor%screen_cols - len(status_bar))
+        end if
+
         ! Render with inverse video
         call terminal_write(char(27) // '[7m')  ! Inverse video
         call terminal_write(status_bar(1:editor%screen_cols))
         call terminal_write(char(27) // '[0m')  ! Reset attributes
     end subroutine render_status_bar
+
+    ! Number of display cells between the viewport's first visible character
+    ! (start_col, cell 0) and char_col, matching exactly how the line
+    ! renderers advance: UTF-8 display widths, tabs expanded to TAB_WIDTH
+    ! stops, one cell per virtual position past end of line. The caret must
+    ! be placed with this, not with raw character-index arithmetic, or it
+    ! drifts on lines containing tabs or wide characters.
+    function display_offset_of(line, start_col, char_col) result(off)
+        character(len=*), intent(in) :: line
+        integer, intent(in) :: start_col, char_col
+        integer :: off
+        integer :: ci
+        character(len=:), allocatable :: ch
+
+        off = 0
+        if (char_col <= start_col) return
+
+        ci = start_col
+        do while (ci < char_col)
+            ch = utf8_char_at(line, ci)
+            if (len(ch) == 0) then
+                ! Past end of line: every remaining position is one cell
+                off = off + (char_col - ci)
+                return
+            else if (ch == char(9)) then
+                off = off + (TAB_WIDTH - mod(off, TAB_WIDTH))
+            else
+                off = off + utf8_display_width(ch)
+            end if
+            ci = ci + 1
+        end do
+    end function display_offset_of
+
+    ! Inverse of display_offset_of: the character position occupying the
+    ! display cell `cells` (0-based) right of the viewport start. Maps mouse
+    ! clicks back to buffer columns; a click inside a tab's or wide char's
+    ! span selects that character.
+    function char_col_at_offset(line, start_col, cells) result(char_col)
+        character(len=*), intent(in) :: line
+        integer, intent(in) :: start_col, cells
+        integer :: char_col
+        integer :: off
+        character(len=:), allocatable :: ch
+
+        char_col = start_col
+        off = 0
+        do while (off < cells)
+            ch = utf8_char_at(line, char_col)
+            if (len(ch) == 0) then
+                ! Past end of line: one cell per virtual position
+                char_col = char_col + (cells - off)
+                return
+            else if (ch == char(9)) then
+                off = off + (TAB_WIDTH - mod(off, TAB_WIDTH))
+            else
+                off = off + utf8_display_width(ch)
+            end if
+            char_col = char_col + 1
+        end do
+        ! Overshot: the click landed inside the previous char's span
+        if (off > cells) char_col = char_col - 1
+    end function char_col_at_offset
 
     ! True when the active cursor has a selection. During a selection
     ! the hardware cursor is hidden and a hollow-box caret is drawn by
@@ -813,20 +941,10 @@ contains
                     ! Calculate screen position from buffer position
                     screen_row = cursor%line - editor%viewport_line + row_offset
 
-                    ! Calculate screen column based on display width
+                    ! Screen column in display cells from the viewport start
                     line = buffer_get_line(buffer, cursor%line)
-                    block
-                        character(len=:), allocatable :: prefix
-                        integer :: byte_pos
-                        byte_pos = utf8_char_to_byte_index(line, cursor%column)
-                        if (byte_pos > 1) then
-                            prefix = line(1:byte_pos-1)
-                            screen_col = utf8_display_width(prefix) - editor%viewport_column + 1 + col_offset
-                        else
-                            screen_col = 1 - editor%viewport_column + col_offset
-                        end if
-                        if (allocated(prefix)) deallocate(prefix)
-                    end block
+                    screen_col = col_offset + 1 + &
+                        display_offset_of(line, editor%viewport_column, cursor%column)
 
                     ! Ensure cursor is within screen bounds and not in tab bar
                     if (screen_row >= min_row .and. screen_row < editor%screen_rows .and. &
@@ -850,20 +968,10 @@ contains
             cursor = editor%cursors(editor%active_cursor)
             screen_row = cursor%line - editor%viewport_line + row_offset
 
-            ! Calculate screen column based on display width
+            ! Screen column in display cells from the viewport start
             line = buffer_get_line(buffer, cursor%line)
-            block
-                character(len=:), allocatable :: prefix2
-                integer :: byte_pos2
-                byte_pos2 = utf8_char_to_byte_index(line, cursor%column)
-                if (byte_pos2 > 1) then
-                    prefix2 = line(1:byte_pos2-1)
-                    screen_col = utf8_display_width(prefix2) - editor%viewport_column + 1 + col_offset
-                else
-                    screen_col = 1 - editor%viewport_column + col_offset
-                end if
-                if (allocated(prefix2)) deallocate(prefix2)
-            end block
+            screen_col = col_offset + 1 + &
+                display_offset_of(line, editor%viewport_column, cursor%column)
 
             if (screen_row >= min_row .and. screen_row < editor%screen_rows .and. &
                 screen_col >= 1 .and. screen_col <= editor%screen_cols) then
@@ -876,7 +984,9 @@ contains
 
             ! Calculate screen position from buffer position
             screen_row = cursor%line - editor%viewport_line + row_offset
-            screen_col = cursor%column - editor%viewport_column + 1 + col_offset
+            line = buffer_get_line(buffer, cursor%line)
+            screen_col = col_offset + 1 + &
+                display_offset_of(line, editor%viewport_column, cursor%column)
 
             ! Ensure cursor is within screen bounds and not in tab bar
             if (screen_row >= min_row .and. screen_row < editor%screen_rows .and. &
@@ -894,16 +1004,23 @@ contains
         type(editor_state_t), intent(inout) :: editor
         logical, intent(in), optional :: match_mode_active
         logical, intent(in), optional :: match_case_sens
+        integer :: editor_start_col, editor_width
 
         ! Just render the status bar and position cursor
         call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
+
+        ! Fuss mode splits 30% tree / 70% editor; compute the same split as
+        ! render_screen_with_tree (a hardcoded 31/cols-30 here only agreed
+        ! with the renderer near 97 columns)
+        editor_start_col = editor%screen_cols * 30 / 100 + 2
+        editor_width = editor%screen_cols - editor_start_col + 1
 
         ! Handle panes vs single buffer
         if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0 .and. &
             editor%active_tab_index <= size(editor%tabs)) then
             if (allocated(editor%tabs(editor%active_tab_index)%panes)) then
                 if (editor%fuss_mode_active) then
-                    call render_cursor_for_panes_with_tree(editor, 31, editor%screen_cols - 30)
+                    call render_cursor_for_panes_with_tree(editor, editor_start_col, editor_width)
                 else
                     call render_cursor_for_panes(editor)
                 end if
@@ -913,7 +1030,7 @@ contains
 
         ! Single buffer mode
         if (editor%fuss_mode_active) then
-            call render_cursor_in_pane(editor, 31, editor%screen_cols - 30)
+            call render_cursor_in_pane(editor, buffer, editor_start_col, editor_width)
         else
             call render_cursor(editor, buffer)
         end if
@@ -924,6 +1041,7 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(cursor_t) :: cursor
         integer :: margin = 3  ! Lines to keep visible above/below cursor
+        integer :: v_margin, h_margin
         integer :: tab_idx, pane_idx
         integer :: pane_height, pane_width
         integer :: screen_width, screen_height
@@ -958,19 +1076,38 @@ contains
                             pane_width = pane_width - LINE_NUMBER_WIDTH - 1
                         end if
 
+                        ! The margin must shrink with the pane: with the fixed
+                        ! margin the two scroll conditions overlap once the
+                        ! pane is shorter than ~2*margin lines, pinning (or
+                        ! oscillating) the viewport a few lines away from the
+                        ! cursor. The cursor line then fails the renderer's
+                        ! bounds check and the caret parks at the pane origin
+                        ! while typing continues off-screen.
+                        v_margin = min(margin, max(0, (pane_height - 1) / 2))
+                        h_margin = min(margin, max(0, (pane_width - 1) / 2))
+
                         ! Vertical scrolling for pane
-                        if (cursor%line < editor%tabs(tab_idx)%panes(pane_idx)%viewport_line + margin) then
-                            editor%tabs(tab_idx)%panes(pane_idx)%viewport_line = max(1, cursor%line - margin)
-                        else if (cursor%line > editor%tabs(tab_idx)%panes(pane_idx)%viewport_line + pane_height - margin - 1) then
-                            editor%tabs(tab_idx)%panes(pane_idx)%viewport_line = cursor%line - pane_height + margin + 1
+                        if (cursor%line < editor%tabs(tab_idx)%panes(pane_idx)%viewport_line + v_margin) then
+                            editor%tabs(tab_idx)%panes(pane_idx)%viewport_line = max(1, cursor%line - v_margin)
+                        else if (cursor%line > editor%tabs(tab_idx)%panes(pane_idx)%viewport_line + pane_height - v_margin - 1) then
+                            editor%tabs(tab_idx)%panes(pane_idx)%viewport_line = cursor%line - pane_height + v_margin + 1
                         end if
 
                         ! Horizontal scrolling for pane
-                        if (cursor%column < editor%tabs(tab_idx)%panes(pane_idx)%viewport_column + margin) then
-                            editor%tabs(tab_idx)%panes(pane_idx)%viewport_column = max(1, cursor%column - margin)
-                        else if (cursor%column > editor%tabs(tab_idx)%panes(pane_idx)%viewport_column + pane_width - margin) then
-                            editor%tabs(tab_idx)%panes(pane_idx)%viewport_column = cursor%column - pane_width + margin
+                        if (cursor%column < editor%tabs(tab_idx)%panes(pane_idx)%viewport_column + h_margin) then
+                            editor%tabs(tab_idx)%panes(pane_idx)%viewport_column = max(1, cursor%column - h_margin)
+                        else if (cursor%column > editor%tabs(tab_idx)%panes(pane_idx)%viewport_column + pane_width - h_margin) then
+                            editor%tabs(tab_idx)%panes(pane_idx)%viewport_column = cursor%column - pane_width + h_margin
                         end if
+
+                        ! Hard guarantee, independent of the margin math: the
+                        ! cursor cell stays inside the visible window.
+                        call clamp_viewport( &
+                            editor%tabs(tab_idx)%panes(pane_idx)%viewport_line, &
+                            cursor%line, pane_height)
+                        call clamp_viewport( &
+                            editor%tabs(tab_idx)%panes(pane_idx)%viewport_column, &
+                            cursor%column, pane_width)
 
                         ! Also update legacy editor viewport for compatibility
                         editor%viewport_line = editor%tabs(tab_idx)%panes(pane_idx)%viewport_line
@@ -984,12 +1121,16 @@ contains
         ! Fallback to original behavior if no panes
         cursor = editor%cursors(editor%active_cursor)
 
+        ! Adaptive margins, as in the pane path above
+        screen_height = editor%screen_rows - 2
+        v_margin = min(margin, max(0, (screen_height - 1) / 2))
+
         ! Vertical scrolling
-        if (cursor%line < editor%viewport_line + margin) then
-            editor%viewport_line = max(1, cursor%line - margin)
-        else if (cursor%line > editor%viewport_line + editor%screen_rows - margin - 2) then
+        if (cursor%line < editor%viewport_line + v_margin) then
+            editor%viewport_line = max(1, cursor%line - v_margin)
+        else if (cursor%line > editor%viewport_line + editor%screen_rows - v_margin - 2) then
             ! -2 for status bar and margin
-            editor%viewport_line = cursor%line - editor%screen_rows + margin + 2
+            editor%viewport_line = cursor%line - editor%screen_rows + v_margin + 2
         end if
 
         ! Horizontal scrolling (account for fuss mode and line numbers)
@@ -1003,13 +1144,33 @@ contains
         if (show_line_numbers) then
             screen_width = screen_width - LINE_NUMBER_WIDTH - 1
         end if
+        h_margin = min(margin, max(0, (screen_width - 1) / 2))
 
-        if (cursor%column < editor%viewport_column + margin) then
-            editor%viewport_column = max(1, cursor%column - margin)
-        else if (cursor%column > editor%viewport_column + screen_width - margin) then
-            editor%viewport_column = cursor%column - screen_width + margin
+        if (cursor%column < editor%viewport_column + h_margin) then
+            editor%viewport_column = max(1, cursor%column - h_margin)
+        else if (cursor%column > editor%viewport_column + screen_width - h_margin) then
+            editor%viewport_column = cursor%column - screen_width + h_margin
         end if
+
+        call clamp_viewport(editor%viewport_line, cursor%line, screen_height)
+        call clamp_viewport(editor%viewport_column, cursor%column, screen_width)
     end subroutine update_viewport
+
+    ! Force the viewport origin so that `pos` falls inside a window of
+    ! `extent` cells starting at `viewport`. Backstop for the margin-based
+    ! scrolling above: whatever the margins produced, the cursor cell must
+    ! be on screen (extent is clamped to at least 1 for degenerate panes).
+    subroutine clamp_viewport(viewport, pos, extent)
+        integer(int32), intent(inout) :: viewport
+        integer(int32), intent(in) :: pos
+        integer, intent(in) :: extent
+
+        if (viewport > pos) viewport = pos
+        if (viewport < pos - max(1, extent) + 1) then
+            viewport = pos - max(1, extent) + 1
+        end if
+        if (viewport < 1) viewport = 1
+    end subroutine clamp_viewport
 
     ! Render screen with split panes (tree on left, editor on right)
     subroutine render_screen_with_tree(buffer, editor, match_mode_active, match_case_sens)
@@ -1104,7 +1265,7 @@ contains
             if (size(editor%tabs(editor%active_tab_index)%panes) > 1) then
                 call render_cursor_for_panes_with_tree(editor, editor_start_col, editor_width)
             else
-                call render_cursor_in_pane(editor, editor_start_col, editor_width)
+                call render_cursor_in_pane(editor, buffer, editor_start_col, editor_width)
             end if
             call show_caret_unless_selecting(editor)
         end if
@@ -1198,7 +1359,6 @@ contains
         integer :: adjusted_width, line_num_width
         integer :: start_row
         character(len=16) :: line_num_str
-        character(len=:), allocatable :: padding
 
         line_count = buffer_get_line_count(buffer)
 
@@ -1241,14 +1401,14 @@ contains
                 end if
             end if
 
-            ! Render content (render_line_with_selections will write exactly adjusted_width chars)
+            ! Render content (render_line_with_selections writes at most
+            ! adjusted_width cells; the ESC[K below clears the rest)
             if (buffer_line <= line_count) then
                 call render_line_with_selections(buffer, editor, buffer_line, &
                                                 editor%viewport_column, adjusted_width)
             else
-                ! Empty line beyond file content
-                padding = '~' // repeat(' ', adjusted_width - 1)
-                call terminal_write(padding)
+                ! Empty line beyond file content ('~' only; ESC[K clears)
+                call terminal_write('~')
             end if
             ! Clear to end of line to prevent stale content when scrolling
             call terminal_write(char(27) // '[K')
@@ -1288,17 +1448,16 @@ contains
             if (allocated(pane%cursors) .and. size(pane%cursors) > 0) then
                 active_cursor = pane%cursors(1)  ! Use first cursor for bracket matching
                 line_content = buffer_get_line(pane%buffer, active_cursor%line)
-                if (active_cursor%column >= 1 .and. active_cursor%column <= len(line_content)) then
-                    cursor_char = line_content(active_cursor%column:active_cursor%column)
-                    if (is_opening_bracket(cursor_char) .or. is_closing_bracket(cursor_char)) then
-                        bracket_line = active_cursor%line
-                        bracket_col = active_cursor%column
-                        call find_matching_bracket(pane%buffer, bracket_line, bracket_col, &
-                                                 found_match, matching_bracket_line, matching_bracket_col)
-                        if (.not. found_match) then
-                            matching_bracket_line = 0
-                            matching_bracket_col = 0
-                        end if
+                ! Char-index lookup (see render_screen bracket check)
+                cursor_char = utf8_char_at(line_content, active_cursor%column)
+                if (is_opening_bracket(cursor_char) .or. is_closing_bracket(cursor_char)) then
+                    bracket_line = active_cursor%line
+                    bracket_col = active_cursor%column
+                    call find_matching_bracket(pane%buffer, bracket_line, bracket_col, &
+                                             found_match, matching_bracket_line, matching_bracket_col)
+                    if (.not. found_match) then
+                        matching_bracket_line = 0
+                        matching_bracket_col = 0
                     end if
                 end if
                 if (allocated(line_content)) deallocate(line_content)
@@ -1525,6 +1684,7 @@ contains
         ! Syntax highlighting support
         type(token_t), allocatable :: tokens(:)
         character(len=:), allocatable :: token_color
+        character(len=:), allocatable :: style, last_style
         integer :: byte_pos, token_idx, line_byte_len
 
         tab_idx = editor%active_tab_index
@@ -1607,9 +1767,11 @@ contains
         end if
 
         ! Render the line character by character with selection highlighting
-        ! Using UTF-8 aware iteration
+        ! Using UTF-8 aware iteration. Style codes are emitted only when
+        ! they change between characters (see render_line_with_selections).
         display_col = 0
         char_idx = pane%viewport_column  ! Start from viewport column (character index)
+        last_style = ''
 
         do while (char_idx <= char_count .and. display_col < content_width)
             in_selection = .false.
@@ -1701,34 +1863,30 @@ contains
                 end do
             end if
 
-            ! Render the character with appropriate highlighting
+            ! Determine this character's style (priority order preserved)
             if (in_selection) then
-                ! Highlight selected text with reverse video
-                call terminal_write(char(27) // '[7m' // utf8_ch // char(27) // '[0m')
+                ! Selected text: reverse video
+                style = char(27) // '[7m'
             else if (is_bracket_match) then
-                ! Highlight matching brackets with cyan background
-                call terminal_write(char(27) // '[46m' // utf8_ch // char(27) // '[0m')
+                ! Matching brackets: cyan background
+                style = char(27) // '[46m'
             else if (pane%is_active .and. is_current_line) then
-                ! Current line with syntax highlighting
-                if (len(token_color) > 0) then
-                    call terminal_write(token_color // char(27) // '[48;5;237m' // utf8_ch // char(27) // '[0m')
-                else
-                    call terminal_write(char(27) // '[48;5;237m' // utf8_ch // char(27) // '[0m')
-                end if
+                ! Current line background (+ syntax color)
+                style = token_color // char(27) // '[48;5;237m'
             else if (.not. pane%is_active) then
-                ! Inactive pane with syntax highlighting
-                if (len(token_color) > 0) then
-                    call terminal_write(token_color // char(27) // '[48;5;234m' // utf8_ch // char(27) // '[0m')
-                else
-                    call terminal_write(char(27) // '[48;5;234m' // utf8_ch // char(27) // '[0m')
-                end if
-            else if (len(token_color) > 0) then
-                ! Normal text with syntax highlighting
-                call terminal_write(token_color // utf8_ch // char(27) // '[0m')
+                ! Inactive pane background (+ syntax color)
+                style = token_color // char(27) // '[48;5;234m'
             else
-                ! Normal text without highlighting
-                call terminal_write(utf8_ch)
+                ! Syntax color only (empty for plain text)
+                style = token_color
             end if
+
+            if (style /= last_style) then
+                call terminal_write(char(27) // '[0m')
+                if (len(style) > 0) call terminal_write(style)
+                last_style = style
+            end if
+            call terminal_write(utf8_ch)
 
             display_col = display_col + char_width
             char_idx = char_idx + 1
@@ -1737,12 +1895,20 @@ contains
         ! Fill remaining width with spaces
         do while (display_col < content_width)
             if (.not. pane%is_active) then
-                call terminal_write(char(27) // '[48;5;234m ' // char(27) // '[0m')
+                style = char(27) // '[48;5;234m'
             else if (is_current_line) then
-                call terminal_write(char(27) // '[48;5;237m ' // char(27) // '[0m')
+                style = char(27) // '[48;5;237m'
             else
-                call terminal_write(' ')
+                style = ''
             end if
+
+            if (style /= last_style) then
+                call terminal_write(char(27) // '[0m')
+                if (len(style) > 0) call terminal_write(style)
+                last_style = style
+            end if
+            call terminal_write(' ')
+
             display_col = display_col + 1
         end do
 
@@ -1836,16 +2002,18 @@ contains
                     ! a ctrl-d word select), reading as a bogus extra highlight
                     if (cursor%has_selection) cycle
 
-                    ! Calculate cursor position within the pane
+                    ! Calculate cursor position within the pane (display
+                    ! cells, so tabs and wide chars line up with the text)
+                    line = buffer_get_line(pane%buffer, cursor%line)
                     screen_row = pane_row + (cursor%line - pane%viewport_line)
-                    screen_col = pane_col + col_offset + (cursor%column - pane%viewport_column)
+                    screen_col = pane_col + col_offset + &
+                        display_offset_of(line, pane%viewport_column, cursor%column)
 
                     ! Ensure cursor is within pane boundaries
                     if (screen_row >= pane_row .and. screen_row < pane_row + pane_height .and. &
                         screen_col >= pane_col + col_offset .and. screen_col < pane_col + pane_width) then
                         ! Get the character at this cursor position
                         ! (cursor%column is a character index, not a byte index)
-                        line = buffer_get_line(pane%buffer, cursor%line)
                         if (cursor%column <= utf8_char_count(line)) then
                             cursor_char = utf8_char_at(line, cursor%column)
                         else
@@ -1864,9 +2032,12 @@ contains
         ! Now render the active cursor
         cursor = pane%cursors(pane%active_cursor)
 
-        ! Calculate cursor position within the pane, accounting for line numbers
+        ! Calculate cursor position within the pane, accounting for line
+        ! numbers, in display cells (tabs / wide chars)
+        line = buffer_get_line(pane%buffer, cursor%line)
         screen_row = pane_row + (cursor%line - pane%viewport_line)
-        screen_col = pane_col + col_offset + (cursor%column - pane%viewport_column)
+        screen_col = pane_col + col_offset + &
+            display_offset_of(line, pane%viewport_column, cursor%column)
 
         ! Ensure cursor is within pane boundaries
         if (screen_row >= pane_row .and. screen_row < pane_row + pane_height .and. &
@@ -1957,7 +2128,9 @@ contains
             end if
 
             screen_row = pane_row + (cursor%line - pane%viewport_line)
-            screen_col = pane_col + col_offset + (cursor%column - pane%viewport_column)
+            screen_col = pane_col + col_offset + display_offset_of( &
+                buffer_get_line(pane%buffer, cursor%line), &
+                pane%viewport_column, cursor%column)
             if (screen_row < pane_row .or. screen_row >= pane_row + pane_height) return
             if (screen_col < pane_col + col_offset .or. screen_col >= pane_col + pane_width) return
             avail = pane_col + pane_width - screen_col
@@ -1976,7 +2149,9 @@ contains
                 min_row = 1
             end if
             screen_row = cursor%line - editor%viewport_line + row_offset
-            screen_col = cursor%column - editor%viewport_column + 1 + col_offset
+            screen_col = col_offset + 1 + display_offset_of( &
+                buffer_get_line(buffer, cursor%line), &
+                editor%viewport_column, cursor%column)
             if (screen_row < min_row .or. screen_row >= editor%screen_rows) return
             if (screen_col < 1 .or. screen_col > screen_width) return
             avail = screen_width - screen_col + 1
@@ -2037,9 +2212,11 @@ contains
             pane_height = pane_height - 1
         end if
 
-        ! Calculate cursor screen position
+        ! Calculate cursor screen position (display cells)
         screen_row = pane_row + (cursor%line - pane%viewport_line)
-        screen_col = pane_col + col_offset + (cursor%column - pane%viewport_column)
+        screen_col = pane_col + col_offset + display_offset_of( &
+            buffer_get_line(pane%buffer, cursor%line), &
+            pane%viewport_column, cursor%column)
 
         ! Ensure cursor is within pane boundaries
         if (screen_row >= pane_row .and. screen_row < pane_row + pane_height .and. &
@@ -2053,8 +2230,9 @@ contains
         call show_caret_unless_selecting(editor)
     end subroutine render_cursor_for_panes_with_tree
 
-    subroutine render_cursor_in_pane(editor, pane_start_col, pane_width)
+    subroutine render_cursor_in_pane(editor, buffer, pane_start_col, pane_width)
         type(editor_state_t), intent(in) :: editor
+        type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: pane_start_col, pane_width
         type(cursor_t) :: cursor
         integer :: screen_row, screen_col, col_offset, row_offset, min_row
@@ -2077,9 +2255,11 @@ contains
 
         cursor = editor%cursors(editor%active_cursor)
 
-        ! Calculate screen position within the editor pane
+        ! Calculate screen position within the editor pane (display cells)
         screen_row = cursor%line - editor%viewport_line + row_offset
-        screen_col = pane_start_col + col_offset + cursor%column - editor%viewport_column
+        screen_col = pane_start_col + col_offset + display_offset_of( &
+            buffer_get_line(buffer, cursor%line), &
+            editor%viewport_column, cursor%column)
 
         ! Ensure cursor is within pane bounds and not in tab bar
         if (screen_row >= min_row .and. screen_row < editor%screen_rows .and. &
@@ -2272,7 +2452,7 @@ contains
         end select
 
         ! Render cursor
-        call render_cursor_for_lsp_panel(editor, 1, editor_width)
+        call render_cursor_for_lsp_panel(editor, buffer, 1, editor_width)
 
         call terminal_show_cursor()
     end subroutine render_screen_with_lsp_panel
@@ -2340,8 +2520,9 @@ contains
     end subroutine render_editor_area_for_lsp_panel
 
     ! Helper to render cursor when LSP panel is visible
-    subroutine render_cursor_for_lsp_panel(editor, start_col, width)
+    subroutine render_cursor_for_lsp_panel(editor, buffer, start_col, width)
         type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: start_col, width
         integer :: tab_idx, n_panes
 
@@ -2355,7 +2536,7 @@ contains
         if (n_panes > 1) then
             call render_cursor_for_panes_in_lsp_view(editor)
         else
-            call render_cursor_in_pane(editor, start_col, width)
+            call render_cursor_in_pane(editor, buffer, start_col, width)
         end if
     end subroutine render_cursor_for_lsp_panel
 

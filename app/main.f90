@@ -14,7 +14,7 @@ program facsimile
     use save_prompt_module
     use command_palette_module, only: register_command
     use terminal_panel_module, only: is_terminal_panel_visible, &
-        terminal_panel_poll
+        terminal_panel_poll, terminal_panel_resize
     use iso_c_binding, only: c_int
     use welcome_menu_module, only: show_welcome_menu
     use fortress_navigator_module, only: open_fortress_navigator
@@ -45,6 +45,7 @@ program facsimile
     character(len=:), allocatable :: selected_path
     integer :: status, argc, rows, cols, i
     integer :: prev_active_tab, prev_active_pane
+    integer :: coalesced_keys
     logical :: active_view_changed
 
 
@@ -467,6 +468,12 @@ program facsimile
             (rows /= editor%screen_rows .or. cols /= editor%screen_cols)) then
             editor%screen_rows = rows
             editor%screen_cols = cols
+            ! Propagate the new size to every consumer that caches it: the
+            ! renderer's screen buffer and the integrated terminal's PTY/grid
+            ! (the shell must receive SIGWINCH or it keeps wrapping at the
+            ! old width).
+            call resize_renderer(rows, cols)
+            call terminal_panel_resize(editor%terminal_panel, rows, cols)
             call update_viewport(editor)
             if (editor%fuss_mode_active) then
                 call render_screen_with_tree(buffer, editor, &
@@ -553,6 +560,14 @@ program facsimile
         call get_key_input(key_input, status)
 
         if (status == 0) then
+            ! Coalescing loop: when keystrokes are already buffered (fast
+            ! typing, paste, or a consumer that fell behind), process the
+            ! whole burst and render once at the end. One full-screen frame
+            ! per keystroke is 3KB at 80x24 but 20KB+ at large terminals;
+            ! emitting one per key floods slow terminals, which then display
+            ! stale/torn frames with the caret detached from the text.
+            coalesced_keys = 0
+            do
             ! Sync buffer before and after input when using panes
             ! Before: copy active pane's buffer -> global buffer
             ! After: copy global buffer -> active pane's buffer
@@ -621,6 +636,16 @@ program facsimile
                     end if
                 end if
             end if
+
+            ! Continue the burst only while more input is already waiting.
+            ! Capped so an endless input stream still renders periodically.
+            if (should_quit) exit
+            if (coalesced_keys >= 64) exit
+            if (.not. terminal_input_available()) exit
+            call get_key_input(key_input, status)
+            if (status /= 0) exit
+            coalesced_keys = coalesced_keys + 1
+            end do
 
             if (should_quit) then
                 running = .false.

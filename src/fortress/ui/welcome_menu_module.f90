@@ -3,7 +3,8 @@
 
 module welcome_menu_module
     use iso_fortran_env, only: int32
-    use terminal_io_module, only: terminal_write, terminal_move_cursor, terminal_clear_screen, terminal_flush
+    use terminal_io_module, only: terminal_write, terminal_move_cursor, terminal_clear_screen, terminal_flush, &
+                                  terminal_get_size
     use input_handler_module, only: get_key_input
     use favorites_module, only: favorite_t, favorites_load, favorites_remove
     use recents_module, only: recent_t, recents_load, recents_remove
@@ -44,8 +45,10 @@ contains
         call recents_load(recents, rec_count, max_recents, success)
         if (.not. success) rec_count = 0
 
-        ! Get terminal size
+        ! Get terminal size (real ioctl query; guard the failure fallback)
         call terminal_get_size(rows, cols)
+        if (rows <= 0) rows = 24
+        if (cols <= 0) cols = 80
 
         ! Main loop
         do
@@ -279,15 +282,6 @@ contains
         ! Note: This means with many items, CWD is always visible but
         ! you scroll through the rest of the list below it
     end subroutine adjust_scroll
-
-    !> Get terminal size (wrapper)
-    subroutine terminal_get_size(rows, cols)
-        integer, intent(out) :: rows, cols
-        ! Default size
-        rows = 24
-        cols = 80
-        ! TODO: Query actual terminal size if available
-    end subroutine terminal_get_size
 
     !> Check if a directory exists (Phase 7: deleted workspace detection)
     function directory_exists(path) result(exists)

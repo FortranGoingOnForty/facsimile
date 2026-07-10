@@ -131,9 +131,10 @@ contains
         tooltip%height = min(lines + 2, MAX_HEIGHT)  ! +2 for borders
     end subroutine calculate_tooltip_dimensions
 
-    subroutine show_hover_tooltip(tooltip, row, col)
+    subroutine show_hover_tooltip(tooltip, row, col, screen_rows, screen_cols)
         type(hover_tooltip_t), intent(inout) :: tooltip
         integer, intent(in) :: row, col
+        integer, intent(in), optional :: screen_rows, screen_cols
         integer :: display_row, i, line_start, line_end
         character(len=256) :: line
 
@@ -142,6 +143,21 @@ contains
 
         tooltip%row = row
         tooltip%col = col
+
+        ! Clamp the box inside the screen when dimensions are known
+        if (present(screen_rows) .and. tooltip%height > 0) then
+            if (tooltip%row + tooltip%height - 1 > screen_rows) then
+                tooltip%row = screen_rows - tooltip%height + 1
+            end if
+            if (tooltip%row < 1) tooltip%row = 1
+        end if
+        if (present(screen_cols) .and. tooltip%width > 0) then
+            if (tooltip%col + tooltip%width - 1 > screen_cols) then
+                tooltip%col = screen_cols - tooltip%width + 1
+            end if
+            if (tooltip%col < 1) tooltip%col = 1
+        end if
+
         tooltip%visible = .true.
 
         ! Draw top border
