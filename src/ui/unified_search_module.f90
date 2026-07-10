@@ -4,13 +4,21 @@ module unified_search_module
     use editor_state_module, only: editor_state_t, cursor_t, sync_editor_to_pane
     use text_buffer_module
     use regex_module
+    use utf8_module, only: utf8_char_count, utf8_char_to_byte_index, utf8_byte_to_char_index
     implicit none
     private
 
     public :: show_unified_search_prompt
-    public :: current_search_pattern, clear_search_pattern
+    public :: current_search_pattern, clear_search_pattern, exit_search_mode
     public :: find_next_match, find_prev_match, center_viewport_on_cursor
     public :: get_matches_on_line, search_mode_active
+    public :: search_forward, search_backward
+
+    ! Column conventions: cursor_t columns are 1-based UTF-8 CHARACTER
+    ! indices, while the search internals (index(), POSIX regex) work on
+    ! BYTE offsets within a line. find_next_match/find_prev_match and
+    ! get_matches_on_line speak bytes; conversions happen where cursor or
+    ! selection fields are read or written.
 
     ! Module variables for search/replace state
     character(len=:), allocatable :: current_search_pattern
@@ -93,6 +101,9 @@ contains
                 selection_end_line = temp_line
                 selection_end_col = temp_col
             end if
+            ! Bounds are compared against byte match positions
+            selection_start_col = line_byte_col(buffer, selection_start_line, selection_start_col)
+            selection_end_col = line_byte_col(buffer, selection_end_line, selection_end_col)
         else
             search_in_selection = .false.
         end if
@@ -123,10 +134,6 @@ contains
 
                 if (ch == -1 .or. ch == 27) then
                     ! Standalone ESC - exit search mode
-                    ! DEBUG: Log ESC pressed
-                    open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
-                    write(99, '(A)') 'ESC: Exiting search mode, about to return'
-                    close(99)
                     search_mode_active = .false.
                     exit
                 else if (ch == iachar('[')) then
@@ -186,11 +193,6 @@ contains
                     in_alt_sequence = .false.
                 end if
             else if (ch == 9) then  ! Tab - switch fields
-                ! DEBUG: Check selection when Tab is pressed
-                open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
-                write(99, '(A,L1)') 'TAB: has_sel=', editor%cursors(editor%active_cursor)%has_selection
-                close(99)
-
                 if (active_field == 1) then
                     active_field = 2
                 else
@@ -454,6 +456,7 @@ contains
         character(len=*), intent(in) :: pattern
         logical :: found
         integer :: found_line, found_col
+        integer :: match_len, start_char, end_char
 
         ! Compile regex if in regex mode
         if (use_regex) then
@@ -471,25 +474,29 @@ contains
 
         call find_next_match(buffer, pattern, &
                             editor%cursors(editor%active_cursor)%line, &
-                            editor%cursors(editor%active_cursor)%column, &
+                            line_byte_col(buffer, editor%cursors(editor%active_cursor)%line, &
+                                          editor%cursors(editor%active_cursor)%column), &
                             found, found_line, found_col)
 
         if (found) then
-            editor%cursors(editor%active_cursor)%line = found_line
-            editor%cursors(editor%active_cursor)%column = found_col
-            editor%cursors(editor%active_cursor)%desired_column = found_col
-
-            ! Create selection
             ! For regex, use the match length from last search
-            ! For normal search, use pattern length
+            ! For normal search, use pattern length (both in bytes)
+            if (use_regex .and. last_match_length > 0) then
+                match_len = last_match_length
+            else
+                match_len = len(pattern)
+            end if
+            start_char = line_char_col(buffer, found_line, found_col)
+            end_char = line_char_col(buffer, found_line, found_col + match_len)
+
+            editor%cursors(editor%active_cursor)%line = found_line
+            editor%cursors(editor%active_cursor)%desired_column = start_char
+
+            ! Create selection spanning the match
             editor%cursors(editor%active_cursor)%has_selection = .true.
             editor%cursors(editor%active_cursor)%selection_start_line = found_line
-            editor%cursors(editor%active_cursor)%selection_start_col = found_col
-            if (use_regex .and. last_match_length > 0) then
-                editor%cursors(editor%active_cursor)%column = found_col + last_match_length
-            else
-                editor%cursors(editor%active_cursor)%column = found_col + len(pattern)
-            end if
+            editor%cursors(editor%active_cursor)%selection_start_col = start_char
+            editor%cursors(editor%active_cursor)%column = end_char
 
             last_search_line = found_line
             last_search_col = found_col
@@ -516,38 +523,84 @@ contains
 
         ! Search from cursor position
         start_line = editor%cursors(editor%active_cursor)%line
-        start_col = editor%cursors(editor%active_cursor)%column
+        start_col = line_byte_col(buffer, start_line, &
+                                  editor%cursors(editor%active_cursor)%column)
 
         call find_next_match(buffer, current_search_pattern, &
                             start_line, start_col, &
                             found, found_line, found_col)
 
-        if (found) then
-            editor%cursors(editor%active_cursor)%line = found_line
-            editor%cursors(editor%active_cursor)%column = found_col
-            editor%cursors(editor%active_cursor)%desired_column = found_col
-
-            editor%cursors(editor%active_cursor)%has_selection = .true.
-            editor%cursors(editor%active_cursor)%selection_start_line = found_line
-            editor%cursors(editor%active_cursor)%selection_start_col = found_col
-
-            ! Use last_match_length for regex (which was set by find_next_match)
-            if (use_regex .and. last_match_length > 0) then
-                editor%cursors(editor%active_cursor)%column = found_col + last_match_length
-            else
-                editor%cursors(editor%active_cursor)%column = found_col + len(current_search_pattern)
-            end if
-
-            last_search_line = found_line
-            last_search_col = found_col
-
-            ! Center viewport on the found match FIRST
-            call center_viewport_on_cursor(editor)
-
-            ! THEN sync cursor and viewport to pane
-            call sync_editor_to_pane(editor)
-        end if
+        if (found) call select_found_match(editor, buffer, found_line, found_col)
     end subroutine search_forward
+
+    subroutine search_backward(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        logical :: found
+        integer :: found_line, found_col
+        integer :: start_line, start_col, start_char
+
+        if (.not. allocated(current_search_pattern)) return
+
+        call count_all_matches(buffer, current_search_pattern)
+
+        ! Start strictly before the current match (its selection start)
+        ! so repeated presses walk backward instead of re-finding it
+        start_line = editor%cursors(editor%active_cursor)%line
+        if (editor%cursors(editor%active_cursor)%has_selection .and. &
+            editor%cursors(editor%active_cursor)%selection_start_line == start_line) then
+            start_char = editor%cursors(editor%active_cursor)%selection_start_col
+        else
+            start_char = editor%cursors(editor%active_cursor)%column
+        end if
+        start_col = line_byte_col(buffer, start_line, start_char) - 1
+
+        call find_prev_match(buffer, current_search_pattern, &
+                            start_line, start_col, &
+                            found, found_line, found_col)
+
+        if (found) call select_found_match(editor, buffer, found_line, found_col)
+    end subroutine search_backward
+
+    ! Shared tail of search_forward/search_backward: place the cursor and
+    ! selection over the match found at (found_line, found_col-in-bytes)
+    subroutine select_found_match(editor, buffer, found_line, found_col)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer, intent(in) :: found_line, found_col
+        integer :: match_len, start_char, end_char
+
+        if (use_regex .and. last_match_length > 0) then
+            match_len = last_match_length
+        else
+            match_len = len(current_search_pattern)
+        end if
+        start_char = line_char_col(buffer, found_line, found_col)
+        end_char = line_char_col(buffer, found_line, found_col + match_len)
+
+        editor%cursors(editor%active_cursor)%line = found_line
+        editor%cursors(editor%active_cursor)%desired_column = start_char
+
+        editor%cursors(editor%active_cursor)%has_selection = .true.
+        editor%cursors(editor%active_cursor)%selection_start_line = found_line
+        editor%cursors(editor%active_cursor)%selection_start_col = start_char
+        editor%cursors(editor%active_cursor)%column = end_char
+
+        last_search_line = found_line
+        last_search_col = found_col
+
+        ! Center viewport on the found match FIRST
+        call center_viewport_on_cursor(editor)
+
+        ! THEN sync cursor and viewport to pane
+        call sync_editor_to_pane(editor)
+    end subroutine select_found_match
+
+    ! Leave search mode (dismiss match highlights, release n/N navigation)
+    ! but keep the pattern so the prompt can prefill it next time
+    subroutine exit_search_mode()
+        search_mode_active = .false.
+    end subroutine exit_search_mode
 
     subroutine replace_current_and_advance(editor, buffer)
         type(editor_state_t), intent(inout) :: editor
@@ -558,36 +611,18 @@ contains
         if (.not. allocated(current_search_pattern)) return
         if (.not. allocated(current_replace_text)) return
 
-        ! DEBUG: Write to file
-        open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
-        write(99, '(A,I0,A,I0,A,L1)') 'REPLACE: cursor at line=', &
-            editor%cursors(editor%active_cursor)%line, ' col=', &
-            editor%cursors(editor%active_cursor)%column, ' has_sel=', &
-            editor%cursors(editor%active_cursor)%has_selection
-        close(99)
-
         ! Check if cursor has selection
         if (editor%cursors(editor%active_cursor)%has_selection) then
-            ! DEBUG: Write selection info
-            open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
-            write(99, '(A,I0,A,I0)') 'REPLACE: selection at line=', &
-                editor%cursors(editor%active_cursor)%selection_start_line, ' col=', &
-                editor%cursors(editor%active_cursor)%selection_start_col
-            close(99)
-            ! Calculate match length from selection
+            ! Calculate match length in BYTES (perform_replacement slices
+            ! the line); the selection columns are char indices
             if (last_match_length > 0) then
                 match_len = last_match_length
             else
-                match_len = editor%cursors(editor%active_cursor)%column - &
-                           editor%cursors(editor%active_cursor)%selection_start_col
+                match_len = line_byte_col(buffer, editor%cursors(editor%active_cursor)%line, &
+                                          editor%cursors(editor%active_cursor)%column) - &
+                            line_byte_col(buffer, editor%cursors(editor%active_cursor)%line, &
+                                          editor%cursors(editor%active_cursor)%selection_start_col)
             end if
-
-            ! DEBUG: About to perform replacement
-            open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
-            write(99, '(A,I0,A,A,A,I0)') 'REPLACE: Calling perform_replacement with match_len=', &
-                match_len, ' replace_text="', trim(current_replace_text), '" at line=', &
-                editor%cursors(editor%active_cursor)%selection_start_line
-            close(99)
 
             ! Perform replacement on parameter buffer
             call perform_replacement(buffer, editor%cursors(editor%active_cursor), &
@@ -611,7 +646,7 @@ contains
             editor%cursors(editor%active_cursor)%selection_start_line = &
                 editor%cursors(editor%active_cursor)%line
             editor%cursors(editor%active_cursor)%selection_start_col = &
-                editor%cursors(editor%active_cursor)%column - len(current_replace_text)
+                editor%cursors(editor%active_cursor)%column - utf8_char_count(current_replace_text)
 
             ! Sync cursor to pane (important!)
             call sync_editor_to_pane(editor)
@@ -628,6 +663,7 @@ contains
         type(buffer_t), intent(inout) :: buffer
         logical :: found
         integer :: found_line, found_col, replace_count
+        integer :: search_line, search_col
         type(cursor_t) :: temp_cursor
 
         if (.not. allocated(current_search_pattern)) return
@@ -636,62 +672,61 @@ contains
         replace_count = 0
         temp_cursor = editor%cursors(editor%active_cursor)
 
-        ! Start from beginning
-        temp_cursor%line = 1
-        temp_cursor%column = 0
+        ! Scan position for find_next_match, in bytes; start from beginning
+        search_line = 1
+        search_col = 0
 
         do
             call find_next_match(buffer, current_search_pattern, &
-                                temp_cursor%line, temp_cursor%column, &
+                                search_line, search_col, &
                                 found, found_line, found_col)
 
             if (.not. found) exit
 
-            ! Move cursor to match and select it
+            ! Move cursor to match and select it (char columns)
             temp_cursor%line = found_line
-            temp_cursor%column = found_col
             temp_cursor%has_selection = .true.
             temp_cursor%selection_start_line = found_line
-            temp_cursor%selection_start_col = found_col
-            temp_cursor%column = found_col + last_match_length
+            temp_cursor%selection_start_col = line_char_col(buffer, found_line, found_col)
+            temp_cursor%column = line_char_col(buffer, found_line, found_col + last_match_length)
 
             ! Replace
             call perform_replacement(buffer, temp_cursor, current_replace_text, last_match_length)
 
             replace_count = replace_count + 1
 
+            ! Continue searching after the replacement
+            search_line = temp_cursor%line
+            search_col = line_byte_col(buffer, search_line, temp_cursor%column)
+
             ! Guard against infinite loop
             if (replace_count > 10000) exit
         end do
 
-        ! Update main cursor
-        editor%cursors(editor%active_cursor) = temp_cursor
+        ! Update main cursor (leave it untouched if nothing matched)
+        if (replace_count > 0) editor%cursors(editor%active_cursor) = temp_cursor
     end subroutine replace_all_matches
 
+    ! Replace match_len BYTES at the cursor's selection start with
+    ! replace_text. Selection/cursor columns are char indices; the line
+    ! rebuild below works in bytes (the local buffer position helpers are
+    ! byte-based, which stays consistent while the whole line is
+    ! deleted and re-inserted byte by byte).
     subroutine perform_replacement(buffer, cursor, replace_text, match_len)
         type(buffer_t), intent(inout) :: buffer
         type(cursor_t), intent(inout) :: cursor
         character(len=*), intent(in) :: replace_text
         integer, intent(in) :: match_len
         character(len=:), allocatable :: line, new_line
-        integer :: col, i
-
-        ! DEBUG: Log entry into perform_replacement
-        open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
-        write(99, '(A,I0,A,I0,A,I0)') 'perform_replacement: cursor at line=', cursor%line, &
-            ' selection_start=', cursor%selection_start_line, ' col=', cursor%selection_start_col
-        close(99)
+        integer :: col_char, col, i
 
         ! Get current line
         line = buffer_get_line(buffer, cursor%line)
 
-        ! DEBUG: Log what line we got
-        open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
-        write(99, '(A,A)') 'perform_replacement: line content="', trim(line), '"'
-        close(99)
-
         ! Build new line with replacement
-        col = cursor%selection_start_col
+        col_char = cursor%selection_start_col
+        col = utf8_char_to_byte_index(line, col_char)
+        if (col == 0) col = len(line) + 1
         allocate(character(len=len(line) - match_len + len(replace_text)) :: new_line)
 
         ! Copy part before match
@@ -709,26 +744,11 @@ contains
             new_line(col+len(replace_text):) = line(col+match_len:)
         end if
 
-        ! DEBUG: Log the new line
-        open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
-        write(99, '(A,A)') 'perform_replacement: new_line="', trim(new_line), '"'
-        close(99)
-
-        ! DEBUG: Log before delete
-        open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
-        write(99, '(A,I0,A,I0)') 'perform_replacement: About to delete at line=', cursor%line, ' col=1'
-        close(99)
-
         ! Delete old line content
         cursor%column = 1
         do i = 1, len(line)
             call buffer_delete_at_cursor(buffer, cursor)
         end do
-
-        ! DEBUG: Log after delete
-        open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
-        write(99, '(A)') 'perform_replacement: Deleted old content'
-        close(99)
 
         ! Insert new line content
         do i = 1, len(new_line)
@@ -736,19 +756,8 @@ contains
             cursor%column = cursor%column + 1
         end do
 
-        ! DEBUG: Log after insert
-        open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
-        write(99, '(A)') 'perform_replacement: Inserted new content'
-        line = buffer_get_line(buffer, 4)
-        write(99, '(A,A)') 'perform_replacement: Line 4 is now="', trim(line), '"'
-        if (allocated(line)) deallocate(line)
-        line = buffer_get_line(buffer, 1)
-        write(99, '(A,A)') 'perform_replacement: Line 1 is now="', trim(line), '"'
-        if (allocated(line)) deallocate(line)
-        close(99)
-
-        ! Position cursor after replacement
-        cursor%column = col + len(replace_text)
+        ! Position cursor after replacement (char column)
+        cursor%column = col_char + utf8_char_count(replace_text)
         cursor%desired_column = cursor%column
 
         buffer%modified = .true.
@@ -763,14 +772,6 @@ contains
         integer :: pos
 
         pos = get_buffer_position(buffer, cursor%line, cursor%column)
-
-        ! DEBUG: Log the position being deleted
-        if (cursor%line == 4) then
-            open(unit=99, file='/tmp/fac_debug.txt', position='append', action='write')
-            write(99, '(A,I0,A,I0,A,I0)') 'buffer_delete_at_cursor: line=', cursor%line, &
-                ' col=', cursor%column, ' calculated pos=', pos
-            close(99)
-        end if
 
         if (pos > 0 .and. pos <= get_buffer_content_size(buffer)) then
             call buffer_delete(buffer, pos, 1)
@@ -829,6 +830,39 @@ contains
 
         size = buffer%size - (buffer%gap_end - buffer%gap_start)
     end function get_buffer_content_size
+
+    ! Convert a 1-based char column on a buffer line to a byte column.
+    ! Values <= 1 pass through (0 is used as "before line start").
+    function line_byte_col(buffer, line_num, char_col) result(byte_col)
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: line_num, char_col
+        integer :: byte_col
+        character(len=:), allocatable :: line
+
+        if (char_col <= 1) then
+            byte_col = char_col
+            return
+        end if
+        line = buffer_get_line(buffer, line_num)
+        byte_col = utf8_char_to_byte_index(line, char_col)
+        if (byte_col == 0) byte_col = len(line) + 1
+    end function line_byte_col
+
+    ! Convert a 1-based byte column on a buffer line to a char column
+    function line_char_col(buffer, line_num, byte_col) result(char_col)
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: line_num, byte_col
+        integer :: char_col
+        character(len=:), allocatable :: line
+
+        if (byte_col <= 1) then
+            char_col = byte_col
+            return
+        end if
+        line = buffer_get_line(buffer, line_num)
+        char_col = utf8_byte_to_char_index(line, byte_col)
+        if (char_col == 0) char_col = utf8_char_count(line) + 1
+    end function line_char_col
 
     ! Include all helper functions from search_prompt_module
     ! (find_next_match, find_prev_match, count_all_matches, etc.)

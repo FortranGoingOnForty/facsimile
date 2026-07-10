@@ -1,5 +1,6 @@
 module bracket_matching_module
     use text_buffer_module
+    use utf8_module, only: utf8_char_to_byte_index, utf8_byte_to_char_index
     implicit none
     private
 
@@ -39,6 +40,10 @@ contains
         end select
     end function get_bracket_pair
 
+    ! start_col and match_col are UTF-8 CHARACTER columns (the cursor
+    ! convention); the scan below runs on bytes internally, which is safe
+    ! because bracket chars are ASCII and UTF-8 continuation bytes can
+    ! never equal an ASCII value.
     subroutine find_matching_bracket(buffer, start_line, start_col, &
                                     found, match_line, match_col)
         type(buffer_t), intent(in) :: buffer
@@ -47,7 +52,7 @@ contains
         integer, intent(out) :: match_line, match_col
         character(len=:), allocatable :: line
         character(len=1) :: start_char, target_char
-        integer :: depth, current_line, current_col
+        integer :: depth, current_line, current_col, start_byte
         integer :: line_count, line_len
         logical :: search_forward
 
@@ -57,12 +62,13 @@ contains
 
         ! Get the character at the starting position
         line = buffer_get_line(buffer, start_line)
-        if (start_col < 1 .or. start_col > len(line)) then
+        start_byte = utf8_char_to_byte_index(line, start_col)
+        if (start_byte < 1 .or. start_byte > len(line)) then
             if (allocated(line)) deallocate(line)
             return
         end if
 
-        start_char = line(start_col:start_col)
+        start_char = line(start_byte:start_byte)
         if (allocated(line)) deallocate(line)
 
         ! Check if it's a bracket
@@ -85,7 +91,7 @@ contains
         if (search_forward) then
             ! Search forward for closing bracket
             current_line = start_line
-            current_col = start_col + 1
+            current_col = start_byte + 1
 
             do while (current_line <= line_count)
                 line = buffer_get_line(buffer, current_line)
@@ -104,7 +110,7 @@ contains
                         if (depth == 0) then
                             found = .true.
                             match_line = current_line
-                            match_col = current_col
+                            match_col = utf8_byte_to_char_index(line, current_col)
                             if (allocated(line)) deallocate(line)
                             return
                         end if
@@ -118,7 +124,7 @@ contains
         else
             ! Search backward for opening bracket
             current_line = start_line
-            current_col = start_col - 1
+            current_col = start_byte - 1
 
             do while (current_line >= 1)
                 line = buffer_get_line(buffer, current_line)
@@ -137,7 +143,7 @@ contains
                         if (depth == 0) then
                             found = .true.
                             match_line = current_line
-                            match_col = current_col
+                            match_col = utf8_byte_to_char_index(line, current_col)
                             if (allocated(line)) deallocate(line)
                             return
                         end if

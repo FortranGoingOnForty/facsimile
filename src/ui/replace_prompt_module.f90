@@ -5,8 +5,13 @@ module replace_prompt_module
     use text_buffer_module
     use search_prompt_module, only: find_next_match, center_viewport_on_cursor
     use renderer_module, only: render_screen
+    use utf8_module, only: utf8_char_count, utf8_char_to_byte_index, utf8_byte_to_char_index
     implicit none
     private
+
+    ! Column conventions: find_next_match positions are BYTE offsets in
+    ! the line; cursor_t columns are UTF-8 CHARACTER indices. Convert at
+    ! the boundaries below.
 
     public :: show_replace_prompt
 
@@ -50,7 +55,8 @@ contains
                 exit
             else if (ch == 10 .or. ch == 13) then  ! Enter - proceed to replacement
                 if (input_pos > 0 .and. entering_find) then
-                    allocate(character(len=input_pos) :: find_pattern)
+                    ! Assignment (re)allocates; find_pattern is already
+                    ! allocated at length 0 above
                     find_pattern = find_buffer(1:input_pos)
                     entering_find = .false.
                     entering_replace = .true.
@@ -63,7 +69,6 @@ contains
                     call terminal_move_cursor(editor%screen_rows, 1)
                     call terminal_write(prompt)
                 else if (entering_replace) then
-                    allocate(character(len=input_pos) :: replace_text)
                     if (input_pos > 0) then
                         replace_text = replace_buffer(1:input_pos)
                     else
@@ -102,8 +107,9 @@ contains
         call terminal_move_cursor(editor%screen_rows, 1)
         call terminal_write(repeat(' ', editor%screen_cols))
 
-        ! If we have both patterns, show replace options
-        if (allocated(find_pattern) .and. allocated(replace_text)) then
+        ! If we have both patterns, show replace options (an empty find
+        ! pattern means the prompt was cancelled before completion)
+        if (len(find_pattern) > 0 .and. allocated(replace_text)) then
             call execute_replace(editor, buffer, find_pattern, replace_text, replace_count)
 
             ! Show result
@@ -137,6 +143,7 @@ contains
         logical :: found
         integer :: found_line, found_col
         integer :: start_line, start_col
+        integer :: start_char, end_char
         character(len=64) :: prompt
         character :: response
         integer :: ch
@@ -152,16 +159,17 @@ contains
                            found, found_line, found_col)
 
         do while (found)
-            ! Move cursor to match
+            ! Move cursor to match (char columns; found_col is bytes)
+            start_char = line_char_col(buffer, found_line, found_col)
+            end_char = line_char_col(buffer, found_line, found_col + len(find_pattern))
             editor%cursors(editor%active_cursor)%line = found_line
-            editor%cursors(editor%active_cursor)%column = found_col
-            editor%cursors(editor%active_cursor)%desired_column = found_col
+            editor%cursors(editor%active_cursor)%desired_column = start_char
 
             ! Select the match
             editor%cursors(editor%active_cursor)%has_selection = .true.
             editor%cursors(editor%active_cursor)%selection_start_line = found_line
-            editor%cursors(editor%active_cursor)%selection_start_col = found_col
-            editor%cursors(editor%active_cursor)%column = found_col + len(find_pattern)
+            editor%cursors(editor%active_cursor)%selection_start_col = start_char
+            editor%cursors(editor%active_cursor)%column = end_char
 
             ! Update viewport and render
             call center_viewport_on_cursor(editor)
@@ -221,9 +229,11 @@ contains
             ! Clear selection
             editor%cursors(editor%active_cursor)%has_selection = .false.
 
-            ! Find next match (starting after the replacement)
+            ! Find next match (starting after the replacement); the scan
+            ! position is in bytes, the cursor column in chars
             start_line = editor%cursors(editor%active_cursor)%line
-            start_col = editor%cursors(editor%active_cursor)%column
+            start_col = line_byte_col(buffer, start_line, &
+                                      editor%cursors(editor%active_cursor)%column)
 
             call find_next_match(buffer, find_pattern, start_line, start_col, &
                                found, found_line, found_col)
@@ -240,13 +250,16 @@ contains
         type(cursor_t), intent(inout) :: cursor
         character(len=*), intent(in) :: find_pattern, replace_text
         character(len=:), allocatable :: line, new_line
-        integer :: col, i
+        integer :: col_char, col, i
 
         ! Get current line
         line = buffer_get_line(buffer, cursor%line)
 
-        ! Build new line with replacement
-        col = cursor%selection_start_col
+        ! Build new line with replacement; slicing works in bytes,
+        ! selection_start_col is a char column
+        col_char = cursor%selection_start_col
+        col = utf8_char_to_byte_index(line, col_char)
+        if (col == 0) col = len(line) + 1
         allocate(character(len=len(line) - len(find_pattern) + len(replace_text)) :: new_line)
 
         ! Copy part before match
@@ -276,8 +289,8 @@ contains
             cursor%column = cursor%column + 1
         end do
 
-        ! Position cursor after replacement
-        cursor%column = col + len(replace_text)
+        ! Position cursor after replacement (char column)
+        cursor%column = col_char + utf8_char_count(replace_text)
         cursor%desired_column = cursor%column
 
         buffer%modified = .true.
@@ -347,6 +360,38 @@ contains
 
         size = buffer%size - (buffer%gap_end - buffer%gap_start)
     end function get_buffer_content_size
+
+    ! Convert a 1-based char column on a buffer line to a byte column
+    function line_byte_col(buffer, line_num, char_col) result(byte_col)
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: line_num, char_col
+        integer :: byte_col
+        character(len=:), allocatable :: line
+
+        if (char_col <= 1) then
+            byte_col = char_col
+            return
+        end if
+        line = buffer_get_line(buffer, line_num)
+        byte_col = utf8_char_to_byte_index(line, char_col)
+        if (byte_col == 0) byte_col = len(line) + 1
+    end function line_byte_col
+
+    ! Convert a 1-based byte column on a buffer line to a char column
+    function line_char_col(buffer, line_num, byte_col) result(char_col)
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: line_num, byte_col
+        integer :: char_col
+        character(len=:), allocatable :: line
+
+        if (byte_col <= 1) then
+            char_col = byte_col
+            return
+        end if
+        line = buffer_get_line(buffer, line_num)
+        char_col = utf8_byte_to_char_index(line, byte_col)
+        if (char_col == 0) char_col = utf8_char_count(line) + 1
+    end function line_char_col
 
     subroutine sleep_ms(milliseconds)
         integer, intent(in) :: milliseconds

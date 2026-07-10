@@ -5,6 +5,7 @@ module utf8_module
 
     public :: utf8_char_count, utf8_byte_to_char_index, utf8_char_to_byte_index
     public :: utf8_char_at, utf8_display_width, utf8_is_valid_start
+    public :: utf8_char_col_to_utf16, utf16_to_utf8_char_col
 
 contains
 
@@ -145,6 +146,58 @@ contains
             end if
         end do
     end function utf8_display_width
+
+    ! LSP interop: Language Server Protocol positions default to UTF-16
+    ! code units. A code point outside the BMP (4-byte UTF-8) occupies 2
+    ! units; everything else occupies 1.
+
+    ! Convert a 1-based char column to the 0-based UTF-16 unit offset of
+    ! that column (i.e. units occupied by the chars before it)
+    pure function utf8_char_col_to_utf16(str, char_col) result(units)
+        character(len=*), intent(in) :: str
+        integer, intent(in) :: char_col
+        integer :: units
+        integer :: i, cidx, char_len
+
+        units = 0
+        cidx = 1
+        i = 1
+        do while (i <= len(str) .and. cidx < char_col)
+            char_len = utf8_char_byte_length(str, i)
+            if (char_len <= 0) char_len = 1
+            if (char_len == 4) then
+                units = units + 2
+            else
+                units = units + 1
+            end if
+            i = i + char_len
+            cidx = cidx + 1
+        end do
+    end function utf8_char_col_to_utf16
+
+    ! Convert a 0-based UTF-16 unit offset to a 1-based char column.
+    ! Offsets past the end of the line map to char_count + 1.
+    pure function utf16_to_utf8_char_col(str, utf16_units) result(char_col)
+        character(len=*), intent(in) :: str
+        integer, intent(in) :: utf16_units
+        integer :: char_col
+        integer :: i, units, char_len
+
+        char_col = 1
+        units = 0
+        i = 1
+        do while (i <= len(str) .and. units < utf16_units)
+            char_len = utf8_char_byte_length(str, i)
+            if (char_len <= 0) char_len = 1
+            if (char_len == 4) then
+                units = units + 2
+            else
+                units = units + 1
+            end if
+            i = i + char_len
+            char_col = char_col + 1
+        end do
+    end function utf16_to_utf8_char_col
 
     ! Determine byte length of UTF-8 character starting at position i
     ! Returns 0 if invalid UTF-8 start byte

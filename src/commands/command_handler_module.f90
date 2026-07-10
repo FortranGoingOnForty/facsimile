@@ -9,15 +9,16 @@ module command_handler_module
     use renderer_module, only: update_viewport, render_screen, render_screen_with_tree, tree_state, &
                                fuss_search_buffer, fuss_search_len, fuss_search_last_time, &
                                fuss_fuzzy_jump, fuss_reset_search, get_time_ms, &
-                               fuss_git_prefix_active
+                               fuss_git_prefix_active, &
+                               display_offset_of, char_col_at_offset
     use yank_stack_module
     use clipboard_module
     use help_display_module, only: show_help
     use goto_prompt_module, only: show_goto_prompt
-    use search_prompt_module, only: show_search_prompt, search_forward, search_backward, &
-                                     current_search_pattern
     use replace_prompt_module, only: show_replace_prompt
-    use unified_search_module, only: show_unified_search_prompt
+    use unified_search_module, only: show_unified_search_prompt, current_search_pattern, &
+                                      search_forward, search_backward, search_mode_active, &
+                                      exit_search_mode
     use undo_stack_module
     use terminal_io_module, only: terminal_move_cursor, terminal_write, terminal_clear_screen, terminal_flush
     use terminal_panel_module, only: toggle_terminal_panel, &
@@ -27,7 +28,9 @@ module command_handler_module
     use input_handler_module, only: get_paste_text
     use bracket_matching_module, only: find_matching_bracket
     use utf8_module, only: utf8_char_to_byte_index, &
-        utf8_byte_to_char_index, utf8_char_count
+        utf8_byte_to_char_index, utf8_char_count, &
+        utf8_is_valid_start, &
+        utf8_char_col_to_utf16, utf16_to_utf8_char_col
     use file_tree_module
     use git_ops_module
     use text_prompt_module, only: show_text_prompt, show_yes_no_prompt
@@ -299,7 +302,6 @@ contains
                                 trim(ref_path) == trim(editor%filename)) then
                                 ! Same file
                                 editor%cursors(editor%active_cursor)%line = ref_line
-                                editor%cursors(editor%active_cursor)%column = ref_col
                             else
                                 ! Find open tab or open new
                                 do ti = 1, size(editor%tabs)
@@ -313,9 +315,12 @@ contains
                                     call open_file_in_editor(ref_path, editor, buffer)
                                 end if
                                 editor%cursors(editor%active_cursor)%line = ref_line
-                                editor%cursors(editor%active_cursor)%column = ref_col
                             end if
-                            editor%cursors(editor%active_cursor)%desired_column = ref_col
+                            ! Stored column is LSP UTF-16 units + 1
+                            editor%cursors(editor%active_cursor)%column = &
+                                char_col_from_lsp(buffer, ref_line, ref_col - 1)
+                            editor%cursors(editor%active_cursor)%desired_column = &
+                                editor%cursors(editor%active_cursor)%column
                             editor%cursors(editor%active_cursor)%has_selection = .false.
                             editor%viewport_line = max(1, ref_line - editor%screen_rows / 2)
                             call hide_references_panel(editor%references_panel)
@@ -338,9 +343,11 @@ contains
                     use iso_fortran_env, only: int32
                     integer(int32) :: sym_line, sym_col
                     if (get_selected_symbol_location(editor%symbols_panel, sym_line, sym_col)) then
-                        ! Jump to the symbol location
+                        ! Jump to the symbol location (stored column is
+                        ! LSP UTF-16 units + 1)
                         editor%cursors(editor%active_cursor)%line = sym_line
-                        editor%cursors(editor%active_cursor)%column = sym_col
+                        editor%cursors(editor%active_cursor)%column = &
+                            char_col_from_lsp(buffer, sym_line, sym_col - 1)
                         ! Center the view on the target line
                         editor%viewport_line = max(1, sym_line - editor%screen_rows / 2)
                         ! Hide the panel after jumping
@@ -408,6 +415,10 @@ contains
 
             ! Other panels (diagnostics, code_actions, references, symbols) are handled in early routing
 
+            ! Dismiss search mode: stops match highlighting and releases
+            ! n/N back to normal typing (the pattern is kept for reuse)
+            call exit_search_mode()
+
             ! ESC - Clear selections and return to single cursor mode
             if (size(editor%cursors) > 1) then
                 ! Keep only the active cursor
@@ -454,10 +465,10 @@ contains
                 if (size(editor%cursors) > 1) then
                     allocate(new_cursors(1))
                     new_cursors(1) = editor%cursors(editor%active_cursor)
-                    ! Clamp cursor to actual line length after undo
+                    ! Clamp cursor to actual line length (chars) after undo
                     line = buffer_get_line(buffer, new_cursors(1)%line)
-                    if (new_cursors(1)%column > len(line) + 1) then
-                        new_cursors(1)%column = len(line) + 1
+                    if (new_cursors(1)%column > utf8_char_count(line) + 1) then
+                        new_cursors(1)%column = utf8_char_count(line) + 1
                     end if
                     new_cursors(1)%desired_column = new_cursors(1)%column
                     if (allocated(line)) deallocate(line)
@@ -646,7 +657,7 @@ contains
                 character(len=:), allocatable :: last_line
                 last_line = buffer_get_line(buffer, line_count)
                 editor%cursors(editor%active_cursor)%column = &
-                    len(last_line) + 1
+                    utf8_char_count(last_line) + 1
                 editor%cursors(editor%active_cursor)%desired_column =&
                     editor%cursors(editor%active_cursor)%column
                 if (allocated(last_line)) deallocate(last_line)
@@ -916,14 +927,10 @@ contains
                     integer :: text_i
                     completion_text = get_selected_completion(editor%completion_popup)
                     if (len(completion_text) > 0) then
-                        ! Insert the completion text at cursor
+                        ! Insert the completion text at cursor (UTF-8 aware)
                         if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-                        do text_i = 1, len(completion_text)
-                            call buffer_insert_char(buffer, editor%cursors(editor%active_cursor), &
-                                                   completion_text(text_i:text_i))
-                            editor%cursors(editor%active_cursor)%column = &
-                                editor%cursors(editor%active_cursor)%column + 1
-                        end do
+                        call insert_line_text(buffer, &
+                            editor%cursors(editor%active_cursor), completion_text)
                     end if
                     call hide_completion_popup(editor%completion_popup)
                 end block
@@ -1303,7 +1310,9 @@ contains
                     block
                         integer :: request_id, lsp_line, lsp_char
                         lsp_line = editor%cursors(editor%active_cursor)%line - 1
-                        lsp_char = editor%cursors(editor%active_cursor)%column - 1
+                        lsp_char = lsp_char_of(buffer, &
+                            editor%cursors(editor%active_cursor)%line, &
+                            editor%cursors(editor%active_cursor)%column)
 
                         ! Popup and ghost text never coexist
                         call ghost_clear(editor%ghost)
@@ -1339,7 +1348,9 @@ contains
                     block
                         integer :: request_id, lsp_line, lsp_char
                         lsp_line = editor%cursors(editor%active_cursor)%line - 1
-                        lsp_char = editor%cursors(editor%active_cursor)%column - 1
+                        lsp_char = lsp_char_of(buffer, &
+                            editor%cursors(editor%active_cursor)%line, &
+                            editor%cursors(editor%active_cursor)%column)
 
                         request_id = request_hover(editor%lsp_manager, &
                             hover_server, &
@@ -1350,7 +1361,8 @@ contains
                             ! Show tooltip at cursor position (will populate when response arrives)
                             call show_hover_tooltip(editor%hover_tooltip, &
                                 editor%cursors(editor%active_cursor)%line - editor%viewport_line + 2, &
-                                editor%cursors(editor%active_cursor)%column - editor%viewport_column + 1)
+                                editor%cursors(editor%active_cursor)%column - editor%viewport_column + 1, &
+                                editor%screen_rows, editor%screen_cols)
                         end if
                     end block
                 end if
@@ -1420,7 +1432,9 @@ contains
                     block
                         integer :: request_id, lsp_line, lsp_char
                         lsp_line = editor%cursors(editor%active_cursor)%line - 1
-                        lsp_char = editor%cursors(editor%active_cursor)%column - 1
+                        lsp_char = lsp_char_of(buffer, &
+                            editor%cursors(editor%active_cursor)%line, &
+                            editor%cursors(editor%active_cursor)%column)
 
                         ! Save editor state and buffer pointers for callback
                         saved_editor_for_callback => editor
@@ -1456,7 +1470,9 @@ contains
                         use references_panel_module, only: clear_references
                         integer :: request_id, lsp_line, lsp_char
                         lsp_line = editor%cursors(editor%active_cursor)%line - 1
-                        lsp_char = editor%cursors(editor%active_cursor)%column - 1
+                        lsp_char = lsp_char_of(buffer, &
+                            editor%cursors(editor%active_cursor)%line, &
+                            editor%cursors(editor%active_cursor)%column)
 
                         ! Clear any existing references so we can detect when new ones arrive
                         call clear_references(editor%references_panel)
@@ -1551,7 +1567,6 @@ contains
                                                         trim(ref_path) == trim(editor%filename)) then
                                                         ! Same file — just move cursor
                                                         editor%cursors(editor%active_cursor)%line = ref_line
-                                                        editor%cursors(editor%active_cursor)%column = ref_col
                                                     else
                                                         ! Different file — find open tab or open new
                                                         do ti = 1, size(editor%tabs)
@@ -1566,9 +1581,12 @@ contains
                                                             call open_file_in_editor(ref_path, editor, buffer)
                                                         end if
                                                         editor%cursors(editor%active_cursor)%line = ref_line
-                                                        editor%cursors(editor%active_cursor)%column = ref_col
                                                     end if
-                                                    editor%cursors(editor%active_cursor)%desired_column = ref_col
+                                                    ! Stored column is LSP UTF-16 units + 1
+                                                    editor%cursors(editor%active_cursor)%column = &
+                                                        char_col_from_lsp(buffer, ref_line, ref_col - 1)
+                                                    editor%cursors(editor%active_cursor)%desired_column = &
+                                                        editor%cursors(editor%active_cursor)%column
                                                     editor%cursors(editor%active_cursor)%has_selection = .false.
                                                     editor%viewport_line = max(1, ref_line - editor%screen_rows / 2)
                                                 end if
@@ -1604,8 +1622,13 @@ contains
                         logical :: cancelled
 
                         line = buffer_get_line(buffer, editor%cursors(editor%active_cursor)%line)
-                        call find_word_boundaries(line, editor%cursors(editor%active_cursor)%column, &
-                            word_start, word_end)
+                        block
+                            integer :: byte_pos
+                            byte_pos = utf8_char_to_byte_index(line, &
+                                editor%cursors(editor%active_cursor)%column)
+                            if (byte_pos == 0) byte_pos = len(line) + 1
+                            call find_word_boundaries(line, byte_pos, word_start, word_end)
+                        end block
 
                         if (word_start > 0 .and. word_end >= word_start) then
                             old_name = line(word_start:word_end)
@@ -1616,7 +1639,9 @@ contains
                             if (.not. cancelled .and. allocated(new_name)) then
                                 ! Send rename request
                                 lsp_line = editor%cursors(editor%active_cursor)%line - 1
-                                lsp_char = editor%cursors(editor%active_cursor)%column - 1
+                                lsp_char = lsp_char_of(buffer, &
+                            editor%cursors(editor%active_cursor)%line, &
+                            editor%cursors(editor%active_cursor)%column)
 
                                 ! Save editor state for callback
                                 saved_editor_for_callback => editor
@@ -1975,7 +2000,8 @@ contains
 
         case('n')
             ! Only use 'n' for search navigation if we have an active search
-            if (allocated(current_search_pattern)) then
+            ! (search mode ends on ESC; the pattern itself persists for reuse)
+            if (search_mode_active .and. allocated(current_search_pattern)) then
                 call search_forward(editor, buffer)
                 call update_viewport(editor)
             else
@@ -1992,7 +2018,7 @@ contains
 
         case('N')
             ! Only use 'N' for search navigation if we have an active search
-            if (allocated(current_search_pattern)) then
+            if (search_mode_active .and. allocated(current_search_pattern)) then
                 call search_backward(editor, buffer)
                 call update_viewport(editor)
             else
@@ -2029,16 +2055,25 @@ contains
             if (index(key_str, 'mouse-') == 1) then
                 call handle_mouse_event_action(key_str, editor, buffer)
                 call sync_editor_to_pane(editor)
-            ! Regular character input (including space)
-            ! Check for single char: either len_trim=1, or it's a space (trim removes it)
-            else if (len_trim(key_str) == 1 .or. (len_trim(key_str) == 0 .and. key_str(1:1) == ' ')) then
-                if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-                ! Handle character input for all cursors
-                if (size(editor%cursors) > 1) then
-                    call insert_char_multiple_cursors(editor, buffer, key_str(1:1))
-                else
-                    call insert_char(editor%cursors(editor%active_cursor), buffer, key_str(1:1))
-                end if
+            ! Regular character input (including space). A printable key is
+            ! one ASCII char, a space (trim removes it), or one whole UTF-8
+            ! multibyte sequence assembled by get_key_input (2-4 bytes whose
+            ! first byte is a lead byte) — inserted as a single column.
+            else if (len_trim(key_str) == 1 .or. &
+                     (len_trim(key_str) == 0 .and. key_str(1:1) == ' ') .or. &
+                     (len_trim(key_str) >= 2 .and. len_trim(key_str) <= 4 .and. &
+                      iachar(key_str(1:1)) >= 192)) then
+                block
+                    integer :: klen
+                    klen = max(1, len_trim(key_str))
+                    if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+                    ! Handle character input for all cursors
+                    if (size(editor%cursors) > 1) then
+                        call insert_char_multiple_cursors(editor, buffer, key_str(1:klen))
+                    else
+                        call insert_char(editor%cursors(editor%active_cursor), buffer, key_str(1:klen))
+                    end if
+                end block
                 call sync_editor_to_pane(editor)
                 call update_viewport(editor)
                 is_edit_action = .true.
@@ -2052,7 +2087,9 @@ contains
                             block
                                 integer :: request_id, lsp_line, lsp_char
                                 lsp_line = editor%cursors(editor%active_cursor)%line - 1
-                                lsp_char = editor%cursors(editor%active_cursor)%column - 1
+                                lsp_char = lsp_char_of(buffer, &
+                            editor%cursors(editor%active_cursor)%line, &
+                            editor%cursors(editor%active_cursor)%column)
 
                                 ! Save editor state for callback
                                 saved_editor_for_callback => editor
@@ -2104,8 +2141,8 @@ contains
 
             ! Always use goal column, clamped to line bounds (standard editor behavior)
             cursor%column = cursor%desired_column
-            if (cursor%column > len(target_line) + 1) then
-                cursor%column = len(target_line) + 1
+            if (cursor%column > utf8_char_count(target_line) + 1) then
+                cursor%column = utf8_char_count(target_line) + 1
             end if
 
             if (allocated(target_line)) deallocate(target_line)
@@ -2125,8 +2162,8 @@ contains
 
             ! Always use goal column, clamped to line bounds (standard editor behavior)
             cursor%column = cursor%desired_column
-            if (cursor%column > len(target_line) + 1) then
-                cursor%column = len(target_line) + 1
+            if (cursor%column > utf8_char_count(target_line) + 1) then
+                cursor%column = utf8_char_count(target_line) + 1
             end if
 
             if (allocated(target_line)) deallocate(target_line)
@@ -2241,7 +2278,8 @@ contains
 
         cursor%has_selection = .false.  ! Clear selection
         line = buffer_get_line(buffer, cursor%line)
-        cursor%column = len(line) + 1
+        ! Columns are character indices, not bytes
+        cursor%column = utf8_char_count(line) + 1
         cursor%desired_column = cursor%column
         if (allocated(line)) deallocate(line)
     end subroutine move_cursor_end
@@ -2450,7 +2488,7 @@ contains
         line = buffer_get_line(buffer, cursor%line)
         line_count = buffer_get_line_count(buffer)
 
-        if (cursor%column <= len(line)) then
+        if (cursor%column <= utf8_char_count(line)) then
             ! Delete character at cursor
             call buffer_delete_at_cursor(buffer, cursor)
         else if (cursor%line < line_count) then
@@ -2627,10 +2665,12 @@ contains
         if (allocated(line)) deallocate(line)
     end subroutine dedent_current_line
 
+    ! ch may be a full multibyte UTF-8 character; it advances the cursor by
+    ! one character column regardless of byte length
     subroutine insert_char(cursor, buffer, ch)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
-        character, intent(in) :: ch
+        character(len=*), intent(in) :: ch
         character :: closing_char
         logical :: should_auto_close, should_wrap
         integer :: start_line, start_col, end_line, end_col
@@ -2703,8 +2743,8 @@ contains
             call delete_selection(cursor, buffer)
         end if
 
-        ! Insert the character
-        call buffer_insert_char(buffer, cursor, ch)
+        ! Insert the character (whole UTF-8 sequence, one column)
+        call buffer_insert_string(buffer, cursor, ch)
         cursor%column = cursor%column + 1
 
         ! If auto-close is enabled, insert the closing character
@@ -2719,7 +2759,7 @@ contains
     subroutine insert_char_multiple_cursors(editor, buffer, ch)
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
-        character, intent(in) :: ch
+        character(len=*), intent(in) :: ch
         integer :: i
         integer :: offset_adjust
 
@@ -2734,8 +2774,8 @@ contains
                 editor%cursors(i)%has_selection = .false.
             end if
 
-            ! Insert character
-            call buffer_insert_char(buffer, editor%cursors(i), ch)
+            ! Insert character (whole UTF-8 sequence, one column)
+            call buffer_insert_string(buffer, editor%cursors(i), ch)
             editor%cursors(i)%column = editor%cursors(i)%column + 1
             editor%cursors(i)%desired_column = editor%cursors(i)%column
         end do
@@ -2781,7 +2821,7 @@ contains
             cursor%line = start_line
             cursor%column = start_col
             line = buffer_get_line(buffer, start_line)
-            do i = start_col, len(line)
+            do i = start_col, utf8_char_count(line)
                 call buffer_delete_at_cursor(buffer, cursor)
             end do
             if (allocated(line)) deallocate(line)
@@ -2793,13 +2833,13 @@ contains
                 if (buffer_get_line_count(buffer) > start_line) then
                     ! Delete the newline to join with next line
                     line = buffer_get_line(buffer, start_line)
-                    cursor%column = len(line) + 1
+                    cursor%column = utf8_char_count(line) + 1
                     call buffer_delete_at_cursor(buffer, cursor)  ! Delete newline
                     if (allocated(line)) deallocate(line)
 
                     ! Delete all content of the joined line
                     line = buffer_get_line(buffer, start_line)
-                    cursor%column = len(line)
+                    cursor%column = utf8_char_count(line)
                     do while (cursor%column > start_col .and. cursor%column > 0)
                         call buffer_delete_at_cursor(buffer, cursor)
                         cursor%column = cursor%column - 1
@@ -2811,7 +2851,7 @@ contains
             ! Delete from beginning of last line to end_col
             if (buffer_get_line_count(buffer) > start_line) then
                 line = buffer_get_line(buffer, start_line)
-                cursor%column = len(line) + 1
+                cursor%column = utf8_char_count(line) + 1
                 call buffer_delete_at_cursor(buffer, cursor)  ! Delete newline
                 if (allocated(line)) deallocate(line)
 
@@ -2859,20 +2899,27 @@ contains
             end_col = cursor%column
         end if
 
-        ! Extract text based on selection
+        ! Extract text based on selection. Selection columns are character
+        ! indices; slicing the line needs the matching byte positions.
         if (start_line == end_line) then
             ! Single-line selection
             line = buffer_get_line(buffer, start_line)
-            if (allocated(line) .and. start_col <= len(line) + 1 .and. end_col <= len(line) + 1) then
-                if (end_col > start_col) then
-                    allocate(character(len=end_col - start_col) :: text)
-                    text = line(start_col:end_col - 1)
+            block
+                integer :: bs, be
+                if (allocated(line) .and. end_col > start_col .and. &
+                    start_col <= utf8_char_count(line) + 1 .and. &
+                    end_col <= utf8_char_count(line) + 1) then
+                    bs = utf8_char_to_byte_index(line, start_col)
+                    be = utf8_char_to_byte_index(line, end_col)
+                    if (bs > 0 .and. be > bs) then
+                        text = line(bs:be - 1)
+                    else
+                        allocate(character(len=0) :: text)
+                    end if
                 else
                     allocate(character(len=0) :: text)
                 end if
-            else
-                allocate(character(len=0) :: text)
-            end if
+            end block
             if (allocated(line)) deallocate(line)
         else
             ! Multi-line selection
@@ -2881,9 +2928,13 @@ contains
             ! First line (from start_col to end)
             line = buffer_get_line(buffer, start_line)
             if (allocated(line)) then
-                if (start_col <= len(line)) then
-                    text = text // line(start_col:)
-                end if
+                block
+                    integer :: bs
+                    if (start_col <= utf8_char_count(line)) then
+                        bs = utf8_char_to_byte_index(line, start_col)
+                        if (bs > 0) text = text // line(bs:)
+                    end if
+                end block
                 text = text // char(10)  ! newline
                 deallocate(line)
             end if
@@ -2900,9 +2951,13 @@ contains
             ! Last line (from beginning to end_col)
             line = buffer_get_line(buffer, end_line)
             if (allocated(line)) then
-                if (end_col > 1 .and. end_col <= len(line) + 1) then
-                    text = text // line(1:end_col - 1)
-                end if
+                block
+                    integer :: be
+                    if (end_col > 1 .and. end_col <= utf8_char_count(line) + 1) then
+                        be = utf8_char_to_byte_index(line, end_col)
+                        if (be > 1) text = text // line(1:be - 1)
+                    end if
+                end block
                 deallocate(line)
             end if
         end if
@@ -3013,7 +3068,7 @@ contains
         integer :: new_column
 
         prev_line = buffer_get_line(buffer, cursor%line - 1)
-        new_column = len(prev_line) + 1
+        new_column = utf8_char_count(prev_line) + 1
 
         ! Move to end of previous line
         cursor%line = cursor%line - 1
@@ -3045,10 +3100,11 @@ contains
 
         line = buffer_get_line(buffer, cursor%line)
 
-        if (cursor%column <= len(line)) then
-            ! Kill from cursor to end of line
-            killed_text = line(cursor%column:)
-            do i = cursor%column, len(line)
+        if (cursor%column <= utf8_char_count(line)) then
+            ! Kill from cursor to end of line (column is a character
+            ! index; slice the line at the matching byte position)
+            killed_text = line(utf8_char_to_byte_index(line, cursor%column):)
+            do i = cursor%column, utf8_char_count(line)
                 call buffer_delete_at_cursor(buffer, cursor)
             end do
         else
@@ -3080,8 +3136,9 @@ contains
         start_col = cursor%column
 
         if (cursor%column > 1) then
-            ! Kill from start of line to cursor
-            killed_text = line(1:cursor%column-1)
+            ! Kill from start of line to cursor (byte slice for the yank
+            ! text; the deletes are per character)
+            killed_text = line(1:utf8_char_to_byte_index(line, cursor%column) - 1)
             cursor%column = 1
             do i = 1, start_col - 1
                 call buffer_delete_at_cursor(buffer, cursor)
@@ -3109,18 +3166,7 @@ contains
 
         text = pop_yank(yank_stack)
         if (allocated(text)) then
-            do i = 1, len(text)
-                if (text(i:i) == char(10)) then
-                    call buffer_insert_newline(buffer, cursor)
-                    cursor%line = cursor%line + 1
-                    cursor%column = 1
-                else
-                    call buffer_insert_char(buffer, cursor, text(i:i))
-                    cursor%column = cursor%column + 1
-                end if
-            end do
-            cursor%desired_column = cursor%column
-            buffer%modified = .true.
+            call insert_text_block(cursor, buffer, text)
             deallocate(text)
         end if
     end subroutine yank_text
@@ -3168,7 +3214,7 @@ contains
 
         ! Restore cursor to moved line
         cursor%line = cursor%line - 1
-        cursor%column = min(saved_column, len(current_line) + 1)
+        cursor%column = min(saved_column, utf8_char_count(current_line) + 1)
         cursor%desired_column = cursor%column
 
         buffer%modified = .true.
@@ -3219,7 +3265,7 @@ contains
         ! Restore cursor position on moved line
         ! Current line is now at cursor%line (which is original_line + 1)
         ! So cursor is already on the moved line, just need to fix column
-        cursor%column = min(saved_column, len(current_line) + 1)
+        cursor%column = min(saved_column, utf8_char_count(current_line) + 1)
         cursor%desired_column = cursor%column
 
         buffer%modified = .true.
@@ -3257,7 +3303,7 @@ contains
         saved_column = cursor%column
 
         ! Move to end of line
-        cursor%column = len(line) + 1
+        cursor%column = utf8_char_count(line) + 1
         ! Insert newline
         call buffer_insert_newline(buffer, cursor)
         cursor%line = cursor%line + 1
@@ -3283,8 +3329,8 @@ contains
         line = buffer_get_line(buffer, cursor%line)
         cursor%column = 1
 
-        ! Delete all characters in line
-        do i = 1, len(line)
+        ! Delete all characters in line (character count, not bytes)
+        do i = 1, utf8_char_count(line)
             call buffer_delete_at_cursor(buffer, cursor)
         end do
 
@@ -3300,11 +3346,17 @@ contains
         type(buffer_t), intent(inout) :: buffer
         type(cursor_t), intent(inout) :: cursor
         character(len=*), intent(in) :: text
-        integer :: i
+        integer :: i, nb
 
-        do i = 1, len(text)
-            call buffer_insert_char(buffer, cursor, text(i:i))
+        ! Insert one whole UTF-8 character at a time: the column is a
+        ! character index, so inserting byte-by-byte would scatter the
+        ! bytes of a multibyte char across character positions
+        i = 1
+        do while (i <= len(text))
+            nb = min(utf8_lead_len(text(i:i)), len(text) - i + 1)
+            call buffer_insert_string(buffer, cursor, text(i:i+nb-1))
             cursor%column = cursor%column + 1
+            i = i + nb
         end do
     end subroutine insert_line_text
 
@@ -3374,12 +3426,13 @@ contains
     end subroutine copy_selection_or_line
 
     ! Insert a block of text at the cursor, treating LF, CR, and
-    ! CRLF as line breaks. Caller is responsible for the undo state.
+    ! CRLF as line breaks. Multibyte UTF-8 sequences are inserted whole
+    ! (one character column each). Caller is responsible for undo state.
     subroutine insert_text_block(cursor, buffer, text)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character(len=*), intent(in) :: text
-        integer :: i
+        integer :: i, nb
 
         i = 1
         do while (i <= len(text))
@@ -3391,15 +3444,18 @@ contains
                 if (i < len(text)) then
                     if (text(i+1:i+1) == char(10)) i = i + 1
                 end if
+                i = i + 1
             else if (text(i:i) == char(10)) then
                 call buffer_insert_newline(buffer, cursor)
                 cursor%line = cursor%line + 1
                 cursor%column = 1
+                i = i + 1
             else
-                call buffer_insert_char(buffer, cursor, text(i:i))
+                nb = min(utf8_lead_len(text(i:i)), len(text) - i + 1)
+                call buffer_insert_string(buffer, cursor, text(i:i+nb-1))
                 cursor%column = cursor%column + 1
+                i = i + nb
             end if
-            i = i + 1
         end do
         cursor%desired_column = cursor%column
         buffer%modified = .true.
@@ -3415,19 +3471,8 @@ contains
         text = paste_from_clipboard()
 
         if (allocated(text)) then
-            ! Insert text at cursor position
-            do i = 1, len(text)
-                if (text(i:i) == char(10)) then
-                    call buffer_insert_newline(buffer, cursor)
-                    cursor%line = cursor%line + 1
-                    cursor%column = 1
-                else
-                    call buffer_insert_char(buffer, cursor, text(i:i))
-                    cursor%column = cursor%column + 1
-                end if
-            end do
-            cursor%desired_column = cursor%column
-            buffer%modified = .true.
+            ! Insert at cursor, UTF-8 and line-break aware
+            call insert_text_block(cursor, buffer, text)
             deallocate(text)
         end if
     end subroutine paste_clipboard
@@ -3582,15 +3627,21 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: line
-        integer :: quote_start, quote_end
+        integer :: quote_start, quote_end, byte_pos
         character :: current_quote, new_quote
 
         line = buffer_get_line(buffer, cursor%line)
 
-        ! Find surrounding quotes
-        call find_surrounding_quotes(line, cursor%column, quote_start, quote_end, current_quote)
+        ! Find surrounding quotes (byte positions; cursor column is chars)
+        byte_pos = utf8_char_to_byte_index(line, cursor%column)
+        if (byte_pos == 0) byte_pos = len(line) + 1
+        call find_surrounding_quotes(line, byte_pos, quote_start, quote_end, current_quote)
 
         if (quote_start > 0 .and. quote_end > 0) then
+            ! Buffer edits below take char columns; quotes are single-byte
+            ! ASCII so replacing them does not shift the byte/char mapping
+            quote_start = utf8_byte_to_char_index(line, quote_start)
+            quote_end = utf8_byte_to_char_index(line, quote_end)
             ! Determine next quote type
             select case(current_quote)
             case('"')
@@ -3620,6 +3671,7 @@ contains
         if (allocated(line)) deallocate(line)
     end subroutine cycle_quotes
 
+    ! pos, start_pos, end_pos are BYTE positions in line
     subroutine find_surrounding_quotes(line, pos, start_pos, end_pos, quote_char)
         character(len=*), intent(in) :: line
         integer, intent(in) :: pos
@@ -3655,16 +3707,21 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: line
-        integer :: bracket_start, bracket_end
+        integer :: bracket_start, bracket_end, byte_pos
         character :: open_bracket, close_bracket
 
         line = buffer_get_line(buffer, cursor%line)
 
-        ! Find surrounding brackets
-        call find_surrounding_brackets(line, cursor%column, bracket_start, bracket_end, &
+        ! Find surrounding brackets (byte positions; cursor column is chars)
+        byte_pos = utf8_char_to_byte_index(line, cursor%column)
+        if (byte_pos == 0) byte_pos = len(line) + 1
+        call find_surrounding_brackets(line, byte_pos, bracket_start, bracket_end, &
                                        open_bracket, close_bracket)
 
         if (bracket_start > 0 .and. bracket_end > 0) then
+            ! Buffer edits below take char columns
+            bracket_start = utf8_byte_to_char_index(line, bracket_start)
+            bracket_end = utf8_byte_to_char_index(line, bracket_end)
             ! Delete closing bracket first (to maintain positions)
             cursor%column = bracket_end
             call buffer_delete_at_cursor(buffer, cursor)
@@ -3679,6 +3736,7 @@ contains
         if (allocated(line)) deallocate(line)
     end subroutine remove_brackets
 
+    ! pos, start_pos, end_pos are BYTE positions in line
     subroutine find_surrounding_brackets(line, pos, start_pos, end_pos, open_br, close_br)
         character(len=*), intent(in) :: line
         integer, intent(in) :: pos
@@ -3895,7 +3953,7 @@ contains
                 ! Check if cursor already exists at this position
                 cursor_exists = 0
                 do i = 1, size(editor%cursors)
-                    if (is_cursor_at_screen_pos(editor%cursors(i), editor, row, col)) then
+                    if (is_cursor_at_screen_pos(editor%cursors(i), editor, buffer, row, col)) then
                         cursor_exists = i
                         exit
                     end if
@@ -3948,7 +4006,7 @@ contains
         character(len=:), allocatable :: line
         integer :: line_count
         integer :: tab_idx, pane_idx, i
-        integer :: pane_row
+        integer :: pane_row, click_cells, vp_col
         logical :: in_pane
 
         line_count = buffer_get_line_count(buffer)
@@ -4000,11 +4058,11 @@ contains
                         !   screen_row = pane%screen_row
                         !              + (line - viewport_line)
                         !   screen_col = pane%screen_col + col_offset
-                        !              + (column - viewport_column)
+                        !              + display cells from viewport_column
                         pane_row = screen_row - pane%screen_row
                         target_line = pane%viewport_line + pane_row
-                        target_col = pane%viewport_column + &
-                            (screen_col - pane%screen_col - col_offset)
+                        click_cells = screen_col - pane%screen_col - col_offset
+                        vp_col = pane%viewport_column
                         in_pane = .true.
                     end associate
                     exit
@@ -4018,19 +4076,26 @@ contains
             ! No panes, use editor viewport. Text begins one cell
             ! after the gutter (screen column col_offset + 1).
             target_line = editor%viewport_line + screen_row - row_offset
-            target_col = editor%viewport_column + &
-                (screen_col - col_offset - 1)
+            click_cells = screen_col - col_offset - 1
+            vp_col = editor%viewport_column
         end if
 
         ! Clamp to valid range
         if (target_line < 1) target_line = 1
         if (target_line > line_count) target_line = line_count
 
-        ! Get line and adjust column to valid positions only
+        ! Map the clicked display cell back to a character column: on lines
+        ! with tabs or wide characters cells and character indices diverge,
+        ! so raw cell arithmetic would land the cursor on the wrong char
         line = buffer_get_line(buffer, target_line)
+        if (click_cells < 0) click_cells = 0
+        target_col = char_col_at_offset(line, vp_col, click_cells)
         if (target_col < 1) target_col = 1
-        ! Clamp column to actual line length + 1 (position after last char)
-        if (target_col > len(line) + 1) target_col = len(line) + 1
+        ! Clamp to character count + 1 (position after last char); len(line)
+        ! is bytes, which overshoots on multibyte text
+        if (target_col > utf8_char_count(line) + 1) then
+            target_col = utf8_char_count(line) + 1
+        end if
 
         ! Set cursor position (ensure cursor_idx is valid)
         if (allocated(editor%cursors) .and. cursor_idx > 0 .and. cursor_idx <= size(editor%cursors)) then
@@ -4045,12 +4110,15 @@ contains
         call sync_editor_to_pane(editor)
     end subroutine position_cursor_at_screen
 
-    function is_cursor_at_screen_pos(cursor, editor, screen_row, screen_col) result(at_pos)
+    function is_cursor_at_screen_pos(cursor, editor, buffer, screen_row, screen_col) result(at_pos)
+        use renderer_module, only: show_line_numbers, LINE_NUMBER_WIDTH
         type(cursor_t), intent(in) :: cursor
         type(editor_state_t), intent(in) :: editor
+        type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: screen_row, screen_col
         logical :: at_pos
-        integer :: cursor_screen_row, cursor_screen_col, row_offset
+        integer :: cursor_screen_row, cursor_screen_col, row_offset, col_offset
+        character(len=:), allocatable :: line
 
         ! Account for tab bar - when tabs exist, content starts at row 2
         if (size(editor%tabs) > 0) then
@@ -4059,8 +4127,18 @@ contains
             row_offset = 1
         end if
 
+        ! Mirror render_cursor's forward mapping: gutter offset plus the
+        ! display-cell distance from the viewport start (tabs / wide chars)
+        if (show_line_numbers) then
+            col_offset = LINE_NUMBER_WIDTH + 1
+        else
+            col_offset = 0
+        end if
+
+        line = buffer_get_line(buffer, cursor%line)
         cursor_screen_row = cursor%line - editor%viewport_line + row_offset
-        cursor_screen_col = cursor%column - editor%viewport_column + 1
+        cursor_screen_col = col_offset + 1 + &
+            display_offset_of(line, editor%viewport_column, cursor%column)
         at_pos = (cursor_screen_row == screen_row .and. cursor_screen_col == screen_col)
     end function is_cursor_at_screen_pos
 
@@ -4068,9 +4146,9 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         type(cursor_t), allocatable :: new_cursors(:)
-        character(len=:), allocatable :: word
+        character(len=:), allocatable :: word, line
         integer :: i
-        integer :: found_line, found_col
+        integer :: found_line, found_col, start_byte, start_char, end_char
         logical :: found
 
         ! If no pattern selected yet, select word at cursor
@@ -4081,13 +4159,23 @@ contains
                 search_pattern = word
             end if
         else
-            ! Search for next occurrence
+            ! Search for next occurrence (byte positions; cursor cols are chars)
+            line = buffer_get_line(buffer, editor%cursors(size(editor%cursors))%line)
+            start_byte = utf8_char_to_byte_index(line, &
+                editor%cursors(size(editor%cursors))%column)
+            if (start_byte == 0) start_byte = len(line) + 1
             call find_next_occurrence(buffer, search_pattern, &
                                      editor%cursors(size(editor%cursors))%line, &
-                                     editor%cursors(size(editor%cursors))%column, &
+                                     start_byte, &
                                      found, found_line, found_col)
 
             if (found) then
+                line = buffer_get_line(buffer, found_line)
+                start_char = utf8_byte_to_char_index(line, found_col)
+                end_char = utf8_byte_to_char_index(line, found_col + len(search_pattern))
+                if (start_char == 0) start_char = utf8_char_count(line) + 1
+                if (end_char == 0) end_char = utf8_char_count(line) + 1
+
                 ! Add a new cursor at the found position
                 allocate(new_cursors(size(editor%cursors) + 1))
                 do i = 1, size(editor%cursors)
@@ -4097,11 +4185,10 @@ contains
                 ! Initialize new cursor
                 call init_cursor(new_cursors(size(new_cursors)))
                 new_cursors(size(new_cursors))%line = found_line
-                new_cursors(size(new_cursors))%column = found_col
                 new_cursors(size(new_cursors))%has_selection = .true.
                 new_cursors(size(new_cursors))%selection_start_line = found_line
-                new_cursors(size(new_cursors))%selection_start_col = found_col
-                new_cursors(size(new_cursors))%column = found_col + len(search_pattern)
+                new_cursors(size(new_cursors))%selection_start_col = start_char
+                new_cursors(size(new_cursors))%column = end_char
 
                 deallocate(editor%cursors)
                 editor%cursors = new_cursors
@@ -4114,19 +4201,21 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
         character(len=:), allocatable :: line
-        integer :: word_start, word_end
+        integer :: word_start, word_end, byte_pos
 
         line = buffer_get_line(buffer, cursor%line)
 
-        ! Find word boundaries
-        call find_word_boundaries(line, cursor%column, word_start, word_end)
+        ! Find word boundaries (byte positions; the cursor column is chars)
+        byte_pos = utf8_char_to_byte_index(line, cursor%column)
+        if (byte_pos == 0) byte_pos = len(line) + 1
+        call find_word_boundaries(line, byte_pos, word_start, word_end)
 
         if (word_start > 0 .and. word_end >= word_start) then
-            ! Select the word
+            ! Select the word (selection columns are char indices)
             cursor%has_selection = .true.
             cursor%selection_start_line = cursor%line
-            cursor%selection_start_col = word_start
-            cursor%column = word_end + 1
+            cursor%selection_start_col = utf8_byte_to_char_index(line, word_start)
+            cursor%column = utf8_byte_to_char_index(line, word_end + 1)
             cursor%desired_column = cursor%column
         end if
 
@@ -4145,13 +4234,17 @@ contains
             return
         end if
 
-        ! For single-line selection only (for now)
+        ! For single-line selection only (for now); selection columns are
+        ! char indices, slicing needs bytes
         if (cursor%selection_start_line == cursor%line) then
             line = buffer_get_line(buffer, cursor%line)
-            start_col = min(cursor%selection_start_col, cursor%column)
-            end_col = max(cursor%selection_start_col, cursor%column) - 1
+            start_col = utf8_char_to_byte_index(line, &
+                min(cursor%selection_start_col, cursor%column))
+            end_col = utf8_char_to_byte_index(line, &
+                max(cursor%selection_start_col, cursor%column)) - 1
+            if (end_col == -1) end_col = len(line)
 
-            if (start_col <= len(line) .and. end_col <= len(line)) then
+            if (start_col >= 1 .and. start_col <= len(line) .and. end_col <= len(line)) then
                 text = line(start_col:end_col)
             else
                 allocate(character(len=0) :: text)
@@ -4162,6 +4255,31 @@ contains
         end if
     end function get_selected_text
 
+    ! LSP positions are 0-based UTF-16 code-unit offsets; cursor columns
+    ! are 1-based char indices. These two convert via the line text.
+    function lsp_char_of(buffer, line_num, char_col) result(units)
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: line_num, char_col
+        integer :: units
+        character(len=:), allocatable :: line
+
+        line = buffer_get_line(buffer, line_num)
+        units = utf8_char_col_to_utf16(line, char_col)
+    end function lsp_char_of
+
+    function char_col_from_lsp(buffer, line_num, lsp_units) result(char_col)
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: line_num, lsp_units
+        integer :: char_col
+        character(len=:), allocatable :: line
+
+        line = buffer_get_line(buffer, line_num)
+        char_col = utf16_to_utf8_char_col(line, lsp_units)
+    end function char_col_from_lsp
+
+    ! pos, word_start and word_end are BYTE positions in line (word chars
+    ! are ASCII, but preceding multibyte text shifts bytes vs chars -
+    ! callers must convert from/to cursor char columns)
     subroutine find_word_boundaries(line, pos, word_start, word_end)
         character(len=*), intent(in) :: line
         integer, intent(in) :: pos
@@ -4316,12 +4434,14 @@ contains
     subroutine buffer_delete_at_cursor(buffer, cursor)
         type(buffer_t), intent(inout) :: buffer
         type(cursor_t), intent(in) :: cursor
-        integer :: pos
+        integer :: pos, nbytes
 
-        ! Convert cursor position to buffer position
+        ! Convert cursor position to buffer position and delete the whole
+        ! character there — one byte of a multibyte char would corrupt it
         pos = get_buffer_position(buffer, cursor%line, cursor%column)
         if (pos > 0 .and. pos <= get_buffer_content_size(buffer)) then
-            call buffer_delete(buffer, pos, 1)
+            nbytes = utf8_lead_len(buffer_get_char(buffer, pos))
+            call buffer_delete(buffer, pos, nbytes)
         end if
     end subroutine buffer_delete_at_cursor
 
@@ -4377,13 +4497,15 @@ contains
         integer, intent(in) :: line, column
         integer :: pos
         integer :: current_line, i, col_in_line
-        character :: ch
+        character :: ch, next_ch
 
         pos = 1
         current_line = 1
         col_in_line = 1
 
-        ! Find the position for the given line and column
+        ! Find the byte position for the given line and CHARACTER column.
+        ! Columns are UTF-8 character indices (the cursor_t contract), so a
+        ! multibyte character advances the column once, not per byte.
         do i = 1, get_buffer_content_size(buffer)
             if (current_line == line .and. col_in_line == column) then
                 pos = i
@@ -4400,7 +4522,12 @@ contains
                 current_line = current_line + 1
                 col_in_line = 1
             else
-                col_in_line = col_in_line + 1
+                ! Advance the column only when the next byte starts a new
+                ! character (continuation bytes belong to the current one)
+                next_ch = buffer_get_char(buffer, i + 1)
+                if (utf8_is_valid_start(iachar(next_ch))) then
+                    col_in_line = col_in_line + 1
+                end if
             end if
         end do
 
@@ -4414,6 +4541,37 @@ contains
 
         size = buffer%size - (buffer%gap_end - buffer%gap_start)
     end function get_buffer_content_size
+
+    ! Byte length of a UTF-8 character from its lead byte (1 for ASCII
+    ! and for invalid/continuation bytes)
+    pure function utf8_lead_len(ch) result(nbytes)
+        character, intent(in) :: ch
+        integer :: nbytes
+        integer :: b
+
+        b = iachar(ch)
+        if (b >= 192 .and. b <= 223) then
+            nbytes = 2
+        else if (b >= 224 .and. b <= 239) then
+            nbytes = 3
+        else if (b >= 240 .and. b <= 247) then
+            nbytes = 4
+        else
+            nbytes = 1
+        end if
+    end function utf8_lead_len
+
+    ! Insert a whole (possibly multibyte) string at the cursor's character
+    ! position without advancing the cursor
+    subroutine buffer_insert_string(buffer, cursor, s)
+        type(buffer_t), intent(inout) :: buffer
+        type(cursor_t), intent(in) :: cursor
+        character(len=*), intent(in) :: s
+        integer :: pos
+
+        pos = get_buffer_position(buffer, cursor%line, cursor%column)
+        call buffer_insert(buffer, pos, s)
+    end subroutine buffer_insert_string
 
     ! ========================================================================
     ! Multiple Cursor Addition Above/Below
@@ -4538,8 +4696,8 @@ contains
                 cursor%desired_column = cursor%column
             else
                 cursor%column = cursor%desired_column
-                if (cursor%column > len(target_line) + 1) then
-                    cursor%column = len(target_line) + 1
+                if (cursor%column > utf8_char_count(target_line) + 1) then
+                    cursor%column = utf8_char_count(target_line) + 1
                 end if
             end if
 
@@ -4573,8 +4731,8 @@ contains
                 cursor%desired_column = 1
             else
                 cursor%column = cursor%desired_column
-                if (cursor%column > len(target_line) + 1) then
-                    cursor%column = len(target_line) + 1
+                if (cursor%column > utf8_char_count(target_line) + 1) then
+                    cursor%column = utf8_char_count(target_line) + 1
                 end if
             end if
 
@@ -4603,7 +4761,7 @@ contains
             ! Move to end of previous line
             cursor%line = cursor%line - 1
             line = buffer_get_line(buffer, cursor%line)
-            cursor%column = len(line) + 1
+            cursor%column = utf8_char_count(line) + 1
             cursor%desired_column = cursor%column
             if (allocated(line)) deallocate(line)
         end if
@@ -4626,7 +4784,7 @@ contains
         line_count = buffer_get_line_count(buffer)
 
         ! Move cursor right
-        if (cursor%column <= len(line)) then
+        if (cursor%column <= utf8_char_count(line)) then
             cursor%column = cursor%column + 1
             cursor%desired_column = cursor%column
         else if (cursor%line < line_count) then
@@ -4666,7 +4824,7 @@ contains
         end if
 
         line = buffer_get_line(buffer, cursor%line)
-        cursor%column = len(line) + 1
+        cursor%column = utf8_char_count(line) + 1
         cursor%desired_column = cursor%column
         if (allocated(line)) deallocate(line)
     end subroutine extend_selection_end
@@ -6267,11 +6425,7 @@ contains
         end if
 
         if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-        do i = 1, len(suffix)
-            call buffer_insert_char(buffer, editor%cursors(editor%active_cursor), suffix(i:i))
-            editor%cursors(editor%active_cursor)%column = &
-                editor%cursors(editor%active_cursor)%column + 1
-        end do
+        call insert_line_text(buffer, editor%cursors(editor%active_cursor), suffix)
         editor%cursors(editor%active_cursor)%desired_column = &
             editor%cursors(editor%active_cursor)%column
         call sync_editor_to_pane(editor)
@@ -6425,7 +6579,8 @@ contains
         if (editor%completion_popup%item_count > 0) then
             call show_completion_popup(editor%completion_popup, &
                 editor%cursors(editor%active_cursor)%line - editor%viewport_line + 2, &
-                editor%cursors(editor%active_cursor)%column - editor%viewport_column + 1)
+                editor%cursors(editor%active_cursor)%column - editor%viewport_column + 1, &
+                editor%screen_rows, editor%screen_cols)
             g_lsp_ui_changed = .true.
         end if
     end subroutine handle_popup_completion_response_impl
@@ -6892,10 +7047,14 @@ contains
                 start_obj = json_get_object(range_obj, 'start')
                 end_obj = json_get_object(range_obj, 'end')
 
+                ! LSP range characters are UTF-16 units; apply_single_edit
+                ! takes char columns
                 start_line = int(json_get_number(start_obj, 'line', 0.0d0)) + 1
-                start_char = int(json_get_number(start_obj, 'character', 0.0d0)) + 1
+                start_char = char_col_from_lsp(saved_editor_for_callback%tabs(tab_idx)%buffer, &
+                    start_line, int(json_get_number(start_obj, 'character', 0.0d0)))
                 end_line = int(json_get_number(end_obj, 'line', 0.0d0)) + 1
-                end_char = int(json_get_number(end_obj, 'character', 0.0d0)) + 1
+                end_char = char_col_from_lsp(saved_editor_for_callback%tabs(tab_idx)%buffer, &
+                    end_line, int(json_get_number(end_obj, 'character', 0.0d0)))
 
                 new_text = json_get_string(edit_obj, 'newText')
 
@@ -7127,10 +7286,14 @@ contains
                 start_obj = json_get_object(range_obj, 'start')
                 end_obj = json_get_object(range_obj, 'end')
 
+                ! LSP range characters are UTF-16 units; apply_single_edit
+                ! takes char columns
                 start_line = int(json_get_number(start_obj, 'line', 0.0d0)) + 1
-                start_char = int(json_get_number(start_obj, 'character', 0.0d0)) + 1
+                start_char = char_col_from_lsp(editor%tabs(tab_idx)%panes(pane_idx)%buffer, &
+                    start_line, int(json_get_number(start_obj, 'character', 0.0d0)))
                 end_line = int(json_get_number(end_obj, 'line', 0.0d0)) + 1
-                end_char = int(json_get_number(end_obj, 'character', 0.0d0)) + 1
+                end_char = char_col_from_lsp(editor%tabs(tab_idx)%panes(pane_idx)%buffer, &
+                    end_line, int(json_get_number(end_obj, 'character', 0.0d0)))
 
                 ! Get new text
                 new_text = json_get_string(edit_obj, 'newText')
@@ -7456,10 +7619,13 @@ contains
         if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
             if (allocated(editor%tabs(editor%active_tab_index)%filename)) then
                 if (paths_match(editor%tabs(editor%active_tab_index)%filename, filepath)) then
-                    ! Same file - just jump to the position
-                    editor%cursors(editor%active_cursor)%line = symbol%line + 1  ! LSP is 0-based
-                    editor%cursors(editor%active_cursor)%column = symbol%column + 1
-                    editor%cursors(editor%active_cursor)%desired_column = symbol%column + 1
+                    ! Same file - just jump to the position (LSP is
+                    ! 0-based; columns are UTF-16 units)
+                    editor%cursors(editor%active_cursor)%line = symbol%line + 1
+                    editor%cursors(editor%active_cursor)%column = &
+                        char_col_from_lsp(buffer, symbol%line + 1, symbol%column)
+                    editor%cursors(editor%active_cursor)%desired_column = &
+                        editor%cursors(editor%active_cursor)%column
                     editor%viewport_line = max(1, symbol%line + 1 - editor%screen_rows / 2)
                     call sync_editor_to_pane(editor)
                     return
@@ -7474,10 +7640,12 @@ contains
                 if (paths_match(editor%tabs(i)%filename, filepath)) then
                     ! Save current buffer and switch to existing tab
                     call switch_to_tab_with_buffer(editor, i, buffer)
-                    ! Jump to the symbol's position
-                    editor%cursors(editor%active_cursor)%line = symbol%line + 1  ! LSP is 0-based
-                    editor%cursors(editor%active_cursor)%column = symbol%column + 1
-                    editor%cursors(editor%active_cursor)%desired_column = symbol%column + 1
+                    ! Jump to the symbol's position (LSP 0-based, UTF-16)
+                    editor%cursors(editor%active_cursor)%line = symbol%line + 1
+                    editor%cursors(editor%active_cursor)%column = &
+                        char_col_from_lsp(buffer, symbol%line + 1, symbol%column)
+                    editor%cursors(editor%active_cursor)%desired_column = &
+                        editor%cursors(editor%active_cursor)%column
                     editor%viewport_line = max(1, symbol%line + 1 - editor%screen_rows / 2)
                     call sync_editor_to_pane(editor)
                     return
@@ -7525,10 +7693,12 @@ contains
                 ! Sync the pane to editor state (this updates editor%cursors, etc.)
                 call sync_pane_to_editor(editor, new_tab_idx, 1)
 
-                ! Navigate to the symbol's position
-                editor%cursors(editor%active_cursor)%line = symbol%line + 1  ! LSP is 0-based
-                editor%cursors(editor%active_cursor)%column = symbol%column + 1
-                editor%cursors(editor%active_cursor)%desired_column = symbol%column + 1
+                ! Navigate to the symbol's position (LSP 0-based, UTF-16)
+                editor%cursors(editor%active_cursor)%line = symbol%line + 1
+                editor%cursors(editor%active_cursor)%column = &
+                    char_col_from_lsp(buffer, symbol%line + 1, symbol%column)
+                editor%cursors(editor%active_cursor)%desired_column = &
+                    editor%cursors(editor%active_cursor)%column
                 editor%viewport_line = max(1, symbol%line + 1 - editor%screen_rows / 2)
 
                 ! Sync editor state back to pane
@@ -7681,7 +7851,9 @@ contains
         line_real = json_get_number(start_obj, 'line', 0.0d0)
         col_real = json_get_number(start_obj, 'character', 0.0d0)
 
-        ! Convert from 0-based LSP to 1-based editor coordinates
+        ! Convert from 0-based LSP to 1-based editor coordinates. The
+        ! column is refined to a char index per target buffer below (LSP
+        ! sends UTF-16 code units).
         target_line = int(line_real) + 1
         target_col = int(col_real) + 1
 
@@ -7754,6 +7926,8 @@ contains
                     call sync_pane_to_editor(editor, new_tab_idx, 1)
 
                     ! Navigate to the definition position
+                    target_col = char_col_from_lsp(editor%tabs(new_tab_idx)%buffer, &
+                        target_line, int(col_real))
                     editor%cursors(editor%active_cursor)%line = target_line
                     editor%cursors(editor%active_cursor)%column = target_col
                     editor%cursors(editor%active_cursor)%desired_column = target_col
@@ -7780,6 +7954,7 @@ contains
         end if
 
         ! File already open in tabs - jump to the line and column
+        target_col = char_col_from_lsp(editor%tabs(i)%buffer, target_line, int(col_real))
         editor%cursors(editor%active_cursor)%line = target_line
         editor%cursors(editor%active_cursor)%column = target_col
         editor%cursors(editor%active_cursor)%desired_column = target_col

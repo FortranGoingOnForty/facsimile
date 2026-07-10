@@ -84,6 +84,21 @@ contains
             key_str = 'backspace'
         case default
             key_str = ch
+            ! Assemble a full UTF-8 sequence into one key event: the command
+            ! layer treats cursor columns as whole characters, so a multibyte
+            ! char must never arrive as separate single-byte keystrokes.
+            block
+                integer :: nbytes, k, cont
+                nbytes = 1
+                if (iachar(ch) >= 192 .and. iachar(ch) <= 223) nbytes = 2
+                if (iachar(ch) >= 224 .and. iachar(ch) <= 239) nbytes = 3
+                if (iachar(ch) >= 240 .and. iachar(ch) <= 247) nbytes = 4
+                do k = 2, nbytes
+                    cont = terminal_read_char_escape()
+                    if (cont < 0) exit
+                    key_str(k:k) = achar(cont)
+                end do
+            end block
         end select
 
     end subroutine get_key_input
