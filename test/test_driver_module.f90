@@ -42,6 +42,12 @@ contains
         editor%cursors(1)%has_selection = .false.
         editor%active_cursor = 1
 
+        ! An empty tabs array must exist: handle_key_command calls
+        ! size(editor%tabs) everywhere, and size() of an unallocated
+        ! allocatable is undefined behavior (this segfaulted every test)
+        allocate(editor%tabs(0))
+        editor%active_tab_index = 0
+
         ! Initialize command handler
         call init_command_handler()
     end subroutine create_test_editor

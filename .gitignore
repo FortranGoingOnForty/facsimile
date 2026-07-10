@@ -12,3 +12,6 @@ fac_debug.txt
 old/
 CLAUDE.md
 CLAUDE.md
+
+# Python
+__pycache__/

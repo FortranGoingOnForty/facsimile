@@ -157,14 +157,16 @@ contains
 
         call create_test_editor(editor, buffer, "Hello World Test")
 
+        ! Word jumps land on the START of the next/previous word
+        ! (trailing spaces are skipped), matching the editor's behavior
         call simulate_key(editor, buffer, "alt-right")
-        call assert_cursor_at(editor, 1, 6, "Jump to end of 'Hello'")
+        call assert_cursor_at(editor, 1, 7, "Jump to start of 'World'")
 
         call simulate_key(editor, buffer, "alt-right")
-        call assert_cursor_at(editor, 1, 12, "Jump to end of 'World'")
+        call assert_cursor_at(editor, 1, 13, "Jump to start of 'Test'")
 
         call simulate_key(editor, buffer, "alt-left")
-        call assert_cursor_at(editor, 1, 7, "Jump back to 'World'")
+        call assert_cursor_at(editor, 1, 7, "Jump back to start of 'World'")
 
         call destroy_test_editor(editor, buffer)
     end subroutine test_word_jump

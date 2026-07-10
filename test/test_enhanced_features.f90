@@ -29,8 +29,8 @@ program test_enhanced_features
     tests(5)%name = "Join lines"
     tests(5)%test_procedure => test_join_lines
 
-    tests(6)%name = "Transpose characters"
-    tests(6)%test_procedure => test_transpose
+    tests(6)%name = "Duplicate line down"
+    tests(6)%test_procedure => test_duplicate_line
 
     tests(7)%name = "Kill and yank line"
     tests(7)%test_procedure => test_kill_yank
@@ -152,8 +152,8 @@ contains
 
         call create_test_editor(editor, buffer, "Hello" // char(10) // "    World")
 
-        ! Join the lines
-        call simulate_key(editor, buffer, "ctrl-j")
+        ! Join the lines (bound to alt-shift-j; ctrl-j was the old binding)
+        call simulate_key(editor, buffer, "alt-shift-j")
 
         call assert_buffer_equals(buffer, "Hello World", "Lines joined with space")
         call assert_cursor_at(editor, 1, 1, "Cursor position maintained")
@@ -161,20 +161,23 @@ contains
         call destroy_test_editor(editor, buffer)
     end subroutine test_join_lines
 
-    subroutine test_transpose()
+    subroutine test_duplicate_line()
         type(editor_state_t) :: editor
         type(buffer_t) :: buffer
 
+        ! ctrl-t (old transpose binding) now opens a new tab; exercise
+        ! line duplication instead, which is a current editing feature
         call create_test_editor(editor, buffer, "Hello")
-        editor%cursors(1)%column = 3  ! Between 'e' and 'l'
+        editor%cursors(1)%column = 3
 
-        call simulate_key(editor, buffer, "ctrl-t")
+        call simulate_key(editor, buffer, "alt-shift-down")
 
-        call assert_buffer_equals(buffer, "Hlelo", "Characters transposed")
-        call assert_cursor_at(editor, 1, 4, "Cursor moved forward")
+        call assert_buffer_equals(buffer, "Hello" // char(10) // "Hello", &
+                                  "Line duplicated below")
+        call assert_cursor_at(editor, 1, 3, "Cursor stays on original line")
 
         call destroy_test_editor(editor, buffer)
-    end subroutine test_transpose
+    end subroutine test_duplicate_line
 
     subroutine test_kill_yank()
         type(editor_state_t) :: editor

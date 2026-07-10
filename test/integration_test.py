@@ -43,7 +43,22 @@ class FacsimileTest:
         # Start the editor
         self.process = pexpect.spawn(self.binary_path, [self.test_file.name],
                                      timeout=5, encoding='utf-8')
-        time.sleep(0.2)  # Give editor time to initialize
+        # Wait for the first rendered frame before typing: fac flushes any
+        # pending input when it enables raw mode during startup (and startup
+        # shells out several times), so keys sent too early are silently
+        # discarded. The status bar marks the first complete frame.
+        deadline = time.time() + 5
+        seen = ""
+        while time.time() < deadline:
+            try:
+                seen += self.process.read_nonblocking(65536, 0.1)
+                if "ctrl-b:fuss" in seen:
+                    break
+            except pexpect.TIMEOUT:
+                continue
+            except pexpect.EOF:
+                break
+        time.sleep(0.2)
 
     def stop(self) -> None:
         """Stop the editor and clean up."""
@@ -72,6 +87,20 @@ class FacsimileTest:
                 pass
             self.test_file = None
 
+    def drain(self, wait: float = 0.05) -> None:
+        """Consume pending editor output. The editor redraws the whole
+        screen per input burst; if nobody reads the pty, its output buffer
+        fills after a few keystrokes and the editor blocks mid-write,
+        never processing the rest of the input."""
+        end = time.time() + wait
+        while time.time() < end:
+            try:
+                self.process.read_nonblocking(65536, 0.02)
+            except pexpect.TIMEOUT:
+                continue
+            except pexpect.EOF:
+                break
+
     def send_key(self, key: str) -> None:
         """Send a special key combination to the editor."""
         key_map = {
@@ -82,7 +111,7 @@ class FacsimileTest:
             'ctrl-q': '\x11', 'ctrl-r': '\x12', 'ctrl-s': '\x13', 'ctrl-t': '\x14',
             'ctrl-u': '\x15', 'ctrl-v': '\x16', 'ctrl-w': '\x17', 'ctrl-x': '\x18',
             'ctrl-y': '\x19', 'ctrl-z': '\x1a',
-            'ctrl-shift-z': '\x1a',  # Redo (may need different mapping)
+            'ctrl-shift-z': '\x1d',  # Redo via ctrl-] (terminals send \x1a for both z variants)
             'escape': '\x1b', 'enter': '\n', 'tab': '\t',
             'backspace': '\x7f', 'delete': '\x1b[3~',
             'up': '\x1b[A', 'down': '\x1b[B', 'right': '\x1b[C', 'left': '\x1b[D',
@@ -94,7 +123,7 @@ class FacsimileTest:
 
         if key in key_map:
             self.process.send(key_map[key])
-            time.sleep(0.05)  # Small delay between key presses
+            self.drain(0.05)
         else:
             print(f"Warning: Unknown key '{key}'")
 
@@ -102,12 +131,12 @@ class FacsimileTest:
         """Type regular text into the editor."""
         for char in text:
             self.process.send(char)
-            time.sleep(0.01)  # Small delay between characters
+            self.drain(0.02)
 
     def save_file(self) -> None:
         """Save the current file."""
         self.send_key('ctrl-s')
-        time.sleep(0.1)
+        self.drain(0.2)
 
     def get_file_content(self) -> str:
         """Get the current content of the file."""
@@ -205,16 +234,16 @@ def test_auto_close_brackets(editor: FacsimileTest):
 
 
 def test_search(editor: FacsimileTest):
-    """Test search functionality."""
+    """Test search functionality (ctrl-f unified search; '/' is not a binding)."""
     editor.start("Hello World\nHello Universe\nHello Galaxy")
-    editor.type_text("/")
-    time.sleep(0.1)
+    editor.send_key('ctrl-f')
+    time.sleep(0.3)
     editor.type_text("Universe")
-    editor.send_key('enter')
-    # Cursor should now be on "Universe"
-    editor.send_key('ctrl-k')  # Kill line forward
+    editor.send_key('enter')      # jump to match start and exit the prompt
+    time.sleep(0.3)
+    editor.type_text("X")         # insert at the match position
     content = editor.get_file_content()
-    assert "Hello Universe" not in content or "Universe" not in content.split('\n')[1]
+    assert "Hello XUniverse" in content, f"Search jump failed: '{content}'"
 
 
 def test_undo_redo(editor: FacsimileTest):
