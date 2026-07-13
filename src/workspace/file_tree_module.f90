@@ -264,7 +264,7 @@ contains
                 trim(workspace_path), &
                 '" && find . -maxdepth 4 ' // &
                 '-not -path "*/.git/*" ' // &
-                '-not -name ".*" -type f ' // &
+                '-not -name ".*" -type f 2>/dev/null ' // &
                 '| sed "s|^\./||" | sort > ' // &
                 '/tmp/fac_all_files.txt 2>/dev/null'
             call execute_command_line(trim(cmd), &
