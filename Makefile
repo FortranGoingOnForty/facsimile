@@ -176,6 +176,11 @@ src/version_module.f90: VERSION
 $(TARGET): src/version_module.f90 $(OBJECTS) $(C_OBJECTS)
 	$(FC) $(FFLAGS) -o $(TARGET) $(OBJECTS) $(C_OBJECTS)
 
+# version_module has no tracked .mod dependency, so a version bump would
+# otherwise only recompile version_module.o and leave stale VERSION strings
+# inlined in modules that `use` it (e.g. app/main.o). Force a full rebuild.
+$(OBJECTS): src/version_module.f90
+
 # Disable parallel builds to ensure correct module compilation order
 .NOTPARALLEL:
 
