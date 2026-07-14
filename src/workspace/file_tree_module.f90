@@ -259,12 +259,17 @@ contains
             call execute_command_line(trim(cmd), &
                 exitstat=status_code)
         else
-            ! Not a git repo: use find
+            ! Not a git repo: use find. Prune heavy machine-generated dirs a
+            ! code editor never edits (~/Library alone is thousands of files
+            ! and drives the worst tree-build cost); dot-FILES stay excluded
+            ! but non-junk dot-dirs (.config, .vscode) remain reachable.
             write(cmd, '(A,A,A)') 'cd "', &
                 trim(workspace_path), &
                 '" && find . -maxdepth 4 ' // &
-                '-not -path "*/.git/*" ' // &
-                '-not -name ".*" -type f 2>/dev/null ' // &
+                '\( -name Library -o -name node_modules ' // &
+                '-o -name .git -o -name .Trash ' // &
+                '-o -name .cache \) -prune -o ' // &
+                '-type f -not -name ".*" -print 2>/dev/null ' // &
                 '| sed "s|^\./||" | sort > ' // &
                 '/tmp/fac_all_files.txt 2>/dev/null'
             call execute_command_line(trim(cmd), &
