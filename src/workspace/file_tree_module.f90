@@ -1,5 +1,6 @@
 module file_tree_module
     use iso_fortran_env, only: int32, error_unit
+    use dir_scan_module, only: dir_entry_t, list_directory
     implicit none
     private
 
@@ -7,6 +8,7 @@ module file_tree_module
     public :: init_tree_state, cleanup_tree_state, refresh_tree_state
     public :: tree_move_up, tree_move_down, get_selected_item_path
     public :: tree_stage_file, tree_unstage_file, tree_toggle_expand
+    public :: tree_expand_node
     public :: build_selectable_list
     public :: update_tree_viewport
     public :: build_tree
@@ -24,6 +26,7 @@ module file_tree_module
         logical :: is_dotfile = .false.  ! Is this a dotfile (starts with .)
         logical :: is_gitignored = .false.  ! Is this file gitignored
         logical :: all_children_hidden = .false.  ! For directories: all children are hidden
+        logical :: scan_pending = .false.  ! Dir not yet scanned (lazy mode); eager paths never set it
         type(tree_node_t), pointer :: parent => null()  ! Parent node for sibling navigation
         type(tree_node_t), pointer :: first_child => null()
         type(tree_node_t), pointer :: next_sibling => null()
@@ -66,6 +69,9 @@ module file_tree_module
         character(len=256) :: repo_name = ''
         character(len=256) :: branch_name = ''
         logical :: hide_dotfiles = .false.
+        character(len=1024) :: workspace_path = ''  ! Stored so lazy expand can scan
+        logical :: is_git_repo = .false.
+        logical :: first_refresh = .true.  ! Guards one-time defaults (hide_dotfiles)
     end type tree_state_t
 
 contains
@@ -122,6 +128,36 @@ contains
                 exitstat=git_check)
             is_git_repo = (git_check == 0)
 
+        ! Remember workspace + repo kind so lazy expansion can scan later
+        state%workspace_path = trim(workspace_path)
+        state%is_git_repo = is_git_repo
+
+        if (.not. is_git_repo) then
+            ! Non-git: lazy tree. Build only the root and scan its immediate
+            ! children; deeper dirs are scanned on first expand. Dotfiles get
+            ! real nodes now (readdir), so default them hidden once to match
+            ! the old find-based look; the '.' toggle reveals them.
+            if (state%first_refresh) then
+                state%hide_dotfiles = .true.
+                state%first_refresh = .false.
+            end if
+            n_all_files = 0
+            allocate(state%files(0))
+            state%n_files = 0
+
+            allocate(state%root)
+            state%root%name = '.'
+            state%root%is_file = .false.
+            state%root%expanded = .true.
+            state%root%full_path = ''
+            state%root%scan_pending = .true.
+            call scan_directory_children(state, state%root)
+
+            call build_selectable_list(state%root, state%selectable_files, state%n_selectable, state%hide_dotfiles)
+        else
+
+        state%first_refresh = .false.
+
         ! Get all files from filesystem
         call get_all_files(workspace_path, &
             all_files, n_all_files, is_git_repo)
@@ -130,26 +166,20 @@ contains
         if (n_all_files > 0) then
             call build_tree(all_files, n_all_files, state%root)
 
-            ! Git operations only if in a git repo
-            if (is_git_repo) then
-                ! Get dirty files from git status and overlay
-                call get_dirty_files(workspace_path, &
+            ! Get dirty files from git status and overlay
+            call get_dirty_files(workspace_path, &
+                dirty_files, n_dirty_files)
+            if (n_dirty_files > 0) then
+                call overlay_git_status(state%root, &
                     dirty_files, n_dirty_files)
-                if (n_dirty_files > 0) then
-                    call overlay_git_status(state%root, &
-                        dirty_files, n_dirty_files)
-                    state%files = dirty_files
-                    state%n_files = n_dirty_files
-                else
-                    allocate(state%files(0))
-                    state%n_files = 0
-                end if
-
-                call collapse_tree_smart(state%root)
+                state%files = dirty_files
+                state%n_files = n_dirty_files
             else
                 allocate(state%files(0))
                 state%n_files = 0
             end if
+
+            call collapse_tree_smart(state%root)
 
             ! Build selectable files list in tree traversal order
             call build_selectable_list(state%root, state%selectable_files, state%n_selectable, state%hide_dotfiles)
@@ -157,6 +187,7 @@ contains
             state%n_selectable = 0
         end if
 
+        end if  ! lazy vs git
         end block  ! is_git_repo block
 
         if (allocated(all_files)) deallocate(all_files)
@@ -972,6 +1003,88 @@ contains
         end do
     end subroutine tree_unstage_file
 
+    ! Scan a directory node's immediate children from the filesystem (lazy
+    ! mode). Children are cached on the node; scan_pending is cleared even on
+    ! failure so an unreadable dir degrades to an empty leaf instead of
+    ! retrying every expand.
+    subroutine scan_directory_children(state, node)
+        type(tree_state_t), intent(inout) :: state
+        type(tree_node_t), pointer, intent(inout) :: node
+        type(dir_entry_t), allocatable :: entries(:)
+        type(tree_node_t), pointer :: new_node
+        character(len=1024) :: abs_path
+        integer :: n_entries, i
+        logical :: ok, any_visible
+
+        node%scan_pending = .false.
+
+        if (len_trim(node%full_path) == 0) then
+            abs_path = trim(state%workspace_path)
+        else
+            abs_path = trim(state%workspace_path) // '/' // trim(node%full_path)
+        end if
+
+        call list_directory(trim(abs_path), entries, n_entries, ok)
+        if (.not. ok) return
+
+        any_visible = .false.
+        do i = 1, n_entries
+            allocate(new_node)
+            new_node%name = entries(i)%name
+            new_node%is_file = .not. entries(i)%is_dir
+            if (len_trim(node%full_path) == 0) then
+                new_node%full_path = trim(entries(i)%name)
+            else
+                new_node%full_path = trim(node%full_path) // '/' // trim(entries(i)%name)
+            end if
+            new_node%is_dotfile = (entries(i)%name(1:1) == '.')
+            if (entries(i)%is_dir) then
+                new_node%expanded = .false.
+                new_node%scan_pending = .true.
+            end if
+            new_node%parent => node
+            new_node%next_sibling => node%first_child
+            node%first_child => new_node
+            if (.not. new_node%is_dotfile) any_visible = .true.
+        end do
+
+        call sort_children(node)
+
+        ! Grey-out marker: children exist but all are dotfiles (per-level
+        ! stand-in for mark_empty_directories, which only runs in eager mode)
+        node%all_children_hidden = (n_entries > 0 .and. .not. any_visible)
+    end subroutine scan_directory_children
+
+    ! Expand a directory node, scanning its children first if they were
+    ! never loaded. Rebuilds the selectable list and keeps the selection on
+    ! the same node. The single expansion path for toggle/right/space.
+    subroutine tree_expand_node(state, node)
+        type(tree_state_t), intent(inout) :: state
+        type(tree_node_t), pointer, intent(inout) :: node
+        integer :: i
+
+        if (.not. associated(node)) return
+        if (node%is_file) return
+
+        if (node%scan_pending) call scan_directory_children(state, node)
+        node%expanded = .true.
+
+        ! Rebuild selectable list to reflect new visibility
+        if (allocated(state%selectable_files)) deallocate(state%selectable_files)
+        call build_selectable_list(state%root, state%selectable_files, state%n_selectable, state%hide_dotfiles)
+
+        ! Keep the selection on this node in the new list
+        do i = 1, state%n_selectable
+            if (associated(state%selectable_files(i)%node, node)) then
+                state%selected_index = i
+                return
+            end if
+        end do
+        if (state%selected_index > state%n_selectable .and. state%n_selectable > 0) then
+            state%selected_index = state%n_selectable
+        end if
+    end subroutine tree_expand_node
+
     subroutine tree_toggle_expand(state)
         type(tree_state_t), intent(inout) :: state
         type(tree_node_t), pointer :: selected_node
@@ -984,9 +1097,17 @@ contains
 
         if (.not. associated(selected_node)) return
 
-        ! Only toggle directories (not files)
-        if (.not. selected_node%is_file .and. associated(selected_node%first_child)) then
-            selected_node%expanded = .not. selected_node%expanded
+        ! Only toggle directories that have (or may have) children
+        if (.not. selected_node%is_file .and. &
+            (selected_node%scan_pending .or. associated(selected_node%first_child))) then
+
+            if (.not. selected_node%expanded) then
+                ! Expanding: route through the lazy scan path (also rebuilds
+                ! the selectable list and restores selection)
+                call tree_expand_node(state, selected_node)
+                return
+            end if
+            selected_node%expanded = .false.
 
             ! Rebuild selectable list to reflect new visibility
             if (allocated(state%selectable_files)) deallocate(state%selectable_files)

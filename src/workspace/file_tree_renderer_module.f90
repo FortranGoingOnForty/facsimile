@@ -176,8 +176,10 @@ contains
             if (item_idx >= state%viewport_offset .and. current_row <= end_row) then
                 ! Build line with simple +/- indicators and indentation
                 if (.not. node%is_file) then
-                    ! Directory - add expand/collapse indicator and / suffix
-                    if (associated(node%first_child)) then
+                    ! Directory - add expand/collapse indicator and / suffix.
+                    ! scan_pending dirs (lazy, never scanned) get a toggle
+                    ! too; only scanned-and-empty dirs render as leaves.
+                    if (node%scan_pending .or. associated(node%first_child)) then
                         if (node%expanded) then
                             base_line = prefix // EXPANDED_DIR // ' ' // trim(node%name) // '/'
                         else
