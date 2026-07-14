@@ -160,7 +160,7 @@ contains
 
         ! Get all files from filesystem
         call get_all_files(workspace_path, &
-            all_files, n_all_files, is_git_repo)
+            all_files, n_all_files)
 
         ! Build tree from ALL files (not just dirty ones)
         if (n_all_files > 0) then
@@ -268,12 +268,13 @@ contains
         deallocate(temp_files)
     end subroutine get_dirty_files
 
-    subroutine get_all_files(workspace_path, files, &
-        n_files, is_git)
+    ! List all tracked + untracked-unignored files in a git repo (eager
+    ! mode). Non-git workspaces use lazy per-directory scanning instead
+    ! (scan_directory_children).
+    subroutine get_all_files(workspace_path, files, n_files)
         character(len=*), intent(in) :: workspace_path
         type(file_entry_t), allocatable, intent(out) :: files(:)
         integer, intent(out) :: n_files
-        logical, intent(in) :: is_git
         integer :: iostat, unit_num, status_code
         character(len=1024) :: line, cmd
         character(len=1024) :: file_path
@@ -284,34 +285,16 @@ contains
         allocate(temp_files(max_files))
         n_files = 0
 
-        if (is_git) then
-            ! Git repo: use git ls-files for speed
-            write(cmd, '(A,A,A)') 'cd "', &
-                trim(workspace_path), &
-                '" && { git ls-files 2>/dev/null; ' // &
-                'git ls-files --others ' // &
-                '--exclude-standard 2>/dev/null; }' // &
-                ' | sort -u > ' // &
-                '/tmp/fac_all_files.txt 2>/dev/null'
-            call execute_command_line(trim(cmd), &
-                exitstat=status_code)
-        else
-            ! Not a git repo: use find. Prune heavy machine-generated dirs a
-            ! code editor never edits (~/Library alone is thousands of files
-            ! and drives the worst tree-build cost); dot-FILES stay excluded
-            ! but non-junk dot-dirs (.config, .vscode) remain reachable.
-            write(cmd, '(A,A,A)') 'cd "', &
-                trim(workspace_path), &
-                '" && find . -maxdepth 4 ' // &
-                '\( -name Library -o -name node_modules ' // &
-                '-o -name .git -o -name .Trash ' // &
-                '-o -name .cache \) -prune -o ' // &
-                '-type f -not -name ".*" -print 2>/dev/null ' // &
-                '| sed "s|^\./||" | sort > ' // &
-                '/tmp/fac_all_files.txt 2>/dev/null'
-            call execute_command_line(trim(cmd), &
-                exitstat=status_code)
-        end if
+        ! Git repo: use git ls-files for speed
+        write(cmd, '(A,A,A)') 'cd "', &
+            trim(workspace_path), &
+            '" && { git ls-files 2>/dev/null; ' // &
+            'git ls-files --others ' // &
+            '--exclude-standard 2>/dev/null; }' // &
+            ' | sort -u > ' // &
+            '/tmp/fac_all_files.txt 2>/dev/null'
+        call execute_command_line(trim(cmd), &
+            exitstat=status_code)
 
         if (status_code /= 0) then
             allocate(files(0))

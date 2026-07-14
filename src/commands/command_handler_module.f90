@@ -5258,6 +5258,7 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: selected_path
+        type(tree_node_t), pointer :: sel_node
         integer :: i
 
         select case(trim(key_str))
@@ -5295,20 +5296,16 @@ contains
             if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
                 if (tree_state%selectable_files(tree_state%selected_index)%is_directory .and. &
                     associated(tree_state%selectable_files(tree_state%selected_index)%node)) then
-                    ! Expand if collapsed
-                    if (.not. tree_state%selectable_files(tree_state%selected_index)%node%expanded) then
-                        tree_state%selectable_files(tree_state%selected_index)%node%expanded = .true.
-                        ! Rebuild selectable list
-                        if (allocated(tree_state%selectable_files)) deallocate(tree_state%selectable_files)
-                        call build_selectable_list(tree_state%root, &
-                    tree_state%selectable_files, tree_state%n_selectable, &
-                    tree_state%hide_dotfiles)
+                    sel_node => tree_state%selectable_files(tree_state%selected_index)%node
+                    ! Expand if collapsed (scans lazily on first expand,
+                    ! rebuilds selectable list, keeps selection on sel_node)
+                    if (.not. sel_node%expanded) then
+                        call tree_expand_node(tree_state, sel_node)
                     end if
                     ! Find first child in selectable list (look for item whose parent is current node)
                     do i = tree_state%selected_index + 1, tree_state%n_selectable
                         if (associated(tree_state%selectable_files(i)%node)) then
-                            if (associated(tree_state%selectable_files(i)%node%parent, &
-                                         tree_state%selectable_files(tree_state%selected_index)%node)) then
+                            if (associated(tree_state%selectable_files(i)%node%parent, sel_node)) then
                                 tree_state%selected_index = i
                                 exit
                             end if
@@ -5318,25 +5315,9 @@ contains
             end if
 
         case(' ', 'space')
-            ! Toggle directory expand/collapse
-            if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
-                if (.not. tree_state%selectable_files(tree_state%selected_index)%is_directory) then
-                    ! Not a directory - do nothing
-                else if (associated(tree_state%selectable_files(tree_state%selected_index)%node)) then
-                    ! Toggle expanded
-                    tree_state%selectable_files(tree_state%selected_index)%node%expanded = &
-                        .not. tree_state%selectable_files(tree_state%selected_index)%node%expanded
-                    ! Rebuild selectable list
-                    if (allocated(tree_state%selectable_files)) deallocate(tree_state%selectable_files)
-                    call build_selectable_list(tree_state%root, &
-                    tree_state%selectable_files, tree_state%n_selectable, &
-                    tree_state%hide_dotfiles)
-                    ! Clamp selection
-                    if (tree_state%selected_index > tree_state%n_selectable .and. tree_state%n_selectable > 0) then
-                        tree_state%selected_index = tree_state%n_selectable
-                    end if
-                end if
-            end if
+            ! Toggle directory expand/collapse (scans lazily on first
+            ! expand, rebuilds selectable list, restores selection)
+            call tree_toggle_expand(tree_state)
 
         case('ctrl-g')
             ! Activate git prefix mode (Ctrl+g then a/u/m/p/f/l/t/d)
