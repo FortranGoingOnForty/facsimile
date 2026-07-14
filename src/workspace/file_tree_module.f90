@@ -29,6 +29,12 @@ module file_tree_module
         type(tree_node_t), pointer :: next_sibling => null()
     end type tree_node_t
 
+    ! Wrapper so we can keep an array of node pointers (Fortran forbids
+    ! arrays of raw pointers). Used as the directory stack in build_tree.
+    type :: node_ptr_t
+        type(tree_node_t), pointer :: p => null()
+    end type node_ptr_t
+
     type :: file_entry_t
         character(len=512) :: path = ''
         character(len=2) :: status = '  '
@@ -378,7 +384,16 @@ contains
         type(file_entry_t), intent(in) :: files(:)
         integer, intent(in) :: n_files
         type(tree_node_t), pointer, intent(out) :: root
-        integer :: i
+        integer, parameter :: MAX_DEPTH = 256
+        type(node_ptr_t) :: pstack(MAX_DEPTH)   ! dir node at each depth of prev path
+        character(len=256) :: nstack(MAX_DEPTH) ! dir name  at each depth of prev path
+        integer :: cur_depth                    ! dir depth of the previous path
+        integer :: i, level, slash_pos
+        logical :: matched, is_last
+        character(len=1024) :: remaining_path
+        character(len=256) :: component
+        type(tree_node_t), pointer :: parent, new_node
+
         ! Create root
         allocate(root)
         root%name = '.'
@@ -386,21 +401,88 @@ contains
         root%first_child => null()
         root%next_sibling => null()
 
-        ! Build tree
+        cur_depth = 0
+
+        ! Input paths are pre-sorted (git ls-files|sort, or find|sort), so
+        ! consecutive paths share directory prefixes. Keep the previous path's
+        ! directory stack and reuse matching prefix nodes instead of rescanning
+        ! siblings. This is O(total path components), replacing the old
+        ! O(sum of children^2) find-or-create + insertion sort.
         do i = 1, n_files
-            call add_to_tree(root, files(i)%path, files(i)%is_staged, &
-                           files(i)%is_unstaged, files(i)%is_untracked, &
-                           files(i)%has_incoming)
+            remaining_path = trim(files(i)%path)
+            if (len_trim(remaining_path) == 0) cycle
+            parent => root
+            matched = .true.
+            level = 0
+
+            do while (len_trim(remaining_path) > 0)
+                slash_pos = index(remaining_path, '/')
+                if (slash_pos > 0) then
+                    component = remaining_path(1:slash_pos-1)
+                    remaining_path = remaining_path(slash_pos+1:)
+                    is_last = .false.
+                else
+                    component = remaining_path(1:min(len(component), &
+                                               len_trim(remaining_path)))
+                    remaining_path = ''
+                    is_last = .true.
+                end if
+                level = level + 1
+
+                if (is_last) then
+                    ! Leaf file: paths are unique, so always a new node.
+                    allocate(new_node)
+                    new_node%name = trim(component)
+                    new_node%is_file = .true.
+                    new_node%parent => parent
+                    new_node%first_child => null()
+                    new_node%next_sibling => parent%first_child
+                    new_node%is_dotfile = (len_trim(component) > 0 .and. &
+                                           component(1:1) == '.')
+                    new_node%full_path = trim(files(i)%path)
+                    new_node%is_staged = files(i)%is_staged
+                    new_node%is_unstaged = files(i)%is_unstaged
+                    new_node%is_untracked = files(i)%is_untracked
+                    new_node%has_incoming = files(i)%has_incoming
+                    parent%first_child => new_node
+                    cur_depth = level - 1
+                else
+                    ! Directory component. Reuse the prefix node from the
+                    ! previous path when it still matches.
+                    if (matched .and. level <= cur_depth .and. &
+                        level <= MAX_DEPTH) then
+                        if (associated(pstack(level)%p) .and. &
+                            trim(nstack(level)) == trim(component)) then
+                            parent => pstack(level)%p
+                            cycle
+                        end if
+                    end if
+                    ! Diverged (or past the stack cap): create a fresh dir node.
+                    matched = .false.
+                    allocate(new_node)
+                    new_node%name = trim(component)
+                    new_node%is_file = .false.
+                    new_node%expanded = .true.
+                    new_node%parent => parent
+                    new_node%first_child => null()
+                    new_node%next_sibling => parent%first_child
+                    new_node%is_dotfile = (len_trim(component) > 0 .and. &
+                                           component(1:1) == '.')
+                    parent%first_child => new_node
+                    parent => new_node
+                    if (level <= MAX_DEPTH) then
+                        pstack(level)%p => new_node
+                        nstack(level) = trim(component)
+                    end if
+                end if
+            end do
         end do
 
-        ! Sort tree
+        ! Sort tree (directories first, then alphabetical)
         call sort_tree(root)
 
         ! Mark directories that only contain hidden files
-        i = 0
-        if (mark_empty_directories(root)) then
-            i = 1
-        end if
+        if (mark_empty_directories(root)) continue
     end subroutine build_tree
 
     ! Recursively mark directories that only contain hidden files
@@ -487,63 +569,6 @@ contains
         end if
     end function has_dirty_files
 
-    subroutine add_to_tree(root, path, is_staged, is_unstaged, is_untracked, has_incoming)
-        type(tree_node_t), pointer, intent(inout) :: root
-        character(len=*), intent(in) :: path
-        logical, intent(in) :: is_staged, is_unstaged, is_untracked, has_incoming
-        character(len=512) :: remaining_path, component
-        integer :: slash_pos
-        type(tree_node_t), pointer :: current, child, new_node
-
-        current => root
-        remaining_path = trim(path)
-
-        do while (len_trim(remaining_path) > 0)
-            slash_pos = index(remaining_path, '/')
-
-            if (slash_pos > 0) then
-                component = remaining_path(1:slash_pos-1)
-                remaining_path = remaining_path(slash_pos+1:)
-            else
-                component = remaining_path
-                remaining_path = ''
-            end if
-
-            ! Find or create child with this name
-            child => current%first_child
-            do while (associated(child))
-                if (trim(child%name) == trim(component)) exit
-                child => child%next_sibling
-            end do
-
-            if (.not. associated(child)) then
-                ! Create new node
-                allocate(new_node)
-                new_node%name = trim(component)
-                new_node%is_file = (len_trim(remaining_path) == 0)
-                new_node%expanded = .true.  ! Explicitly set expanded for directories
-                new_node%parent => current  ! Set parent pointer
-                new_node%first_child => null()
-                new_node%next_sibling => current%first_child
-                ! Mark as dotfile if name starts with '.'
-                new_node%is_dotfile = (len_trim(component) > 0 .and. component(1:1) == '.')
-                current%first_child => new_node
-                child => new_node
-            end if
-
-            ! If this is the final component, set status and full path
-            if (len_trim(remaining_path) == 0) then
-                child%is_staged = is_staged
-                child%is_unstaged = is_unstaged
-                child%is_untracked = is_untracked
-                child%has_incoming = has_incoming
-                child%full_path = trim(path)
-            end if
-
-            current => child
-        end do
-    end subroutine add_to_tree
-
     recursive subroutine sort_tree(node)
         type(tree_node_t), pointer, intent(inout) :: node
         type(tree_node_t), pointer :: child
@@ -561,49 +586,98 @@ contains
         end do
     end subroutine sort_tree
 
+    ! O(C log C) stable merge sort of a directory's children. The old
+    ! insertion sort was O(C^2), which dominated tree build for wide dirs
+    ! (e.g. a home dir with 1000+ entries under one folder).
     subroutine sort_children(parent)
         type(tree_node_t), pointer, intent(inout) :: parent
-        type(tree_node_t), pointer :: sorted, current, next_node, insert_pos
-        logical :: inserted
 
         if (.not. associated(parent%first_child)) return
+        parent%first_child => merge_sort_siblings(parent%first_child)
+    end subroutine sort_children
 
-        sorted => null()
+    recursive function merge_sort_siblings(head) result(sorted_head)
+        type(tree_node_t), pointer, intent(in) :: head
+        type(tree_node_t), pointer :: sorted_head
+        type(tree_node_t), pointer :: left, right, slow, fast
 
-        current => parent%first_child
-        do while (associated(current))
-            next_node => current%next_sibling
+        if (.not. associated(head)) then
+            sorted_head => null()
+            return
+        end if
+        if (.not. associated(head%next_sibling)) then
+            sorted_head => head
+            return
+        end if
 
-            ! Insert current into sorted list
-            if (.not. associated(sorted)) then
-                sorted => current
-                current%next_sibling => null()
-            else if (compare_nodes(current, sorted) < 0) then
-                current%next_sibling => sorted
-                sorted => current
-            else
-                insert_pos => sorted
-                inserted = .false.
-                do while (associated(insert_pos%next_sibling))
-                    if (compare_nodes(current, insert_pos%next_sibling) < 0) then
-                        current%next_sibling => insert_pos%next_sibling
-                        insert_pos%next_sibling => current
-                        inserted = .true.
-                        exit
-                    end if
-                    insert_pos => insert_pos%next_sibling
-                end do
-                if (.not. inserted) then
-                    insert_pos%next_sibling => current
-                    current%next_sibling => null()
-                end if
+        ! Split the sibling list into halves via slow/fast pointers.
+        slow => head
+        fast => head%next_sibling
+        do while (associated(fast))
+            fast => fast%next_sibling
+            if (associated(fast)) then
+                slow => slow%next_sibling
+                fast => fast%next_sibling
             end if
+        end do
+        left => head
+        right => slow%next_sibling
+        slow%next_sibling => null()
 
-            current => next_node
+        left => merge_sort_siblings(left)
+        right => merge_sort_siblings(right)
+        sorted_head => merge_siblings(left, right)
+    end function merge_sort_siblings
+
+    ! Stable merge: on ties the node from `a_in` (left half) is kept first.
+    function merge_siblings(a_in, b_in) result(merged)
+        type(tree_node_t), pointer, intent(in) :: a_in, b_in
+        type(tree_node_t), pointer :: merged, tail, a, b, nxt
+
+        a => a_in
+        b => b_in
+        merged => null()
+        tail => null()
+
+        ! append_sibling nulls the node's next pointer, so capture the
+        ! successor before each append to keep walking the source list.
+        do while (associated(a) .and. associated(b))
+            if (compare_nodes(a, b) <= 0) then
+                nxt => a%next_sibling
+                call append_sibling(merged, tail, a)
+                a => nxt
+            else
+                nxt => b%next_sibling
+                call append_sibling(merged, tail, b)
+                b => nxt
+            end if
         end do
 
-        parent%first_child => sorted
-    end subroutine sort_children
+        do while (associated(a))
+            nxt => a%next_sibling
+            call append_sibling(merged, tail, a)
+            a => nxt
+        end do
+        do while (associated(b))
+            nxt => b%next_sibling
+            call append_sibling(merged, tail, b)
+            b => nxt
+        end do
+    end function merge_siblings
+
+    ! Append node to the merged list, updating head and tail.
+    subroutine append_sibling(head, tail, node)
+        type(tree_node_t), pointer, intent(inout) :: head, tail
+        type(tree_node_t), pointer, intent(in) :: node
+
+        if (.not. associated(head)) then
+            head => node
+        else
+            tail%next_sibling => node
+        end if
+        tail => node
+        node%next_sibling => null()
+    end subroutine append_sibling
 
     function compare_nodes(a, b) result(cmp)
         type(tree_node_t), pointer, intent(in) :: a, b
