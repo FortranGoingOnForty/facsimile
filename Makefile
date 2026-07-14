@@ -97,6 +97,7 @@ SOURCES = src/version_module.f90 \
           src/utils/platform_module.f90 \
           src/utils/utf8_module.f90 \
           src/utils/regex_module.f90 \
+          src/utils/dir_scan_module.f90 \
           src/buffer/text_buffer_module.f90 \
           src/clipboard/yank_stack_module.f90 \
           src/clipboard/clipboard_module.f90 \
@@ -160,6 +161,7 @@ C_SOURCES = src/terminal/termios_wrapper.c \
             src/terminal/vt100_grid.c \
             src/utils/regex_wrapper.c \
             src/utils/platform_wrapper.c \
+            src/utils/dir_scan_wrapper.c \
             src/lsp/lsp_process_wrapper.c
 C_OBJECTS = $(C_SOURCES:.c=.o)
 
