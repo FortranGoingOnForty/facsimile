@@ -700,10 +700,10 @@ contains
                    merge(' [modified]', '           ', buffer%modified), ' '
         end if
 
-        ! Add hint in center - show timed message, diagnostic, match mode hint, or help
+        ! Timed messages and LSP diagnostics take over the whole bar:
+        ! always exactly one line, ellipsized to the terminal width.
         block
             type(diagnostic_t), allocatable :: line_diagnostics(:)
-            character(len=256) :: diag_msg
             character(len=:), allocatable :: file_uri
             integer(int64) :: now_ms
 
@@ -711,8 +711,8 @@ contains
             now_ms = get_time_ms()
             if (len_trim(editor%timed_message) > 0 .and. &
                 (now_ms - editor%timed_message_ms) < 2000) then
-                status_center = trim(editor%timed_message)
-                goto 200  ! Skip other center content
+                call write_status_message(editor%screen_cols, ' ' // trim(editor%timed_message))
+                return
             else if (len_trim(editor%timed_message) > 0) then
                 editor%timed_message = ''  ! Expired, clear it
             end if
@@ -725,14 +725,13 @@ contains
 
             if (allocated(line_diagnostics) .and. size(line_diagnostics) > 0) then
                 ! Show first diagnostic message (highest severity)
-                diag_msg = line_diagnostics(1)%message
-                ! Truncate if too long
-                if (len_trim(diag_msg) > 50) then
-                    status_center = trim(diag_msg(1:47)) // '...'
-                else
-                    status_center = trim(diag_msg)
-                end if
-            else if (show_match_hint .and. present(match_case_sens)) then
+                call write_status_message(editor%screen_cols, &
+                    ' ' // trim(line_diagnostics(1)%message))
+                deallocate(line_diagnostics)
+                return
+            end if
+
+            if (show_match_hint .and. present(match_case_sens)) then
                 if (match_case_sens) then
                     status_center = '[Cc] alt-c:toggle'
                 else
@@ -741,9 +740,6 @@ contains
             else
                 status_center = 'ctrl-/:help'
             end if
-
-            if (allocated(line_diagnostics)) deallocate(line_diagnostics)
-200         continue
         end block
 
         if (size(editor%cursors) > 1) then
@@ -787,7 +783,7 @@ contains
                             status_bar = repeat(' ', left_pad) // trim(status_center) // &
                                         repeat(' ', padding_len - left_pad)
                         else
-                            status_bar = status_center(1:editor%screen_cols)
+                            status_bar = trim(status_center)
                         end if
                     end if
                 end if
@@ -797,24 +793,52 @@ contains
                 if (padding_len > 0) then
                     status_bar = trim(status_left) // repeat(' ', padding_len) // trim(status_right)
                 else
-                    status_bar = status_left(1:editor%screen_cols)
+                    status_bar = trim(status_left)
                 end if
             end if
         end if
 
-        ! Pad to the full width before slicing: the bar was previously a
-        ! fixed 256-char buffer, so terminals wider than 256 columns read
-        ! past its end (out-of-bounds substring) and lost the right section.
-        if (len(status_bar) < editor%screen_cols) then
-            status_bar = status_bar // &
-                repeat(' ', editor%screen_cols - len(status_bar))
+        ! Render with inverse video, clamped to the terminal width
+        call write_status_message(editor%screen_cols, trim(status_bar))
+    end subroutine render_status_bar
+
+    ! Write one status-bar line in inverse video. The text is forced to
+    ! exactly `width` columns: control characters are blanked (LSP
+    ! messages can carry newlines/tabs that would wrap the bar onto the
+    ! text area) and overlong text is ellipsized, never wrapped.
+    subroutine write_status_message(width, text)
+        integer, intent(in) :: width
+        character(len=*), intent(in) :: text
+        character(len=:), allocatable :: line
+        integer :: i, cut
+
+        if (width < 1) return
+
+        line = text
+        do i = 1, len(line)
+            if (iachar(line(i:i)) < 32 .or. iachar(line(i:i)) == 127) line(i:i) = ' '
+        end do
+
+        if (len(line) > width) then
+            if (width > 3) then
+                cut = width - 3
+                ! Don't split a UTF-8 sequence at the cut point
+                do while (cut > 1 .and. iachar(line(cut+1:cut+1)) >= 128 .and. &
+                          iachar(line(cut+1:cut+1)) < 192)
+                    cut = cut - 1
+                end do
+                line = line(1:cut) // '...' // repeat(' ', width - cut - 3)
+            else
+                line = line(1:width)
+            end if
+        else if (len(line) < width) then
+            line = line // repeat(' ', width - len(line))
         end if
 
-        ! Render with inverse video
         call terminal_write(char(27) // '[7m')  ! Inverse video
-        call terminal_write(status_bar(1:editor%screen_cols))
+        call terminal_write(line)
         call terminal_write(char(27) // '[0m')  ! Reset attributes
-    end subroutine render_status_bar
+    end subroutine write_status_message
 
     ! Number of display cells between the viewport's first visible character
     ! (start_col, cell 0) and char_col, matching exactly how the line
@@ -1093,6 +1117,13 @@ contains
                             editor%tabs(tab_idx)%panes(pane_idx)%viewport_line = cursor%line - pane_height + v_margin + 1
                         end if
 
+                        ! Never scroll past the last buffer line: a stale
+                        ! cursor (e.g. restored session state for another
+                        ! file) must not blank the whole view.
+                        editor%tabs(tab_idx)%panes(pane_idx)%viewport_line = &
+                            min(editor%tabs(tab_idx)%panes(pane_idx)%viewport_line, &
+                                max(1, buffer_get_line_count(editor%tabs(tab_idx)%panes(pane_idx)%buffer)))
+
                         ! Horizontal scrolling for pane
                         if (cursor%column < editor%tabs(tab_idx)%panes(pane_idx)%viewport_column + h_margin) then
                             editor%tabs(tab_idx)%panes(pane_idx)%viewport_column = max(1, cursor%column - h_margin)
@@ -1131,6 +1162,13 @@ contains
         else if (cursor%line > editor%viewport_line + editor%screen_rows - v_margin - 2) then
             ! -2 for status bar and margin
             editor%viewport_line = cursor%line - editor%screen_rows + v_margin + 2
+        end if
+
+        ! Never scroll past the last buffer line (see pane path above)
+        if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0 .and. &
+            editor%active_tab_index <= size(editor%tabs)) then
+            editor%viewport_line = min(editor%viewport_line, &
+                max(1, buffer_get_line_count(editor%tabs(editor%active_tab_index)%buffer)))
         end if
 
         ! Horizontal scrolling (account for fuss mode and line numbers)
