@@ -32,6 +32,9 @@ if command -v python3 &> /dev/null; then
         echo "Running Integration Tests..."
         echo "----------------------------------------"
         python3 test/integration_test.py
+        # These self-skip when pyte is not installed
+        python3 test/integration_lazy_tree.py
+        python3 test/integration_caret.py
     else
         echo ""
         echo "⚠ Skipping integration tests (pexpect not installed)"
