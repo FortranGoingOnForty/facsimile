@@ -267,10 +267,11 @@ contains
         colon_pos = index(line, ':')
         if (colon_pos == 0) return
 
-        ! Find first quote after colon
+        ! Find first quote after colon (index into the substring is
+        ! 1-based, so subtract 1 to get the absolute position)
         start_quote = index(line(colon_pos:), '"')
         if (start_quote == 0) return
-        start_quote = start_quote + colon_pos
+        start_quote = start_quote + colon_pos - 1
 
         ! Find second quote
         end_quote = index(line(start_quote+1:), '"')
