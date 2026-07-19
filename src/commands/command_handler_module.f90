@@ -924,7 +924,6 @@ contains
             if (is_completion_visible(editor%completion_popup)) then
                 block
                     character(len=:), allocatable :: completion_text
-                    integer :: text_i
                     completion_text = get_selected_completion(editor%completion_popup)
                     if (len(completion_text) > 0) then
                         ! Insert the completion text at cursor (UTF-8 aware)
@@ -3162,7 +3161,6 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: text
-        integer :: i
 
         text = pop_yank(yank_stack)
         if (allocated(text)) then
@@ -3465,7 +3463,6 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: text
-        integer :: i
 
         ! Get text from clipboard
         text = paste_from_clipboard()
@@ -6387,7 +6384,6 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: suffix
-        integer :: i
 
         ! Revalidate: the suggestion must still be anchored at the live
         ! cursor, which must still sit at end of line
