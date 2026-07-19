@@ -1,5 +1,40 @@
+! LSP callbacks live at module scope: passing an internal procedure of
+! the main program as a callback makes gfortran emit a stack trampoline,
+! which requires an executable stack (ld warns about it on -O0 builds).
+module main_lsp_callbacks
+    use editor_state_module, only: editor_state_t
+    implicit none
+    private
+    public :: bind_diagnostics_editor, handle_diagnostics
+
+    type(editor_state_t), pointer :: cb_editor => null()
+
+contains
+
+    subroutine bind_diagnostics_editor(ed)
+        type(editor_state_t), intent(inout), target :: ed
+        cb_editor => ed
+    end subroutine bind_diagnostics_editor
+
+    ! Handler for LSP diagnostics notifications (with server attribution)
+    subroutine handle_diagnostics(notification, server_index)
+        use lsp_protocol_module, only: lsp_message_t
+        use diagnostics_module, only: parse_diagnostics_from_params_with_server
+        type(lsp_message_t), intent(in) :: notification
+        integer, intent(in) :: server_index
+
+        if (.not. associated(cb_editor)) return
+        ! Parse and store diagnostics with server attribution so
+        ! diagnostics from different servers stay separate (multi-LSP)
+        call parse_diagnostics_from_params_with_server(cb_editor%diagnostics, &
+            notification%params, server_index)
+    end subroutine handle_diagnostics
+
+end module main_lsp_callbacks
+
 program facsimile
     use iso_fortran_env, only: error_unit, input_unit, output_unit, int64
+    use main_lsp_callbacks, only: bind_diagnostics_editor, handle_diagnostics
     use version_module
     use terminal_io_module
     use input_handler_module, only: get_key_input
@@ -34,7 +69,7 @@ program facsimile
         end subroutine
     end interface
 
-    type(editor_state_t) :: editor
+    type(editor_state_t), target :: editor
     type(buffer_t) :: buffer
     character(len=32) :: key_input
     character(len=512) :: filename, arg, workspace_dir, lsp_workspace
@@ -261,6 +296,7 @@ program facsimile
     end if
 
     ! Set up diagnostics handler for LSP
+    call bind_diagnostics_editor(editor)
     call set_diagnostics_handler(editor%lsp_manager, handle_diagnostics)
 
     ! Register all commands for command palette
@@ -756,19 +792,6 @@ program facsimile
     call cleanup_buffer(buffer)
 
 contains
-
-    ! Handler for LSP diagnostics notifications (with server attribution)
-    subroutine handle_diagnostics(notification, server_index)
-        use lsp_protocol_module, only: lsp_message_t
-        use diagnostics_module, only: parse_diagnostics_from_params_with_server
-        use terminal_io_module, only: terminal_write
-        type(lsp_message_t), intent(in) :: notification
-        integer, intent(in) :: server_index
-
-        ! Parse and store diagnostics with server attribution (for multi-LSP)
-        ! This keeps diagnostics from different servers separate
-        call parse_diagnostics_from_params_with_server(editor%diagnostics, notification%params, server_index)
-    end subroutine handle_diagnostics
 
     ! Flush pending document changes for all tabs
     subroutine flush_pending_document_changes(editor)
