@@ -225,6 +225,26 @@ info:
 	@echo "Default CFLAGS: $(CFLAGS)"
 	@echo "Dev CFLAGS: $(CFLAGS_DEV)"
 
+# Generate compile_commands.json for clangd, covering the C wrappers.
+# Without it clangd falls back to fpm's build/compile_commands.json and
+# interpolates gfortran flags (-ffree-form, -J) onto the C files. Uses
+# dev CFLAGS so the editor surfaces the same warnings as `make dev`.
+compile-commands:
+	@echo '[' > compile_commands.json
+	@first=1; for f in $(C_SOURCES); do \
+	  [ $$first -eq 1 ] || echo '  ,' >> compile_commands.json; \
+	  first=0; \
+	  printf '  {"directory": "%s", "file": "%s", "arguments": ["$(CC)"' \
+	    "$$(pwd)" "$$f" >> compile_commands.json; \
+	  for a in $(CFLAGS_DEV); do \
+	    printf ', "%s"' "$$a" >> compile_commands.json; \
+	  done; \
+	  printf ', "-c", "%s", "-o", "%s"]}\n' \
+	    "$$f" "$${f%.c}.o" >> compile_commands.json; \
+	done
+	@echo ']' >> compile_commands.json
+	@echo "Wrote compile_commands.json ($(words $(C_SOURCES)) C entries)"
+
 # Installation (supports DESTDIR and PREFIX for packaging)
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
@@ -320,4 +340,4 @@ lsp-dev: clean-lsp
 	@echo "Building LSP modules with debug flags..."
 	@$(MAKE) lsp-modules FFLAGS="$(FFLAGS_DEBUG)" CFLAGS="$(CFLAGS_DEV)"
 
-.PHONY: all clean dev debug info install uninstall bump-patch bump-minor bump-major version release lsp-modules test-lsp test-lsp-editor clean-lsp lsp-dev
+.PHONY: all clean dev debug info install uninstall bump-patch bump-minor bump-major version release lsp-modules test-lsp test-lsp-editor clean-lsp lsp-dev compile-commands
