@@ -173,7 +173,7 @@ void get_temp_dir_f(char* buffer, int buffer_len, int* result_len) {
     if (!tmp) tmp = getenv("TEMP");
     if (!tmp) tmp = "/tmp";
 
-    int len = strlen(tmp);
+    int len = (int)strlen(tmp);
 
     // Ensure it ends with slash
     int needs_slash = (tmp[len-1] != '/') ? 1 : 0;
@@ -181,7 +181,7 @@ void get_temp_dir_f(char* buffer, int buffer_len, int* result_len) {
     if (copy_len >= buffer_len) copy_len = buffer_len - 1;
 
     int bytes_to_copy = len < buffer_len - 1 ? len : buffer_len - 1;
-    memcpy(buffer, tmp, bytes_to_copy);
+    memcpy(buffer, tmp, (size_t)bytes_to_copy);
     if (needs_slash && len < buffer_len - 1) {
         buffer[len] = '/';
         buffer[len + 1] = '\0';
@@ -201,9 +201,9 @@ void get_home_dir_f(char* buffer, int buffer_len, int* result_len) {
     }
     if (!home) home = "/tmp";
 
-    int len = strlen(home);
+    int len = (int)strlen(home);
     int copy_len = len < buffer_len - 1 ? len : buffer_len - 1;
-    strncpy(buffer, home, copy_len);
+    strncpy(buffer, home, (size_t)copy_len);
     buffer[copy_len] = '\0';
     *result_len = copy_len;
 }
@@ -241,9 +241,9 @@ int is_windows_f(void) {
 void get_config_dir_f(char* buffer, int buffer_len, int* result_len) {
     const char* config = getenv("XDG_CONFIG_HOME");
     if (config && strlen(config) > 0) {
-        int len = strlen(config);
+        int len = (int)strlen(config);
         int copy_len = len < buffer_len - 1 ? len : buffer_len - 1;
-        memcpy(buffer, config, copy_len);
+        memcpy(buffer, config, (size_t)copy_len);
         buffer[copy_len] = '\0';
         *result_len = copy_len;
         return;
@@ -257,14 +257,14 @@ void get_config_dir_f(char* buffer, int buffer_len, int* result_len) {
     }
     if (!home) home = "/tmp";
 
-    int len = snprintf(buffer, buffer_len, "%s/.config", home);
+    int len = snprintf(buffer, (size_t)buffer_len, "%s/.config", home);
     *result_len = len < buffer_len ? len : buffer_len - 1;
 }
 
 // Get current working directory
 void get_cwd_f(char* buffer, int buffer_len, int* result_len) {
-    if (getcwd(buffer, buffer_len)) {
-        *result_len = strlen(buffer);
+    if (getcwd(buffer, (size_t)buffer_len)) {
+        *result_len = (int)strlen(buffer);
     } else {
         buffer[0] = '\0';
         *result_len = 0;

@@ -229,7 +229,8 @@ static int read_console_char(int timeout_ms) {
 // Fill the input buffer
 static void fill_input_buffer(void) {
     if (buffer_start > 0 && buffer_start < buffer_end) {
-        memmove(input_buffer, input_buffer + buffer_start, buffer_end - buffer_start);
+        memmove(input_buffer, input_buffer + buffer_start,
+                (size_t)(buffer_end - buffer_start));
         buffer_end -= buffer_start;
         buffer_start = 0;
     } else if (buffer_start >= buffer_end) {
@@ -438,7 +439,8 @@ int input_available_count(void) {
 static void fill_input_buffer(void) {
     // Shift remaining data to start of buffer
     if (buffer_start > 0 && buffer_start < buffer_end) {
-        memmove(input_buffer, input_buffer + buffer_start, buffer_end - buffer_start);
+        memmove(input_buffer, input_buffer + buffer_start,
+                (size_t)(buffer_end - buffer_start));
         buffer_end -= buffer_start;
         buffer_start = 0;
     } else if (buffer_start >= buffer_end) {
@@ -448,9 +450,10 @@ static void fill_input_buffer(void) {
     // Read all available data into buffer
     int space = INPUT_BUFFER_SIZE - buffer_end;
     if (space > 0) {
-        ssize_t nread = read(STDIN_FILENO, input_buffer + buffer_end, space);
+        ssize_t nread = read(STDIN_FILENO, input_buffer + buffer_end,
+                             (size_t)space);
         if (nread > 0) {
-            buffer_end += nread;
+            buffer_end += (int)nread;
         }
     }
 }
@@ -540,23 +543,23 @@ void term_buf_write(const char *data, int len) {
     // If this write would overflow, flush first
     if (output_pos + len > OUTPUT_BUFFER_SIZE) {
         if (output_pos > 0) {
-            write(STDOUT_FILENO, output_buf, output_pos);
+            write(STDOUT_FILENO, output_buf, (size_t)output_pos);
             output_pos = 0;
         }
     }
     // If single write is larger than buffer, write directly
     if (len > OUTPUT_BUFFER_SIZE) {
-        write(STDOUT_FILENO, data, len);
+        write(STDOUT_FILENO, data, (size_t)len);
         return;
     }
-    memcpy(output_buf + output_pos, data, len);
+    memcpy(output_buf + output_pos, data, (size_t)len);
     output_pos += len;
 }
 
 // Flush the output buffer to stdout in one write() syscall
 void term_buf_flush(void) {
     if (output_pos > 0) {
-        write(STDOUT_FILENO, output_buf, output_pos);
+        write(STDOUT_FILENO, output_buf, (size_t)output_pos);
         output_pos = 0;
     }
 }

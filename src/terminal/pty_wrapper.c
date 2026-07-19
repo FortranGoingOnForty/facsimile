@@ -106,10 +106,10 @@ static void respond_to_queries(int fd, const char *buf, int n) {
                 resp[rlen++] = 'r';
                 int klen = key_end - key_start;
                 if (klen > 200) klen = 200;
-                memcpy(resp + rlen, buf + key_start, klen);
+                memcpy(resp + rlen, buf + key_start, (size_t)klen);
                 rlen += klen;
                 resp[rlen++] = 0x1b; resp[rlen++] = '\\';
-                write(fd, resp, rlen);
+                write(fd, resp, (size_t)rlen);
             }
         }
 
@@ -176,8 +176,8 @@ static void handle_startup_queries(pty_state_t *state) {
     int idle_count = 0;
     for (;;) {
         gettimeofday(&now, NULL);
-        double elapsed = (now.tv_sec - start.tv_sec) +
-                          (now.tv_usec - start.tv_usec) / 1e6;
+        double elapsed = (double)(now.tv_sec - start.tv_sec) +
+                          (double)(now.tv_usec - start.tv_usec) / 1e6;
         if (elapsed > 3.0) break;
 
         fd_set rfds;
@@ -199,12 +199,12 @@ static void handle_startup_queries(pty_state_t *state) {
         if (n <= 0) continue;
 
         // Save to startup buffer for replay
-        int copy = n;
+        int copy = (int)n;
         if (state->startup_len + copy > STARTUP_BUF_SIZE)
             copy = STARTUP_BUF_SIZE - state->startup_len;
         if (copy > 0) {
             memcpy(state->startup_buf + state->startup_len,
-                   buf, copy);
+                   buf, (size_t)copy);
             state->startup_len += copy;
         }
 
@@ -233,7 +233,7 @@ void pty_spawn_f(const char *shell, int *shell_len,
         *error = -1;
         return;
     }
-    memcpy(shell_path, shell, *shell_len);
+    memcpy(shell_path, shell, (size_t)*shell_len);
     shell_path[*shell_len] = '\0';
 
     // Trim trailing spaces (Fortran pads strings)
@@ -243,8 +243,8 @@ void pty_spawn_f(const char *shell, int *shell_len,
     }
 
     // Set up window size
-    ws.ws_row = *rows;
-    ws.ws_col = *cols;
+    ws.ws_row = (unsigned short)*rows;
+    ws.ws_col = (unsigned short)*cols;
     ws.ws_xpixel = 0;
     ws.ws_ypixel = 0;
 
@@ -390,12 +390,12 @@ int pty_read_f(void **handle, char *buffer, int *bufsize) {
         int avail = state->startup_len - state->startup_pos;
         int copy = avail < *bufsize ? avail : *bufsize;
         memcpy(buffer, state->startup_buf + state->startup_pos,
-               copy);
+               (size_t)copy);
         state->startup_pos += copy;
         return copy;
     }
 
-    ssize_t n = read(state->master_fd, buffer, *bufsize);
+    ssize_t n = read(state->master_fd, buffer, (size_t)*bufsize);
     if (n < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             return 0;
@@ -417,7 +417,7 @@ int pty_write_f(void **handle, const char *data, int *len) {
     pty_state_t *state = (pty_state_t *)*handle;
     if (!state || state->master_fd < 0) return -1;
 
-    ssize_t n = write(state->master_fd, data, *len);
+    ssize_t n = write(state->master_fd, data, (size_t)*len);
     if (n < 0) return -1;
     return (int)n;
 }
@@ -435,8 +435,8 @@ int pty_resize_f(void **handle, int *rows, int *cols) {
     if (!state || state->master_fd < 0) return -1;
 
     struct winsize ws;
-    ws.ws_row = *rows;
-    ws.ws_col = *cols;
+    ws.ws_row = (unsigned short)*rows;
+    ws.ws_col = (unsigned short)*cols;
     ws.ws_xpixel = 0;
     ws.ws_ypixel = 0;
 
