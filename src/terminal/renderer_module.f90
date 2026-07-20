@@ -2091,20 +2091,20 @@ contains
     end subroutine render_cursor_for_panes
 
     ! Draw the inline shadow-text suggestion (dim gray) at the active cursor.
-    ! Only rendered when the cursor sits at end-of-line, so everything to the
-    ! right of it is fill space that can be safely overdrawn. Drawn just before
-    ! cursor placement each frame; the next full redraw self-clears stale text.
-    ! Screen-position math mirrors render_cursor_for_panes / render_cursor so
-    ! the ghost stays aligned with the caret.
+    ! Mid-line the rest of the real line is redrawn after the suggestion, so
+    ! the line visually opens up for the ghost and closes again when it goes
+    ! (every keystroke is a full redraw). Drawn just before cursor placement
+    ! each frame. Screen-position math mirrors render_cursor_for_panes /
+    ! render_cursor so the ghost stays aligned with the caret.
     subroutine render_ghost_text(editor, buffer)
         use editor_state_module, only: pane_t
         type(editor_state_t), intent(in) :: editor
         type(buffer_t), intent(in) :: buffer
         type(pane_t) :: pane
         type(cursor_t) :: cursor
-        character(len=:), allocatable :: suffix
+        character(len=:), allocatable :: suffix, line
         integer :: tab_idx, pane_idx, col_offset
-        integer :: screen_row, screen_col, avail
+        integer :: screen_row, screen_col, avail, disp
         integer :: screen_width, screen_height
         integer :: pane_col, pane_row, pane_width, pane_height
         integer :: row_offset, min_row
@@ -2146,10 +2146,10 @@ contains
             if (pane%active_cursor < 1 .or. pane%active_cursor > size(pane%cursors)) return
             cursor = pane%cursors(pane%active_cursor)
 
-            ! Suggestion must still be anchored at the cursor, at end of line
+            ! Suggestion must still be anchored at the cursor
             if (cursor%line /= editor%ghost%anchor_line .or. &
                 cursor%column /= editor%ghost%anchor_col) return
-            if (cursor%column <= buffer_get_line_char_count(pane%buffer, cursor%line)) return
+            line = buffer_get_line(pane%buffer, cursor%line)
 
             ! Pane geometry (same formulas as render_cursor_for_panes)
             screen_height = editor%screen_rows - 2
@@ -2166,9 +2166,8 @@ contains
             end if
 
             screen_row = pane_row + (cursor%line - pane%viewport_line)
-            screen_col = pane_col + col_offset + display_offset_of( &
-                buffer_get_line(pane%buffer, cursor%line), &
-                pane%viewport_column, cursor%column)
+            disp = display_offset_of(line, pane%viewport_column, cursor%column)
+            screen_col = pane_col + col_offset + disp
             if (screen_row < pane_row .or. screen_row >= pane_row + pane_height) return
             if (screen_col < pane_col + col_offset .or. screen_col >= pane_col + pane_width) return
             avail = pane_col + pane_width - screen_col
@@ -2177,7 +2176,7 @@ contains
             cursor = editor%cursors(editor%active_cursor)
             if (cursor%line /= editor%ghost%anchor_line .or. &
                 cursor%column /= editor%ghost%anchor_col) return
-            if (cursor%column <= buffer_get_line_char_count(buffer, cursor%line)) return
+            line = buffer_get_line(buffer, cursor%line)
 
             if (size(editor%tabs) > 0) then
                 row_offset = 2
@@ -2187,9 +2186,8 @@ contains
                 min_row = 1
             end if
             screen_row = cursor%line - editor%viewport_line + row_offset
-            screen_col = col_offset + 1 + display_offset_of( &
-                buffer_get_line(buffer, cursor%line), &
-                editor%viewport_column, cursor%column)
+            disp = display_offset_of(line, editor%viewport_column, cursor%column)
+            screen_col = col_offset + 1 + disp
             if (screen_row < min_row .or. screen_row >= editor%screen_rows) return
             if (screen_col < 1 .or. screen_col > screen_width) return
             avail = screen_width - screen_col + 1
@@ -2201,7 +2199,83 @@ contains
         call terminal_move_cursor(screen_row, screen_col)
         call terminal_write(char(27) // '[2m' // char(27) // '[90m' // &
                             suffix // char(27) // '[0m')
+
+        ! Mid-line: redraw the real text right of the cursor, shifted past
+        ! the suggestion, so nothing is hidden while the ghost is up
+        if (cursor%column <= utf8_char_count(line)) then
+            call render_line_tail_shifted(line, cursor%column, &
+                disp + len(suffix), avail - len(suffix))
+        end if
     end subroutine render_ghost_text
+
+    ! Draw buffer_line from start_char onward at the current terminal cursor,
+    ! stopping when budget screen cells are used. start_off is the display
+    ! offset of the first cell from the line's on-screen start (keeps tab
+    ! stops aligned). Colors come from a fresh tokenization of the real line;
+    ! the highlighter's multiline scan state is saved and restored so the
+    ! frame-sequential state machine is untouched.
+    subroutine render_line_tail_shifted(buffer_line, start_char, start_off, budget)
+        character(len=*), intent(in) :: buffer_line
+        integer, intent(in) :: start_char, start_off, budget
+        type(token_t), allocatable :: tokens(:)
+        logical :: saved_mc, saved_ms
+        character(len=4) :: saved_delim
+        character(len=:), allocatable :: ch, style, prev_style
+        integer :: ci, off, w, byte_pos, ti
+
+        if (budget < 1) return
+
+        saved_mc = syntax_highlighter%in_multiline_comment
+        saved_ms = syntax_highlighter%in_multiline_string
+        saved_delim = syntax_highlighter%string_delimiter
+        syntax_highlighter%in_multiline_comment = .false.
+        syntax_highlighter%in_multiline_string = .false.
+        call tokenize_line(syntax_highlighter, buffer_line, tokens)
+        syntax_highlighter%in_multiline_comment = saved_mc
+        syntax_highlighter%in_multiline_string = saved_ms
+        syntax_highlighter%string_delimiter = saved_delim
+
+        prev_style = ''
+        off = 0
+        ci = start_char
+        byte_pos = utf8_char_to_byte_index(buffer_line, start_char)
+        do
+            ch = utf8_char_at(buffer_line, ci)
+            if (len(ch) == 0) exit
+            if (ch == char(9)) then
+                w = TAB_WIDTH - mod(start_off + off, TAB_WIDTH)
+            else
+                w = utf8_display_width(ch)
+            end if
+            if (off + w > budget) exit
+
+            style = ''
+            if (syntax_highlighter%enabled) then
+                do ti = 1, size(tokens)
+                    if (byte_pos >= tokens(ti)%start_col .and. &
+                        byte_pos <= tokens(ti)%end_col) then
+                        style = get_token_color(tokens(ti)%type)
+                        exit
+                    end if
+                end do
+            end if
+            if (style /= prev_style) then
+                call terminal_write(char(27) // '[0m')
+                if (len(style) > 0) call terminal_write(style)
+                prev_style = style
+            end if
+
+            if (ch == char(9)) then
+                call terminal_write(repeat(' ', w))
+            else
+                call terminal_write(ch)
+            end if
+            off = off + w
+            byte_pos = byte_pos + len(ch)
+            ci = ci + 1
+        end do
+        call terminal_write(char(27) // '[0m')
+    end subroutine render_line_tail_shifted
 
     subroutine render_cursor_for_panes_with_tree(editor, tree_offset, editor_width)
         use editor_state_module, only: pane_t

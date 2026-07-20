@@ -49,7 +49,8 @@ module command_handler_module
                                         navigate_completion_down, get_selected_completion, &
                                         is_completion_visible
     use ghost_text_module, only: ghost_clear, ghost_clear_pending, &
-                                 ghost_get_prefix_at_cursor, ghost_update_from_buffer, &
+                                 ghost_get_prefix_at_cursor, ghost_get_include_prefix, &
+                                 ghost_update_from_buffer, &
                                  ghost_apply_lsp_result, ghost_suffix, ghost_is_active
     use hover_tooltip_module, only: show_hover_tooltip, hide_hover_tooltip, &
                                      handle_hover_response, is_hover_visible
@@ -370,16 +371,26 @@ contains
             end if
         end if
 
-        ! Ghost text: tab/right accepts the shadow suggestion; any other key
-        ! clears it before normal dispatch (recomputed in the edit tail below).
-        ! Placed after all panel routing so panels keep key priority.
+        ! Ghost text: tab accepts the shadow suggestion; right accepts it
+        ! only at end of line (mid-line, right must keep meaning "move over
+        ! the next real character"). Any other key clears it before normal
+        ! dispatch (recomputed in the edit tail below). Placed after all
+        ! panel routing so panels keep key priority.
         if (ghost_is_active(editor%ghost) .and. &
             .not. is_completion_visible(editor%completion_popup) .and. &
             size(editor%cursors) == 1 .and. &
             .not. editor%cursors(editor%active_cursor)%has_selection) then
-            if (trim(key_str) == 'tab' .or. trim(key_str) == 'right') then
+            if (trim(key_str) == 'tab') then
                 call accept_ghost_suggestion(editor, buffer)
                 return
+            end if
+            if (trim(key_str) == 'right') then
+                if (editor%cursors(editor%active_cursor)%column > &
+                    buffer_get_line_char_count(buffer, &
+                        editor%cursors(editor%active_cursor)%line)) then
+                    call accept_ghost_suggestion(editor, buffer)
+                    return
+                end if
             end if
         end if
         call ghost_clear(editor%ghost)
@@ -6386,11 +6397,9 @@ contains
         character(len=:), allocatable :: suffix
 
         ! Revalidate: the suggestion must still be anchored at the live
-        ! cursor, which must still sit at end of line
+        ! cursor (mid-line is fine; insertion pushes the tail right)
         if (editor%cursors(editor%active_cursor)%line /= editor%ghost%anchor_line .or. &
-            editor%cursors(editor%active_cursor)%column /= editor%ghost%anchor_col .or. &
-            editor%cursors(editor%active_cursor)%column <= &
-                buffer_get_line_char_count(buffer, editor%cursors(editor%active_cursor)%line)) then
+            editor%cursors(editor%active_cursor)%column /= editor%ghost%anchor_col) then
             call ghost_clear(editor%ghost)
             return
         end if
@@ -6424,18 +6433,9 @@ contains
         character(len=*), intent(in) :: key_str
         character(len=:), allocatable :: prefix
         integer :: completion_server, request_id, cur_line, cur_col
-        logical :: trigger_key
+        logical :: trigger_key, in_include
 
         if (.not. editor%ghost%enabled) return
-
-        ! Only word-char typing and backspace produce/refresh a suggestion
-        trigger_key = .false.
-        if (len_trim(key_str) == 1) then
-            trigger_key = is_word_char(key_str(1:1))
-        else if (trim(key_str) == 'backspace') then
-            trigger_key = .true.
-        end if
-        if (.not. trigger_key) return
 
         if (size(editor%cursors) /= 1) return
         if (editor%cursors(editor%active_cursor)%has_selection) return
@@ -6444,14 +6444,37 @@ contains
         cur_line = editor%cursors(editor%active_cursor)%line
         cur_col = editor%cursors(editor%active_cursor)%column
 
-        ! Only suggest at end of line (a mid-line ghost would shift real text)
-        if (cur_col <= buffer_get_line_char_count(buffer, cur_line)) return
+        ! '#include <par' completes header names; prefix is the path
+        ! segment being typed (may be empty right after '<' or '/')
+        call ghost_get_include_prefix(buffer, cur_line, cur_col, prefix, in_include)
 
-        call ghost_get_prefix_at_cursor(buffer, cur_line, cur_col, prefix)
-        if (len(prefix) == 0) return
+        ! Word-char typing and backspace refresh a suggestion; in include
+        ! context any printable char does ('<', '/', '.', ...)
+        trigger_key = .false.
+        if (len_trim(key_str) == 1) then
+            if (in_include) then
+                trigger_key = iachar(key_str(1:1)) >= 33
+            else
+                trigger_key = is_word_char(key_str(1:1))
+            end if
+        else if (trim(key_str) == 'backspace') then
+            trigger_key = .true.
+        end if
+        if (.not. trigger_key) return
 
-        ! Instant suggestion from words in this file
-        call ghost_update_from_buffer(editor%ghost, buffer, prefix, cur_line, cur_col)
+        if (.not. in_include) then
+            ! Mid-line is fine, but only at a word boundary: with the
+            ! cursor inside a word the ghost would duplicate its tail
+            if (.not. ghost_at_word_boundary(buffer, cur_line, cur_col)) return
+            call ghost_get_prefix_at_cursor(buffer, cur_line, cur_col, prefix)
+            if (len(prefix) == 0) return
+
+            ! Instant suggestion from words in this file
+            call ghost_update_from_buffer(editor%ghost, buffer, prefix, cur_line, cur_col)
+        else
+            ! Header names come from the LSP only; drop any stale ghost
+            call ghost_clear(editor%ghost)
+        end if
 
         ! Ask LSP for a (better) completion; the response is validated and
         ! applied asynchronously by the wrapper below
@@ -6474,9 +6497,25 @@ contains
             if (request_id > 0) then
                 editor%ghost%pending_request_id = request_id
                 editor%ghost%pending_prefix = prefix
+                editor%ghost%pending_include = in_include
             end if
         end if
     end subroutine update_ghost_suggestion
+
+    ! True when the cursor is not sitting inside a word: at end of line or
+    ! on a non-word character (closing bracket, quote, space, ...)
+    function ghost_at_word_boundary(buffer, line_num, col) result(ok)
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: line_num, col
+        logical :: ok
+        character(len=:), allocatable :: line
+        integer :: b
+
+        ok = .true.
+        line = buffer_get_line(buffer, line_num)
+        b = utf8_char_to_byte_index(line, col)
+        if (b >= 1 .and. b <= len(line)) ok = .not. is_word_char(line(b:b))
+    end function ghost_at_word_boundary
 
     ! Wrapper callback matching the LSP callback signature (ghost text)
     subroutine handle_ghost_completion_response_wrapper(request_id, response)
@@ -6499,6 +6538,7 @@ contains
         type(lsp_message_t), intent(in) :: response
         character(len=:), allocatable :: pend, prefix, before
         integer :: cur_line, cur_col
+        logical :: was_include, in_include
 
         ! Only the most recent request may update the ghost
         if (request_id /= editor%ghost%pending_request_id) return
@@ -6507,6 +6547,7 @@ contains
         else
             pend = ''
         end if
+        was_include = editor%ghost%pending_include
         call ghost_clear_pending(editor%ghost)
 
         ! Revalidate against current editor state: the user may have moved,
@@ -6516,13 +6557,19 @@ contains
         if (editor%cursors(editor%active_cursor)%has_selection) return
         cur_line = editor%cursors(editor%active_cursor)%line
         cur_col = editor%cursors(editor%active_cursor)%column
-        if (cur_col <= buffer_get_line_char_count(buffer, cur_line)) return
-        call ghost_get_prefix_at_cursor(buffer, cur_line, cur_col, prefix)
-        if (len(prefix) == 0) return
+        if (was_include) then
+            call ghost_get_include_prefix(buffer, cur_line, cur_col, prefix, in_include)
+            if (.not. in_include) return
+        else
+            if (.not. ghost_at_word_boundary(buffer, cur_line, cur_col)) return
+            call ghost_get_prefix_at_cursor(buffer, cur_line, cur_col, prefix)
+            if (len(prefix) == 0) return
+        end if
         if (prefix /= pend) return
 
         if (ghost_is_active(editor%ghost)) before = editor%ghost%suggestion
-        call ghost_apply_lsp_result(editor%ghost, response%result, prefix, cur_line, cur_col)
+        call ghost_apply_lsp_result(editor%ghost, response%result, prefix, cur_line, cur_col, &
+                                    was_include)
 
         ! Redraw (without a keypress) only if the suggestion actually changed
         if (ghost_is_active(editor%ghost)) then
