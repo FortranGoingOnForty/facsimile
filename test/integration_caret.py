@@ -18,6 +18,7 @@ Requires: pip3 install pexpect pyte
 """
 
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -170,10 +171,12 @@ def main():
     check("typed 'x'")
 
     # The caret must also sit on the exact row containing the typed 'x'
-    # (renders as 'x}' since Enter moved the auto-closed brace along)
-    x_row = next((i for i, r in enumerate(screen.display) if "x}" in r), None)
+    # (renders as 'x}' since Enter moved the auto-closed brace along; a
+    # ghost-text suggestion may sit between them, e.g. 'xor}')
+    x_row = next((i for i, r in enumerate(screen.display)
+                  if re.search(r"x\S*\}", r)), None)
     if x_row is None:
-        print("FAIL typed text 'x}' not found on screen")
+        print("FAIL typed text 'x...}' not found on screen")
         failures.append("typed text visible")
     elif screen.cursor.y != x_row:
         print(f"FAIL caret row {screen.cursor.y} but typed text is on row {x_row}")
