@@ -170,10 +170,9 @@ contains
         type(editor_state_t), intent(inout), target :: editor
         type(buffer_t), intent(inout), target :: buffer
         logical, intent(out) :: should_quit
-        integer :: line_count, i, j, insert_line, pane_idx
+        integer :: line_count, i, pane_idx
         logical :: is_edit_action
         type(cursor_t), allocatable :: new_cursors(:)
-        integer, allocatable :: original_lines(:)
         character(len=:), allocatable :: line
 
         should_quit = .false.
@@ -864,10 +863,7 @@ contains
         case('backspace')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (size(editor%cursors) > 1) then
-                ! Apply to all cursors
-                do i = 1, size(editor%cursors)
-                    call handle_backspace(editor%cursors(i), buffer)
-                end do
+                call backspace_multiple_cursors(editor, buffer)
             else
                 call handle_backspace(editor%cursors(editor%active_cursor), buffer)
             end if
@@ -878,10 +874,7 @@ contains
         case('delete')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (size(editor%cursors) > 1) then
-                ! Apply to all cursors
-                do i = 1, size(editor%cursors)
-                    call handle_delete(editor%cursors(i), buffer)
-                end do
+                call delete_multiple_cursors(editor, buffer)
             else
                 call handle_delete(editor%cursors(editor%active_cursor), buffer)
             end if
@@ -950,31 +943,7 @@ contains
 
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (size(editor%cursors) > 1) then
-                ! Sort cursors and apply from bottom to top to avoid position shifts
-                call sort_cursors_by_position(editor)
-                ! Save original line numbers before any insertions
-                allocate(original_lines(size(editor%cursors)))
-                do i = 1, size(editor%cursors)
-                    original_lines(i) = editor%cursors(i)%line
-                end do
-
-                ! Process in reverse order (bottom to top)
-                do i = size(editor%cursors), 1, -1
-                    ! Save the line where we're inserting
-                    insert_line = original_lines(i)
-
-                    call handle_enter(editor%cursors(i), buffer)
-
-                    ! Adjust ALL other cursors that were BELOW where we inserted
-                    ! (cursors at same line are handled by their own handle_enter)
-                    do j = 1, size(editor%cursors)
-                        if (j /= i .and. original_lines(j) > insert_line) then
-                            ! This cursor was below where we inserted, shift it down
-                            editor%cursors(j)%line = editor%cursors(j)%line + 1
-                        end if
-                    end do
-                end do
-                deallocate(original_lines)
+                call enter_multiple_cursors(editor, buffer)
             else
                 call handle_enter(editor%cursors(editor%active_cursor), buffer)
             end if
@@ -985,14 +954,7 @@ contains
         case('tab')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (size(editor%cursors) > 1) then
-                ! Apply to all cursors
-                do i = 1, size(editor%cursors)
-                    if (editor%cursors(i)%has_selection) then
-                        call indent_selection(editor%cursors(i), buffer)
-                    else
-                        call handle_tab(editor%cursors(i), buffer)
-                    end if
-                end do
+                call tab_multiple_cursors(editor, buffer)
             else
                 if (editor%cursors(editor%active_cursor)%has_selection) then
                     call indent_selection(editor%cursors(editor%active_cursor), buffer)
@@ -1292,11 +1254,7 @@ contains
         case('ctrl-v')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (size(editor%cursors) > 1) then
-                ! Apply to all cursors in reverse order (bottom to top)
-                ! This prevents position shifts as we insert text
-                do i = size(editor%cursors), 1, -1
-                    call paste_clipboard(editor%cursors(i), buffer)
-                end do
+                call paste_multiple_cursors(editor, buffer)
             else
                 call paste_clipboard(editor%cursors(editor%active_cursor), buffer)
             end if
@@ -2051,9 +2009,13 @@ contains
                 ptext = get_paste_text()
                 if (len(ptext) > 0) then
                     call save_undo_state(buffer, editor)
-                    call insert_text_block( &
-                        editor%cursors(editor%active_cursor), &
-                        buffer, ptext)
+                    if (size(editor%cursors) > 1) then
+                        call paste_text_multiple_cursors(editor, buffer, ptext)
+                    else
+                        call insert_text_block( &
+                            editor%cursors(editor%active_cursor), &
+                            buffer, ptext)
+                    end if
                     call sync_editor_to_pane(editor)
                     call update_viewport(editor)
                     is_edit_action = .true.
@@ -2686,34 +2648,8 @@ contains
         integer :: start_line, start_col, end_line, end_col
 
         ! Check if we should auto-close or wrap brackets/quotes
-        should_auto_close = .false.
-        should_wrap = .false.
-        select case(ch)
-        case('(')
-            closing_char = ')'
-            should_auto_close = .true.
-            if (cursor%has_selection) should_wrap = .true.
-        case('[')
-            closing_char = ']'
-            should_auto_close = .true.
-            if (cursor%has_selection) should_wrap = .true.
-        case('{')
-            closing_char = '}'
-            should_auto_close = .true.
-            if (cursor%has_selection) should_wrap = .true.
-        case('"')
-            closing_char = '"'
-            should_auto_close = .true.
-            if (cursor%has_selection) should_wrap = .true.
-        case("'")
-            closing_char = "'"
-            should_auto_close = .true.
-            if (cursor%has_selection) should_wrap = .true.
-        case('`')
-            closing_char = '`'
-            should_auto_close = .true.
-            if (cursor%has_selection) should_wrap = .true.
-        end select
+        call classify_auto_close(ch, closing_char, should_auto_close)
+        should_wrap = should_auto_close .and. cursor%has_selection
 
         ! If we should wrap, don't delete - wrap the selection instead
         if (should_wrap) then
@@ -2766,30 +2702,339 @@ contains
         cursor%desired_column = cursor%column
     end subroutine insert_char
 
+    ! ---- Multi-cursor coordinate transforms ------------------------------
+    ! Any buffer edit made for one cursor moves the text every other cursor
+    ! (and selection anchor) points into. After each per-cursor edit the
+    ! helpers below shift all other cursors the way the text moved; with
+    ! that, cursors sharing a line stay glued to their characters and
+    ! processing order cannot corrupt positions. All columns are UTF-8
+    ! character columns, matching cursor_t.
+
+    ! Transform one point for a block insertion that began at (l, c) and
+    ! left the inserting cursor at (l2, c2). Single char: (l,c)->(l,c+1);
+    ! newline+indent: (l,c)->(l+1,indent+1); paste: end of pasted block.
+    subroutine mc_point_after_insert(pl, pc, l, c, l2, c2)
+        integer(int32), intent(inout) :: pl, pc
+        integer, intent(in) :: l, c, l2, c2
+
+        if (pl == l .and. pc >= c) then
+            pl = int(l2, int32)
+            pc = int(c2 + (pc - c), int32)
+        else if (pl > l) then
+            pl = pl + int(l2 - l, int32)
+        end if
+    end subroutine mc_point_after_insert
+
+    ! Transform one point for deletion of the normalized, end-exclusive
+    ! range (sl,sc)..(el,ec). Points inside the range collapse to its start.
+    subroutine mc_point_after_delete(pl, pc, sl, sc, el, ec)
+        integer(int32), intent(inout) :: pl, pc
+        integer, intent(in) :: sl, sc, el, ec
+
+        if (pl == el .and. pc >= ec) then
+            pl = int(sl, int32)
+            pc = int(sc + (pc - ec), int32)
+        else if ((pl == sl .and. pc >= sc .and. (sl /= el .or. pc < ec)) .or. &
+                 (pl > sl .and. pl < el) .or. &
+                 (pl == el .and. sl /= el .and. pc < ec)) then
+            pl = int(sl, int32)
+            pc = int(sc, int32)
+        else if (pl > el) then
+            pl = pl - int(el - sl, int32)
+        end if
+    end subroutine mc_point_after_delete
+
+    subroutine mc_others_inserted(editor, skip, l, c, l2, c2)
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: skip, l, c, l2, c2
+        integer :: k
+
+        do k = 1, size(editor%cursors)
+            if (k == skip) cycle
+            call mc_point_after_insert(editor%cursors(k)%line, &
+                editor%cursors(k)%column, l, c, l2, c2)
+            editor%cursors(k)%desired_column = editor%cursors(k)%column
+            if (editor%cursors(k)%has_selection) then
+                call mc_point_after_insert(editor%cursors(k)%selection_start_line, &
+                    editor%cursors(k)%selection_start_col, l, c, l2, c2)
+            end if
+        end do
+    end subroutine mc_others_inserted
+
+    subroutine mc_others_deleted(editor, skip, sl, sc, el, ec)
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: skip, sl, sc, el, ec
+        integer :: k
+
+        do k = 1, size(editor%cursors)
+            if (k == skip) cycle
+            call mc_point_after_delete(editor%cursors(k)%line, &
+                editor%cursors(k)%column, sl, sc, el, ec)
+            editor%cursors(k)%desired_column = editor%cursors(k)%column
+            if (editor%cursors(k)%has_selection) then
+                call mc_point_after_delete(editor%cursors(k)%selection_start_line, &
+                    editor%cursors(k)%selection_start_col, sl, sc, el, ec)
+            end if
+        end do
+    end subroutine mc_others_deleted
+
+    ! Normalized selection bounds (start <= end; end-exclusive column)
+    subroutine normalize_selection(cursor, sl, sc, el, ec)
+        type(cursor_t), intent(in) :: cursor
+        integer, intent(out) :: sl, sc, el, ec
+
+        if (cursor%line < cursor%selection_start_line .or. &
+            (cursor%line == cursor%selection_start_line .and. &
+             cursor%column < cursor%selection_start_col)) then
+            sl = cursor%line
+            sc = cursor%column
+            el = cursor%selection_start_line
+            ec = cursor%selection_start_col
+        else
+            sl = cursor%selection_start_line
+            sc = cursor%selection_start_col
+            el = cursor%line
+            ec = cursor%column
+        end if
+    end subroutine normalize_selection
+
+    ! Auto-close/wrap classification shared by the single- and multi-cursor
+    ! insert paths, so their behavior can never diverge
+    subroutine classify_auto_close(ch, closing_char, should_auto_close)
+        character(len=*), intent(in) :: ch
+        character, intent(out) :: closing_char
+        logical, intent(out) :: should_auto_close
+
+        should_auto_close = .true.
+        select case(ch)
+        case('(')
+            closing_char = ')'
+        case('[')
+            closing_char = ']'
+        case('{')
+            closing_char = '}'
+        case('"')
+            closing_char = '"'
+        case("'")
+            closing_char = "'"
+        case('`')
+            closing_char = '`'
+        case default
+            closing_char = ' '
+            should_auto_close = .false.
+        end select
+    end subroutine classify_auto_close
+
+    ! Insert a character at every cursor with full parity with the single-
+    ! cursor path: selection wrap for brackets/quotes, selection replace,
+    ! and bracket auto-close.
     subroutine insert_char_multiple_cursors(editor, buffer, ch)
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         character(len=*), intent(in) :: ch
-        integer :: i
-        integer :: offset_adjust
+        character :: closing_char
+        logical :: should_auto_close
+        integer :: i, sl, sc, el, ec, l0, c0
 
-        ! Sort cursors by position to handle offset adjustments
+        call classify_auto_close(ch, closing_char, should_auto_close)
         call sort_cursors_by_position(editor)
 
-        offset_adjust = 0
         do i = 1, size(editor%cursors)
-            ! For cursors with selection, delete selection first
-            if (editor%cursors(i)%has_selection) then
-                call delete_selection(editor%cursors(i), buffer)
+            if (editor%cursors(i)%has_selection .and. should_auto_close) then
+                ! Wrap the selection in the pair. Closing char first, so the
+                ! opening insert cannot shift the end position.
+                call normalize_selection(editor%cursors(i), sl, sc, el, ec)
+                editor%cursors(i)%line = el
+                editor%cursors(i)%column = ec
+                call buffer_insert_char(buffer, editor%cursors(i), closing_char)
+                call mc_others_inserted(editor, i, el, ec, el, ec + 1)
+                editor%cursors(i)%line = sl
+                editor%cursors(i)%column = sc
+                call buffer_insert_char(buffer, editor%cursors(i), ch)
+                call mc_others_inserted(editor, i, sl, sc, sl, sc + 1)
+                editor%cursors(i)%column = sc + 1
                 editor%cursors(i)%has_selection = .false.
+                editor%cursors(i)%desired_column = editor%cursors(i)%column
+                cycle
             end if
 
+            if (editor%cursors(i)%has_selection) then
+                call normalize_selection(editor%cursors(i), sl, sc, el, ec)
+                call delete_selection(editor%cursors(i), buffer)
+                editor%cursors(i)%has_selection = .false.
+                call mc_others_deleted(editor, i, sl, sc, el, ec)
+            end if
+
+            l0 = editor%cursors(i)%line
+            c0 = editor%cursors(i)%column
             ! Insert character (whole UTF-8 sequence, one column)
             call buffer_insert_string(buffer, editor%cursors(i), ch)
             editor%cursors(i)%column = editor%cursors(i)%column + 1
             editor%cursors(i)%desired_column = editor%cursors(i)%column
+            if (should_auto_close) then
+                ! Cursor stays between the pair
+                call buffer_insert_char(buffer, editor%cursors(i), closing_char)
+                call mc_others_inserted(editor, i, l0, c0, l0, c0 + 2)
+            else
+                call mc_others_inserted(editor, i, l0, c0, l0, c0 + 1)
+            end if
         end do
+
+        call deduplicate_cursors(editor)
     end subroutine insert_char_multiple_cursors
+
+    ! Backspace at every cursor: same-line peers shift left with the text;
+    ! a line join re-homes every cursor on and below the joined line
+    subroutine backspace_multiple_cursors(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer :: i, sl, sc, el, ec
+
+        call sort_cursors_by_position(editor)
+        do i = 1, size(editor%cursors)
+            if (editor%cursors(i)%has_selection) then
+                call normalize_selection(editor%cursors(i), sl, sc, el, ec)
+                call delete_selection(editor%cursors(i), buffer)
+                editor%cursors(i)%has_selection = .false.
+                call mc_others_deleted(editor, i, sl, sc, el, ec)
+            else if (editor%cursors(i)%column > 1) then
+                editor%cursors(i)%column = editor%cursors(i)%column - 1
+                call buffer_delete_at_cursor(buffer, editor%cursors(i))
+                editor%cursors(i)%desired_column = editor%cursors(i)%column
+                call mc_others_deleted(editor, i, &
+                    editor%cursors(i)%line, editor%cursors(i)%column, &
+                    editor%cursors(i)%line, editor%cursors(i)%column + 1)
+            else if (editor%cursors(i)%line > 1) then
+                ! Join with previous line; the deleted range is the newline
+                call join_line_with_previous(editor%cursors(i), buffer)
+                call mc_others_deleted(editor, i, &
+                    editor%cursors(i)%line, editor%cursors(i)%column, &
+                    editor%cursors(i)%line + 1, 1)
+            end if
+        end do
+        call deduplicate_cursors(editor)
+    end subroutine backspace_multiple_cursors
+
+    subroutine delete_multiple_cursors(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: line
+        integer :: i, sl, sc, el, ec
+
+        call sort_cursors_by_position(editor)
+        do i = 1, size(editor%cursors)
+            if (editor%cursors(i)%has_selection) then
+                call normalize_selection(editor%cursors(i), sl, sc, el, ec)
+                call delete_selection(editor%cursors(i), buffer)
+                editor%cursors(i)%has_selection = .false.
+                call mc_others_deleted(editor, i, sl, sc, el, ec)
+                cycle
+            end if
+            line = buffer_get_line(buffer, editor%cursors(i)%line)
+            if (editor%cursors(i)%column <= utf8_char_count(line)) then
+                call buffer_delete_at_cursor(buffer, editor%cursors(i))
+                call mc_others_deleted(editor, i, &
+                    editor%cursors(i)%line, editor%cursors(i)%column, &
+                    editor%cursors(i)%line, editor%cursors(i)%column + 1)
+            else if (editor%cursors(i)%line < buffer_get_line_count(buffer)) then
+                ! Join with next line; the deleted range is the newline
+                call join_line_with_next(editor%cursors(i), buffer)
+                call mc_others_deleted(editor, i, &
+                    editor%cursors(i)%line, editor%cursors(i)%column, &
+                    editor%cursors(i)%line + 1, 1)
+            end if
+        end do
+        call deduplicate_cursors(editor)
+    end subroutine delete_multiple_cursors
+
+    ! Enter at every cursor. handle_enter's newline+auto-indent is one block
+    ! insertion from the pre-split point to the cursor's landing position,
+    ! so the generic insert transform covers same-line peers (they move to
+    ! the new line, keeping their offset past the split) and lines below.
+    subroutine enter_multiple_cursors(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer :: i, sl, sc, el, ec, l0, c0
+
+        call sort_cursors_by_position(editor)
+        do i = 1, size(editor%cursors)
+            if (editor%cursors(i)%has_selection) then
+                call normalize_selection(editor%cursors(i), sl, sc, el, ec)
+                call delete_selection(editor%cursors(i), buffer)
+                editor%cursors(i)%has_selection = .false.
+                call mc_others_deleted(editor, i, sl, sc, el, ec)
+            end if
+            l0 = editor%cursors(i)%line
+            c0 = editor%cursors(i)%column
+            call handle_enter(editor%cursors(i), buffer)
+            call mc_others_inserted(editor, i, l0, c0, &
+                editor%cursors(i)%line, editor%cursors(i)%column)
+        end do
+        call deduplicate_cursors(editor)
+    end subroutine enter_multiple_cursors
+
+    ! Paste the clipboard at every cursor. paste_clipboard leaves the
+    ! cursor at the end of the inserted block, which is exactly the block
+    ! insert transform's end point.
+    subroutine paste_multiple_cursors(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer :: i, l0, c0
+
+        call sort_cursors_by_position(editor)
+        do i = 1, size(editor%cursors)
+            l0 = editor%cursors(i)%line
+            c0 = editor%cursors(i)%column
+            call paste_clipboard(editor%cursors(i), buffer)
+            call mc_others_inserted(editor, i, l0, c0, &
+                editor%cursors(i)%line, editor%cursors(i)%column)
+        end do
+        call deduplicate_cursors(editor)
+    end subroutine paste_multiple_cursors
+
+    ! Same for a bracketed-paste block of text
+    subroutine paste_text_multiple_cursors(editor, buffer, text)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=*), intent(in) :: text
+        integer :: i, l0, c0
+
+        call sort_cursors_by_position(editor)
+        do i = 1, size(editor%cursors)
+            l0 = editor%cursors(i)%line
+            c0 = editor%cursors(i)%column
+            call insert_text_block(editor%cursors(i), buffer, text)
+            call mc_others_inserted(editor, i, l0, c0, &
+                editor%cursors(i)%line, editor%cursors(i)%column)
+        end do
+        call deduplicate_cursors(editor)
+    end subroutine paste_text_multiple_cursors
+
+    subroutine tab_multiple_cursors(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer :: i, ln, sl, sc, el, ec, l0, c0
+
+        call sort_cursors_by_position(editor)
+        do i = 1, size(editor%cursors)
+            if (editor%cursors(i)%has_selection) then
+                call normalize_selection(editor%cursors(i), sl, sc, el, ec)
+                call indent_selection(editor%cursors(i), buffer)
+                ! Four spaces went in at the start of each selected line.
+                ! Insert point col 2 matches indent_selection's own
+                ! convention: a cursor parked at column 1 stays put.
+                do ln = sl, el
+                    call mc_others_inserted(editor, i, ln, 2, ln, 6)
+                end do
+            else
+                l0 = editor%cursors(i)%line
+                c0 = editor%cursors(i)%column
+                call handle_tab(editor%cursors(i), buffer)
+                call mc_others_inserted(editor, i, l0, c0, l0, c0 + 4)
+            end if
+        end do
+        call deduplicate_cursors(editor)
+    end subroutine tab_multiple_cursors
 
     subroutine delete_selection(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
