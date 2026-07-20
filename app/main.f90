@@ -1,5 +1,40 @@
+! LSP callbacks live at module scope: passing an internal procedure of
+! the main program as a callback makes gfortran emit a stack trampoline,
+! which requires an executable stack (ld warns about it on -O0 builds).
+module main_lsp_callbacks
+    use editor_state_module, only: editor_state_t
+    implicit none
+    private
+    public :: bind_diagnostics_editor, handle_diagnostics
+
+    type(editor_state_t), pointer :: cb_editor => null()
+
+contains
+
+    subroutine bind_diagnostics_editor(ed)
+        type(editor_state_t), intent(inout), target :: ed
+        cb_editor => ed
+    end subroutine bind_diagnostics_editor
+
+    ! Handler for LSP diagnostics notifications (with server attribution)
+    subroutine handle_diagnostics(notification, server_index)
+        use lsp_protocol_module, only: lsp_message_t
+        use diagnostics_module, only: parse_diagnostics_from_params_with_server
+        type(lsp_message_t), intent(in) :: notification
+        integer, intent(in) :: server_index
+
+        if (.not. associated(cb_editor)) return
+        ! Parse and store diagnostics with server attribution so
+        ! diagnostics from different servers stay separate (multi-LSP)
+        call parse_diagnostics_from_params_with_server(cb_editor%diagnostics, &
+            notification%params, server_index)
+    end subroutine handle_diagnostics
+
+end module main_lsp_callbacks
+
 program facsimile
     use iso_fortran_env, only: error_unit, input_unit, output_unit, int64
+    use main_lsp_callbacks, only: bind_diagnostics_editor, handle_diagnostics
     use version_module
     use terminal_io_module
     use input_handler_module, only: get_key_input
@@ -34,7 +69,7 @@ program facsimile
         end subroutine
     end interface
 
-    type(editor_state_t) :: editor
+    type(editor_state_t), target :: editor
     type(buffer_t) :: buffer
     character(len=32) :: key_input
     character(len=512) :: filename, arg, workspace_dir, lsp_workspace
@@ -47,6 +82,7 @@ program facsimile
     integer :: prev_active_tab, prev_active_pane
     integer :: coalesced_keys
     logical :: active_view_changed
+    logical :: opened_existing_tab
 
 
     ! Get command line arguments
@@ -260,6 +296,7 @@ program facsimile
     end if
 
     ! Set up diagnostics handler for LSP
+    call bind_diagnostics_editor(editor)
     call set_diagnostics_handler(editor%lsp_manager, handle_diagnostics)
 
     ! Register all commands for command palette
@@ -336,6 +373,25 @@ program facsimile
 
     ! Initialize buffer and load file if specified
     if (len_trim(filename) > 0) then
+        ! If workspace restore already opened this file, reuse that tab.
+        ! A duplicate tab would send a second didOpen for the same URI
+        ! (LSP servers reject it) and add one more copy of the file to
+        ! the saved session on every launch.
+        opened_existing_tab = .false.
+        block
+            integer :: ti
+            do ti = 1, size(editor%tabs)
+                if (allocated(editor%tabs(ti)%filename)) then
+                    if (editor%tabs(ti)%filename == trim(filename)) then
+                        call switch_to_tab_with_buffer(editor, ti, buffer)
+                        opened_existing_tab = .true.
+                        exit
+                    end if
+                end if
+            end do
+        end block
+
+        if (.not. opened_existing_tab) then
         ! Create a tab for the initial file
         call create_tab(editor, trim(filename))
 
@@ -412,7 +468,24 @@ program facsimile
             if (allocated(editor%filename)) deallocate(editor%filename)
             allocate(character(len=len_trim(filename)) :: editor%filename)
             editor%filename = trim(filename)
+
+            ! didOpen for the empty document: without it the server
+            ! ignores every didChange, so brand-new files never get
+            ! diagnostics or completion.
+            if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+                if (editor%tabs(editor%active_tab_index)%num_lsp_servers > 0) then
+                    block
+                        integer :: srv_i
+                        do srv_i = 1, editor%tabs(editor%active_tab_index)%num_lsp_servers
+                            call notify_file_opened(editor%lsp_manager, &
+                                editor%tabs(editor%active_tab_index)%lsp_server_indices(srv_i), &
+                                trim(filename), buffer_to_string(buffer))
+                        end do
+                    end block
+                end if
+            end if
         end if
+        end if  ! .not. opened_existing_tab
     else
         ! Only initialize empty buffer if we don't have restored tabs
         if (.not. (allocated(editor%tabs) .and. editor%active_tab_index > 0)) then
@@ -719,19 +792,6 @@ program facsimile
     call cleanup_buffer(buffer)
 
 contains
-
-    ! Handler for LSP diagnostics notifications (with server attribution)
-    subroutine handle_diagnostics(notification, server_index)
-        use lsp_protocol_module, only: lsp_message_t
-        use diagnostics_module, only: parse_diagnostics_from_params_with_server
-        use terminal_io_module, only: terminal_write
-        type(lsp_message_t), intent(in) :: notification
-        integer, intent(in) :: server_index
-
-        ! Parse and store diagnostics with server attribution (for multi-LSP)
-        ! This keeps diagnostics from different servers separate
-        call parse_diagnostics_from_params_with_server(editor%diagnostics, notification%params, server_index)
-    end subroutine handle_diagnostics
 
     ! Flush pending document changes for all tabs
     subroutine flush_pending_document_changes(editor)

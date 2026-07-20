@@ -388,6 +388,14 @@ contains
         ! Replace tabs array
         call move_alloc(temp_tabs, editor%tabs)
         editor%active_tab_index = new_index
+
+        ! Load the new pane's cursor/viewport/filename into the editor
+        ! globals. Without this the previously active tab's state leaks
+        ! into the new tab: the next sync_editor_to_pane stamps the old
+        ! cursor into the new pane and the viewport scrolls a short
+        ! buffer completely off screen.
+        call sync_pane_to_editor(editor, new_index, 1)
+        editor%modified = .false.
     end subroutine create_tab
 
     ! Switch to a specific tab index (1-based)
@@ -415,18 +423,10 @@ contains
         ! Load new tab state
         editor%active_tab_index = tab_index
 
-        ! Load from active pane of new tab
+        ! Load from active pane of new tab (clamps cursors to the
+        ! tab's buffer so persisted positions can't point past EOF)
         pane_idx = editor%tabs(tab_index)%active_pane_index
-        if (allocated(editor%tabs(tab_index)%panes) .and. &
-            pane_idx > 0 .and. pane_idx <= size(editor%tabs(tab_index)%panes)) then
-
-            if (allocated(editor%cursors)) deallocate(editor%cursors)
-            allocate(editor%cursors(size(editor%tabs(tab_index)%panes(pane_idx)%cursors)))
-            editor%cursors = editor%tabs(tab_index)%panes(pane_idx)%cursors
-            editor%active_cursor = editor%tabs(tab_index)%panes(pane_idx)%active_cursor
-            editor%viewport_line = editor%tabs(tab_index)%panes(pane_idx)%viewport_line
-            editor%viewport_column = editor%tabs(tab_index)%panes(pane_idx)%viewport_column
-        end if
+        call sync_pane_to_editor(editor, tab_index, pane_idx)
 
         if (allocated(editor%filename)) deallocate(editor%filename)
         allocate(character(len=len(editor%tabs(tab_index)%filename)) :: editor%filename)
@@ -483,18 +483,10 @@ contains
             call copy_buffer(buffer, editor%tabs(tab_index)%buffer)
         end if
 
-        ! Load from active pane of new tab
+        ! Load from active pane of new tab (clamps cursors to the
+        ! tab's buffer so persisted positions can't point past EOF)
         pane_idx = editor%tabs(tab_index)%active_pane_index
-        if (allocated(editor%tabs(tab_index)%panes) .and. &
-            pane_idx > 0 .and. pane_idx <= size(editor%tabs(tab_index)%panes)) then
-
-            if (allocated(editor%cursors)) deallocate(editor%cursors)
-            allocate(editor%cursors(size(editor%tabs(tab_index)%panes(pane_idx)%cursors)))
-            editor%cursors = editor%tabs(tab_index)%panes(pane_idx)%cursors
-            editor%active_cursor = editor%tabs(tab_index)%panes(pane_idx)%active_cursor
-            editor%viewport_line = editor%tabs(tab_index)%panes(pane_idx)%viewport_line
-            editor%viewport_column = editor%tabs(tab_index)%panes(pane_idx)%viewport_column
-        end if
+        call sync_pane_to_editor(editor, tab_index, pane_idx)
 
         if (allocated(editor%filename)) deallocate(editor%filename)
         allocate(character(len=len(editor%tabs(tab_index)%filename)) :: editor%filename)

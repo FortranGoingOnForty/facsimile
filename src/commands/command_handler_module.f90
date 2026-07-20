@@ -49,7 +49,8 @@ module command_handler_module
                                         navigate_completion_down, get_selected_completion, &
                                         is_completion_visible
     use ghost_text_module, only: ghost_clear, ghost_clear_pending, &
-                                 ghost_get_prefix_at_cursor, ghost_update_from_buffer, &
+                                 ghost_get_prefix_at_cursor, ghost_get_include_prefix, &
+                                 ghost_update_from_buffer, &
                                  ghost_apply_lsp_result, ghost_suffix, ghost_is_active
     use hover_tooltip_module, only: show_hover_tooltip, hide_hover_tooltip, &
                                      handle_hover_response, is_hover_visible
@@ -169,10 +170,9 @@ contains
         type(editor_state_t), intent(inout), target :: editor
         type(buffer_t), intent(inout), target :: buffer
         logical, intent(out) :: should_quit
-        integer :: line_count, i, j, insert_line, pane_idx
+        integer :: line_count, i, pane_idx
         logical :: is_edit_action
         type(cursor_t), allocatable :: new_cursors(:)
-        integer, allocatable :: original_lines(:)
         character(len=:), allocatable :: line
 
         should_quit = .false.
@@ -370,16 +370,26 @@ contains
             end if
         end if
 
-        ! Ghost text: tab/right accepts the shadow suggestion; any other key
-        ! clears it before normal dispatch (recomputed in the edit tail below).
-        ! Placed after all panel routing so panels keep key priority.
+        ! Ghost text: tab accepts the shadow suggestion; right accepts it
+        ! only at end of line (mid-line, right must keep meaning "move over
+        ! the next real character"). Any other key clears it before normal
+        ! dispatch (recomputed in the edit tail below). Placed after all
+        ! panel routing so panels keep key priority.
         if (ghost_is_active(editor%ghost) .and. &
             .not. is_completion_visible(editor%completion_popup) .and. &
             size(editor%cursors) == 1 .and. &
             .not. editor%cursors(editor%active_cursor)%has_selection) then
-            if (trim(key_str) == 'tab' .or. trim(key_str) == 'right') then
+            if (trim(key_str) == 'tab') then
                 call accept_ghost_suggestion(editor, buffer)
                 return
+            end if
+            if (trim(key_str) == 'right') then
+                if (editor%cursors(editor%active_cursor)%column > &
+                    buffer_get_line_char_count(buffer, &
+                        editor%cursors(editor%active_cursor)%line)) then
+                    call accept_ghost_suggestion(editor, buffer)
+                    return
+                end if
             end if
         end if
         call ghost_clear(editor%ghost)
@@ -853,10 +863,7 @@ contains
         case('backspace')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (size(editor%cursors) > 1) then
-                ! Apply to all cursors
-                do i = 1, size(editor%cursors)
-                    call handle_backspace(editor%cursors(i), buffer)
-                end do
+                call backspace_multiple_cursors(editor, buffer)
             else
                 call handle_backspace(editor%cursors(editor%active_cursor), buffer)
             end if
@@ -867,10 +874,7 @@ contains
         case('delete')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (size(editor%cursors) > 1) then
-                ! Apply to all cursors
-                do i = 1, size(editor%cursors)
-                    call handle_delete(editor%cursors(i), buffer)
-                end do
+                call delete_multiple_cursors(editor, buffer)
             else
                 call handle_delete(editor%cursors(editor%active_cursor), buffer)
             end if
@@ -924,7 +928,6 @@ contains
             if (is_completion_visible(editor%completion_popup)) then
                 block
                     character(len=:), allocatable :: completion_text
-                    integer :: text_i
                     completion_text = get_selected_completion(editor%completion_popup)
                     if (len(completion_text) > 0) then
                         ! Insert the completion text at cursor (UTF-8 aware)
@@ -940,31 +943,7 @@ contains
 
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (size(editor%cursors) > 1) then
-                ! Sort cursors and apply from bottom to top to avoid position shifts
-                call sort_cursors_by_position(editor)
-                ! Save original line numbers before any insertions
-                allocate(original_lines(size(editor%cursors)))
-                do i = 1, size(editor%cursors)
-                    original_lines(i) = editor%cursors(i)%line
-                end do
-
-                ! Process in reverse order (bottom to top)
-                do i = size(editor%cursors), 1, -1
-                    ! Save the line where we're inserting
-                    insert_line = original_lines(i)
-
-                    call handle_enter(editor%cursors(i), buffer)
-
-                    ! Adjust ALL other cursors that were BELOW where we inserted
-                    ! (cursors at same line are handled by their own handle_enter)
-                    do j = 1, size(editor%cursors)
-                        if (j /= i .and. original_lines(j) > insert_line) then
-                            ! This cursor was below where we inserted, shift it down
-                            editor%cursors(j)%line = editor%cursors(j)%line + 1
-                        end if
-                    end do
-                end do
-                deallocate(original_lines)
+                call enter_multiple_cursors(editor, buffer)
             else
                 call handle_enter(editor%cursors(editor%active_cursor), buffer)
             end if
@@ -975,14 +954,7 @@ contains
         case('tab')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (size(editor%cursors) > 1) then
-                ! Apply to all cursors
-                do i = 1, size(editor%cursors)
-                    if (editor%cursors(i)%has_selection) then
-                        call indent_selection(editor%cursors(i), buffer)
-                    else
-                        call handle_tab(editor%cursors(i), buffer)
-                    end if
-                end do
+                call tab_multiple_cursors(editor, buffer)
             else
                 if (editor%cursors(editor%active_cursor)%has_selection) then
                     call indent_selection(editor%cursors(editor%active_cursor), buffer)
@@ -1282,11 +1254,7 @@ contains
         case('ctrl-v')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (size(editor%cursors) > 1) then
-                ! Apply to all cursors in reverse order (bottom to top)
-                ! This prevents position shifts as we insert text
-                do i = size(editor%cursors), 1, -1
-                    call paste_clipboard(editor%cursors(i), buffer)
-                end do
+                call paste_multiple_cursors(editor, buffer)
             else
                 call paste_clipboard(editor%cursors(editor%active_cursor), buffer)
             end if
@@ -2041,9 +2009,13 @@ contains
                 ptext = get_paste_text()
                 if (len(ptext) > 0) then
                     call save_undo_state(buffer, editor)
-                    call insert_text_block( &
-                        editor%cursors(editor%active_cursor), &
-                        buffer, ptext)
+                    if (size(editor%cursors) > 1) then
+                        call paste_text_multiple_cursors(editor, buffer, ptext)
+                    else
+                        call insert_text_block( &
+                            editor%cursors(editor%active_cursor), &
+                            buffer, ptext)
+                    end if
                     call sync_editor_to_pane(editor)
                     call update_viewport(editor)
                     is_edit_action = .true.
@@ -2676,34 +2648,8 @@ contains
         integer :: start_line, start_col, end_line, end_col
 
         ! Check if we should auto-close or wrap brackets/quotes
-        should_auto_close = .false.
-        should_wrap = .false.
-        select case(ch)
-        case('(')
-            closing_char = ')'
-            should_auto_close = .true.
-            if (cursor%has_selection) should_wrap = .true.
-        case('[')
-            closing_char = ']'
-            should_auto_close = .true.
-            if (cursor%has_selection) should_wrap = .true.
-        case('{')
-            closing_char = '}'
-            should_auto_close = .true.
-            if (cursor%has_selection) should_wrap = .true.
-        case('"')
-            closing_char = '"'
-            should_auto_close = .true.
-            if (cursor%has_selection) should_wrap = .true.
-        case("'")
-            closing_char = "'"
-            should_auto_close = .true.
-            if (cursor%has_selection) should_wrap = .true.
-        case('`')
-            closing_char = '`'
-            should_auto_close = .true.
-            if (cursor%has_selection) should_wrap = .true.
-        end select
+        call classify_auto_close(ch, closing_char, should_auto_close)
+        should_wrap = should_auto_close .and. cursor%has_selection
 
         ! If we should wrap, don't delete - wrap the selection instead
         if (should_wrap) then
@@ -2756,30 +2702,339 @@ contains
         cursor%desired_column = cursor%column
     end subroutine insert_char
 
+    ! ---- Multi-cursor coordinate transforms ------------------------------
+    ! Any buffer edit made for one cursor moves the text every other cursor
+    ! (and selection anchor) points into. After each per-cursor edit the
+    ! helpers below shift all other cursors the way the text moved; with
+    ! that, cursors sharing a line stay glued to their characters and
+    ! processing order cannot corrupt positions. All columns are UTF-8
+    ! character columns, matching cursor_t.
+
+    ! Transform one point for a block insertion that began at (l, c) and
+    ! left the inserting cursor at (l2, c2). Single char: (l,c)->(l,c+1);
+    ! newline+indent: (l,c)->(l+1,indent+1); paste: end of pasted block.
+    subroutine mc_point_after_insert(pl, pc, l, c, l2, c2)
+        integer(int32), intent(inout) :: pl, pc
+        integer, intent(in) :: l, c, l2, c2
+
+        if (pl == l .and. pc >= c) then
+            pl = int(l2, int32)
+            pc = int(c2 + (pc - c), int32)
+        else if (pl > l) then
+            pl = pl + int(l2 - l, int32)
+        end if
+    end subroutine mc_point_after_insert
+
+    ! Transform one point for deletion of the normalized, end-exclusive
+    ! range (sl,sc)..(el,ec). Points inside the range collapse to its start.
+    subroutine mc_point_after_delete(pl, pc, sl, sc, el, ec)
+        integer(int32), intent(inout) :: pl, pc
+        integer, intent(in) :: sl, sc, el, ec
+
+        if (pl == el .and. pc >= ec) then
+            pl = int(sl, int32)
+            pc = int(sc + (pc - ec), int32)
+        else if ((pl == sl .and. pc >= sc .and. (sl /= el .or. pc < ec)) .or. &
+                 (pl > sl .and. pl < el) .or. &
+                 (pl == el .and. sl /= el .and. pc < ec)) then
+            pl = int(sl, int32)
+            pc = int(sc, int32)
+        else if (pl > el) then
+            pl = pl - int(el - sl, int32)
+        end if
+    end subroutine mc_point_after_delete
+
+    subroutine mc_others_inserted(editor, skip, l, c, l2, c2)
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: skip, l, c, l2, c2
+        integer :: k
+
+        do k = 1, size(editor%cursors)
+            if (k == skip) cycle
+            call mc_point_after_insert(editor%cursors(k)%line, &
+                editor%cursors(k)%column, l, c, l2, c2)
+            editor%cursors(k)%desired_column = editor%cursors(k)%column
+            if (editor%cursors(k)%has_selection) then
+                call mc_point_after_insert(editor%cursors(k)%selection_start_line, &
+                    editor%cursors(k)%selection_start_col, l, c, l2, c2)
+            end if
+        end do
+    end subroutine mc_others_inserted
+
+    subroutine mc_others_deleted(editor, skip, sl, sc, el, ec)
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: skip, sl, sc, el, ec
+        integer :: k
+
+        do k = 1, size(editor%cursors)
+            if (k == skip) cycle
+            call mc_point_after_delete(editor%cursors(k)%line, &
+                editor%cursors(k)%column, sl, sc, el, ec)
+            editor%cursors(k)%desired_column = editor%cursors(k)%column
+            if (editor%cursors(k)%has_selection) then
+                call mc_point_after_delete(editor%cursors(k)%selection_start_line, &
+                    editor%cursors(k)%selection_start_col, sl, sc, el, ec)
+            end if
+        end do
+    end subroutine mc_others_deleted
+
+    ! Normalized selection bounds (start <= end; end-exclusive column)
+    subroutine normalize_selection(cursor, sl, sc, el, ec)
+        type(cursor_t), intent(in) :: cursor
+        integer, intent(out) :: sl, sc, el, ec
+
+        if (cursor%line < cursor%selection_start_line .or. &
+            (cursor%line == cursor%selection_start_line .and. &
+             cursor%column < cursor%selection_start_col)) then
+            sl = cursor%line
+            sc = cursor%column
+            el = cursor%selection_start_line
+            ec = cursor%selection_start_col
+        else
+            sl = cursor%selection_start_line
+            sc = cursor%selection_start_col
+            el = cursor%line
+            ec = cursor%column
+        end if
+    end subroutine normalize_selection
+
+    ! Auto-close/wrap classification shared by the single- and multi-cursor
+    ! insert paths, so their behavior can never diverge
+    subroutine classify_auto_close(ch, closing_char, should_auto_close)
+        character(len=*), intent(in) :: ch
+        character, intent(out) :: closing_char
+        logical, intent(out) :: should_auto_close
+
+        should_auto_close = .true.
+        select case(ch)
+        case('(')
+            closing_char = ')'
+        case('[')
+            closing_char = ']'
+        case('{')
+            closing_char = '}'
+        case('"')
+            closing_char = '"'
+        case("'")
+            closing_char = "'"
+        case('`')
+            closing_char = '`'
+        case default
+            closing_char = ' '
+            should_auto_close = .false.
+        end select
+    end subroutine classify_auto_close
+
+    ! Insert a character at every cursor with full parity with the single-
+    ! cursor path: selection wrap for brackets/quotes, selection replace,
+    ! and bracket auto-close.
     subroutine insert_char_multiple_cursors(editor, buffer, ch)
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         character(len=*), intent(in) :: ch
-        integer :: i
-        integer :: offset_adjust
+        character :: closing_char
+        logical :: should_auto_close
+        integer :: i, sl, sc, el, ec, l0, c0
 
-        ! Sort cursors by position to handle offset adjustments
+        call classify_auto_close(ch, closing_char, should_auto_close)
         call sort_cursors_by_position(editor)
 
-        offset_adjust = 0
         do i = 1, size(editor%cursors)
-            ! For cursors with selection, delete selection first
-            if (editor%cursors(i)%has_selection) then
-                call delete_selection(editor%cursors(i), buffer)
+            if (editor%cursors(i)%has_selection .and. should_auto_close) then
+                ! Wrap the selection in the pair. Closing char first, so the
+                ! opening insert cannot shift the end position.
+                call normalize_selection(editor%cursors(i), sl, sc, el, ec)
+                editor%cursors(i)%line = el
+                editor%cursors(i)%column = ec
+                call buffer_insert_char(buffer, editor%cursors(i), closing_char)
+                call mc_others_inserted(editor, i, el, ec, el, ec + 1)
+                editor%cursors(i)%line = sl
+                editor%cursors(i)%column = sc
+                call buffer_insert_char(buffer, editor%cursors(i), ch)
+                call mc_others_inserted(editor, i, sl, sc, sl, sc + 1)
+                editor%cursors(i)%column = sc + 1
                 editor%cursors(i)%has_selection = .false.
+                editor%cursors(i)%desired_column = editor%cursors(i)%column
+                cycle
             end if
 
+            if (editor%cursors(i)%has_selection) then
+                call normalize_selection(editor%cursors(i), sl, sc, el, ec)
+                call delete_selection(editor%cursors(i), buffer)
+                editor%cursors(i)%has_selection = .false.
+                call mc_others_deleted(editor, i, sl, sc, el, ec)
+            end if
+
+            l0 = editor%cursors(i)%line
+            c0 = editor%cursors(i)%column
             ! Insert character (whole UTF-8 sequence, one column)
             call buffer_insert_string(buffer, editor%cursors(i), ch)
             editor%cursors(i)%column = editor%cursors(i)%column + 1
             editor%cursors(i)%desired_column = editor%cursors(i)%column
+            if (should_auto_close) then
+                ! Cursor stays between the pair
+                call buffer_insert_char(buffer, editor%cursors(i), closing_char)
+                call mc_others_inserted(editor, i, l0, c0, l0, c0 + 2)
+            else
+                call mc_others_inserted(editor, i, l0, c0, l0, c0 + 1)
+            end if
         end do
+
+        call deduplicate_cursors(editor)
     end subroutine insert_char_multiple_cursors
+
+    ! Backspace at every cursor: same-line peers shift left with the text;
+    ! a line join re-homes every cursor on and below the joined line
+    subroutine backspace_multiple_cursors(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer :: i, sl, sc, el, ec
+
+        call sort_cursors_by_position(editor)
+        do i = 1, size(editor%cursors)
+            if (editor%cursors(i)%has_selection) then
+                call normalize_selection(editor%cursors(i), sl, sc, el, ec)
+                call delete_selection(editor%cursors(i), buffer)
+                editor%cursors(i)%has_selection = .false.
+                call mc_others_deleted(editor, i, sl, sc, el, ec)
+            else if (editor%cursors(i)%column > 1) then
+                editor%cursors(i)%column = editor%cursors(i)%column - 1
+                call buffer_delete_at_cursor(buffer, editor%cursors(i))
+                editor%cursors(i)%desired_column = editor%cursors(i)%column
+                call mc_others_deleted(editor, i, &
+                    editor%cursors(i)%line, editor%cursors(i)%column, &
+                    editor%cursors(i)%line, editor%cursors(i)%column + 1)
+            else if (editor%cursors(i)%line > 1) then
+                ! Join with previous line; the deleted range is the newline
+                call join_line_with_previous(editor%cursors(i), buffer)
+                call mc_others_deleted(editor, i, &
+                    editor%cursors(i)%line, editor%cursors(i)%column, &
+                    editor%cursors(i)%line + 1, 1)
+            end if
+        end do
+        call deduplicate_cursors(editor)
+    end subroutine backspace_multiple_cursors
+
+    subroutine delete_multiple_cursors(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: line
+        integer :: i, sl, sc, el, ec
+
+        call sort_cursors_by_position(editor)
+        do i = 1, size(editor%cursors)
+            if (editor%cursors(i)%has_selection) then
+                call normalize_selection(editor%cursors(i), sl, sc, el, ec)
+                call delete_selection(editor%cursors(i), buffer)
+                editor%cursors(i)%has_selection = .false.
+                call mc_others_deleted(editor, i, sl, sc, el, ec)
+                cycle
+            end if
+            line = buffer_get_line(buffer, editor%cursors(i)%line)
+            if (editor%cursors(i)%column <= utf8_char_count(line)) then
+                call buffer_delete_at_cursor(buffer, editor%cursors(i))
+                call mc_others_deleted(editor, i, &
+                    editor%cursors(i)%line, editor%cursors(i)%column, &
+                    editor%cursors(i)%line, editor%cursors(i)%column + 1)
+            else if (editor%cursors(i)%line < buffer_get_line_count(buffer)) then
+                ! Join with next line; the deleted range is the newline
+                call join_line_with_next(editor%cursors(i), buffer)
+                call mc_others_deleted(editor, i, &
+                    editor%cursors(i)%line, editor%cursors(i)%column, &
+                    editor%cursors(i)%line + 1, 1)
+            end if
+        end do
+        call deduplicate_cursors(editor)
+    end subroutine delete_multiple_cursors
+
+    ! Enter at every cursor. handle_enter's newline+auto-indent is one block
+    ! insertion from the pre-split point to the cursor's landing position,
+    ! so the generic insert transform covers same-line peers (they move to
+    ! the new line, keeping their offset past the split) and lines below.
+    subroutine enter_multiple_cursors(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer :: i, sl, sc, el, ec, l0, c0
+
+        call sort_cursors_by_position(editor)
+        do i = 1, size(editor%cursors)
+            if (editor%cursors(i)%has_selection) then
+                call normalize_selection(editor%cursors(i), sl, sc, el, ec)
+                call delete_selection(editor%cursors(i), buffer)
+                editor%cursors(i)%has_selection = .false.
+                call mc_others_deleted(editor, i, sl, sc, el, ec)
+            end if
+            l0 = editor%cursors(i)%line
+            c0 = editor%cursors(i)%column
+            call handle_enter(editor%cursors(i), buffer)
+            call mc_others_inserted(editor, i, l0, c0, &
+                editor%cursors(i)%line, editor%cursors(i)%column)
+        end do
+        call deduplicate_cursors(editor)
+    end subroutine enter_multiple_cursors
+
+    ! Paste the clipboard at every cursor. paste_clipboard leaves the
+    ! cursor at the end of the inserted block, which is exactly the block
+    ! insert transform's end point.
+    subroutine paste_multiple_cursors(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer :: i, l0, c0
+
+        call sort_cursors_by_position(editor)
+        do i = 1, size(editor%cursors)
+            l0 = editor%cursors(i)%line
+            c0 = editor%cursors(i)%column
+            call paste_clipboard(editor%cursors(i), buffer)
+            call mc_others_inserted(editor, i, l0, c0, &
+                editor%cursors(i)%line, editor%cursors(i)%column)
+        end do
+        call deduplicate_cursors(editor)
+    end subroutine paste_multiple_cursors
+
+    ! Same for a bracketed-paste block of text
+    subroutine paste_text_multiple_cursors(editor, buffer, text)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=*), intent(in) :: text
+        integer :: i, l0, c0
+
+        call sort_cursors_by_position(editor)
+        do i = 1, size(editor%cursors)
+            l0 = editor%cursors(i)%line
+            c0 = editor%cursors(i)%column
+            call insert_text_block(editor%cursors(i), buffer, text)
+            call mc_others_inserted(editor, i, l0, c0, &
+                editor%cursors(i)%line, editor%cursors(i)%column)
+        end do
+        call deduplicate_cursors(editor)
+    end subroutine paste_text_multiple_cursors
+
+    subroutine tab_multiple_cursors(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer :: i, ln, sl, sc, el, ec, l0, c0
+
+        call sort_cursors_by_position(editor)
+        do i = 1, size(editor%cursors)
+            if (editor%cursors(i)%has_selection) then
+                call normalize_selection(editor%cursors(i), sl, sc, el, ec)
+                call indent_selection(editor%cursors(i), buffer)
+                ! Four spaces went in at the start of each selected line.
+                ! Insert point col 2 matches indent_selection's own
+                ! convention: a cursor parked at column 1 stays put.
+                do ln = sl, el
+                    call mc_others_inserted(editor, i, ln, 2, ln, 6)
+                end do
+            else
+                l0 = editor%cursors(i)%line
+                c0 = editor%cursors(i)%column
+                call handle_tab(editor%cursors(i), buffer)
+                call mc_others_inserted(editor, i, l0, c0, l0, c0 + 4)
+            end if
+        end do
+        call deduplicate_cursors(editor)
+    end subroutine tab_multiple_cursors
 
     subroutine delete_selection(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
@@ -3162,7 +3417,6 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: text
-        integer :: i
 
         text = pop_yank(yank_stack)
         if (allocated(text)) then
@@ -3465,7 +3719,6 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: text
-        integer :: i
 
         ! Get text from clipboard
         text = paste_from_clipboard()
@@ -5258,6 +5511,7 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: selected_path
+        type(tree_node_t), pointer :: sel_node
         integer :: i
 
         select case(trim(key_str))
@@ -5295,20 +5549,16 @@ contains
             if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
                 if (tree_state%selectable_files(tree_state%selected_index)%is_directory .and. &
                     associated(tree_state%selectable_files(tree_state%selected_index)%node)) then
-                    ! Expand if collapsed
-                    if (.not. tree_state%selectable_files(tree_state%selected_index)%node%expanded) then
-                        tree_state%selectable_files(tree_state%selected_index)%node%expanded = .true.
-                        ! Rebuild selectable list
-                        if (allocated(tree_state%selectable_files)) deallocate(tree_state%selectable_files)
-                        call build_selectable_list(tree_state%root, &
-                    tree_state%selectable_files, tree_state%n_selectable, &
-                    tree_state%hide_dotfiles)
+                    sel_node => tree_state%selectable_files(tree_state%selected_index)%node
+                    ! Expand if collapsed (scans lazily on first expand,
+                    ! rebuilds selectable list, keeps selection on sel_node)
+                    if (.not. sel_node%expanded) then
+                        call tree_expand_node(tree_state, sel_node)
                     end if
                     ! Find first child in selectable list (look for item whose parent is current node)
                     do i = tree_state%selected_index + 1, tree_state%n_selectable
                         if (associated(tree_state%selectable_files(i)%node)) then
-                            if (associated(tree_state%selectable_files(i)%node%parent, &
-                                         tree_state%selectable_files(tree_state%selected_index)%node)) then
+                            if (associated(tree_state%selectable_files(i)%node%parent, sel_node)) then
                                 tree_state%selected_index = i
                                 exit
                             end if
@@ -5318,25 +5568,9 @@ contains
             end if
 
         case(' ', 'space')
-            ! Toggle directory expand/collapse
-            if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
-                if (.not. tree_state%selectable_files(tree_state%selected_index)%is_directory) then
-                    ! Not a directory - do nothing
-                else if (associated(tree_state%selectable_files(tree_state%selected_index)%node)) then
-                    ! Toggle expanded
-                    tree_state%selectable_files(tree_state%selected_index)%node%expanded = &
-                        .not. tree_state%selectable_files(tree_state%selected_index)%node%expanded
-                    ! Rebuild selectable list
-                    if (allocated(tree_state%selectable_files)) deallocate(tree_state%selectable_files)
-                    call build_selectable_list(tree_state%root, &
-                    tree_state%selectable_files, tree_state%n_selectable, &
-                    tree_state%hide_dotfiles)
-                    ! Clamp selection
-                    if (tree_state%selected_index > tree_state%n_selectable .and. tree_state%n_selectable > 0) then
-                        tree_state%selected_index = tree_state%n_selectable
-                    end if
-                end if
-            end if
+            ! Toggle directory expand/collapse (scans lazily on first
+            ! expand, rebuilds selectable list, restores selection)
+            call tree_toggle_expand(tree_state)
 
         case('ctrl-g')
             ! Activate git prefix mode (Ctrl+g then a/u/m/p/f/l/t/d)
@@ -6406,14 +6640,11 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: suffix
-        integer :: i
 
         ! Revalidate: the suggestion must still be anchored at the live
-        ! cursor, which must still sit at end of line
+        ! cursor (mid-line is fine; insertion pushes the tail right)
         if (editor%cursors(editor%active_cursor)%line /= editor%ghost%anchor_line .or. &
-            editor%cursors(editor%active_cursor)%column /= editor%ghost%anchor_col .or. &
-            editor%cursors(editor%active_cursor)%column <= &
-                buffer_get_line_char_count(buffer, editor%cursors(editor%active_cursor)%line)) then
+            editor%cursors(editor%active_cursor)%column /= editor%ghost%anchor_col) then
             call ghost_clear(editor%ghost)
             return
         end if
@@ -6447,18 +6678,9 @@ contains
         character(len=*), intent(in) :: key_str
         character(len=:), allocatable :: prefix
         integer :: completion_server, request_id, cur_line, cur_col
-        logical :: trigger_key
+        logical :: trigger_key, in_include
 
         if (.not. editor%ghost%enabled) return
-
-        ! Only word-char typing and backspace produce/refresh a suggestion
-        trigger_key = .false.
-        if (len_trim(key_str) == 1) then
-            trigger_key = is_word_char(key_str(1:1))
-        else if (trim(key_str) == 'backspace') then
-            trigger_key = .true.
-        end if
-        if (.not. trigger_key) return
 
         if (size(editor%cursors) /= 1) return
         if (editor%cursors(editor%active_cursor)%has_selection) return
@@ -6467,14 +6689,37 @@ contains
         cur_line = editor%cursors(editor%active_cursor)%line
         cur_col = editor%cursors(editor%active_cursor)%column
 
-        ! Only suggest at end of line (a mid-line ghost would shift real text)
-        if (cur_col <= buffer_get_line_char_count(buffer, cur_line)) return
+        ! '#include <par' completes header names; prefix is the path
+        ! segment being typed (may be empty right after '<' or '/')
+        call ghost_get_include_prefix(buffer, cur_line, cur_col, prefix, in_include)
 
-        call ghost_get_prefix_at_cursor(buffer, cur_line, cur_col, prefix)
-        if (len(prefix) == 0) return
+        ! Word-char typing and backspace refresh a suggestion; in include
+        ! context any printable char does ('<', '/', '.', ...)
+        trigger_key = .false.
+        if (len_trim(key_str) == 1) then
+            if (in_include) then
+                trigger_key = iachar(key_str(1:1)) >= 33
+            else
+                trigger_key = is_word_char(key_str(1:1))
+            end if
+        else if (trim(key_str) == 'backspace') then
+            trigger_key = .true.
+        end if
+        if (.not. trigger_key) return
 
-        ! Instant suggestion from words in this file
-        call ghost_update_from_buffer(editor%ghost, buffer, prefix, cur_line, cur_col)
+        if (.not. in_include) then
+            ! Mid-line is fine, but only at a word boundary: with the
+            ! cursor inside a word the ghost would duplicate its tail
+            if (.not. ghost_at_word_boundary(buffer, cur_line, cur_col)) return
+            call ghost_get_prefix_at_cursor(buffer, cur_line, cur_col, prefix)
+            if (len(prefix) == 0) return
+
+            ! Instant suggestion from words in this file
+            call ghost_update_from_buffer(editor%ghost, buffer, prefix, cur_line, cur_col)
+        else
+            ! Header names come from the LSP only; drop any stale ghost
+            call ghost_clear(editor%ghost)
+        end if
 
         ! Ask LSP for a (better) completion; the response is validated and
         ! applied asynchronously by the wrapper below
@@ -6497,9 +6742,25 @@ contains
             if (request_id > 0) then
                 editor%ghost%pending_request_id = request_id
                 editor%ghost%pending_prefix = prefix
+                editor%ghost%pending_include = in_include
             end if
         end if
     end subroutine update_ghost_suggestion
+
+    ! True when the cursor is not sitting inside a word: at end of line or
+    ! on a non-word character (closing bracket, quote, space, ...)
+    function ghost_at_word_boundary(buffer, line_num, col) result(ok)
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: line_num, col
+        logical :: ok
+        character(len=:), allocatable :: line
+        integer :: b
+
+        ok = .true.
+        line = buffer_get_line(buffer, line_num)
+        b = utf8_char_to_byte_index(line, col)
+        if (b >= 1 .and. b <= len(line)) ok = .not. is_word_char(line(b:b))
+    end function ghost_at_word_boundary
 
     ! Wrapper callback matching the LSP callback signature (ghost text)
     subroutine handle_ghost_completion_response_wrapper(request_id, response)
@@ -6522,6 +6783,7 @@ contains
         type(lsp_message_t), intent(in) :: response
         character(len=:), allocatable :: pend, prefix, before
         integer :: cur_line, cur_col
+        logical :: was_include, in_include
 
         ! Only the most recent request may update the ghost
         if (request_id /= editor%ghost%pending_request_id) return
@@ -6530,6 +6792,7 @@ contains
         else
             pend = ''
         end if
+        was_include = editor%ghost%pending_include
         call ghost_clear_pending(editor%ghost)
 
         ! Revalidate against current editor state: the user may have moved,
@@ -6539,13 +6802,19 @@ contains
         if (editor%cursors(editor%active_cursor)%has_selection) return
         cur_line = editor%cursors(editor%active_cursor)%line
         cur_col = editor%cursors(editor%active_cursor)%column
-        if (cur_col <= buffer_get_line_char_count(buffer, cur_line)) return
-        call ghost_get_prefix_at_cursor(buffer, cur_line, cur_col, prefix)
-        if (len(prefix) == 0) return
+        if (was_include) then
+            call ghost_get_include_prefix(buffer, cur_line, cur_col, prefix, in_include)
+            if (.not. in_include) return
+        else
+            if (.not. ghost_at_word_boundary(buffer, cur_line, cur_col)) return
+            call ghost_get_prefix_at_cursor(buffer, cur_line, cur_col, prefix)
+            if (len(prefix) == 0) return
+        end if
         if (prefix /= pend) return
 
         if (ghost_is_active(editor%ghost)) before = editor%ghost%suggestion
-        call ghost_apply_lsp_result(editor%ghost, response%result, prefix, cur_line, cur_col)
+        call ghost_apply_lsp_result(editor%ghost, response%result, prefix, cur_line, cur_col, &
+                                    was_include)
 
         ! Redraw (without a keypress) only if the suggestion actually changed
         if (ghost_is_active(editor%ghost)) then

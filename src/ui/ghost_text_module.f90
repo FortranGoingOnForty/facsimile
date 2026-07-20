@@ -10,10 +10,12 @@ module ghost_text_module
     public :: GHOST_SRC_NONE, GHOST_SRC_WORDS, GHOST_SRC_LSP
     public :: ghost_clear, ghost_clear_pending
     public :: ghost_get_prefix_at_cursor
+    public :: ghost_get_include_prefix
     public :: ghost_update_from_buffer
     public :: ghost_apply_lsp_result
     public :: ghost_suffix
     public :: ghost_is_active
+    public :: ghost_word_char
 
     integer, parameter :: GHOST_SRC_NONE = 0
     integer, parameter :: GHOST_SRC_WORDS = 1
@@ -33,6 +35,7 @@ module ghost_text_module
         integer :: anchor_col = 0                     ! 1-based UTF-8 char column
         integer :: pending_request_id = 0             ! outstanding LSP request (0 = none)
         character(len=:), allocatable :: pending_prefix
+        logical :: pending_include = .false.          ! request made in #include context
     end type ghost_text_t
 
 contains
@@ -54,6 +57,7 @@ contains
         type(ghost_text_t), intent(inout) :: ghost
 
         ghost%pending_request_id = 0
+        ghost%pending_include = .false.
         if (allocated(ghost%pending_prefix)) deallocate(ghost%pending_prefix)
     end subroutine ghost_clear_pending
 
@@ -85,6 +89,82 @@ contains
         end do
         if (i < byte_end - 1) prefix = line(i+1:byte_end-1)
     end subroutine ghost_get_prefix_at_cursor
+
+    ! Detect an include-directive context: '#include <partial' or
+    ! '#include "partial' with the cursor inside the unclosed header name.
+    ! The prefix is the current path segment - the text after the last of
+    ! '<', '"' or '/' - because that is how clangd anchors header
+    ! completions (insertText for '<sys/epo' is 'epoll.h>', not the full
+    ! path). prefix may come back empty with in_include true, e.g. right
+    ! after typing the '<' or a '/'.
+    subroutine ghost_get_include_prefix(buffer, line_num, col, prefix, in_include)
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: line_num, col
+        character(len=:), allocatable, intent(out) :: prefix
+        logical, intent(out) :: in_include
+        character(len=:), allocatable :: line
+        integer :: cursor_byte, i, n, word_start, seg_start
+        character :: closer
+
+        prefix = ''
+        in_include = .false.
+        line = buffer_get_line(buffer, line_num)
+        n = len(line)
+        if (n == 0) return
+        cursor_byte = utf8_char_to_byte_index(line, col)
+
+        ! '#', optional blanks, then an include-like directive word
+        i = 1
+        do while (i <= n)
+            if (line(i:i) /= ' ' .and. line(i:i) /= char(9)) exit
+            i = i + 1
+        end do
+        if (i > n) return
+        if (line(i:i) /= '#') return
+        i = i + 1
+        do while (i <= n)
+            if (line(i:i) /= ' ' .and. line(i:i) /= char(9)) exit
+            i = i + 1
+        end do
+        word_start = i
+        do while (i <= n)
+            if (.not. ghost_word_char(line(i:i))) exit
+            i = i + 1
+        end do
+        if (i <= word_start) return
+        select case (line(word_start:i-1))
+        case ('include', 'include_next', 'import')
+        case default
+            return
+        end select
+
+        ! Opening delimiter before the cursor, not yet closed
+        do while (i <= n)
+            if (line(i:i) /= ' ' .and. line(i:i) /= char(9)) exit
+            i = i + 1
+        end do
+        if (i > n .or. i >= cursor_byte) return
+        if (line(i:i) == '<') then
+            closer = '>'
+        else if (line(i:i) == '"') then
+            closer = '"'
+        else
+            return
+        end if
+
+        seg_start = i + 1
+        do i = seg_start, cursor_byte - 1
+            if (line(i:i) == closer) return
+            if (line(i:i) == '/') then
+                seg_start = i + 1
+            else if (.not. header_char(line(i:i))) then
+                return
+            end if
+        end do
+
+        in_include = .true.
+        if (seg_start <= cursor_byte - 1) prefix = line(seg_start:cursor_byte-1)
+    end subroutine ghost_get_include_prefix
 
     ! Scan the whole buffer for [A-Za-z0-9_]+ tokens that extend the prefix
     ! and keep the one nearest the cursor line (tie: earliest occurrence).
@@ -161,21 +241,26 @@ contains
     end subroutine ghost_update_from_buffer
 
     ! Replace the current suggestion with the first LSP completion item that
-    ! extends the prefix and is a plain identifier (rejects snippets with
-    ! placeholders like ${1:...} and multibyte text). Accepts both the
-    ! CompletionList {items:[...]} shape and a bare item array. If no item
-    ! survives the filter, any word-scan suggestion is left in place.
-    subroutine ghost_apply_lsp_result(ghost, result_json, prefix, cur_line, cur_col)
+    ! extends the prefix and passes the shape filter: a plain identifier
+    ! normally, or a header path (float.h>, sys/stat.h>) in include context.
+    ! Rejects snippets with placeholders like ${1:...} and multibyte text.
+    ! Accepts both the CompletionList {items:[...]} shape and a bare item
+    ! array. If no item survives, any word-scan suggestion is left in place.
+    ! In include context an empty prefix is legal (cursor right after '<'
+    ! or '/'), so the first header item shows whole.
+    subroutine ghost_apply_lsp_result(ghost, result_json, prefix, cur_line, cur_col, header_ctx)
         type(ghost_text_t), intent(inout) :: ghost
         type(json_value_t), intent(in) :: result_json
         character(len=*), intent(in) :: prefix
         integer, intent(in) :: cur_line, cur_col
+        logical, intent(in) :: header_ctx
         type(json_value_t) :: items, item
         character(len=:), allocatable :: text
+        logical :: shape_ok
         integer :: i, n, plen
 
         plen = len(prefix)
-        if (plen == 0) return
+        if (plen == 0 .and. .not. header_ctx) return
 
         if (result_json%value_type == JSON_OBJECT) then
             if (.not. json_has_key(result_json, "items")) return
@@ -195,7 +280,19 @@ contains
                 text = json_get_string(item, "label")
             end if
             if (len(text) > plen) then
-                if (text(1:plen) == prefix .and. is_identifier(text)) then
+                if (header_ctx) then
+                    shape_ok = is_header_completion(text)
+                else
+                    shape_ok = is_identifier(text)
+                end if
+                if (shape_ok) then
+                    if (plen == 0) then
+                        shape_ok = .true.
+                    else
+                        shape_ok = text(1:plen) == prefix
+                    end if
+                end if
+                if (shape_ok) then
                     ghost%suggestion = text
                     ghost%prefix = prefix
                     ghost%anchor_line = cur_line
@@ -238,6 +335,36 @@ contains
                   (ch >= '0' .and. ch <= '9') .or. &
                   ch == '_'
     end function ghost_word_char
+
+    ! Chars legal inside one segment of a header name (no '/')
+    pure function header_char(ch) result(ok)
+        character, intent(in) :: ch
+        logical :: ok
+
+        ok = ghost_word_char(ch) .or. ch == '.' .or. ch == '+' .or. ch == '-'
+    end function header_char
+
+    ! Header completion item: path chars, optionally closed by '>' or '"'
+    pure function is_header_completion(text) result(yes)
+        character(len=*), intent(in) :: text
+        logical :: yes
+        integer :: i, last
+
+        last = len(text)
+        yes = last > 0
+        if (.not. yes) return
+        if (text(last:last) == '>' .or. text(last:last) == '"') last = last - 1
+        if (last < 1) then
+            yes = .false.
+            return
+        end if
+        do i = 1, last
+            if (.not. (header_char(text(i:i)) .or. text(i:i) == '/')) then
+                yes = .false.
+                return
+            end if
+        end do
+    end function is_header_completion
 
     pure function is_identifier(text) result(yes)
         character(len=*), intent(in) :: text

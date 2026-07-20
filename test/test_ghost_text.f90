@@ -88,7 +88,7 @@ program test_ghost_text
     call ghost_clear(ghost)
     result_json = json_parse('{"items":[{"label":"co$1"},{"label":"count me"},' // &
                              '{"label":"counter_total"}]}')
-    call ghost_apply_lsp_result(ghost, result_json, "cou", 1, 8)
+    call ghost_apply_lsp_result(ghost, result_json, "cou", 1, 8, .false.)
     call check(ghost_is_active(ghost), "LSP CompletionList applied", "inactive")
     if (ghost_is_active(ghost)) then
         call check(ghost%suggestion == "counter_total", &
@@ -99,7 +99,7 @@ program test_ghost_text
     ! --- LSP results: bare-array shape, insertText preferred ---
     call ghost_clear(ghost)
     result_json = json_parse('[{"label":"shown","insertText":"couple"}]')
-    call ghost_apply_lsp_result(ghost, result_json, "cou", 1, 8)
+    call ghost_apply_lsp_result(ghost, result_json, "cou", 1, 8, .false.)
     call check(ghost_is_active(ghost), "LSP bare array applied", "inactive")
     if (ghost_is_active(ghost)) then
         call check(ghost%suggestion == "couple", "insertText preferred over label", &
@@ -109,9 +109,84 @@ program test_ghost_text
     ! --- LSP result with no surviving item keeps prior suggestion ---
     call ghost_update_from_buffer(ghost, buffer, "myv", 1, 8)
     result_json = json_parse('{"items":[{"label":"$0 snippet"}]}')
-    call ghost_apply_lsp_result(ghost, result_json, "myv", 1, 8)
+    call ghost_apply_lsp_result(ghost, result_json, "myv", 1, 8, .false.)
     call check(ghost_is_active(ghost) .and. ghost%suggestion == "myvalue", &
                "word suggestion kept when LSP items all filtered", "lost")
+
+    ! --- Include-directive context detection ---
+    call cleanup_buffer(buffer)
+    call init_buffer(buffer)
+    call buffer_insert(buffer, 1, &
+        '#include <floa' // char(10) // &
+        '#include <sys/epo' // char(10) // &
+        '#include "loc' // char(10) // &
+        '#include <stdio.h>' // char(10) // &
+        '  #  include <x' // char(10) // &
+        'int x; // #include <floa' // char(10) // &
+        '#define MAX <y')
+
+    block
+        logical :: inc
+
+        call ghost_get_include_prefix(buffer, 1, 15, prefix, inc)
+        call check(inc .and. prefix == "floa", "include <floa detected", prefix)
+
+        ! Prefix is the segment after the last '/', matching clangd anchors
+        call ghost_get_include_prefix(buffer, 2, 18, prefix, inc)
+        call check(inc .and. prefix == "epo", "include <sys/epo segment", prefix)
+
+        call ghost_get_include_prefix(buffer, 3, 14, prefix, inc)
+        call check(inc .and. prefix == "loc", 'include "loc detected', prefix)
+
+        ! Right after '<': in context with empty prefix
+        call ghost_get_include_prefix(buffer, 1, 11, prefix, inc)
+        call check(inc .and. prefix == "", "empty prefix right after <", prefix)
+
+        ! Cursor after the closing '>': not in context
+        call ghost_get_include_prefix(buffer, 4, 20, prefix, inc)
+        call check(.not. inc, "closed <stdio.h> not in context", "in ctx")
+
+        ! Blanks around '#' and the directive word are legal
+        call ghost_get_include_prefix(buffer, 5, 16, prefix, inc)
+        call check(inc .and. prefix == "x", "blanks after # accepted", prefix)
+
+        ! '#' not opening the line: no context
+        call ghost_get_include_prefix(buffer, 6, 26, prefix, inc)
+        call check(.not. inc, "# inside comment not a directive", "in ctx")
+
+        ! Non-include directive: no context
+        call ghost_get_include_prefix(buffer, 7, 15, prefix, inc)
+        call check(.not. inc, "#define is not include context", "in ctx")
+    end block
+
+    ! --- Header items pass the LSP filter only in include context ---
+    call ghost_clear(ghost)
+    result_json = json_parse('{"items":[{"label":" float.h>","insertText":"float.h>"}]}')
+    call ghost_apply_lsp_result(ghost, result_json, "floa", 1, 15, .true.)
+    call check(ghost_is_active(ghost), "header item accepted in include ctx", "inactive")
+    if (ghost_is_active(ghost)) then
+        call check(ghost%suggestion == "float.h>", "header insertText used", ghost%suggestion)
+        call check(ghost_suffix(ghost) == "t.h>", "header suffix", ghost_suffix(ghost))
+    end if
+
+    ! Empty prefix in include ctx shows the whole first header item
+    call ghost_clear(ghost)
+    call ghost_apply_lsp_result(ghost, result_json, "", 1, 11, .true.)
+    call check(ghost_is_active(ghost) .and. ghost%suggestion == "float.h>", &
+               "empty include prefix shows whole item", "inactive")
+
+    ! Outside include ctx the same item is rejected ('.' and '>')
+    call ghost_clear(ghost)
+    call ghost_apply_lsp_result(ghost, result_json, "floa", 1, 15, .false.)
+    call check(.not. ghost_is_active(ghost), &
+               "header item rejected outside include ctx", "active")
+
+    ! Subdirectory paths are legal header items
+    call ghost_clear(ghost)
+    result_json = json_parse('{"items":[{"insertText":"sys/stat.h>","label":"x"}]}')
+    call ghost_apply_lsp_result(ghost, result_json, "sy", 1, 13, .true.)
+    call check(ghost_is_active(ghost) .and. ghost%suggestion == "sys/stat.h>", &
+               "subdir header item accepted", "inactive")
 
     ! --- Clearing ---
     call ghost_clear(ghost)

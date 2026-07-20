@@ -26,8 +26,10 @@
 
 typedef struct {
     char ch;
-    unsigned char fg;   // 0 = default
-    unsigned char bg;   // 0 = default
+    // unsigned short, not char: the "+1 so 0=default" encoding needs
+    // 1..256, and 256 would wrap an 8-bit field back to default
+    unsigned short fg;  // 0 = default
+    unsigned short bg;  // 0 = default
     unsigned char attr;
 } vt100_cell_t;
 
@@ -47,8 +49,8 @@ typedef struct {
     int saved_col;
     int scroll_top;     // 0-based, inclusive
     int scroll_bottom;  // 0-based, inclusive
-    unsigned char cur_fg;
-    unsigned char cur_bg;
+    unsigned short cur_fg;
+    unsigned short cur_bg;
     unsigned char cur_attr;
     // Parser state
     int parse_state;
@@ -104,9 +106,9 @@ static void sb_push_line(vt100_grid_t *g, vt100_cell_t *row, int width) {
         g->sb_head = (g->sb_head + 1) % SCROLLBACK_MAX;
     }
     g->scrollback[idx].cells =
-        (vt100_cell_t *)malloc(width * sizeof(vt100_cell_t));
+        (vt100_cell_t *)malloc((size_t)width * sizeof(vt100_cell_t));
     if (!g->scrollback[idx].cells) { g->scrollback[idx].width = 0; return; }
-    memcpy(g->scrollback[idx].cells, row, width * sizeof(vt100_cell_t));
+    memcpy(g->scrollback[idx].cells, row, (size_t)width * sizeof(vt100_cell_t));
     g->scrollback[idx].width = width;
 }
 
@@ -127,7 +129,7 @@ static void scroll_up(vt100_grid_t *g, int top, int bottom, int n) {
     for (int r = top; r <= bottom - n; r++) {
         memcpy(&g->cells[r * g->cols],
                &g->cells[(r + n) * g->cols],
-               g->cols * sizeof(vt100_cell_t));
+               (size_t)g->cols * sizeof(vt100_cell_t));
     }
     // Clear bottom n lines
     for (int r = bottom - n + 1; r <= bottom; r++) {
@@ -144,7 +146,7 @@ static void scroll_down(vt100_grid_t *g, int top, int bottom, int n) {
     for (int r = bottom; r >= top + n; r--) {
         memcpy(&g->cells[r * g->cols],
                &g->cells[(r - n) * g->cols],
-               g->cols * sizeof(vt100_cell_t));
+               (size_t)g->cols * sizeof(vt100_cell_t));
     }
     for (int r = top; r < top + n; r++) {
         for (int c = 0; c < g->cols; c++) {
@@ -161,7 +163,10 @@ static int parse_params(const char *buf, int len, int *params, int max) {
 
     for (int i = 0; i < len && count < max; i++) {
         if (buf[i] >= '0' && buf[i] <= '9') {
-            val = val * 10 + (buf[i] - '0');
+            // Cap so a hostile/buggy child can't overflow int with a
+            // long digit run; no real parameter comes close
+            if (val < 1000000)
+                val = val * 10 + (buf[i] - '0');
             has_val = 1;
         } else if (buf[i] == ';') {
             params[count++] = has_val ? val : 0;
@@ -173,6 +178,14 @@ static int parse_params(const char *buf, int len, int *params, int max) {
         if (count < max) params[count++] = val;
     }
     return count;
+}
+
+// SGR color operands arrive from an untrusted child process; keep them
+// in palette range before the +1 "0 = default" encoding
+static int clamp_color(int v) {
+    if (v < 0) return 0;
+    if (v > 255) return 255;
+    return v;
 }
 
 // Handle SGR (Select Graphic Rendition) — CSI ... m
@@ -199,61 +212,65 @@ static void handle_sgr(vt100_grid_t *g, int *params, int nparams) {
         } else if (p == 7) {
             g->cur_attr |= ATTR_INVERSE;
         } else if (p == 22) {
-            g->cur_attr &= ~(ATTR_BOLD | ATTR_DIM);
+            g->cur_attr = (unsigned char)(g->cur_attr & ~(ATTR_BOLD | ATTR_DIM));
         } else if (p == 23) {
-            g->cur_attr &= ~ATTR_ITALIC;
+            g->cur_attr = (unsigned char)(g->cur_attr & ~ATTR_ITALIC);
         } else if (p == 24) {
-            g->cur_attr &= ~ATTR_UNDERLINE;
+            g->cur_attr = (unsigned char)(g->cur_attr & ~ATTR_UNDERLINE);
         } else if (p == 27) {
-            g->cur_attr &= ~ATTR_INVERSE;
+            g->cur_attr = (unsigned char)(g->cur_attr & ~ATTR_INVERSE);
         } else if (p >= 30 && p <= 37) {
-            g->cur_fg = p - 30 + 1; // 1-8 for standard colors
+            g->cur_fg = (unsigned short)(p - 30 + 1); // 1-8 for standard colors
         } else if (p == 38) {
             // Extended foreground: 38;5;N or 38;2;R;G;B
             if (i + 1 < nparams && params[i + 1] == 5 &&
                 i + 2 < nparams) {
-                g->cur_fg = params[i + 2] + 1; // +1 so 0=default
+                g->cur_fg = (unsigned short)(clamp_color(params[i + 2]) + 1); // +1 so 0=default
                 i += 2;
             } else if (i + 1 < nparams && params[i + 1] == 2 &&
                        i + 4 < nparams) {
                 // True color — approximate to 256-color
-                int r = params[i+2], gr = params[i+3], b = params[i+4];
+                int r = clamp_color(params[i+2]);
+                int gr = clamp_color(params[i+3]);
+                int b = clamp_color(params[i+4]);
                 if (r == gr && gr == b) {
                     // Grayscale
-                    g->cur_fg = 232 + (r * 24 / 256) + 1;
+                    g->cur_fg = (unsigned short)(232 + (r * 24 / 256) + 1);
                 } else {
-                    g->cur_fg = 16 + (r*6/256)*36 + (gr*6/256)*6 +
-                                (b*6/256) + 1;
+                    g->cur_fg = (unsigned short)(16 + (r*6/256)*36 +
+                                (gr*6/256)*6 + (b*6/256) + 1);
                 }
                 i += 4;
             }
         } else if (p == 39) {
             g->cur_fg = 0; // Default foreground
         } else if (p >= 40 && p <= 47) {
-            g->cur_bg = p - 40 + 1;
+            g->cur_bg = (unsigned short)(p - 40 + 1);
         } else if (p == 48) {
             // Extended background
             if (i + 1 < nparams && params[i + 1] == 5 &&
                 i + 2 < nparams) {
-                g->cur_bg = params[i + 2] + 1;
+                g->cur_bg = (unsigned short)(clamp_color(params[i + 2]) + 1);
                 i += 2;
             } else if (i + 1 < nparams && params[i + 1] == 2 &&
                        i + 4 < nparams) {
-                int r = params[i+2], gr = params[i+3], b = params[i+4];
+                int r = clamp_color(params[i+2]);
+                int gr = clamp_color(params[i+3]);
+                int b = clamp_color(params[i+4]);
                 if (r == gr && gr == b) {
-                    g->cur_bg = 232 + (r * 24 / 256) + 1;
+                    g->cur_bg = (unsigned short)(232 + (r * 24 / 256) + 1);
                 } else {
-                    g->cur_bg = 16 + (r*6/256)*36 + (gr*6/256)*6 +
-                                (b*6/256) + 1;
+                    g->cur_bg = (unsigned short)(16 + (r*6/256)*36 +
+                                (gr*6/256)*6 + (b*6/256) + 1);
                 }
                 i += 4;
             }
         } else if (p == 49) {
             g->cur_bg = 0; // Default background
         } else if (p >= 90 && p <= 97) {
-            g->cur_fg = p - 90 + 9; // Bright colors 9-16
+            g->cur_fg = (unsigned short)(p - 90 + 9); // Bright colors 9-16
         } else if (p >= 100 && p <= 107) {
-            g->cur_bg = p - 100 + 9;
+            g->cur_bg = (unsigned short)(p - 100 + 9);
         }
     }
 }
@@ -415,7 +432,8 @@ static void handle_csi(vt100_grid_t *g, char final) {
             int cpr_len = snprintf(cpr, sizeof(cpr),
                 "\x1b[%d;%dR",
                 g->cursor_row + 1, g->cursor_col + 1);
-            write(g->pty_fd, cpr, cpr_len);
+            if (cpr_len > 0)
+                write(g->pty_fd, cpr, (size_t)cpr_len);
         }
         g->cpr_pending = 0;
         break;
@@ -659,7 +677,8 @@ void vt100_grid_create_f(void **handle, int *rows, int *cols) {
     vt100_grid_t *g = (vt100_grid_t *)calloc(1, sizeof(vt100_grid_t));
     g->rows = *rows;
     g->cols = *cols;
-    g->cells = (vt100_cell_t *)calloc(*rows * *cols, sizeof(vt100_cell_t));
+    g->cells = (vt100_cell_t *)calloc((size_t)(*rows * *cols),
+                                      sizeof(vt100_cell_t));
     g->scroll_top = 0;
     g->scroll_bottom = *rows - 1;
     g->cursor_visible = 1;
@@ -706,7 +725,7 @@ void vt100_grid_resize_f(void **handle, int *rows, int *cols) {
 
     int new_size = *rows * *cols;
     vt100_cell_t *new_cells = (vt100_cell_t *)calloc(
-        new_size, sizeof(vt100_cell_t));
+        (size_t)new_size, sizeof(vt100_cell_t));
 
     // Initialize to spaces
     for (int i = 0; i < new_size; i++) {

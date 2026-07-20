@@ -225,6 +225,7 @@ contains
         logical, intent(out) :: success
         character(len=MAX_PATH_LEN) :: workspace_file, relative_path
         integer :: unit, ios, i, j, ws_len
+        integer :: active_out
         character(len=20) :: timestamp
         logical :: is_relative
 
@@ -234,6 +235,40 @@ contains
         ! Open file for writing
         open(newunit=unit, file=workspace_file, status='replace', iostat=ios)
         if (ios /= 0) return
+
+        ! Map the active tab onto the deduplicated list written below,
+        ! otherwise "active_tab" can point past the saved tab count and
+        ! restore lands on the wrong tab.
+        active_out = 1
+        if (allocated(editor%tabs)) then
+            block
+                integer, allocatable :: out_pos(:)
+                integer :: k, n_out
+                allocate(out_pos(size(editor%tabs)))
+                n_out = 0
+                do i = 1, size(editor%tabs)
+                    out_pos(i) = 0
+                    if (allocated(editor%tabs(i)%filename)) then
+                        do k = 1, i - 1
+                            if (allocated(editor%tabs(k)%filename)) then
+                                if (trim(editor%tabs(k)%filename) == trim(editor%tabs(i)%filename)) then
+                                    out_pos(i) = out_pos(k)
+                                    exit
+                                end if
+                            end if
+                        end do
+                    end if
+                    if (out_pos(i) == 0) then
+                        n_out = n_out + 1
+                        out_pos(i) = n_out
+                    end if
+                end do
+                if (editor%active_tab_index >= 1 .and. &
+                    editor%active_tab_index <= size(editor%tabs)) then
+                    active_out = max(1, out_pos(editor%active_tab_index))
+                end if
+            end block
+        end if
 
         ! Get current timestamp (simplified)
         call date_and_time(timestamp)
@@ -398,7 +433,7 @@ contains
 
         ! Write JSON footer
         write(unit, '(A)') '  ],'
-        write(unit, '(A,I0,A)') '  "active_tab": ', editor%active_tab_index, ','
+        write(unit, '(A,I0,A)') '  "active_tab": ', active_out, ','
         write(unit, '(A)') '  "fuss_mode": {'
         if (editor%fuss_mode_active) then
             write(unit, '(A)') '    "active": true,'

@@ -42,6 +42,8 @@ module syntax_highlighter_module
         character(len=4), allocatable :: string_delimiters(:)
         character(len=4), allocatable :: operators(:)
         logical :: case_sensitive = .true.
+        ! '#' at the start of a line begins a preprocessor directive (C/C++)
+        logical :: has_preprocessor = .false.
     end type language_def_t
 
     ! Main highlighter type
@@ -153,7 +155,7 @@ contains
         type(syntax_highlighter_t), intent(inout) :: highlighter
         character(len=*), intent(in) :: line
         type(token_t), allocatable, intent(out) :: tokens(:)
-        integer :: i, line_len, token_count
+        integer :: i, line_len, token_count, first_nonblank
         character :: ch
 
         if (.not. highlighter%enabled) then
@@ -167,6 +169,15 @@ contains
         line_len = len(line)
         allocate(tokens(max(1, line_len)))
         token_count = 0
+        i = 1
+
+        first_nonblank = 0
+        do i = 1, line_len
+            if (line(i:i) /= ' ' .and. line(i:i) /= char(9)) then
+                first_nonblank = i
+                exit
+            end if
+        end do
         i = 1
 
         ! Handle multiline comment continuation
@@ -196,8 +207,15 @@ contains
                 exit
             end if
 
+            ! Check for preprocessor directive ('#' opening the line).
+            ! ch, not line(i:i): comment processing above may have advanced
+            ! i past the end of the line, and .and. is not short-circuit.
+            if (highlighter%current_lang%has_preprocessor .and. &
+                i == first_nonblank .and. ch == '#') then
+                call process_preprocessor(line, tokens, token_count, i)
+
             ! Check for string
-            if (check_string_start(highlighter, line, i)) then
+            else if (check_string_start(highlighter, line, i)) then
                 call process_string(highlighter, line, tokens, token_count, i)
 
             ! Check for number (guard the next-char peek: .and. is not
@@ -631,6 +649,65 @@ contains
         end if
     end subroutine process_word
 
+    ! '#' plus the directive word is one TOKEN_PREPROCESSOR token. The
+    ! <header> operand of an include-like directive is emitted as a string
+    ! token so header names that collide with keywords (<float.h>) are not
+    ! keyword-colored; the "header.h" form already gets string handling.
+    subroutine process_preprocessor(line, tokens, token_count, pos)
+        character(len=*), intent(in) :: line
+        type(token_t), intent(inout) :: tokens(:)
+        integer, intent(inout) :: token_count, pos
+        integer :: line_len, start_pos, word_start, word_end, close_off
+        character(len=:), allocatable :: directive
+
+        line_len = len(line)
+        start_pos = pos
+        pos = pos + 1
+
+        ! Blanks are legal between '#' and the directive word
+        do while (pos <= line_len)
+            if (line(pos:pos) /= ' ' .and. line(pos:pos) /= char(9)) exit
+            pos = pos + 1
+        end do
+
+        word_start = pos
+        do while (pos <= line_len)
+            if (.not. is_alnum(line(pos:pos))) exit
+            pos = pos + 1
+        end do
+        word_end = pos - 1
+
+        token_count = token_count + 1
+        tokens(token_count)%type = TOKEN_PREPROCESSOR
+        tokens(token_count)%start_col = start_pos
+        tokens(token_count)%end_col = max(start_pos, word_end)
+
+        if (word_end < word_start) return
+        directive = line(word_start:word_end)
+        if (directive /= 'include' .and. directive /= 'include_next' .and. &
+            directive /= 'import') return
+
+        do while (pos <= line_len)
+            if (line(pos:pos) /= ' ' .and. line(pos:pos) /= char(9)) exit
+            pos = pos + 1
+        end do
+        if (pos > line_len) return
+        if (line(pos:pos) /= '<') return
+
+        ! To the closing '>', or end of line while still being typed
+        close_off = index(line(pos+1:line_len), '>')
+        token_count = token_count + 1
+        tokens(token_count)%type = TOKEN_STRING
+        tokens(token_count)%start_col = pos
+        if (close_off > 0) then
+            tokens(token_count)%end_col = pos + close_off
+            pos = pos + close_off + 1
+        else
+            tokens(token_count)%end_col = line_len
+            pos = line_len + 1
+        end if
+    end subroutine process_preprocessor
+
     function compare_word(word1, word2, case_sensitive) result(match)
         character(len=*), intent(in) :: word1, word2
         logical, intent(in) :: case_sensitive
@@ -662,6 +739,7 @@ contains
 
         highlighter%current_lang%name = "c"
         highlighter%current_lang%case_sensitive = .true.
+        highlighter%current_lang%has_preprocessor = .true.
 
         ! Keywords
         allocate(highlighter%current_lang%keywords(32))
@@ -707,6 +785,7 @@ contains
 
         highlighter%current_lang%name = "cpp"
         highlighter%current_lang%case_sensitive = .true.
+        highlighter%current_lang%has_preprocessor = .true.
 
         ! Keywords (C++ specific + C keywords)
         allocate(highlighter%current_lang%keywords(48))

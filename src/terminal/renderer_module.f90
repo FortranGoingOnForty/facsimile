@@ -700,10 +700,10 @@ contains
                    merge(' [modified]', '           ', buffer%modified), ' '
         end if
 
-        ! Add hint in center - show timed message, diagnostic, match mode hint, or help
+        ! Timed messages and LSP diagnostics take over the whole bar:
+        ! always exactly one line, ellipsized to the terminal width.
         block
             type(diagnostic_t), allocatable :: line_diagnostics(:)
-            character(len=256) :: diag_msg
             character(len=:), allocatable :: file_uri
             integer(int64) :: now_ms
 
@@ -711,8 +711,8 @@ contains
             now_ms = get_time_ms()
             if (len_trim(editor%timed_message) > 0 .and. &
                 (now_ms - editor%timed_message_ms) < 2000) then
-                status_center = trim(editor%timed_message)
-                goto 200  ! Skip other center content
+                call write_status_message(editor%screen_cols, ' ' // trim(editor%timed_message))
+                return
             else if (len_trim(editor%timed_message) > 0) then
                 editor%timed_message = ''  ! Expired, clear it
             end if
@@ -725,14 +725,13 @@ contains
 
             if (allocated(line_diagnostics) .and. size(line_diagnostics) > 0) then
                 ! Show first diagnostic message (highest severity)
-                diag_msg = line_diagnostics(1)%message
-                ! Truncate if too long
-                if (len_trim(diag_msg) > 50) then
-                    status_center = trim(diag_msg(1:47)) // '...'
-                else
-                    status_center = trim(diag_msg)
-                end if
-            else if (show_match_hint .and. present(match_case_sens)) then
+                call write_status_message(editor%screen_cols, &
+                    ' ' // trim(line_diagnostics(1)%message))
+                deallocate(line_diagnostics)
+                return
+            end if
+
+            if (show_match_hint .and. present(match_case_sens)) then
                 if (match_case_sens) then
                     status_center = '[Cc] alt-c:toggle'
                 else
@@ -741,9 +740,6 @@ contains
             else
                 status_center = 'ctrl-/:help'
             end if
-
-            if (allocated(line_diagnostics)) deallocate(line_diagnostics)
-200         continue
         end block
 
         if (size(editor%cursors) > 1) then
@@ -787,7 +783,7 @@ contains
                             status_bar = repeat(' ', left_pad) // trim(status_center) // &
                                         repeat(' ', padding_len - left_pad)
                         else
-                            status_bar = status_center(1:editor%screen_cols)
+                            status_bar = trim(status_center)
                         end if
                     end if
                 end if
@@ -797,24 +793,52 @@ contains
                 if (padding_len > 0) then
                     status_bar = trim(status_left) // repeat(' ', padding_len) // trim(status_right)
                 else
-                    status_bar = status_left(1:editor%screen_cols)
+                    status_bar = trim(status_left)
                 end if
             end if
         end if
 
-        ! Pad to the full width before slicing: the bar was previously a
-        ! fixed 256-char buffer, so terminals wider than 256 columns read
-        ! past its end (out-of-bounds substring) and lost the right section.
-        if (len(status_bar) < editor%screen_cols) then
-            status_bar = status_bar // &
-                repeat(' ', editor%screen_cols - len(status_bar))
+        ! Render with inverse video, clamped to the terminal width
+        call write_status_message(editor%screen_cols, trim(status_bar))
+    end subroutine render_status_bar
+
+    ! Write one status-bar line in inverse video. The text is forced to
+    ! exactly `width` columns: control characters are blanked (LSP
+    ! messages can carry newlines/tabs that would wrap the bar onto the
+    ! text area) and overlong text is ellipsized, never wrapped.
+    subroutine write_status_message(width, text)
+        integer, intent(in) :: width
+        character(len=*), intent(in) :: text
+        character(len=:), allocatable :: line
+        integer :: i, cut
+
+        if (width < 1) return
+
+        line = text
+        do i = 1, len(line)
+            if (iachar(line(i:i)) < 32 .or. iachar(line(i:i)) == 127) line(i:i) = ' '
+        end do
+
+        if (len(line) > width) then
+            if (width > 3) then
+                cut = width - 3
+                ! Don't split a UTF-8 sequence at the cut point
+                do while (cut > 1 .and. iachar(line(cut+1:cut+1)) >= 128 .and. &
+                          iachar(line(cut+1:cut+1)) < 192)
+                    cut = cut - 1
+                end do
+                line = line(1:cut) // '...' // repeat(' ', width - cut - 3)
+            else
+                line = line(1:width)
+            end if
+        else if (len(line) < width) then
+            line = line // repeat(' ', width - len(line))
         end if
 
-        ! Render with inverse video
         call terminal_write(char(27) // '[7m')  ! Inverse video
-        call terminal_write(status_bar(1:editor%screen_cols))
+        call terminal_write(line)
         call terminal_write(char(27) // '[0m')  ! Reset attributes
-    end subroutine render_status_bar
+    end subroutine write_status_message
 
     ! Number of display cells between the viewport's first visible character
     ! (start_col, cell 0) and char_col, matching exactly how the line
@@ -1093,6 +1117,13 @@ contains
                             editor%tabs(tab_idx)%panes(pane_idx)%viewport_line = cursor%line - pane_height + v_margin + 1
                         end if
 
+                        ! Never scroll past the last buffer line: a stale
+                        ! cursor (e.g. restored session state for another
+                        ! file) must not blank the whole view.
+                        editor%tabs(tab_idx)%panes(pane_idx)%viewport_line = &
+                            min(editor%tabs(tab_idx)%panes(pane_idx)%viewport_line, &
+                                max(1, buffer_get_line_count(editor%tabs(tab_idx)%panes(pane_idx)%buffer)))
+
                         ! Horizontal scrolling for pane
                         if (cursor%column < editor%tabs(tab_idx)%panes(pane_idx)%viewport_column + h_margin) then
                             editor%tabs(tab_idx)%panes(pane_idx)%viewport_column = max(1, cursor%column - h_margin)
@@ -1131,6 +1162,13 @@ contains
         else if (cursor%line > editor%viewport_line + editor%screen_rows - v_margin - 2) then
             ! -2 for status bar and margin
             editor%viewport_line = cursor%line - editor%screen_rows + v_margin + 2
+        end if
+
+        ! Never scroll past the last buffer line (see pane path above)
+        if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0 .and. &
+            editor%active_tab_index <= size(editor%tabs)) then
+            editor%viewport_line = min(editor%viewport_line, &
+                max(1, buffer_get_line_count(editor%tabs(editor%active_tab_index)%buffer)))
         end if
 
         ! Horizontal scrolling (account for fuss mode and line numbers)
@@ -2053,20 +2091,20 @@ contains
     end subroutine render_cursor_for_panes
 
     ! Draw the inline shadow-text suggestion (dim gray) at the active cursor.
-    ! Only rendered when the cursor sits at end-of-line, so everything to the
-    ! right of it is fill space that can be safely overdrawn. Drawn just before
-    ! cursor placement each frame; the next full redraw self-clears stale text.
-    ! Screen-position math mirrors render_cursor_for_panes / render_cursor so
-    ! the ghost stays aligned with the caret.
+    ! Mid-line the rest of the real line is redrawn after the suggestion, so
+    ! the line visually opens up for the ghost and closes again when it goes
+    ! (every keystroke is a full redraw). Drawn just before cursor placement
+    ! each frame. Screen-position math mirrors render_cursor_for_panes /
+    ! render_cursor so the ghost stays aligned with the caret.
     subroutine render_ghost_text(editor, buffer)
         use editor_state_module, only: pane_t
         type(editor_state_t), intent(in) :: editor
         type(buffer_t), intent(in) :: buffer
         type(pane_t) :: pane
         type(cursor_t) :: cursor
-        character(len=:), allocatable :: suffix
+        character(len=:), allocatable :: suffix, line
         integer :: tab_idx, pane_idx, col_offset
-        integer :: screen_row, screen_col, avail
+        integer :: screen_row, screen_col, avail, disp
         integer :: screen_width, screen_height
         integer :: pane_col, pane_row, pane_width, pane_height
         integer :: row_offset, min_row
@@ -2108,10 +2146,10 @@ contains
             if (pane%active_cursor < 1 .or. pane%active_cursor > size(pane%cursors)) return
             cursor = pane%cursors(pane%active_cursor)
 
-            ! Suggestion must still be anchored at the cursor, at end of line
+            ! Suggestion must still be anchored at the cursor
             if (cursor%line /= editor%ghost%anchor_line .or. &
                 cursor%column /= editor%ghost%anchor_col) return
-            if (cursor%column <= buffer_get_line_char_count(pane%buffer, cursor%line)) return
+            line = buffer_get_line(pane%buffer, cursor%line)
 
             ! Pane geometry (same formulas as render_cursor_for_panes)
             screen_height = editor%screen_rows - 2
@@ -2128,9 +2166,8 @@ contains
             end if
 
             screen_row = pane_row + (cursor%line - pane%viewport_line)
-            screen_col = pane_col + col_offset + display_offset_of( &
-                buffer_get_line(pane%buffer, cursor%line), &
-                pane%viewport_column, cursor%column)
+            disp = display_offset_of(line, pane%viewport_column, cursor%column)
+            screen_col = pane_col + col_offset + disp
             if (screen_row < pane_row .or. screen_row >= pane_row + pane_height) return
             if (screen_col < pane_col + col_offset .or. screen_col >= pane_col + pane_width) return
             avail = pane_col + pane_width - screen_col
@@ -2139,7 +2176,7 @@ contains
             cursor = editor%cursors(editor%active_cursor)
             if (cursor%line /= editor%ghost%anchor_line .or. &
                 cursor%column /= editor%ghost%anchor_col) return
-            if (cursor%column <= buffer_get_line_char_count(buffer, cursor%line)) return
+            line = buffer_get_line(buffer, cursor%line)
 
             if (size(editor%tabs) > 0) then
                 row_offset = 2
@@ -2149,9 +2186,8 @@ contains
                 min_row = 1
             end if
             screen_row = cursor%line - editor%viewport_line + row_offset
-            screen_col = col_offset + 1 + display_offset_of( &
-                buffer_get_line(buffer, cursor%line), &
-                editor%viewport_column, cursor%column)
+            disp = display_offset_of(line, editor%viewport_column, cursor%column)
+            screen_col = col_offset + 1 + disp
             if (screen_row < min_row .or. screen_row >= editor%screen_rows) return
             if (screen_col < 1 .or. screen_col > screen_width) return
             avail = screen_width - screen_col + 1
@@ -2163,7 +2199,83 @@ contains
         call terminal_move_cursor(screen_row, screen_col)
         call terminal_write(char(27) // '[2m' // char(27) // '[90m' // &
                             suffix // char(27) // '[0m')
+
+        ! Mid-line: redraw the real text right of the cursor, shifted past
+        ! the suggestion, so nothing is hidden while the ghost is up
+        if (cursor%column <= utf8_char_count(line)) then
+            call render_line_tail_shifted(line, cursor%column, &
+                disp + len(suffix), avail - len(suffix))
+        end if
     end subroutine render_ghost_text
+
+    ! Draw buffer_line from start_char onward at the current terminal cursor,
+    ! stopping when budget screen cells are used. start_off is the display
+    ! offset of the first cell from the line's on-screen start (keeps tab
+    ! stops aligned). Colors come from a fresh tokenization of the real line;
+    ! the highlighter's multiline scan state is saved and restored so the
+    ! frame-sequential state machine is untouched.
+    subroutine render_line_tail_shifted(buffer_line, start_char, start_off, budget)
+        character(len=*), intent(in) :: buffer_line
+        integer, intent(in) :: start_char, start_off, budget
+        type(token_t), allocatable :: tokens(:)
+        logical :: saved_mc, saved_ms
+        character(len=4) :: saved_delim
+        character(len=:), allocatable :: ch, style, prev_style
+        integer :: ci, off, w, byte_pos, ti
+
+        if (budget < 1) return
+
+        saved_mc = syntax_highlighter%in_multiline_comment
+        saved_ms = syntax_highlighter%in_multiline_string
+        saved_delim = syntax_highlighter%string_delimiter
+        syntax_highlighter%in_multiline_comment = .false.
+        syntax_highlighter%in_multiline_string = .false.
+        call tokenize_line(syntax_highlighter, buffer_line, tokens)
+        syntax_highlighter%in_multiline_comment = saved_mc
+        syntax_highlighter%in_multiline_string = saved_ms
+        syntax_highlighter%string_delimiter = saved_delim
+
+        prev_style = ''
+        off = 0
+        ci = start_char
+        byte_pos = utf8_char_to_byte_index(buffer_line, start_char)
+        do
+            ch = utf8_char_at(buffer_line, ci)
+            if (len(ch) == 0) exit
+            if (ch == char(9)) then
+                w = TAB_WIDTH - mod(start_off + off, TAB_WIDTH)
+            else
+                w = utf8_display_width(ch)
+            end if
+            if (off + w > budget) exit
+
+            style = ''
+            if (syntax_highlighter%enabled) then
+                do ti = 1, size(tokens)
+                    if (byte_pos >= tokens(ti)%start_col .and. &
+                        byte_pos <= tokens(ti)%end_col) then
+                        style = get_token_color(tokens(ti)%type)
+                        exit
+                    end if
+                end do
+            end if
+            if (style /= prev_style) then
+                call terminal_write(char(27) // '[0m')
+                if (len(style) > 0) call terminal_write(style)
+                prev_style = style
+            end if
+
+            if (ch == char(9)) then
+                call terminal_write(repeat(' ', w))
+            else
+                call terminal_write(ch)
+            end if
+            off = off + w
+            byte_pos = byte_pos + len(ch)
+            ci = ci + 1
+        end do
+        call terminal_write(char(27) // '[0m')
+    end subroutine render_line_tail_shifted
 
     subroutine render_cursor_for_panes_with_tree(editor, tree_offset, editor_width)
         use editor_state_module, only: pane_t

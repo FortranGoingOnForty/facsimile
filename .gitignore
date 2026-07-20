@@ -4,6 +4,10 @@
 fac
 fac_debug.txt
 
+# clangd (regenerate with `make compile-commands`; has absolute paths)
+/compile_commands.json
+/.cache/
+
 # Temporary files
 /tmp/
 .fac

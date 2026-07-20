@@ -97,6 +97,7 @@ SOURCES = src/version_module.f90 \
           src/utils/platform_module.f90 \
           src/utils/utf8_module.f90 \
           src/utils/regex_module.f90 \
+          src/utils/dir_scan_module.f90 \
           src/buffer/text_buffer_module.f90 \
           src/clipboard/yank_stack_module.f90 \
           src/clipboard/clipboard_module.f90 \
@@ -160,6 +161,7 @@ C_SOURCES = src/terminal/termios_wrapper.c \
             src/terminal/vt100_grid.c \
             src/utils/regex_wrapper.c \
             src/utils/platform_wrapper.c \
+            src/utils/dir_scan_wrapper.c \
             src/lsp/lsp_process_wrapper.c
 C_OBJECTS = $(C_SOURCES:.c=.o)
 
@@ -175,6 +177,11 @@ src/version_module.f90: VERSION
 
 $(TARGET): src/version_module.f90 $(OBJECTS) $(C_OBJECTS)
 	$(FC) $(FFLAGS) -o $(TARGET) $(OBJECTS) $(C_OBJECTS)
+
+# version_module has no tracked .mod dependency, so a version bump would
+# otherwise only recompile version_module.o and leave stale VERSION strings
+# inlined in modules that `use` it (e.g. app/main.o). Force a full rebuild.
+$(OBJECTS): src/version_module.f90
 
 # Disable parallel builds to ensure correct module compilation order
 .NOTPARALLEL:
@@ -217,6 +224,26 @@ info:
 	@echo "C Compiler: $(CC)"
 	@echo "Default CFLAGS: $(CFLAGS)"
 	@echo "Dev CFLAGS: $(CFLAGS_DEV)"
+
+# Generate compile_commands.json for clangd, covering the C wrappers.
+# Without it clangd falls back to fpm's build/compile_commands.json and
+# interpolates gfortran flags (-ffree-form, -J) onto the C files. Uses
+# dev CFLAGS so the editor surfaces the same warnings as `make dev`.
+compile-commands:
+	@echo '[' > compile_commands.json
+	@first=1; for f in $(C_SOURCES); do \
+	  [ $$first -eq 1 ] || echo '  ,' >> compile_commands.json; \
+	  first=0; \
+	  printf '  {"directory": "%s", "file": "%s", "arguments": ["$(CC)"' \
+	    "$$(pwd)" "$$f" >> compile_commands.json; \
+	  for a in $(CFLAGS_DEV); do \
+	    printf ', "%s"' "$$a" >> compile_commands.json; \
+	  done; \
+	  printf ', "-c", "%s", "-o", "%s"]}\n' \
+	    "$$f" "$${f%.c}.o" >> compile_commands.json; \
+	done
+	@echo ']' >> compile_commands.json
+	@echo "Wrote compile_commands.json ($(words $(C_SOURCES)) C entries)"
 
 # Installation (supports DESTDIR and PREFIX for packaging)
 PREFIX ?= /usr/local
@@ -313,4 +340,4 @@ lsp-dev: clean-lsp
 	@echo "Building LSP modules with debug flags..."
 	@$(MAKE) lsp-modules FFLAGS="$(FFLAGS_DEBUG)" CFLAGS="$(CFLAGS_DEV)"
 
-.PHONY: all clean dev debug info install uninstall bump-patch bump-minor bump-major version release lsp-modules test-lsp test-lsp-editor clean-lsp lsp-dev
+.PHONY: all clean dev debug info install uninstall bump-patch bump-minor bump-major version release lsp-modules test-lsp test-lsp-editor clean-lsp lsp-dev compile-commands

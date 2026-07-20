@@ -481,7 +481,7 @@ pid_t lsp_get_pid(lsp_process_t* proc) {
 void lsp_start_server_f(const char* command, int command_len, void** handle) {
     char cmd[1024];
     int len = command_len < 1023 ? command_len : 1023;
-    strncpy(cmd, command, len);
+    strncpy(cmd, command, (size_t)len);
     cmd[len] = '\0';
 
     *handle = lsp_start_server(cmd);

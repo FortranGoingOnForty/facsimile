@@ -401,8 +401,12 @@ contains
         character(len=:), allocatable :: str
         character(len=32) :: buffer
 
-        if (num == int(num)) then
-            write(buffer, '(i0)') int(num)
+        ! Exactly integral values in int64 range print without a decimal
+        ! point. The exactness test is phrased as a difference so
+        ! -Wcompare-reals stays quiet; int64, not default int, because
+        ! int() of a double past huge(int32) is undefined.
+        if (abs(num) < 1.0e18_real64 .and. abs(num - aint(num)) <= 0.0_real64) then
+            write(buffer, '(i0)') int(num, int64)
         else
             write(buffer, '(f0.6)') num
         end if
