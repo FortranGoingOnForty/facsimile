@@ -114,6 +114,16 @@ module command_handler_module
     ! Columns one indent level occupies (also the width a tab is counted as)
     integer, parameter :: ENTER_INDENT_WIDTH = 4
 
+    ! Closers that auto-close inserted and the caret has not yet passed,
+    ! innermost last. Typing a closer that matches the innermost pending one
+    ! steps over it instead of leaving a duplicate behind -- the muscle-memory
+    ! case where you type the ')' auto-close already put there. Only
+    ! auto-inserted closers are tracked, so typing ')' in front of a ')' you
+    ! wrote yourself still inserts a character.
+    integer, parameter :: MAX_PENDING_CLOSERS = 32
+    character :: g_pending_closers(MAX_PENDING_CLOSERS) = ' '
+    integer :: g_pending_closer_count = 0
+
     ! Module-level storage for LSP callbacks
     type(editor_state_t), pointer, save :: saved_editor_for_callback => null()
     type(buffer_t), pointer, save :: saved_buffer_for_callback => null()
@@ -145,6 +155,8 @@ contains
         call init_yank_stack(yank_stack)
         call init_undo_stack(undo_stack)
         last_action_was_edit = .false.
+        ! Pending closers belong to the buffer that was being typed into
+        call clear_pending_closers()
     end subroutine init_command_handler
 
     subroutine save_initial_state_for_undo(buffer, editor)
@@ -175,12 +187,16 @@ contains
         logical, intent(out) :: should_quit
         integer :: line_count, i, pane_idx
         logical :: is_edit_action
+        ! Typing a plain character is the only thing that keeps a pending
+        ! auto-closed closer live (see clear_pending_closers below)
+        logical :: is_text_insert
         type(cursor_t), allocatable :: new_cursors(:)
         character(len=:), allocatable :: line
 
         should_quit = .false.
         line_count = buffer_get_line_count(buffer)
         is_edit_action = .false.
+        is_text_insert = .false.
         g_cursor_only_move = .false.
 
         ! Ignore empty key strings (from terminal position reports, etc)
@@ -2065,6 +2081,7 @@ contains
                      (len_trim(key_str) == 0 .and. key_str(1:1) == ' ') .or. &
                      (len_trim(key_str) >= 2 .and. len_trim(key_str) <= 4 .and. &
                       iachar(key_str(1:1)) >= 192)) then
+                is_text_insert = .true.
                 block
                     integer :: klen
                     klen = max(1, len_trim(key_str))
@@ -2118,6 +2135,11 @@ contains
                 end if
             end if
         end select
+
+        ! Anything other than typing text -- a cursor move, Enter, backspace,
+        ! a paste, an undo -- breaks the link between the caret and the closer
+        ! auto-close parked in front of it, so stop offering to step over it.
+        if (.not. is_text_insert) call clear_pending_closers()
 
         ! Update edit action state
         last_action_was_edit = is_edit_action
@@ -2774,6 +2796,19 @@ contains
         logical :: should_auto_close, should_wrap
         integer :: start_line, start_col, end_line, end_col
 
+        ! Step over a closer auto-close already inserted rather than typing a
+        ! duplicate. Checked before classification because a quote is both an
+        ! opener and a closer -- inside an auto-closed '""' the second '"'
+        ! must close, not open a new pair.
+        if (len(ch) == 1) then
+            if (overtypes_pending_closer(cursor, buffer, ch(1:1))) then
+                g_pending_closer_count = g_pending_closer_count - 1
+                cursor%column = cursor%column + 1
+                cursor%desired_column = cursor%column
+                return
+            end if
+        end if
+
         ! Check if we should auto-close or wrap brackets/quotes
         call classify_auto_close(ch, closing_char, should_auto_close)
         should_wrap = should_auto_close .and. cursor%has_selection
@@ -2824,6 +2859,7 @@ contains
         if (should_auto_close) then
             call buffer_insert_char(buffer, cursor, closing_char)
             ! Don't move cursor forward - stay between the brackets/quotes
+            call push_pending_closer(closing_char)
         end if
 
         cursor%desired_column = cursor%column
@@ -2925,6 +2961,35 @@ contains
         end if
     end subroutine normalize_selection
 
+    subroutine push_pending_closer(ch)
+        character, intent(in) :: ch
+
+        if (g_pending_closer_count >= MAX_PENDING_CLOSERS) return
+        g_pending_closer_count = g_pending_closer_count + 1
+        g_pending_closers(g_pending_closer_count) = ch
+    end subroutine push_pending_closer
+
+    ! Anything other than typing text breaks the association between the
+    ! caret and the closer auto-close put in front of it
+    subroutine clear_pending_closers()
+        g_pending_closer_count = 0
+    end subroutine clear_pending_closers
+
+    ! True when ch is the innermost pending closer AND it is the character
+    ! sitting at the caret, i.e. typing it would duplicate it
+    function overtypes_pending_closer(cursor, buffer, ch) result(res)
+        type(cursor_t), intent(in) :: cursor
+        type(buffer_t), intent(in) :: buffer
+        character, intent(in) :: ch
+        logical :: res
+
+        res = .false.
+        if (cursor%has_selection) return
+        if (g_pending_closer_count <= 0) return
+        if (g_pending_closers(g_pending_closer_count) /= ch) return
+        res = buffer_char_at(buffer, cursor%line, cursor%column) == ch
+    end function overtypes_pending_closer
+
     ! Auto-close/wrap classification shared by the single- and multi-cursor
     ! insert paths, so their behavior can never diverge
     subroutine classify_auto_close(ch, closing_char, should_auto_close)
@@ -2960,8 +3025,29 @@ contains
         type(buffer_t), intent(inout) :: buffer
         character(len=*), intent(in) :: ch
         character :: closing_char
-        logical :: should_auto_close
+        logical :: should_auto_close, all_overtype
         integer :: i, sl, sc, el, ec, l0, c0
+
+        ! Overtype only when EVERY cursor is sitting in front of the same
+        ! pending closer. Cursors run in lockstep here, and stepping some over
+        ! while inserting at others would desynchronise them.
+        if (len(ch) == 1 .and. g_pending_closer_count > 0) then
+            all_overtype = .true.
+            do i = 1, size(editor%cursors)
+                if (.not. overtypes_pending_closer(editor%cursors(i), buffer, ch(1:1))) then
+                    all_overtype = .false.
+                    exit
+                end if
+            end do
+            if (all_overtype) then
+                g_pending_closer_count = g_pending_closer_count - 1
+                do i = 1, size(editor%cursors)
+                    editor%cursors(i)%column = editor%cursors(i)%column + 1
+                    editor%cursors(i)%desired_column = editor%cursors(i)%column
+                end do
+                return
+            end if
+        end if
 
         call classify_auto_close(ch, closing_char, should_auto_close)
         call sort_cursors_by_position(editor)
@@ -3001,6 +3087,7 @@ contains
             if (should_auto_close) then
                 ! Cursor stays between the pair
                 call buffer_insert_char(buffer, editor%cursors(i), closing_char)
+                if (i == 1) call push_pending_closer(closing_char)
                 call mc_others_inserted(editor, i, l0, c0, l0, c0 + 2)
             else
                 call mc_others_inserted(editor, i, l0, c0, l0, c0 + 1)
