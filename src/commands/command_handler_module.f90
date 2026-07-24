@@ -27,6 +27,7 @@ module command_handler_module
         terminal_panel_paste, terminal_panel_scroll
     use input_handler_module, only: get_paste_text
     use bracket_matching_module, only: find_matching_bracket
+    use comment_command_module, only: toggle_comment_lines, comment_syntax_available
     use utf8_module, only: utf8_char_to_byte_index, &
         utf8_byte_to_char_index, utf8_char_count, &
         utf8_is_valid_start, &
@@ -445,12 +446,39 @@ contains
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
-        case('ctrl-?', 'ctrl-/')
-            ! Show help menu
-            ! Both ctrl-? and ctrl-/ supported for compatibility
-            ! ctrl-/ is more reliable across terminals
+        case('ctrl-shift-/', 'ctrl-?', 'f1')
+            ! Show help menu. ctrl-/ now toggles comments (VSCode parity), so
+            ! help moved up to ctrl-shift-/ (advertised as ctrl-?). Telling
+            ! those two apart needs the kitty keyboard protocol, which
+            ! terminal_init negotiates; f1 is the fallback for terminals that
+            ! decline it and collapse both chords onto the same byte.
             call show_help(editor)
             ! Screen will be redrawn automatically by main loop
+
+        case('ctrl-/')
+            ! Toggle line comment over every cursor's lines (VSCode ctrl-/)
+            block
+                logical :: comment_changed
+                character(len=:), allocatable :: comment_file
+
+                if (allocated(editor%filename)) then
+                    comment_file = editor%filename
+                else
+                    comment_file = ''
+                end if
+                ! Check first so an unknown language does not push an
+                ! identical state onto the undo stack for nothing
+                if (comment_syntax_available(comment_file)) then
+                    if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+                    call toggle_comment_lines(buffer, editor%cursors, comment_file, &
+                                              comment_changed)
+                    if (comment_changed) then
+                        call sync_editor_to_pane(editor)
+                        call update_viewport(editor)
+                        is_edit_action = .true.
+                    end if
+                end if
+            end block
 
         case('ctrl-g')
             ! Go to line:column
@@ -7719,6 +7747,8 @@ contains
             call handle_key_command('ctrl-z', editor, buffer, should_quit)
         case('redo')
             call handle_key_command('ctrl-y', editor, buffer, should_quit)
+        case('toggle-comment')
+            call handle_key_command('ctrl-/', editor, buffer, should_quit)
 
         ! Search operations
         case('find')
