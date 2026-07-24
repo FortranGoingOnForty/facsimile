@@ -53,7 +53,7 @@ fpm run -- [filename]
 - `ctrl-k` - kill line forward (yank stack)
 - `ctrl-u` - kill line backward (yank stack)
 - `ctrl-y` - yank from stack
-- `ctrl-w` / `alt-backspace` - delete word backward
+- `ctrl-w` / `alt-backspace` - delete word backward (at column 1 it takes the line break, so it eats blank lines)
 - `alt-d` / `alt-delete` / `fn-alt-backspace` - delete word forward
 - `ctrl-t` - transpose characters
 - `ctrl-j` - join lines

@@ -153,7 +153,7 @@ contains
         lines(i) = "  ctrl-k              kill line forward"; i = i + 1
         lines(i) = "  ctrl-u              kill line backward"; i = i + 1
         lines(i) = "  ctrl-y              yank from stack"; i = i + 1
-        lines(i) = "  alt-bksp            delete word backward"; i = i + 1
+        lines(i) = "  alt-bksp            delete word backward (eats blank lines)"; i = i + 1
         lines(i) = "  alt-d               delete word forward"; i = i + 1
         lines(i) = "  ctrl-j              join lines"; i = i + 1
         lines(i) = "  ctrl-t              transpose characters"; i = i + 1

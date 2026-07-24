@@ -45,7 +45,7 @@ Complete keyboard shortcut reference for `fac` editor.
 | `Ctrl+V` | Paste | Paste from clipboard |
 | `Ctrl+A` | Select All | Select entire file |
 | `Ctrl+/` | Toggle Line Comment | Comment/uncomment the cursor's lines or the selection |
-| `Alt+Backspace` | Delete Word | Delete word backward |
+| `Alt+Backspace` | Delete Word | Delete word backward; at column 1 it deletes the line break, so blank lines are eaten one press at a time |
 | `Backspace` | Delete Char | Delete character backward |
 | `Delete` | Delete Forward | Delete character forward |
 

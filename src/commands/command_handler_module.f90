@@ -1154,10 +1154,7 @@ contains
         case('alt-backspace')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (size(editor%cursors) > 1) then
-                ! Apply to all cursors
-                do i = 1, size(editor%cursors)
-                    call delete_word_backward(editor%cursors(i), buffer)
-                end do
+                call delete_word_backward_multiple_cursors(editor, buffer)
             else
                 call delete_word_backward(editor%cursors(editor%active_cursor), buffer)
             end if
@@ -3128,6 +3125,29 @@ contains
         end do
         call deduplicate_cursors(editor)
     end subroutine backspace_multiple_cursors
+
+    ! alt-backspace at every cursor. Each deletion shifts the cursors that
+    ! sat after it -- including across a line join, which re-homes every
+    ! cursor below onto the joined line.
+    subroutine delete_word_backward_multiple_cursors(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer :: i, sl, sc, el, ec
+
+        call sort_cursors_by_position(editor)
+        do i = 1, size(editor%cursors)
+            if (editor%cursors(i)%has_selection) then
+                call normalize_selection(editor%cursors(i), sl, sc, el, ec)
+                call delete_selection(editor%cursors(i), buffer)
+                editor%cursors(i)%has_selection = .false.
+                call mc_others_deleted(editor, i, sl, sc, el, ec)
+                cycle
+            end if
+            call delete_word_backward(editor%cursors(i), buffer, sl, sc, el, ec)
+            if (sl /= el .or. sc /= ec) call mc_others_deleted(editor, i, sl, sc, el, ec)
+        end do
+        call deduplicate_cursors(editor)
+    end subroutine delete_word_backward_multiple_cursors
 
     subroutine delete_multiple_cursors(editor, buffer)
         type(editor_state_t), intent(inout) :: editor
@@ -5553,13 +5573,39 @@ contains
         if (allocated(line)) deallocate(line)
     end subroutine delete_word_forward
 
-    subroutine delete_word_backward(cursor, buffer)
+    ! Delete the word before the caret. At column 1 there is no word left on
+    ! this line, so the line break itself is what gets deleted -- otherwise
+    ! alt-backspace stalls at the start of a line and can never clear a blank
+    ! one. Reports the deleted range (character columns, end-exclusive) so the
+    ! multi-cursor path can shift its other cursors by it.
+    subroutine delete_word_backward(cursor, buffer, del_sl, del_sc, del_el, del_ec)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
+        integer, intent(out), optional :: del_sl, del_sc, del_el, del_ec
         character(len=:), allocatable :: line
         integer :: start_col, end_col, line_len
-        integer :: byte_cursor
+        integer :: byte_cursor, from_line, from_col
         logical :: in_word
+
+        ! An empty range means "nothing was deleted"
+        if (present(del_sl)) del_sl = cursor%line
+        if (present(del_sc)) del_sc = cursor%column
+        if (present(del_el)) del_el = cursor%line
+        if (present(del_ec)) del_ec = cursor%column
+
+        if (cursor%column <= 1) then
+            if (cursor%line <= 1) return
+            from_line = cursor%line
+            call join_line_with_previous(cursor, buffer)
+            buffer%modified = .true.
+            ! The newline between (cursor%line, cursor%column) and the start
+            ! of the line that followed it
+            if (present(del_sl)) del_sl = cursor%line
+            if (present(del_sc)) del_sc = cursor%column
+            if (present(del_el)) del_el = from_line
+            if (present(del_ec)) del_ec = 1
+            return
+        end if
 
         line = buffer_get_line(buffer, cursor%line)
         line_len = len(line)
@@ -5597,6 +5643,7 @@ contains
         if (start_col < 1) start_col = 1
 
         if (start_col <= end_col) then
+            from_col = cursor%column
             call delete_range(buffer, &
                 cursor%line, start_col, &
                 cursor%line, end_col)
@@ -5605,6 +5652,10 @@ contains
                 start_col)
             cursor%desired_column = cursor%column
             buffer%modified = .true.
+            if (present(del_sl)) del_sl = cursor%line
+            if (present(del_sc)) del_sc = cursor%column
+            if (present(del_el)) del_el = cursor%line
+            if (present(del_ec)) del_ec = from_col
         end if
 
         if (allocated(line)) deallocate(line)
