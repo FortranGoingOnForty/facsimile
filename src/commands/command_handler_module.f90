@@ -1026,6 +1026,15 @@ contains
             call update_viewport(editor)
             is_edit_action = .true.
 
+        case('ctrl-shift-k')
+            ! Delete the caret's lines outright -- nothing goes to the
+            ! clipboard or the yank stack (VSCode's Delete Line)
+            call save_undo_state(buffer, editor)
+            call delete_lines(editor, buffer)
+            call sync_editor_to_pane(editor)
+            call update_viewport(editor)
+            is_edit_action = .true.
+
         ! Editing keybinds
         case('ctrl-k')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
@@ -3148,6 +3157,90 @@ contains
         end do
         call deduplicate_cursors(editor)
     end subroutine delete_word_backward_multiple_cursors
+
+    ! Remove whole lines outright -- no clipboard, no yank stack. Everything
+    ! else that removes a line (ctrl-x, ctrl-k) captures the text first; this
+    ! is the one that simply discards it.
+    subroutine delete_lines(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer :: i, k, first, last, line_count, start_pos, end_pos
+        integer :: a, b
+
+        line_count = buffer_get_line_count(buffer)
+
+        ! Highest line range first, so lower line numbers stay valid
+        call sort_cursors_by_position(editor)
+        do i = size(editor%cursors), 1, -1
+            call cursor_line_span(editor%cursors(i), first, last)
+            first = max(1, min(first, line_count))
+            last = max(1, min(last, line_count))
+            if (last < first) cycle
+
+            start_pos = get_line_start_pos(buffer, first)
+            if (last < line_count) then
+                ! Take the trailing newline with the block
+                end_pos = get_line_start_pos(buffer, last + 1)
+            else
+                end_pos = get_buffer_content_size(buffer) + 1
+                ! Last line of the file: take the newline that precedes it
+                ! instead, so deleting it does not leave a blank line behind
+                if (first > 1) start_pos = get_line_start_pos(buffer, first) - 1
+            end if
+
+            if (end_pos > start_pos) then
+                call buffer_delete(buffer, start_pos, end_pos - start_pos)
+                buffer%modified = .true.
+            end if
+            line_count = buffer_get_line_count(buffer)
+
+            ! Re-home every cursor that sat on or below the deleted block
+            do k = 1, size(editor%cursors)
+                a = editor%cursors(k)%line
+                if (a > last) then
+                    editor%cursors(k)%line = a - (last - first + 1)
+                else if (a >= first) then
+                    editor%cursors(k)%line = first
+                    editor%cursors(k)%column = 1
+                end if
+                editor%cursors(k)%line = max(1, min(editor%cursors(k)%line, line_count))
+                b = buffer_get_line_char_count(buffer, editor%cursors(k)%line) + 1
+                editor%cursors(k)%column = max(1, min(editor%cursors(k)%column, b))
+                editor%cursors(k)%has_selection = .false.
+                editor%cursors(k)%desired_column = editor%cursors(k)%column
+            end do
+        end do
+
+        call deduplicate_cursors(editor)
+    end subroutine delete_lines
+
+    ! Lines one cursor covers. A selection ending in column 1 does not drag
+    ! that line in, matching the comment-toggle rule.
+    subroutine cursor_line_span(cursor, first, last)
+        type(cursor_t), intent(in) :: cursor
+        integer, intent(out) :: first, last
+        integer :: end_col
+
+        if (.not. cursor%has_selection) then
+            first = cursor%line
+            last = cursor%line
+            return
+        end if
+
+        if (cursor%selection_start_line < cursor%line .or. &
+            (cursor%selection_start_line == cursor%line .and. &
+             cursor%selection_start_col <= cursor%column)) then
+            first = cursor%selection_start_line
+            last = cursor%line
+            end_col = cursor%column
+        else
+            first = cursor%line
+            last = cursor%selection_start_line
+            end_col = cursor%selection_start_col
+        end if
+
+        if (last > first .and. end_col <= 1) last = last - 1
+    end subroutine cursor_line_span
 
     subroutine delete_multiple_cursors(editor, buffer)
         type(editor_state_t), intent(inout) :: editor
@@ -7988,6 +8081,8 @@ contains
             call handle_key_command('ctrl-y', editor, buffer, should_quit)
         case('toggle-comment')
             call handle_key_command('ctrl-/', editor, buffer, should_quit)
+        case('delete-line')
+            call handle_key_command('ctrl-shift-k', editor, buffer, should_quit)
 
         ! Search operations
         case('find')

@@ -1280,6 +1280,7 @@ contains
         call register_command('Undo', 'undo', 'Ctrl+Z', 'Edit')
         call register_command('Redo', 'redo', 'Ctrl+Y', 'Edit')
         call register_command('Toggle Line Comment', 'toggle-comment', 'Ctrl+/', 'Edit')
+        call register_command('Delete Line', 'delete-line', 'Ctrl+Shift+K', 'Edit')
 
         ! Search operations
         call register_command('Find', 'find', 'Ctrl+F', 'Search')

@@ -51,6 +51,7 @@ fpm run -- [filename]
 - `shift-tab` - dedent selection or current line
 - `ctrl-/` - toggle line comment (indent-aware; comments whole lines for a partial selection)
 - `ctrl-k` - kill line forward (yank stack)
+- `ctrl-shift-k` - delete line outright (no clipboard, no yank stack)
 - `ctrl-u` - kill line backward (yank stack)
 - `ctrl-y` - yank from stack
 - `ctrl-w` / `alt-backspace` - delete word backward (at column 1 it takes the line break, so it eats blank lines)
