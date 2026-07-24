@@ -111,6 +111,8 @@ module command_handler_module
     character(len=:), allocatable :: search_pattern  ! For ctrl-d functionality
     logical :: match_case_sensitive = .true.  ! Case sensitivity for ctrl-d match mode
     logical :: last_action_was_edit = .false.
+    ! Columns one indent level occupies (also the width a tab is counted as)
+    integer, parameter :: ENTER_INDENT_WIDTH = 4
 
     ! Module-level storage for LSP callbacks
     type(editor_state_t), pointer, save :: saved_editor_for_callback => null()
@@ -2499,47 +2501,144 @@ contains
         if (allocated(line)) deallocate(line)
     end subroutine handle_delete
 
-    subroutine handle_enter(cursor, buffer)
+    ! Auto-indent on Enter.
+    !
+    ! The new line's leading whitespace is REPLACED by the computed indent,
+    ! never prepended to it. Prepending is what made indentation run away:
+    ! whenever the caret sat left of a line's own indentation, that whitespace
+    ! was part of the text pushed down onto the new line, so re-inserting the
+    ! indent doubled it -- and the next Enter doubled the doubled value. On a
+    ! line with text that also silently shifted the text right (`    int x;`
+    ! with the caret at column 1 became `        int x;`).
+    !
+    ! expand_pair pushes a closing brace that sits directly after the caret
+    ! onto its own line. It adds a second line, which the multi-cursor
+    ! transform cannot model, so enter_multiple_cursors turns it off.
+    subroutine handle_enter(cursor, buffer, expand_pair)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
-        character(len=:), allocatable :: current_line
-        integer :: indent_level, i
+        logical, intent(in), optional :: expand_pair
+        character(len=:), allocatable :: current_line, before, after
+        integer :: indent_level, new_indent, split_byte
+        logical :: opens_block, closes_immediately, do_expand
+
+        do_expand = .true.
+        if (present(expand_pair)) do_expand = expand_pair
 
         ! Delete selection if one exists
         if (cursor%has_selection) then
             call delete_selection(cursor, buffer)
         end if
 
-        ! Get the current line to determine indentation
         current_line = buffer_get_line(buffer, cursor%line)
+        indent_level = indent_width(current_line)
 
-        ! Count leading spaces/tabs for auto-indent
-        indent_level = 0
-        do i = 1, len(current_line)
-            if (current_line(i:i) == ' ') then
-                indent_level = indent_level + 1
-            else if (current_line(i:i) == char(9)) then  ! Tab
-                indent_level = indent_level + 4  ! Treat tab as 4 spaces
-            else
-                exit  ! Found non-whitespace character
-            end if
-        end do
+        ! Text either side of the caret decides whether a block is opening
+        split_byte = utf8_char_to_byte_index(current_line, cursor%column)
+        if (split_byte <= 0) split_byte = len(current_line) + 1
+        before = current_line(1:split_byte-1)
+        after = current_line(split_byte:)
 
-        ! Insert the newline
+        ! A block opens only when the caret is directly after '{' -- which is
+        ! the one moment an extra indent level is wanted. Every later Enter on
+        ! the resulting blank line just inherits the indent it already has.
+        opens_block = last_nonblank_is(before, '{')
+        closes_immediately = opens_block .and. first_nonblank_is(after, '}')
+
+        new_indent = indent_level
+        if (opens_block) new_indent = indent_level + ENTER_INDENT_WIDTH
+
         call buffer_insert_newline(buffer, cursor)
         cursor%line = cursor%line + 1
         cursor%column = 1
+        call set_line_indent(buffer, cursor%line, new_indent)
+        cursor%column = new_indent + 1
 
-        ! Insert the same indentation on the new line
-        do i = 1, indent_level
-            call buffer_insert_char(buffer, cursor, ' ')
-            cursor%column = cursor%column + 1
-        end do
+        ! '{|}' becomes an open brace, an indented blank line for the caret,
+        ! and the closer back at the outer indent
+        if (closes_immediately .and. do_expand) then
+            call buffer_insert_text_at(buffer, cursor%line, cursor%column, char(10))
+            call set_line_indent(buffer, cursor%line + 1, indent_level)
+        end if
 
         cursor%desired_column = cursor%column
-
-        if (allocated(current_line)) deallocate(current_line)
     end subroutine handle_enter
+
+    ! Display width of a line's leading whitespace, tabs counted as 4
+    pure function indent_width(line) result(width)
+        character(len=*), intent(in) :: line
+        integer :: width
+        integer :: i
+
+        width = 0
+        do i = 1, len(line)
+            if (line(i:i) == ' ') then
+                width = width + 1
+            else if (line(i:i) == char(9)) then
+                width = width + ENTER_INDENT_WIDTH
+            else
+                exit
+            end if
+        end do
+    end function indent_width
+
+    ! Byte count of a line's leading whitespace run
+    pure function leading_ws_len(line) result(n)
+        character(len=*), intent(in) :: line
+        integer :: n
+
+        n = 0
+        do while (n < len(line))
+            if (line(n+1:n+1) /= ' ' .and. line(n+1:n+1) /= char(9)) exit
+            n = n + 1
+        end do
+    end function leading_ws_len
+
+    pure function last_nonblank_is(text, ch) result(res)
+        character(len=*), intent(in) :: text
+        character, intent(in) :: ch
+        logical :: res
+        integer :: i
+
+        res = .false.
+        do i = len(text), 1, -1
+            if (text(i:i) == ' ' .or. text(i:i) == char(9)) cycle
+            res = text(i:i) == ch
+            return
+        end do
+    end function last_nonblank_is
+
+    pure function first_nonblank_is(text, ch) result(res)
+        character(len=*), intent(in) :: text
+        character, intent(in) :: ch
+        logical :: res
+        integer :: i
+
+        res = .false.
+        do i = 1, len(text)
+            if (text(i:i) == ' ' .or. text(i:i) == char(9)) cycle
+            res = text(i:i) == ch
+            return
+        end do
+    end function first_nonblank_is
+
+    ! Give a line exactly `width` columns of indentation. Leaves the line
+    ! untouched when it already measures that wide, so tab-indented files keep
+    ! their tabs and a repeated Enter on a blank line is a no-op rather than a
+    ! doubling. Leading whitespace is ASCII, so bytes and columns agree.
+    subroutine set_line_indent(buffer, line_num, width)
+        type(buffer_t), intent(inout) :: buffer
+        integer, intent(in) :: line_num, width
+        character(len=:), allocatable :: line
+        integer :: ws
+
+        line = buffer_get_line(buffer, line_num)
+        if (indent_width(line) == width) return
+
+        ws = leading_ws_len(line)
+        if (ws > 0) call buffer_delete_range(buffer, line_num, 1, line_num, ws + 1)
+        if (width > 0) call buffer_insert_text_at(buffer, line_num, 1, repeat(' ', width))
+    end subroutine set_line_indent
 
     subroutine handle_tab(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
@@ -2994,7 +3093,9 @@ contains
             end if
             l0 = editor%cursors(i)%line
             c0 = editor%cursors(i)%column
-            call handle_enter(editor%cursors(i), buffer)
+            ! expand_pair off: pushing a closer onto its own line adds a
+            ! second line, which mc_others_inserted cannot represent
+            call handle_enter(editor%cursors(i), buffer, expand_pair=.false.)
             call mc_others_inserted(editor, i, l0, c0, &
                 editor%cursors(i)%line, editor%cursors(i)%column)
         end do

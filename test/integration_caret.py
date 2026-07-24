@@ -170,11 +170,13 @@ def main():
     drain(0.3)
     check("typed 'x'")
 
-    # The caret must also sit on the exact row containing the typed 'x'
-    # (renders as 'x}' since Enter moved the auto-closed brace along; a
-    # ghost-text suggestion may sit between them, e.g. 'xor}')
+    # The caret must also sit on the exact row containing the typed 'x'.
+    # Enter between the auto-closed braces expands the block, so 'x' lands on
+    # its own indented row with '}' below it. Match on the text past the
+    # 6-column line-number gutter; a ghost-text suggestion may trail the 'x'
+    # (e.g. 'xor').
     x_row = next((i for i, r in enumerate(screen.display)
-                  if re.search(r"x\S*\}", r)), None)
+                  if re.match(r"\s*x\S*\s*$", r[6:])), None)
     if x_row is None:
         print("FAIL typed text 'x...}' not found on screen")
         failures.append("typed text visible")
