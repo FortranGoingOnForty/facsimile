@@ -46,6 +46,14 @@ contains
         ! ESC[200~/ESC[201~ so it arrives as one event, not a
         ! keystroke stream that could auto-execute.
         call buf_write_str(ESC // '[?2004h')
+        ! Kitty keyboard protocol, flag 1 (disambiguate escape codes). Ctrl+/
+        ! and Ctrl+Shift+/ collapse onto the same control byte (0x1F) in the
+        ! legacy encoding, so ctrl-/ for comments and ctrl-? for help can only
+        ! coexist if the terminal reports modifiers separately. Pushed, not
+        ! set, so terminal_cleanup restores whatever was there before;
+        ! terminals that do not implement it ignore the sequence and keep the
+        ! legacy path (where f1 is the help fallback).
+        call buf_write_str(ESC // '[>1u')
         call terminal_clear_screen()
         call terminal_hide_cursor()
     end subroutine terminal_init
@@ -53,6 +61,8 @@ contains
     subroutine terminal_cleanup()
         call terminal_show_cursor()
         call terminal_disable_mouse()
+        ! Pop the keyboard-protocol flags pushed in terminal_init
+        call buf_write_str(ESC // '[<u')
         ! Disable bracketed paste
         call buf_write_str(ESC // '[?2004l')
         ! Leave alternate screen buffer to restore original shell view

@@ -6,6 +6,7 @@ module input_handler_module
 
     public :: get_key_input, key_type, mouse_event_t
     public :: get_paste_text
+    public :: decode_csi_u  ! exposed for unit tests
 
     ! Holds the most recent bracketed-paste payload; retrieved by
     ! the command handler when a 'paste' key event is delivered.
@@ -37,7 +38,49 @@ module input_handler_module
 
     character(len=*), parameter :: ESC = char(27)
 
+    ! Pushback queue for bytes the CSI lookahead consumed but did not use.
+    !
+    ! Kitty-protocol key events (CSI <code> ; <mods> u) and the legacy CSI
+    ! sequences share a prefix, so the only way to tell them apart is to scan
+    ! ahead to the final byte. When the sequence turns out to be a legacy one,
+    ! the scanned bytes are pushed back here and the original hand-rolled
+    ! parser re-reads them unchanged -- the legacy path stays byte-for-byte
+    ! what it always was.
+    integer, parameter :: PUSHBACK_CAP = 64
+    character(len=PUSHBACK_CAP) :: g_pushback = ''
+    integer :: g_pushback_len = 0
+    integer :: g_pushback_pos = 1
+
 contains
+
+    ! Queue bytes to be handed back before the next terminal read.
+    subroutine push_back(bytes)
+        character(len=*), intent(in) :: bytes
+        integer :: n
+
+        n = min(len(bytes), PUSHBACK_CAP)
+        if (n <= 0) return
+        g_pushback(1:n) = bytes(1:n)
+        g_pushback_len = n
+        g_pushback_pos = 1
+    end subroutine push_back
+
+    ! Next byte of an escape sequence: pushback first, then the terminal.
+    function next_escape_char() result(code)
+        integer :: code
+
+        if (g_pushback_pos <= g_pushback_len) then
+            code = iachar(g_pushback(g_pushback_pos:g_pushback_pos))
+            g_pushback_pos = g_pushback_pos + 1
+            if (g_pushback_pos > g_pushback_len) then
+                g_pushback_len = 0
+                g_pushback_pos = 1
+            end if
+            return
+        end if
+
+        code = terminal_read_char_escape()
+    end function next_escape_char
 
     subroutine get_key_input(key_str, status)
         character(len=*), intent(out) :: key_str
@@ -48,8 +91,14 @@ contains
         key_str = ''
         status = -1
 
-        ! Read single character using raw mode function (50ms timeout when idle)
-        char_code = terminal_read_char()
+        ! Read single character using raw mode function (50ms timeout when idle).
+        ! Pushback first: a CSI lookahead may have left bytes behind if the
+        ! sequence it was scanning turned out to be malformed.
+        if (g_pushback_pos <= g_pushback_len) then
+            char_code = next_escape_char()
+        else
+            char_code = terminal_read_char()
+        end if
 
         if (char_code < 0) then
             return
@@ -94,7 +143,7 @@ contains
                 if (iachar(ch) >= 224 .and. iachar(ch) <= 239) nbytes = 3
                 if (iachar(ch) >= 240 .and. iachar(ch) <= 247) nbytes = 4
                 do k = 2, nbytes
-                    cont = terminal_read_char_escape()
+                    cont = next_escape_char()
                     if (cont < 0) exit
                     key_str(k:k) = achar(cont)
                 end do
@@ -127,7 +176,7 @@ contains
         misses = 0
 
         do
-            cc = terminal_read_char_escape()
+            cc = next_escape_char()
             if (cc < 0) then
                 ! Tolerate brief gaps mid-paste; bail if truly idle
                 misses = misses + 1
@@ -158,27 +207,259 @@ contains
         key_str = 'paste'
     end subroutine capture_bracketed_paste
 
+    ! Scan a CSI sequence whose first parameter byte is already in hand and
+    ! decode it if it turns out to be a kitty key event. Anything else is
+    ! pushed back (minus that first byte, which the caller still holds) so the
+    ! legacy parser sees exactly the stream it would have seen.
+    subroutine try_csi_u(first_ch, key_str, handled)
+        character, intent(in) :: first_ch
+        character(len=*), intent(out) :: key_str
+        logical, intent(out) :: handled
+        character(len=PUSHBACK_CAP) :: params
+        integer :: n, code
+        character :: c
+
+        handled = .false.
+        params = ''
+        params(1:1) = first_ch
+        n = 1
+
+        do
+            if (n >= PUSHBACK_CAP - 1) exit
+            code = next_escape_char()
+            if (code < 0) then
+                ! Timed out mid-sequence; hand back what we took.
+                if (n > 1) call push_back(params(2:n))
+                return
+            end if
+            c = achar(code)
+            ! 0x30-0x3F is the CSI parameter-byte range (digits, ';', ':', ...)
+            if (code >= 48 .and. code <= 63) then
+                n = n + 1
+                params(n:n) = c
+                cycle
+            end if
+
+            if (c == 'u') then
+                call decode_csi_u(params(1:n), key_str, handled)
+                return
+            end if
+
+            call push_back(params(2:n) // c)
+            return
+        end do
+
+        ! Absurdly long parameter run - not a key event we understand.
+        if (n > 1) call push_back(params(2:n))
+    end subroutine try_csi_u
+
+    ! Decode the parameters of a kitty CSI-u key event:
+    !     <codepoint>[:<shifted>:<base>] [ ; <mods>[:<event>] ] [ ; <text> ]
+    ! Returns '' for events this editor has no name for (key releases,
+    ! keypad/media keys), which the caller treats as "no key".
+    subroutine decode_csi_u(params, key_str, ok)
+        character(len=*), intent(in) :: params
+        character(len=*), intent(out) :: key_str
+        logical, intent(out) :: ok
+        character(len=:), allocatable :: base_name, prefix
+        integer :: codepoint, mods, event, bits
+        logical :: shift, alt, ctrl
+
+        key_str = ''
+        ok = .false.
+
+        codepoint = param_int(params, 1, -1)
+        if (codepoint < 0) return
+
+        mods = param_int(params, 2, 1)
+        if (mods < 1) mods = 1
+        bits = mods - 1
+        shift = iand(bits, 1) /= 0
+        alt = iand(bits, 2) /= 0
+        ctrl = iand(bits, 4) /= 0
+
+        ! Sub-parameter of field 2 is the event type when flag 2 is on:
+        ! 1 press, 2 repeat, 3 release. Only releases are dropped.
+        event = param_subint(params, 2, 1)
+        if (event == 3) return
+
+        ! Ctrl-only chords keep the meaning their control byte had before the
+        ! protocol was negotiated, so nothing that used to work changes.
+        if (ctrl .and. .not. shift .and. .not. alt) then
+            select case(codepoint)
+            case(iachar('i'))
+                key_str = 'tab'
+                ok = .true.
+                return
+            case(iachar('m'), iachar('j'))
+                key_str = 'enter'
+                ok = .true.
+                return
+            case(iachar('['))
+                key_str = 'esc'
+                ok = .true.
+                return
+            end select
+        end if
+
+        base_name = csi_u_key_name(codepoint)
+        if (len(base_name) == 0) return
+
+        ! Unmodified (and shift-only, which the terminal usually delivers as
+        ! plain text anyway) resolves to the bare key.
+        if (.not. ctrl .and. .not. alt) then
+            if (.not. shift) then
+                ! Bare printable keys must arrive as the character itself,
+                ! the way the legacy path delivers them to the text layer.
+                if (codepoint == 32) then
+                    key_str = ' '
+                else
+                    key_str = base_name
+                end if
+            else if (codepoint >= iachar('a') .and. codepoint <= iachar('z')) then
+                key_str = achar(codepoint - 32)
+            else if (len(base_name) > 1) then
+                key_str = 'shift-' // base_name
+            else
+                key_str = base_name
+            end if
+            ok = .true.
+            return
+        end if
+
+        ! Order matches the legacy modifier names: alt-, then ctrl-, then shift-
+        prefix = ''
+        if (alt) prefix = prefix // 'alt-'
+        if (ctrl) prefix = prefix // 'ctrl-'
+        if (shift) prefix = prefix // 'shift-'
+
+        ! The one legacy name that is spelled out rather than punctuated
+        if (prefix == 'alt-shift-' .and. codepoint == iachar("'")) then
+            key_str = 'alt-shift-apostrophe'
+            ok = .true.
+            return
+        end if
+
+        key_str = prefix // base_name
+        ok = .true.
+    end subroutine decode_csi_u
+
+    ! Name for a codepoint in the vocabulary the command layer already speaks.
+    function csi_u_key_name(codepoint) result(name)
+        integer, intent(in) :: codepoint
+        character(len=:), allocatable :: name
+
+        select case(codepoint)
+        case(27)
+            name = 'esc'
+        case(13)
+            name = 'enter'
+        case(9)
+            name = 'tab'
+        case(127, 8)
+            name = 'backspace'
+        case(32)
+            name = 'space'
+        case(33:126)
+            name = achar(codepoint)
+        case default
+            ! Keypad, media and lone-modifier keys live in kitty's private-use
+            ! range; nothing here is bound, so report no key at all.
+            name = ''
+        end select
+    end function csi_u_key_name
+
+    ! Value of the idx-th ';'-separated parameter, up to any ':' sub-parameter.
+    function param_int(params, idx, default_value) result(val)
+        character(len=*), intent(in) :: params
+        integer, intent(in) :: idx, default_value
+        integer :: val
+        character(len=:), allocatable :: field
+        integer :: colon, ios
+
+        val = default_value
+        field = param_field(params, idx)
+        if (len(field) == 0) return
+        colon = index(field, ':')
+        if (colon > 0) field = field(1:colon-1)
+        if (len(field) == 0) return
+        read(field, *, iostat=ios) val
+        if (ios /= 0) val = default_value
+    end function param_int
+
+    ! Value of the first ':' sub-parameter of the idx-th parameter.
+    function param_subint(params, idx, default_value) result(val)
+        character(len=*), intent(in) :: params
+        integer, intent(in) :: idx, default_value
+        integer :: val
+        character(len=:), allocatable :: field
+        integer :: colon, colon2, ios
+
+        val = default_value
+        field = param_field(params, idx)
+        colon = index(field, ':')
+        if (colon <= 0) return
+        field = field(colon+1:)
+        colon2 = index(field, ':')
+        if (colon2 > 0) field = field(1:colon2-1)
+        if (len(field) == 0) return
+        read(field, *, iostat=ios) val
+        if (ios /= 0) val = default_value
+    end function param_subint
+
+    function param_field(params, idx) result(field)
+        character(len=*), intent(in) :: params
+        integer, intent(in) :: idx
+        character(len=:), allocatable :: field
+        integer :: i, start, count
+
+        field = ''
+        start = 1
+        count = 1
+        do i = 1, len(params)
+            if (params(i:i) == ';') then
+                if (count == idx) then
+                    field = params(start:i-1)
+                    return
+                end if
+                count = count + 1
+                start = i + 1
+            end if
+        end do
+        if (count == idx) field = params(start:len(params))
+    end function param_field
+
     subroutine handle_escape_sequence(key_str)
         character(len=*), intent(out) :: key_str
         character :: ch, ch1, ch2, ch3
         integer :: char_code, ios
+        logical :: csi_u_handled
 
         key_str = 'esc'
 
         ! Try to read next character (with fast 5ms timeout for escape sequences)
-        char_code = terminal_read_char_escape()
+        char_code = next_escape_char()
         if (char_code < 0) return
         ch1 = achar(char_code)
 
         if (ch1 == '[') then
             ! CSI sequence (or Alt+[ if no valid sequence follows)
-            char_code = terminal_read_char_escape()
+            char_code = next_escape_char()
             if (char_code < 0) then
                 ! Timeout - no character follows, this is Alt+[
                 key_str = 'alt-['
                 return
             end if
             ch2 = achar(char_code)
+
+            ! A kitty keyboard-protocol key event is CSI <number> ... 'u', and
+            ! the legacy sequences below start the same way, so scan ahead to
+            ! the final byte. Non-'u' sequences are pushed back untouched and
+            ! fall through to the original parser.
+            if (ch2 >= '0' .and. ch2 <= '9') then
+                call try_csi_u(ch2, key_str, csi_u_handled)
+                if (csi_u_handled) return
+            end if
 
             select case(ch2)
             case('A')
@@ -198,7 +479,7 @@ contains
                 key_str = 'shift-tab'
             case('3')
                 ! Delete key: ESC [ 3 ~ or ESC [ 3 ; modifier ~
-                char_code = terminal_read_char_escape()
+                char_code = next_escape_char()
                 if (char_code >= 0) then
                     ch3 = achar(char_code)
                     if (ch3 == '~') then
@@ -209,7 +490,7 @@ contains
                 end if
             case('5')
                 ! Could be page up
-                char_code = terminal_read_char_escape()
+                char_code = next_escape_char()
                 if (char_code >= 0) then
                     ch3 = achar(char_code)
                     ios = 0
@@ -224,7 +505,7 @@ contains
                 end if
             case('6')
                 ! Could be page down
-                char_code = terminal_read_char_escape()
+                char_code = next_escape_char()
                 if (char_code >= 0) then
                     ch3 = achar(char_code)
                     ios = 0
@@ -240,7 +521,7 @@ contains
             case('1')
                 ! Could be function key (F1-F9) or modified arrow/home/end
                 ! Check next character
-                char_code = terminal_read_char_escape()
+                char_code = next_escape_char()
                 if (char_code >= 0) then
                     ch3 = achar(char_code)
                     if (ch3 == '~') then
@@ -248,14 +529,14 @@ contains
                         key_str = 'f1'
                     else if (ch3 == '0') then
                         ! F10 might be ESC [ 2 1 ~, check for tilde
-                        char_code = terminal_read_char_escape()
+                        char_code = next_escape_char()
                         if (char_code >= 0 .and. achar(char_code) == '~') then
                             key_str = 'f10'
                         end if
                     else if (ch3 == '1' .or. ch3 == '2' .or. ch3 == '3' .or. ch3 == '4' .or. &
                              ch3 == '5' .or. ch3 == '7' .or. ch3 == '8' .or. ch3 == '9') then
                         ! Function keys F1-F8: ESC [ 1 X ~ or ESC [ 1 X ; modifier ~
-                        char_code = terminal_read_char_escape()
+                        char_code = next_escape_char()
                         if (char_code >= 0) then
                             ch = achar(char_code)
                             if (ch == '~') then
@@ -291,12 +572,12 @@ contains
                 end if
             case('2')
                 ! Could be F9-F12 or alternate modified keys
-                char_code = terminal_read_char_escape()
+                char_code = next_escape_char()
                 if (char_code >= 0) then
                     ch3 = achar(char_code)
                     if (ch3 == '0' .or. ch3 == '1' .or. ch3 == '3' .or. ch3 == '4') then
                         ! Function keys F9-F12: ESC [ 2 X ~ or ESC [ 2 X ; modifier ~
-                        char_code = terminal_read_char_escape()
+                        char_code = next_escape_char()
                         if (char_code >= 0) then
                             ch = achar(char_code)
                             if (ch == '~') then
@@ -316,7 +597,7 @@ contains
                                 call handle_modified_function_key(key_str, '2', ch3)
                             else if (ch3 == '0' .and. ch == '0') then
                                 ! ESC [ 2 0 0 ~ : bracketed paste begins
-                                char_code = terminal_read_char_escape()
+                                char_code = next_escape_char()
                                 if (char_code >= 0 .and. &
                                     achar(char_code) == '~') then
                                     call capture_bracketed_paste(key_str)
@@ -325,7 +606,7 @@ contains
                         end if
                     else if (ch3 == ';') then
                         ! ESC [ 2 ; A format (shift+arrow)
-                        char_code = terminal_read_char_escape()
+                        char_code = next_escape_char()
                         if (char_code >= 0) then
                             ch = achar(char_code)
                             key_str = 'shift-'
@@ -357,7 +638,7 @@ contains
                 end if
             case('4')
                 ! End key: ESC [ 4 ~ or ESC [ 4 ; modifier ~
-                char_code = terminal_read_char_escape()
+                char_code = next_escape_char()
                 if (char_code >= 0) then
                     ch3 = achar(char_code)
                     if (ch3 == '~') then
@@ -368,7 +649,7 @@ contains
                 end if
             case('7')
                 ! rxvt Home: ESC [ 7 ~ or ESC [ 7 ; modifier ~
-                char_code = terminal_read_char_escape()
+                char_code = next_escape_char()
                 if (char_code >= 0) then
                     ch3 = achar(char_code)
                     if (ch3 == '~') then
@@ -379,7 +660,7 @@ contains
                 end if
             case('8')
                 ! rxvt End: ESC [ 8 ~ or ESC [ 8 ; modifier ~
-                char_code = terminal_read_char_escape()
+                char_code = next_escape_char()
                 if (char_code >= 0) then
                     ch3 = achar(char_code)
                     if (ch3 == '~') then
@@ -394,7 +675,7 @@ contains
             end select
         else if (ch1 == 'O') then
             ! SS3 sequence (e.g., function keys F1-F4)
-            char_code = terminal_read_char_escape()
+            char_code = next_escape_char()
             if (char_code < 0) then
                 ! Timeout - this is just Alt+O
                 key_str = 'alt-o'
@@ -420,12 +701,12 @@ contains
             end select
         else if (ch1 == achar(27)) then
             ! ESC ESC - likely Alt+something
-            char_code = terminal_read_char_escape()
+            char_code = next_escape_char()
             if (char_code >= 0) then
                 ch2 = achar(char_code)
                 if (ch2 == '[') then
                     ! ESC ESC [ - Alt+arrow keys or Alt+modified keys
-                    char_code = terminal_read_char_escape()
+                    char_code = next_escape_char()
                     if (char_code >= 0) then
                         ch3 = achar(char_code)
                         select case(ch3)
@@ -439,7 +720,7 @@ contains
                             key_str = 'alt-left'
                         case('3')
                             ! Could be Alt+Delete (ESC ESC [ 3 ~)
-                            char_code = terminal_read_char_escape()
+                            char_code = next_escape_char()
                             if (char_code >= 0 .and. achar(char_code) == '~') then
                                 key_str = 'alt-delete'
                             end if
@@ -508,7 +789,7 @@ contains
             read_count = read_count + 1
             if (read_count > 20) exit  ! Safety limit
 
-            char_code = terminal_read_char_escape()
+            char_code = next_escape_char()
             if (char_code >= 0) then
                 ch = achar(char_code)
                 ios = 0
@@ -629,7 +910,7 @@ contains
             read_count = read_count + 1
             if (read_count > 20) exit
 
-            char_code = terminal_read_char_escape()
+            char_code = next_escape_char()
             if (char_code < 0) exit
 
             ch = achar(char_code)
@@ -696,7 +977,7 @@ contains
 
         ! Read modifier sequence (already past the semicolon)
         do
-            char_code = terminal_read_char_escape()
+            char_code = next_escape_char()
             if (char_code >= 0) then
                 ch = achar(char_code)
                 ios = 0
@@ -793,12 +1074,12 @@ contains
         end if
 
         ! Read modifier (should be a digit 2-8)
-        char_code = terminal_read_char_escape()
+        char_code = next_escape_char()
         if (char_code < 0) return
         modifier_ch = achar(char_code)
 
         ! Read terminating ~
-        char_code = terminal_read_char_escape()
+        char_code = next_escape_char()
         if (char_code < 0 .or. achar(char_code) /= '~') return
 
         ! Parse modifier: 2=Shift, 3=Alt, 4=Alt+Shift, 5=Ctrl, 6=Ctrl+Shift, 7=Alt+Ctrl, 8=Alt+Shift
@@ -839,7 +1120,7 @@ contains
 
         ! Read until 'M' (press) or 'm' (release)
         do
-            char_code = terminal_read_char_escape()
+            char_code = next_escape_char()
             if (char_code >= 0) then
                 ch = achar(char_code)
                 ios = 0
