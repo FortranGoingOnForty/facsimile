@@ -49,6 +49,7 @@ fpm run -- [filename]
 - `delete` - delete forward
 - `tab` - insert 4 spaces (or indent selection)
 - `shift-tab` - dedent selection or current line
+- `ctrl-/` - toggle line comment (indent-aware; comments whole lines for a partial selection)
 - `ctrl-k` - kill line forward (yank stack)
 - `ctrl-u` - kill line backward (yank stack)
 - `ctrl-y` - yank from stack
@@ -147,7 +148,12 @@ When in fuss mode (ctrl-b), you get a split view with a git-aware file tree on t
 - `ctrl-b` - toggle fuss mode off
 
 ### Help
-- `ctrl-/` or `ctrl-?` - show keybindings (ctrl-/ is more reliable)
+- `ctrl-?` (ctrl-shift-/) or `F1` - show keybindings
+
+`ctrl-/` and `ctrl-?` are the same byte (0x1F) in the legacy terminal
+encoding, so `fac` negotiates the kitty keyboard protocol at startup to tell
+them apart. In terminals that decline it (and inside `tmux` without
+`set -g extended-keys on`), `ctrl-/` toggles a comment and `F1` opens help.
 
 ## Terminal Compatibility Notes
 

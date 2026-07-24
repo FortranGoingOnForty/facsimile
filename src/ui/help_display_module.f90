@@ -67,7 +67,7 @@ contains
             call get_key_input(key_input, status)
             if (status == 0) then
                 select case(trim(key_input))
-                case('q', 'Q', 'esc', 'ctrl-/', 'ctrl-?')
+                case('q', 'Q', 'esc', 'ctrl-shift-/', 'ctrl-?', 'f1')
                     done = .true.
                 case('up', 'k')
                     if (viewport_start > 1) viewport_start = viewport_start - 1
@@ -104,7 +104,7 @@ contains
         n_lines = 0
         n_lines = n_lines + 11 + 2  ! NAVIGATION
         n_lines = n_lines + 6 + 2   ! SELECTION
-        n_lines = n_lines + 11 + 2  ! EDITING
+        n_lines = n_lines + 12 + 2  ! EDITING
         n_lines = n_lines + 4 + 2   ! CLIPBOARD
         n_lines = n_lines + 3 + 2   ! LINES
         n_lines = n_lines + 9 + 2   ! SEARCH & REPLACE
@@ -149,6 +149,7 @@ contains
         lines(i) = "  delete              delete forward"; i = i + 1
         lines(i) = "  tab                 insert 4 spaces/indent"; i = i + 1
         lines(i) = "  shift-tab           dedent selection/line"; i = i + 1
+        lines(i) = "  ctrl-/              toggle line comment"; i = i + 1
         lines(i) = "  ctrl-k              kill line forward"; i = i + 1
         lines(i) = "  ctrl-u              kill line backward"; i = i + 1
         lines(i) = "  ctrl-y              yank from stack"; i = i + 1
@@ -238,7 +239,7 @@ contains
         lines(i) = "  ctrl-b              toggle file browser (fuss mode)"; i = i + 1
         lines(i) = "  ctrl-s              save"; i = i + 1
         lines(i) = "  ctrl-q              quit"; i = i + 1
-        lines(i) = "  ctrl-/ or ctrl-?    show this help"; i = i + 1
+        lines(i) = "  ctrl-? or F1        show this help"; i = i + 1
         lines(i) = ""; i = i + 1
 
         ! LSP (Language Server Protocol)

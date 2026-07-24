@@ -44,6 +44,7 @@ Complete keyboard shortcut reference for `fac` editor.
 | `Ctrl+C` | Copy | Copy selection to clipboard |
 | `Ctrl+V` | Paste | Paste from clipboard |
 | `Ctrl+A` | Select All | Select entire file |
+| `Ctrl+/` | Toggle Line Comment | Comment/uncomment the cursor's lines or the selection |
 | `Alt+Backspace` | Delete Word | Delete word backward |
 | `Backspace` | Delete Char | Delete character backward |
 | `Delete` | Delete Forward | Delete character forward |
@@ -125,7 +126,7 @@ Complete keyboard shortcut reference for `fac` editor.
 | Keybinding | Command | Description |
 |------------|---------|-------------|
 | `Ctrl+P` | Command Palette | Search and execute any command |
-| `Ctrl+?` or `Ctrl+/` | Help | Show help screen |
+| `Ctrl+?` or `F1` | Help | Show help screen (`Ctrl+?` needs a terminal that supports the kitty keyboard protocol; `F1` always works) |
 | `Ctrl+B` or `F3` | File Tree | Toggle file explorer (Fuss mode) |
 | `Ctrl+L` | Redraw Screen | Clear and redraw the screen |
 | `Esc` | Cancel/Close | Close panels, cancel operations |
@@ -236,7 +237,7 @@ Most terminal emulators don't pass Ctrl+Shift combinations reliably. That's why 
 
 ### Discovering Commands
 - Use `Ctrl+P` (Command Palette) to see all available commands
-- Press `Ctrl+/` or `Ctrl+?` to see the help screen
+- Press `Ctrl+?` or `F1` to see the help screen
 
 ### Vim Users
 Some vim-style keybindings work:

@@ -738,7 +738,7 @@ contains
                     status_center = '[cc] alt-c:toggle'
                 end if
             else
-                status_center = 'ctrl-/:help'
+                status_center = 'ctrl-?:help'
             end if
         end block
 

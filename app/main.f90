@@ -1279,6 +1279,7 @@ contains
         call register_command('Cut', 'cut', 'Ctrl+X', 'Edit')
         call register_command('Undo', 'undo', 'Ctrl+Z', 'Edit')
         call register_command('Redo', 'redo', 'Ctrl+Y', 'Edit')
+        call register_command('Toggle Line Comment', 'toggle-comment', 'Ctrl+/', 'Edit')
 
         ! Search operations
         call register_command('Find', 'find', 'Ctrl+F', 'Search')
@@ -1309,7 +1310,7 @@ contains
         call register_command('Navigate Pane Down', 'pane-down', 'Ctrl+J', 'View')
 
         ! Help
-        call register_command('Show Help', 'help', '?', 'Help')
+        call register_command('Show Help', 'help', 'Ctrl+?', 'Help')
         call register_command('Command Palette', 'palette', 'Ctrl+Shift+P', 'Help')
     end subroutine register_all_commands
 
