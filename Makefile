@@ -124,6 +124,7 @@ SOURCES = src/version_module.f90 \
           src/lsp/diagnostics_module.f90 \
           src/lsp/server_detection_module.f90 \
           src/lsp/server_installer_module.f90 \
+          src/ui/context_menu_module.f90 \
           src/ui/completion_popup_module.f90 \
           src/ui/hover_tooltip_module.f90 \
           src/ui/diagnostics_panel_module.f90 \
