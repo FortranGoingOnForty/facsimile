@@ -6,6 +6,7 @@
 module ai_state_module
     use iso_fortran_env, only: int64
     use ai_http_module, only: ai_http_t, ai_http_addr_t
+    use completion_cache_module, only: completion_cache_t
     implicit none
     private
 
@@ -80,6 +81,10 @@ module ai_state_module
         ! ---- rate limiting ----
         integer(int64) :: bucket_window_ms = 0
         integer :: bucket_count = 0
+
+        ! ---- cache ----
+        type(completion_cache_t) :: cache
+        integer(int64) :: flight_key = 0
 
         ! ---- observability ----
         integer :: requests_sent = 0

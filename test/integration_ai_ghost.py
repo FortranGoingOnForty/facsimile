@@ -15,6 +15,7 @@ Requires: pip3 install pexpect pyte
 
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -122,6 +123,14 @@ class Session:
         self.send("\x13", 0.6)
         with open(self.target) as f:
             return f.read()
+
+    def ai_status(self):
+        """Open the palette, run AI: Status, return the status bar text."""
+        self.send("\x10", 0.5)          # Ctrl+P
+        self.send("AI: Status", 0.5)
+        self.send("\r", 0.8)
+        return self.display()
+
 
     def close(self):
         try:
@@ -278,6 +287,48 @@ def test_block_that_does_not_fit_shows_a_marker(binary):
         s.close()
 
 
+def test_cache_saves_a_repeat_request(binary):
+    """Backspace is a trigger key, so deleting and retyping asks the model a
+    question it has already answered. The cache is only worth its complexity
+    if that repeat is actually served locally -- so read the counter rather
+    than trust the design."""
+    s = Session(binary, "/* Return the larger of a and b. */\n"
+                        "int max_of(int a, int b) {\n"
+                        "    ret\n"
+                        "}\n", ai_on=True, cols=200)
+    try:
+        s.send("\x1b[B\x1b[B", 0.3)
+        s.send("\x1b[F", 0.3)
+
+        # First pass: delete a char and retype it, producing a real request.
+        s.send("\x7f", 0.3)
+        s.send("t", 0.4)
+        got = s.wait_for(lambda sc: any("return" in r for r in sc.display[1:6]),
+                         timeout=14)
+        if not got:
+            print("SKIP: model did not produce a suggestion this run")
+            return
+
+        # Same delete-and-retype: identical prefix and suffix windows, so the
+        # second ask is the same question and must not reach the model.
+        s.send("\x7f", 0.5)
+        s.send("t", 0.6)
+        s.wait_for(lambda sc: any("return" in r for r in sc.display[1:6]),
+                   timeout=14)
+
+        status = s.ai_status()
+        check("cache" in status, "AI: Status reports the cache", status)
+
+        m = re.search(r"cache (\d+)% \((\d+) saved\)", status)
+        check(m is not None, "the cache counter is parseable", status)
+        if m:
+            check(int(m.group(2)) >= 1,
+                  "a repeated prompt was served from cache, not the model",
+                  status)
+    finally:
+        s.close()
+
+
 def main():
     binary = find_binary()
 
@@ -292,6 +343,7 @@ def main():
         test_block_renders_without_hiding_the_file(binary)
         test_block_line_and_full_accept(binary)
         test_block_that_does_not_fit_shows_a_marker(binary)
+        test_cache_saves_a_repeat_request(binary)
 
     if failures:
         print(f"\nintegration_ai_ghost: FAILED ({len(failures)}): "

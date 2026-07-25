@@ -100,6 +100,7 @@ SOURCES = src/version_module.f90 \
           src/utils/dir_scan_module.f90 \
           src/syntax/comment_syntax_module.f90 \
           src/ai/ai_http_module.f90 \
+          src/ai/completion_cache_module.f90 \
           src/ai/ai_state_module.f90 \
           src/ai/ai_json_module.f90 \
           src/ai/completion_sanitize_module.f90 \

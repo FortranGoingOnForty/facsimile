@@ -75,6 +75,29 @@ place and **no request is sent**. During normal forward typing into a correct
 suggestion this eliminates most requests, which is what makes a ~300 ms
 backend feel immediate.
 
+### Asking the same question twice is free
+
+Backspace is a trigger, so deleting a few characters and retyping them asks
+the model something it answered a moment ago. Completions are cached on the
+exact prompt — model, the code before the caret, the code after it, and the
+token budget — and a hit returns the already-validated text in **0 ms**
+without touching the backend. Four identical delete-and-retype cycles cost
+one request, not four.
+
+Rejections are cached too, for 30 s, so a prompt the model keeps answering
+badly does not burn the rate limiter on every keystroke.
+
+The cache holds 64 entries, is cleared when you switch files or change
+models, and reports itself in **AI: Status**:
+
+```
+… | sent 1, shown 3, rejected 0 | cache 75% (3 saved)
+```
+
+Because entries are keyed on the surrounding code rather than on the caret's
+coordinates, an undo needs no special handling — different code is a
+different key, and a stale answer can never be served for it.
+
 ---
 
 ## Settings

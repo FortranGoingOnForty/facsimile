@@ -24,6 +24,7 @@ module ai_engine_module
                                  ghost_clear, ghost_apply_block, &
                                  GHOST_SRC_LLM, GHOST_SRC_NONE
     use settings_module
+    use completion_cache_module
     implicit none
     private
 
@@ -100,6 +101,10 @@ contains
                 ai%last_error = 'cannot resolve ' // ai%remote_host
             end if
         end if
+
+        ! Settings were just re-read, so the model or backend may have changed
+        ! underneath entries that were stored against the old one.
+        call cache_clear(ai%cache)
     end subroutine ai_configure
 
     ! Blocking probe, run at enable time only. Answers the two questions that
@@ -374,6 +379,11 @@ contains
         ! used for the header and symbol digest, so the filename has to come
         ! along with the trigger.
         if (present(filename)) then
+            ! Guarded: filename has no default initialiser, so on the very
+            ! first trigger of a session it is unallocated.
+            if (allocated(ai%filename)) then
+                if (ai%filename /= filename) call cache_clear(ai%cache)
+            end if
             ai%filename = filename
         else
             ai%filename = ''
@@ -402,18 +412,20 @@ contains
             return
         end if
 
-        if (ai%trigger_pending) call maybe_send(ai, editor, buffer)
+        if (ai%trigger_pending) call maybe_send(ai, editor, buffer, ui_changed)
     end subroutine ai_tick
 
-    subroutine maybe_send(ai, editor, buffer)
+    subroutine maybe_send(ai, editor, buffer, ui_changed)
         use terminal_io_module, only: terminal_input_available
         type(ai_state_t), intent(inout) :: ai
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(in) :: buffer
-        character(len=:), allocatable :: prefix, suffix, body
+        logical, intent(inout) :: ui_changed
+        character(len=:), allocatable :: prefix, suffix, body, cached
         type(prompt_options_t) :: popts
         integer :: npredict
-        integer(int64) :: t
+        integer(int64) :: t, key
+        logical :: hit, known_bad
 
         t = now_ms()
         if (t - ai%trigger_ms < int(ai%debounce_ms, int64)) return
@@ -433,11 +445,6 @@ contains
             return
         end if
 
-        if (.not. take_token(ai, t)) then
-            ai%trigger_pending = .false.
-            return
-        end if
-
         popts%prefix_bytes = ai%prefix_bytes
         popts%suffix_bytes = ai%suffix_bytes
         popts%include_header = ai%include_header
@@ -451,6 +458,41 @@ contains
             npredict = ai%num_predict * 4
         else
             npredict = ai%num_predict
+        end if
+
+        ! Has this exact question already been answered? Asked before the
+        ! token bucket, because a hit costs no request and must not be
+        ! rate-limited as though it did.
+        key = cache_key_of(ai%model, prefix, suffix, npredict)
+        call cache_lookup(ai%cache, key, t, cached, hit, known_bad)
+
+        if (known_bad) then
+            ! The model answered this badly a moment ago and is unlikely to
+            ! do better now. Stay quiet rather than spend a request finding out.
+            ai%trigger_pending = .false.
+            return
+        end if
+
+        if (hit) then
+            ! Reuse the live-state revalidation in apply_to_ghost by filling in
+            ! the same flight_* fields a real reply would have arrived against.
+            ai%trigger_pending = .false.
+            ai%generation = ai%generation + 1
+            ai%flight_generation = ai%generation
+            ai%flight_line = ai%trig_line
+            ai%flight_col = ai%trig_col
+            ai%flight_prefix = ai%trig_prefix
+            ai%flight_line_after = ai%trig_line_after
+            ai%flight_doc_revision = ai%trig_doc_revision
+            ai%flight_at_eol = ai%trig_at_eol
+            ai%last_latency_ms = 0
+            call apply_to_ghost(ai, editor, cached, ui_changed)
+            return
+        end if
+
+        if (.not. take_token(ai, t)) then
+            ai%trigger_pending = .false.
+            return
         end if
 
         body = ollama_generate_body(ai%model, prefix, suffix, npredict, &
@@ -474,6 +516,7 @@ contains
         ai%flight_at_eol = ai%trig_at_eol
         ai%requests_sent = ai%requests_sent + 1
         ai%request_started_ms = t
+        ai%flight_key = key
     end subroutine maybe_send
 
     subroutine pump_in_flight(ai, editor, ui_changed)
@@ -519,8 +562,13 @@ contains
         if (code /= SAN_OK) then
             ai%last_reject_reason = sanitize_reason(code)
             ai%rejected_count = ai%rejected_count + 1
+            call cache_store_rejection(ai%cache, ai%flight_key, now_ms())
             return
         end if
+
+        ! Store the sanitized text, not the raw reply: a hit then skips the
+        ! whole validation pipeline as well as the request.
+        call cache_store(ai%cache, ai%flight_key, now_ms(), text)
 
         call apply_to_ghost(ai, editor, text, ui_changed)
     end subroutine pump_in_flight
@@ -621,7 +669,9 @@ contains
 
         text = text // ' | sent ' // int_str(ai%requests_sent) // &
                ', shown ' // int_str(ai%accepted_count) // &
-               ', rejected ' // int_str(ai%rejected_count)
+               ', rejected ' // int_str(ai%rejected_count) // &
+               ' | cache ' // int_str(cache_hit_rate_percent(ai%cache)) // '% (' // &
+               int_str(ai%cache%saved_requests) // ' saved)'
         if (allocated(ai%last_reject_reason)) then
             if (len(ai%last_reject_reason) > 0) &
                 text = text // ' (' // ai%last_reject_reason // ')'
