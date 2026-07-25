@@ -1,4 +1,5 @@
 module ghost_text_module
+    use iso_fortran_env, only: int64
     use text_buffer_module, only: buffer_t, buffer_get_line, buffer_get_line_count
     use utf8_module, only: utf8_char_to_byte_index
     use json_module, only: json_value_t, json_has_key, json_get_array, json_get_string, &
@@ -36,6 +37,11 @@ module ghost_text_module
         integer :: pending_request_id = 0             ! outstanding LSP request (0 = none)
         character(len=:), allocatable :: pending_prefix
         logical :: pending_include = .false.          ! request made in #include context
+        ! Document revision when the request went out. Cursor position and
+        ! typed prefix can both be restored by an undo while the rest of the
+        ! document changes, so they are not enough on their own to tell that
+        ! a reply still applies.
+        integer(int64) :: pending_doc_revision = 0
     end type ghost_text_t
 
 contains
@@ -57,6 +63,7 @@ contains
         type(ghost_text_t), intent(inout) :: ghost
 
         ghost%pending_request_id = 0
+        ghost%pending_doc_revision = 0
         ghost%pending_include = .false.
         if (allocated(ghost%pending_prefix)) deallocate(ghost%pending_prefix)
     end subroutine ghost_clear_pending

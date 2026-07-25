@@ -103,6 +103,14 @@ module editor_state_module
         logical :: modified = .false.
         logical :: is_orphan = .false.  ! True if file is outside workspace (uses absolute path)
 
+        ! Bumped on every edit to this tab. An async request (LSP completion,
+        ! and later a model completion) captures this when it is sent; if the
+        ! value has moved by the time the reply lands, the reply was computed
+        ! against a document that no longer exists and must be dropped.
+        ! Cursor position and typed prefix are not sufficient on their own --
+        ! undo/redo can restore both while changing everything else.
+        integer(int64) :: doc_revision = 0
+
         ! LSP support - multiple servers per file
         integer, allocatable :: lsp_server_indices(:)  ! Indices of LSP servers handling this file
         integer :: num_lsp_servers = 0                 ! Number of active LSP servers

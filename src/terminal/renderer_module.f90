@@ -2132,6 +2132,10 @@ contains
     ! render_cursor so the ghost stays aligned with the caret.
     subroutine render_ghost_text(editor, buffer)
         use editor_state_module, only: pane_t
+        use symbols_panel_module, only: is_symbols_panel_visible
+        use code_actions_panel_module, only: is_code_actions_panel_visible
+        use hover_tooltip_module, only: is_hover_visible
+        use signature_tooltip_module, only: is_signature_tooltip_visible
         type(editor_state_t), intent(in) :: editor
         type(buffer_t), intent(in) :: buffer
         type(pane_t) :: pane
@@ -2145,7 +2149,22 @@ contains
         logical :: use_panes
 
         if (.not. ghost_is_active(editor%ghost)) return
+
+        ! Anything drawn over the editor takes precedence. The ghost is
+        ! painted after these panels, so without this it draws on top of
+        ! them -- and it can still be live here, because keys consumed by a
+        ! panel return from handle_key_command before the ghost_clear that
+        ! ordinarily dismisses it. Suppressing at the draw site makes the
+        ! invariant hold however the ghost got there. The diagnostics and
+        ! references panels are deliberately absent: they shrink the editor
+        ! rather than covering it, and are already accounted for in the
+        ! width calculation below.
         if (editor%completion_popup%visible) return
+        if (is_symbols_panel_visible(editor%symbols_panel)) return
+        if (is_code_actions_panel_visible(editor%code_actions_panel)) return
+        if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel)) return
+        if (is_hover_visible(editor%hover_tooltip)) return
+        if (is_signature_tooltip_visible(editor%signature_tooltip)) return
 
         suffix = ghost_suffix(editor%ghost)
         if (len(suffix) == 0) return

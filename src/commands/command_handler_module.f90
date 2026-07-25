@@ -1,5 +1,5 @@
 module command_handler_module
-    use iso_fortran_env, only: int32, error_unit
+    use iso_fortran_env, only: int32, int64, error_unit
     use iso_c_binding, only: c_int
     use editor_state_module, only: editor_state_t, cursor_t, switch_to_tab_with_buffer, &
                                    close_tab, create_tab, close_pane, split_pane_vertical, split_pane_horizontal, &
@@ -2178,6 +2178,10 @@ contains
 
         ! Notify LSP of document changes if buffer was modified
         if (is_edit_action) then
+            ! Bumped here rather than in notify_buffer_change, which returns
+            ! early for files with no language server -- the revision has to
+            ! track every edit, not just the ones LSP hears about.
+            call bump_doc_revision(editor)
             call notify_buffer_change(editor, buffer)
             ! Recompute the ghost suggestion after the LSP sync so a
             ! completion request sees the up-to-date document
@@ -7000,6 +7004,27 @@ contains
     end subroutine close_tab_without_prompt
 
     ! Notify LSP server of buffer changes
+    ! Mark the active tab's document as changed. Async replies captured the
+    ! old value and drop themselves when it no longer matches.
+    subroutine bump_doc_revision(editor)
+        type(editor_state_t), intent(inout) :: editor
+
+        if (editor%active_tab_index < 1 .or. &
+            editor%active_tab_index > size(editor%tabs)) return
+        editor%tabs(editor%active_tab_index)%doc_revision = &
+            editor%tabs(editor%active_tab_index)%doc_revision + 1
+    end subroutine bump_doc_revision
+
+    function current_doc_revision(editor) result(rev)
+        type(editor_state_t), intent(in) :: editor
+        integer(int64) :: rev
+
+        rev = 0
+        if (editor%active_tab_index < 1 .or. &
+            editor%active_tab_index > size(editor%tabs)) return
+        rev = editor%tabs(editor%active_tab_index)%doc_revision
+    end function current_doc_revision
+
     subroutine notify_buffer_change(editor, buffer)
         use document_sync_module, only: notify_document_change
         type(editor_state_t), intent(inout) :: editor
@@ -7129,6 +7154,7 @@ contains
                 editor%ghost%pending_request_id = request_id
                 editor%ghost%pending_prefix = prefix
                 editor%ghost%pending_include = in_include
+                editor%ghost%pending_doc_revision = current_doc_revision(editor)
             end if
         end if
     end subroutine update_ghost_suggestion
@@ -7169,10 +7195,12 @@ contains
         type(lsp_message_t), intent(in) :: response
         character(len=:), allocatable :: pend, prefix, before
         integer :: cur_line, cur_col
+        integer(int64) :: pend_rev
         logical :: was_include, in_include
 
         ! Only the most recent request may update the ghost
         if (request_id /= editor%ghost%pending_request_id) return
+        pend_rev = editor%ghost%pending_doc_revision
         if (allocated(editor%ghost%pending_prefix)) then
             pend = editor%ghost%pending_prefix
         else
@@ -7182,7 +7210,11 @@ contains
         call ghost_clear_pending(editor%ghost)
 
         ! Revalidate against current editor state: the user may have moved,
-        ! edited, or opened the popup while the request was in flight
+        ! edited, or opened the popup while the request was in flight.
+        ! The document revision is checked first because an undo can restore
+        ! the cursor and the typed prefix while changing everything else,
+        ! which every other check here would wave through.
+        if (pend_rev /= current_doc_revision(editor)) return
         if (is_completion_visible(editor%completion_popup)) return
         if (size(editor%cursors) /= 1) return
         if (editor%cursors(editor%active_cursor)%has_selection) return
