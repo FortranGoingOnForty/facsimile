@@ -590,6 +590,18 @@ contains
         select case(trim(key_str))
         ! File operations
         case('ctrl-q')
+            ! Close whatever is open on top of the document first, and only
+            ! quit once nothing is. Getting out of the editor is then always
+            ! the same key, pressed until there is nothing left to close.
+            block
+                logical :: closed
+
+                call close_topmost_surface(editor, closed)
+                if (closed) then
+                    g_lsp_ui_changed = .true.
+                    return
+                end if
+            end block
             should_quit = .true.
 
         case('ctrl-b', 'ctrl-shift-b', 'f3')
@@ -4905,6 +4917,74 @@ contains
         ! Sync the updated cursor position back to the active pane
         call sync_editor_to_pane(editor)
     end subroutine position_cursor_at_screen
+
+    !> Close the one surface sitting closest to the user, if any.
+    !>
+    !> The order is the same "what is on top" the mouse router uses: the
+    !> terminal panel and the floating popups sit above the modal side
+    !> panels, which sit above the file tree, which sits above the document.
+    !> Dismissal used to be spread across the terminal-panel router, the
+    !> fuss-mode router, five per-panel handlers and the esc case, so no
+    !> single place knew that order; this states it once.
+    subroutine close_topmost_surface(editor, closed)
+        type(editor_state_t), intent(inout) :: editor
+        logical, intent(out) :: closed
+
+        closed = .true.
+
+        if (is_terminal_panel_visible(editor%terminal_panel)) then
+            editor%terminal_panel%visible = .false.
+            editor%terminal_panel%focused = .false.
+            call terminal_write(achar(27) // '[2J')
+            return
+        end if
+
+        if (is_completion_visible(editor%completion_popup)) then
+            call hide_completion_popup(editor%completion_popup)
+            return
+        end if
+
+        if (is_hover_visible(editor%hover_tooltip)) then
+            call hide_hover_tooltip(editor%hover_tooltip)
+            return
+        end if
+
+        if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel)) then
+            call hide_lsp_server_installer_panel(editor%lsp_installer_panel)
+            return
+        end if
+
+        if (is_code_actions_panel_visible(editor%code_actions_panel)) then
+            call hide_code_actions_panel(editor%code_actions_panel)
+            return
+        end if
+
+        if (is_references_panel_visible(editor%references_panel)) then
+            call hide_references_panel(editor%references_panel)
+            return
+        end if
+
+        if (is_symbols_panel_visible(editor%symbols_panel)) then
+            call hide_symbols_panel(editor%symbols_panel)
+            return
+        end if
+
+        if (is_diagnostics_panel_visible(editor%diagnostics_panel)) then
+            ! No hide entry point on this one; the toggle is the way to close
+            call toggle_panel(editor%diagnostics_panel)
+            return
+        end if
+
+        ! The tree is last: it is a layout rather than something floating
+        ! over the document, so it is the least surprising thing to lose on
+        ! the press before the one that quits.
+        if (editor%fuss_mode_active) then
+            call toggle_fuss_mode(editor)
+            return
+        end if
+
+        closed = .false.
+    end subroutine close_topmost_surface
 
     function is_cursor_at_screen_pos(cursor, editor, buffer, screen_row, screen_col) result(at_pos)
         use renderer_module, only: show_line_numbers, LINE_NUMBER_WIDTH
