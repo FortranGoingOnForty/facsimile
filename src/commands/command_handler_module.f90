@@ -118,7 +118,8 @@ module command_handler_module
     integer, parameter :: ACT_COMMENT = 4, ACT_SELECT_ALL = 5
     integer, parameter :: ACT_GOTO_DEF = 6, ACT_FIND_REFS = 7, ACT_PALETTE = 8
     integer, parameter :: ACT_TREE_ACTIVATE = 20, ACT_TREE_VSPLIT = 21
-    integer, parameter :: ACT_TREE_HSPLIT = 22
+    integer, parameter :: ACT_TREE_HSPLIT = 22, ACT_TREE_STAGE = 23
+    integer, parameter :: ACT_TREE_UNSTAGE = 24, ACT_TREE_DIFF = 25
 
     public :: handle_key_command, init_command_handler, cleanup_command_handler
     public :: save_initial_state_for_undo
@@ -5303,6 +5304,24 @@ contains
         end if
     end function comment_available_here
 
+    !> Run one of the tree's git actions, which are reachable from the
+    !> keyboard only behind a ctrl-g prefix.
+    !>
+    !> Setting the flag and sending the letter rather than calling the git
+    !> internals keeps the workspace_path guard and the flag hygiene in a
+    !> single place, and means the menu and the keyboard cannot diverge. The
+    !> flag is set and consumed within one call, so the renderer never sees it
+    !> true and the tree's prefix hint does not flash.
+    subroutine invoke_fuss_git(letter, editor, buffer)
+        character(len=*), intent(in) :: letter
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+
+        fuss_git_prefix_active = .true.
+        call handle_fuss_input(letter, editor, buffer)
+        fuss_git_prefix_active = .false.
+    end subroutine invoke_fuss_git
+
     !> Repaint before handing control to anything that owns the terminal.
     subroutine repaint_now(editor, buffer)
         type(editor_state_t), intent(inout) :: editor
@@ -5371,6 +5390,12 @@ contains
                 call handle_fuss_input('alt-v', editor, buffer)
             case (ACT_TREE_HSPLIT)
                 call handle_fuss_input('alt-s', editor, buffer)
+            case (ACT_TREE_STAGE)
+                call invoke_fuss_git('a', editor, buffer)
+            case (ACT_TREE_UNSTAGE)
+                call invoke_fuss_git('u', editor, buffer)
+            case (ACT_TREE_DIFF)
+                call invoke_fuss_git('d', editor, buffer)
             end select
         end if
 
@@ -5382,7 +5407,7 @@ contains
         type(editor_state_t), intent(inout) :: editor
         integer, intent(in) :: item_idx, mrow, mcol
         integer :: top_row, bottom_row, left_col, right_col
-        logical :: shown, is_dir
+        logical :: shown, is_dir, git_ok
 
         if (item_idx < 1) return
         if (item_idx > tree_state%n_selectable) return
@@ -5391,11 +5416,32 @@ contains
 
         call context_menu_begin(CTX_KIND_TREE)
         if (is_dir) then
+            ! One adaptive row rather than two, one of them always greyed:
+            ! activating a directory is expanding or collapsing it, and which
+            ! is already known here.
             call context_menu_add_item('Expand or Collapse', 'Space', ACT_TREE_ACTIVATE)
         else
             call context_menu_add_item('Open', 'Enter', ACT_TREE_ACTIVATE)
             call context_menu_add_item('Open to the Side', 'Alt+V', ACT_TREE_VSPLIT)
             call context_menu_add_item('Open Below', 'Alt+S', ACT_TREE_HSPLIT)
+
+            ! Git actions, which otherwise live behind an undiscoverable
+            ! ctrl-g prefix. Greyed from the per-file status the tree already
+            ! tracks, so the menu says what is possible for this file.
+            git_ok = tree_state%is_git_repo
+            if (git_ok) then
+                if (.not. allocated(editor%workspace_path)) git_ok = .false.
+            end if
+            call context_menu_add_separator()
+            call context_menu_add_item('Stage', 'Ctrl+G A', ACT_TREE_STAGE, &
+                enabled=(git_ok .and. &
+                    (tree_state%selectable_files(item_idx)%is_unstaged .or. &
+                     tree_state%selectable_files(item_idx)%is_untracked)))
+            call context_menu_add_item('Unstage', 'Ctrl+G U', ACT_TREE_UNSTAGE, &
+                enabled=(git_ok .and. &
+                    tree_state%selectable_files(item_idx)%is_staged))
+            call context_menu_add_item('Diff', 'Ctrl+G D', ACT_TREE_DIFF, &
+                enabled=git_ok)
         end if
 
         call menu_bounds(editor, top_row, bottom_row, left_col, right_col)
