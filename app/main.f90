@@ -1291,6 +1291,7 @@ contains
         call register_command('Undo', 'undo', 'Ctrl+Z', 'Edit')
         call register_command('Redo', 'redo', 'Ctrl+Shift+Z', 'Edit')
         call register_command('Toggle Line Comment', 'toggle-comment', 'Ctrl+/', 'Edit')
+        call register_command('Context Menu', 'context-menu', 'Shift+F10 / Alt+Z', 'Edit')
 
         ! AI
         call register_command('AI: Toggle Inline Completion', 'ai-toggle', 'Alt+I', 'AI')

@@ -2110,6 +2110,16 @@ contains
                 end block
             end if
 
+        case('shift-f10', 'alt-z')
+            ! Context menu at the caret. shift-f10 is the universal chord for
+            ! this; alt-z is the fallback because GNOME Terminal grabs F10 for
+            ! its own menubar, the same class of problem the README documents
+            ! for F2. A letter rather than punctuation on purpose: the legacy
+            ! escape decoder only accepts letters, digits and a couple of
+            ! special-cased marks, so alt-; would never arrive at all.
+            ! python3 tools/keycap.py shows which your terminal delivers.
+            call open_document_menu_at_caret(editor, buffer)
+
         case('ctrl-p')
             ! Command palette (Ctrl+P - VSCode standard)
             ! Note: ctrl-shift-p doesn't work - terminals can't distinguish ctrl-p from ctrl-shift-p
@@ -5221,6 +5231,40 @@ contains
             editor%cursors(editor%active_cursor)%has_selection = .false.
         end if
 
+        call build_document_menu(editor)
+
+        call menu_bounds(editor, top_row, bottom_row, left_col, right_col)
+        shown = context_menu_show(mrow, mcol, top_row, bottom_row, left_col, right_col)
+        if (shown) g_lsp_ui_changed = .true.
+    end subroutine open_document_context_menu
+
+    !> Open the document menu at the caret, for the keyboard shortcut. No
+    !> caret rule applies: the caret is already where the user put it, and
+    !> whatever is selected stays selected.
+    subroutine open_document_menu_at_caret(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(in) :: buffer
+        integer :: top_row, bottom_row, left_col, right_col
+        integer :: crow, ccol
+        logical :: shown
+
+        if (.not. document_menu_available(editor)) return
+
+        call caret_screen_pos(editor%cursors(editor%active_cursor), editor, &
+                              buffer, crow, ccol)
+        call build_document_menu(editor)
+
+        call menu_bounds(editor, top_row, bottom_row, left_col, right_col)
+        ! One row down so the box does not sit on top of the caret it
+        ! belongs to; clamping pulls it back up at the bottom of the screen.
+        shown = context_menu_show(crow + 1, ccol, top_row, bottom_row, &
+                                  left_col, right_col)
+        if (shown) g_lsp_ui_changed = .true.
+    end subroutine open_document_menu_at_caret
+
+    subroutine build_document_menu(editor)
+        type(editor_state_t), intent(in) :: editor
+
         call context_menu_begin(CTX_KIND_DOC)
         ! Cut and Copy fall back to the whole line when nothing is selected,
         ! so they are never disabled -- the label says which it will be.
@@ -5246,11 +5290,7 @@ contains
                                    enabled=(get_lsp_server_for_cap(editor, CAP_REFERENCES) > 0))
         call context_menu_add_separator()
         call context_menu_add_item('Command Palette', 'Ctrl+P', ACT_PALETTE)
-
-        call menu_bounds(editor, top_row, bottom_row, left_col, right_col)
-        shown = context_menu_show(mrow, mcol, top_row, bottom_row, left_col, right_col)
-        if (shown) g_lsp_ui_changed = .true.
-    end subroutine open_document_context_menu
+    end subroutine build_document_menu
 
     function comment_available_here(editor) result(ok)
         type(editor_state_t), intent(in) :: editor
@@ -5438,21 +5478,22 @@ contains
         closed = .false.
     end subroutine close_topmost_surface
 
-    function is_cursor_at_screen_pos(cursor, editor, buffer, screen_row, screen_col) result(at_pos)
+    !> Where on screen a cursor is drawn: the renderer's forward mapping,
+    !> shared by the alt-click hit test and the keyboard menu opener so the
+    !> two cannot drift apart.
+    subroutine caret_screen_pos(cursor, editor, buffer, screen_row, screen_col)
         use renderer_module, only: show_line_numbers, LINE_NUMBER_WIDTH
         use editor_state_module, only: get_active_pane_indices
         type(cursor_t), intent(in) :: cursor
         type(editor_state_t), intent(in) :: editor
         type(buffer_t), intent(in) :: buffer
-        integer, intent(in) :: screen_row, screen_col
-        logical :: at_pos
-        integer :: cursor_screen_row, cursor_screen_col, row_offset, col_offset
-        integer :: tab_idx, pane_idx
+        integer, intent(out) :: screen_row, screen_col
+        integer :: row_offset, col_offset, tab_idx, pane_idx
         logical :: used_pane
         character(len=:), allocatable :: line
 
-        ! Mirror render_cursor's forward mapping: gutter offset plus the
-        ! display-cell distance from the viewport start (tabs / wide chars)
+        ! Gutter offset plus the display-cell distance from the viewport
+        ! start, so tabs and wide characters line up with the text
         if (show_line_numbers) then
             col_offset = LINE_NUMBER_WIDTH + 1
         else
@@ -5465,18 +5506,16 @@ contains
         ! Use the active pane's rect and viewport, the same way
         ! position_cursor_at_screen inverts them. Assuming row 2 and the
         ! editor-level viewport made this disagree with where the caret is
-        ! actually drawn in a split or with the tree open, so alt-click could
-        ! not recognise an existing cursor and stacked a duplicate instead of
-        ! removing it.
+        ! actually drawn in a split or with the tree open.
         call get_active_pane_indices(editor, tab_idx, pane_idx)
         if (tab_idx > 0 .and. pane_idx > 0) then
             if (tab_idx <= size(editor%tabs)) then
                 if (allocated(editor%tabs(tab_idx)%panes)) then
                     if (pane_idx <= size(editor%tabs(tab_idx)%panes)) then
                         associate(pane => editor%tabs(tab_idx)%panes(pane_idx))
-                            cursor_screen_row = pane%screen_row + &
+                            screen_row = pane%screen_row + &
                                 (cursor%line - pane%viewport_line)
-                            cursor_screen_col = pane%screen_col + col_offset + &
+                            screen_col = pane%screen_col + col_offset + &
                                 display_offset_of(line, pane%viewport_column, &
                                                   cursor%column)
                         end associate
@@ -5493,13 +5532,25 @@ contains
             else
                 row_offset = 1
             end if
-            cursor_screen_row = cursor%line - editor%viewport_line + row_offset
-            cursor_screen_col = col_offset + 1 + &
+            screen_row = cursor%line - editor%viewport_line + row_offset
+            screen_col = col_offset + 1 + &
                 display_offset_of(line, editor%viewport_column, cursor%column)
         end if
+    end subroutine caret_screen_pos
 
+    function is_cursor_at_screen_pos(cursor, editor, buffer, screen_row, screen_col) result(at_pos)
+        type(cursor_t), intent(in) :: cursor
+        type(editor_state_t), intent(in) :: editor
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: screen_row, screen_col
+        logical :: at_pos
+        integer :: cursor_screen_row, cursor_screen_col
+
+        call caret_screen_pos(cursor, editor, buffer, cursor_screen_row, &
+                              cursor_screen_col)
         at_pos = (cursor_screen_row == screen_row .and. cursor_screen_col == screen_col)
     end function is_cursor_at_screen_pos
+
 
     subroutine select_next_match(editor, buffer)
         type(editor_state_t), intent(inout) :: editor
@@ -9016,6 +9067,8 @@ contains
             call handle_key_command('ctrl-shift-z', editor, buffer, should_quit)
         case('toggle-comment')
             call handle_key_command('ctrl-/', editor, buffer, should_quit)
+        case('context-menu')
+            call handle_key_command('shift-f10', editor, buffer, should_quit)
 
         ! AI completion
         case('ai-toggle')

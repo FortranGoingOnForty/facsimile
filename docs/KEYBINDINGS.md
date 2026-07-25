@@ -46,6 +46,7 @@ Complete keyboard shortcut reference for `fac` editor.
 | `Ctrl+C` | Copy | Copy selection, or the whole line when nothing is selected |
 | `Ctrl+V` | Paste | Paste from clipboard |
 | `Alt+A` | Select All | Select entire file |
+| `Shift+F10` or `Alt+Z` | Context Menu | Open the context menu at the caret (right-click opens it at the pointer) |
 | `Tab` | Accept Suggestion | Accept the whole inline suggestion |
 | `Ctrl+Right` | Accept One Word | Accept a single word of an inline suggestion, keeping the rest offered |
 | `Alt+Right` | Accept One Line | Accept one line of a multi-line suggestion, keeping the rest offered |
