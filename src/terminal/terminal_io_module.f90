@@ -266,6 +266,11 @@ contains
 
     subroutine terminal_disable_mouse()
         call buf_write_str(CSI // '?1006l')
+        ! 1003 before 1002: the context menu turns any-motion reporting on
+        ! while it is open, and quitting with one up would otherwise leave the
+        ! shell receiving an event for every pointer movement -- unusable over
+        ! a slow link, and it outlives the editor.
+        call buf_write_str(CSI // '?1003l')
         call buf_write_str(CSI // '?1002l')
         call buf_write_str(CSI // '?1000l')
         ! Restore alternate scroll (the common terminal default) so
