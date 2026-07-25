@@ -55,6 +55,16 @@ program facsimile
     use welcome_menu_module, only: show_welcome_menu
     use fortress_navigator_module, only: open_fortress_navigator
     use binary_prompt_module, only: binary_file_prompt
+    ! Read by caret_move_only: everything that would make a partial repaint wrong
+    use ghost_text_module, only: ghost_is_active
+    use completion_popup_module, only: is_completion_visible
+    use context_menu_module, only: is_context_menu_visible
+    use hover_tooltip_module, only: is_hover_visible
+    use diagnostics_panel_module, only: is_diagnostics_panel_visible
+    use code_actions_panel_module, only: is_code_actions_panel_visible
+    use references_panel_module, only: is_references_panel_visible
+    use symbols_panel_module, only: is_symbols_panel_visible
+    use lsp_server_installer_panel_module, only: is_lsp_server_installer_panel_visible
     use lsp_server_manager_module, only: notify_file_opened, notify_file_changed, &
                                          notify_file_closed, process_server_messages, &
                                          set_diagnostics_handler, set_lsp_workspace_root
@@ -81,6 +91,9 @@ program facsimile
     character(len=:), allocatable :: selected_path
     integer :: status, argc, rows, cols, i
     integer :: prev_active_tab, prev_active_pane
+    ! Snapshot for the caret-move fast path
+    integer :: prev_cursor_line, prev_viewport_line, prev_viewport_col
+    logical :: prev_ghost_visible
     integer :: coalesced_keys
     logical :: active_view_changed
     logical :: opened_existing_tab
@@ -679,6 +692,18 @@ program facsimile
                 end if
             end if
 
+            ! Snapshot what the fast-path guard needs to compare against
+            prev_cursor_line = 0
+            prev_viewport_line = editor%viewport_line
+            prev_viewport_col = editor%viewport_column
+            prev_ghost_visible = ghost_is_active(editor%ghost)
+            if (allocated(editor%cursors)) then
+                if (editor%active_cursor >= 1 .and. &
+                    editor%active_cursor <= size(editor%cursors)) then
+                    prev_cursor_line = editor%cursors(editor%active_cursor)%line
+                end if
+            end if
+
             ! Process input
             call handle_key_command(key_input, editor, buffer, should_quit)
 
@@ -753,8 +778,20 @@ program facsimile
                     end if
                 end if
 
-                ! Re-render screen after each command
-                if (editor%fuss_mode_active) then
+                ! Re-render screen after each command.
+                !
+                ! A plain caret move repaints only the handful of lines whose
+                ! appearance actually changed. A full frame is ~3.3 KB, which
+                ! over ssh is what makes a held arrow key feel like wading.
+                ! The guard is deliberately strict: anything that could put
+                ! something else on screen falls back to the full path, so
+                ! the fast path never has to be right about more than the
+                ! caret.
+                if (caret_move_only(editor, prev_cursor_line, prev_viewport_line, &
+                                    prev_viewport_col, prev_ghost_visible)) then
+                    call render_caret_move(buffer, editor, prev_cursor_line, &
+                                           allocated(search_pattern), match_case_sensitive)
+                else if (editor%fuss_mode_active) then
                     call render_screen_with_tree(buffer, editor, allocated(search_pattern), match_case_sensitive)
                 else
                     call render_screen(buffer, editor, allocated(search_pattern), match_case_sensitive)
@@ -1276,6 +1313,69 @@ contains
     end subroutine show_backup_diff
 
     ! Register all available commands for the command palette
+    !> Is it safe to repaint only the lines a caret move touched?
+    !>
+    !> Every condition here is something that puts other pixels on screen, or
+    !> moves the whole viewport. The cost of being wrong is a stale artifact
+    !> the user has to redraw by hand, so this errs heavily toward the full
+    !> path: it only says yes for a plain arrow key, in a single pane, with
+    !> one cursor, nothing selected, nothing floating, and the viewport
+    !> exactly where it was.
+    function caret_move_only(editor, prev_line, prev_vp_line, prev_vp_col, &
+                             prev_ghost) result(ok)
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(in) :: prev_line, prev_vp_line, prev_vp_col
+        logical, intent(in) :: prev_ghost
+        logical :: ok
+        integer :: tab_idx
+
+        ok = .false.
+
+        ! Only the four plain arrow cases set this
+        if (.not. g_cursor_only_move) return
+        if (prev_line < 1) return
+
+        ! A scroll moves every line on screen
+        if (editor%viewport_line /= prev_vp_line) return
+        if (editor%viewport_column /= prev_vp_col) return
+
+        ! A ghost suggestion that has just been cleared still has to be
+        ! erased, and one still showing has to move with the caret
+        if (prev_ghost) return
+        if (ghost_is_active(editor%ghost)) return
+
+        ! Anything drawn over the document
+        if (is_completion_visible(editor%completion_popup)) return
+        if (is_context_menu_visible()) return
+        if (is_hover_visible(editor%hover_tooltip)) return
+        if (is_terminal_panel_visible(editor%terminal_panel)) return
+        if (is_diagnostics_panel_visible(editor%diagnostics_panel)) return
+        if (is_code_actions_panel_visible(editor%code_actions_panel)) return
+        if (is_references_panel_visible(editor%references_panel)) return
+        if (is_symbols_panel_visible(editor%symbols_panel)) return
+        if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel)) return
+        if (editor%fuss_mode_active) return
+
+        ! An edit or an LSP update means the text itself may have changed
+        if (g_lsp_modified_buffer) return
+        if (g_lsp_ui_changed) return
+
+        ! Several carets paint several blocks; the ones left behind would
+        ! need erasing. Selections likewise span arbitrary lines.
+        if (.not. allocated(editor%cursors)) return
+        if (size(editor%cursors) /= 1) return
+        if (editor%cursors(1)%has_selection) return
+
+        ! Split panes: the inactive pane's caret is drawn too
+        tab_idx = editor%active_tab_index
+        if (tab_idx < 1) return
+        if (tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+        if (size(editor%tabs(tab_idx)%panes) /= 1) return
+
+        ok = .true.
+    end function caret_move_only
+
     subroutine register_all_commands()
         ! File operations
         call register_command('Save File', 'save', 'Ctrl+S', 'File')

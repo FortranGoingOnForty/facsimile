@@ -43,7 +43,7 @@ module renderer_module
     character(len=:), allocatable :: g_status_message
     public :: tree_state
     public :: update_syntax_highlighter
-    public :: render_cursor_only  ! Fast path for cursor-only updates
+    public :: render_caret_move  ! Fast path for a plain caret move
     public :: fuss_search_buffer, fuss_search_len, fuss_search_last_time
     public :: fuss_fuzzy_jump, fuss_reset_search, get_time_ms
     public :: fuss_git_prefix_active
@@ -160,13 +160,9 @@ contains
         logical, intent(in), optional :: match_mode_active
         logical, intent(in), optional :: match_case_sens
         integer :: screen_row, buffer_line, line_count
-        character(len=:), allocatable :: line_content
-        character(len=1) :: cursor_char
         integer :: content_width
         integer :: start_row, row_offset_val
         character(len=16) :: line_num_str
-        logical :: found_match
-        type(cursor_t) :: cursor
 
         ! Auto-update syntax highlighter if filename changed
         if (allocated(editor%filename)) then
@@ -179,29 +175,7 @@ contains
         ! Render tab bar if there are any tabs
         call render_tab_bar(editor)
 
-        ! Check if cursor is on a bracket and find its match. The cursor
-        ! column is a char index; utf8_char_at handles bounds and returns
-        ! '' (padded to a space) past EOL. Multibyte chars truncate to
-        ! their lead byte, which is never an ASCII bracket.
-        cursor = editor%cursors(editor%active_cursor)
-        line_content = buffer_get_line(buffer, cursor%line)
-        cursor_char = utf8_char_at(line_content, cursor%column)
-        if (is_opening_bracket(cursor_char) .or. is_closing_bracket(cursor_char)) then
-            bracket_line = cursor%line
-            bracket_col = cursor%column
-            call find_matching_bracket(buffer, bracket_line, bracket_col, &
-                                     found_match, matching_bracket_line, matching_bracket_col)
-            if (.not. found_match) then
-                matching_bracket_line = 0
-                matching_bracket_col = 0
-            end if
-        else
-            bracket_line = 0
-            bracket_col = 0
-            matching_bracket_line = 0
-            matching_bracket_col = 0
-        end if
-        if (allocated(line_content)) deallocate(line_content)
+        call update_bracket_match(buffer, editor)
 
         ! Get total lines in buffer
         line_count = buffer_get_line_count(buffer)
@@ -418,6 +392,134 @@ contains
     ! next frame -- a menu one frame late, and stale bytes on the frame it is
     ! dismissed. Hiding the caret both suppresses a caret blinking behind the
     ! box and flushes.
+    ! Recompute which bracket pair, if any, sits under the caret. The four
+    ! module variables it sets are read by the line renderers, so a frame that
+    ! repaints only some lines must call this too or it will paint a
+    ! highlight from the previous caret position.
+    !
+    ! The cursor column is a char index; utf8_char_at handles bounds and
+    ! returns '' (padded to a space) past EOL. Multibyte chars truncate to
+    ! their lead byte, which is never an ASCII bracket.
+    !> Repaint only what a plain caret move changes, instead of the whole
+    !> screen. A full frame is ~3.3 KB on an 80x24-ish terminal; this is a few
+    !> hundred bytes, which is the difference between comfortable and
+    !> unusable when the terminal is at the far end of an ssh link.
+    !>
+    !> Four things change when the caret moves without editing: the status
+    !> bar's Ln/Col, the caret itself, the line-number gutter (the caret's line
+    !> is drawn bright, the one it left goes dim), and the bracket-match
+    !> highlight (up to two lines gained, up to two lost). So the affected
+    !> lines are known exactly rather than guessed at -- there is no
+    !> "probably nothing else moved" in here.
+    !>
+    !> The caller is responsible for only invoking this when nothing else on
+    !> screen could have changed; see the guard in app/main.f90.
+    subroutine render_caret_move(buffer, editor, prev_line, match_mode_active, &
+                                 match_case_sens)
+        type(buffer_t), intent(in) :: buffer
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: prev_line
+        logical, intent(in), optional :: match_mode_active
+        logical, intent(in), optional :: match_case_sens
+        integer :: dirty(6), n_dirty, i, j, tab_idx, pane_idx
+        integer :: old_bracket, old_match, line_count, screen_row
+        integer :: line_num_width, adjusted_width, start_row
+        logical :: seen
+
+        tab_idx = editor%active_tab_index
+        if (tab_idx < 1) return
+        if (tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+        pane_idx = editor%tabs(tab_idx)%active_pane_index
+        if (pane_idx < 1) return
+        if (pane_idx > size(editor%tabs(tab_idx)%panes)) return
+
+        ! The module bracket state still describes the previous caret
+        old_bracket = bracket_line
+        old_match = matching_bracket_line
+        call update_bracket_match(buffer, editor)
+
+        n_dirty = 0
+        call mark(prev_line)
+        call mark(editor%cursors(editor%active_cursor)%line)
+        call mark(old_bracket)
+        call mark(old_match)
+        call mark(bracket_line)
+        call mark(matching_bracket_line)
+
+        ! Mirror render_editor_pane's own geometry, which is what
+        ! render_all_panes uses for the single-pane case the guard admits.
+        if (show_line_numbers) then
+            line_num_width = LINE_NUMBER_WIDTH + 1
+        else
+            line_num_width = 0
+        end if
+        start_row = 2
+        if (size(editor%tabs) == 0) start_row = 1
+
+        line_count = buffer_get_line_count(buffer)
+        associate(pane => editor%tabs(tab_idx)%panes(pane_idx))
+            adjusted_width = pane%screen_width - line_num_width
+            do i = 1, n_dirty
+                if (dirty(i) < 1) cycle
+                if (dirty(i) > line_count) cycle
+                screen_row = start_row + (dirty(i) - editor%viewport_line)
+                if (screen_row < start_row) cycle
+                if (screen_row > editor%screen_rows - 1) cycle
+                call render_editor_row(pane%buffer, editor, dirty(i), screen_row, &
+                                       1, adjusted_width, line_num_width, line_count)
+            end do
+        end associate
+
+        call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
+        call render_cursor_for_panes(editor)
+
+    contains
+
+        subroutine mark(ln)
+            integer, intent(in) :: ln
+
+            if (ln < 1) return
+            seen = .false.
+            do j = 1, n_dirty
+                if (dirty(j) == ln) seen = .true.
+            end do
+            if (seen) return
+            if (n_dirty >= size(dirty)) return
+            n_dirty = n_dirty + 1
+            dirty(n_dirty) = ln
+        end subroutine mark
+
+    end subroutine render_caret_move
+
+    subroutine update_bracket_match(buffer, editor)
+        type(buffer_t), intent(in) :: buffer
+        type(editor_state_t), intent(in) :: editor
+        type(cursor_t) :: cursor
+        character(len=:), allocatable :: line_content, cursor_char
+        logical :: found_match
+
+        cursor = editor%cursors(editor%active_cursor)
+        line_content = buffer_get_line(buffer, cursor%line)
+        cursor_char = utf8_char_at(line_content, cursor%column)
+        if (is_opening_bracket(cursor_char) .or. is_closing_bracket(cursor_char)) then
+            bracket_line = cursor%line
+            bracket_col = cursor%column
+            call find_matching_bracket(buffer, bracket_line, bracket_col, &
+                                     found_match, matching_bracket_line, matching_bracket_col)
+            if (.not. found_match) then
+                matching_bracket_line = 0
+                matching_bracket_col = 0
+            end if
+        else
+            bracket_line = 0
+            bracket_col = 0
+            matching_bracket_line = 0
+            matching_bracket_col = 0
+        end if
+        if (allocated(line_content)) deallocate(line_content)
+    end subroutine update_bracket_match
+
     subroutine render_menu_overlay()
         ! Any-motion reporting is switched here rather than in the menu
         ! module, for two reasons. The frame loop converges on the right state
@@ -1179,43 +1281,6 @@ contains
 
     ! Fast path for cursor-only updates - just update cursor and status bar
     ! Use this when only cursor position changed, not buffer content
-    subroutine render_cursor_only(buffer, editor, match_mode_active, match_case_sens)
-        type(buffer_t), intent(in) :: buffer
-        type(editor_state_t), intent(inout) :: editor
-        logical, intent(in), optional :: match_mode_active
-        logical, intent(in), optional :: match_case_sens
-        integer :: editor_start_col, editor_width
-
-        ! Just render the status bar and position cursor
-        call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
-
-        ! Fuss mode splits 30% tree / 70% editor; compute the same split as
-        ! render_screen_with_tree (a hardcoded 31/cols-30 here only agreed
-        ! with the renderer near 97 columns)
-        editor_start_col = editor%screen_cols * 30 / 100 + 2
-        editor_width = editor%screen_cols - editor_start_col + 1
-
-        ! Handle panes vs single buffer
-        if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0 .and. &
-            editor%active_tab_index <= size(editor%tabs)) then
-            if (allocated(editor%tabs(editor%active_tab_index)%panes)) then
-                if (editor%fuss_mode_active) then
-                    call render_cursor_for_panes_with_tree(editor, editor_start_col, editor_width)
-                else
-                    call render_cursor_for_panes(editor)
-                end if
-                return
-            end if
-        end if
-
-        ! Single buffer mode
-        if (editor%fuss_mode_active) then
-            call render_cursor_in_pane(editor, buffer, editor_start_col, editor_width)
-        else
-            call render_cursor(editor, buffer)
-        end if
-    end subroutine render_cursor_only
-
     subroutine update_viewport(editor)
         use editor_state_module, only: pane_t
         type(editor_state_t), intent(inout) :: editor
@@ -1572,7 +1637,6 @@ contains
         integer :: screen_row, buffer_line, line_count
         integer :: adjusted_width, line_num_width
         integer :: start_row
-        character(len=16) :: line_num_str
 
         line_count = buffer_get_line_count(buffer)
 
@@ -1595,39 +1659,53 @@ contains
         ! Render each visible line in the editor pane
         do screen_row = start_row, editor%screen_rows - 1
             buffer_line = editor%viewport_line + screen_row - start_row
-
-            ! Position cursor at start of this line in the pane
-            call terminal_move_cursor(screen_row, start_col)
-
-            ! Render line number if enabled
-            if (show_line_numbers) then
-                if (buffer_line <= line_count) then
-                    write(line_num_str, '(i5)') buffer_line
-                    if (buffer_line == editor%cursors(editor%active_cursor)%line) then
-                        call terminal_write(char(27) // '[1;33m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
-                                          // char(27) // '[0m ')
-                    else
-                        call terminal_write(char(27) // '[90m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
-                                          // char(27) // '[0m ')
-                    end if
-                else
-                    call terminal_write(repeat(' ', line_num_width))
-                end if
-            end if
-
-            ! Render content (render_line_with_selections writes at most
-            ! adjusted_width cells; the ESC[K below clears the rest)
-            if (buffer_line <= line_count) then
-                call render_line_with_selections(buffer, editor, buffer_line, &
-                                                editor%viewport_column, adjusted_width)
-            else
-                ! Empty line beyond file content ('~' only; ESC[K clears)
-                call terminal_write('~')
-            end if
-            ! Clear to end of line to prevent stale content when scrolling
-            call terminal_write(char(27) // '[K')
+            call render_editor_row(buffer, editor, buffer_line, screen_row, &
+                                   start_col, adjusted_width, line_num_width, &
+                                   line_count)
         end do
     end subroutine render_editor_pane
+
+    ! One screen row of the editor: gutter, content, clear-to-end.
+    !
+    ! Extracted so the caret-move fast path repaints a row exactly the way a
+    ! full frame does. Anything that lives only in one of the two shows up as
+    ! a line that looks subtly wrong until the next full redraw.
+    subroutine render_editor_row(buffer, editor, buffer_line, screen_row, start_col, &
+                                 adjusted_width, line_num_width, line_count)
+        type(buffer_t), intent(in) :: buffer
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(in) :: buffer_line, screen_row, start_col
+        integer, intent(in) :: adjusted_width, line_num_width, line_count
+        character(len=16) :: line_num_str
+
+        call terminal_move_cursor(screen_row, start_col)
+
+        if (show_line_numbers) then
+            if (buffer_line <= line_count) then
+                write(line_num_str, '(i5)') buffer_line
+                if (buffer_line == editor%cursors(editor%active_cursor)%line) then
+                    call terminal_write(char(27) // '[1;33m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
+                                      // char(27) // '[0m ')
+                else
+                    call terminal_write(char(27) // '[90m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
+                                      // char(27) // '[0m ')
+                end if
+            else
+                call terminal_write(repeat(' ', line_num_width))
+            end if
+        end if
+
+        ! render_line_with_selections writes at most adjusted_width cells;
+        ! the ESC[K below clears the rest
+        if (buffer_line <= line_count) then
+            call render_line_with_selections(buffer, editor, buffer_line, &
+                                            editor%viewport_column, adjusted_width)
+        else
+            ! Empty line beyond file content ('~' only; ESC[K clears)
+            call terminal_write('~')
+        end if
+        call terminal_write(char(27) // '[K')
+    end subroutine render_editor_row
 
     subroutine render_all_panes(editor)
         use editor_state_module, only: pane_t
