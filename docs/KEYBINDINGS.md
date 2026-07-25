@@ -16,6 +16,7 @@ Complete keyboard shortcut reference for `fac` editor.
 | `F4` or `Alt+O` | Document Symbols | Navigate symbols in current file |
 | `F6` or `Alt+P` | Workspace Symbols | Search symbols across all files |
 | `Ctrl+P` | Command Palette | Search and execute any command |
+| `F5` or `Alt+T` | Integrated Terminal | Toggle the terminal panel |
 | `Shift+Alt+F` | Format Document | Auto-format current file |
 | `Alt+,` | Jump Back | Return to previous location (jump stack) |
 
@@ -127,10 +128,11 @@ Complete keyboard shortcut reference for `fac` editor.
 | Keybinding | Command | Description |
 |------------|---------|-------------|
 | `Ctrl+P` | Command Palette | Search and execute any command |
+| `F5` or `Alt+T` | Integrated Terminal | Toggle the terminal panel |
 | `Ctrl+?` or `F1` | Help | Show help screen (`Ctrl+?` needs a terminal that supports the kitty keyboard protocol; `F1` always works) |
 | `Ctrl+B` or `F3` | File Tree | Toggle file explorer (Fuss mode) |
 | `Ctrl+L` | Redraw Screen | Clear and redraw the screen |
-| `Esc` | Cancel/Close | Close panels, cancel operations |
+| `Esc` | Cancel/Close | Close panels, cancel operations. In the terminal panel it closes the panel only from a bare shell prompt — with text on the line, or inside a full-screen program, the shell gets it |
 
 ---
 

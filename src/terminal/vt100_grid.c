@@ -781,6 +781,14 @@ int vt100_grid_app_cursor_f(void **handle) {
     return g ? g->app_cursor_keys : 0;
 }
 
+/* Non-zero while a full-screen program (vim, less, htop) owns the screen.
+   Callers use this to leave keys like Escape alone -- they belong to that
+   program, not to the shell prompt. */
+int vt100_grid_alt_screen_f(void **handle) {
+    vt100_grid_t *g = (vt100_grid_t *)*handle;
+    return g ? g->alt_screen : 0;
+}
+
 int vt100_grid_bracketed_paste_f(void **handle) {
     vt100_grid_t *g = (vt100_grid_t *)*handle;
     return g ? g->bracketed_paste : 0;

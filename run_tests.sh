@@ -38,6 +38,7 @@ if command -v python3 &> /dev/null; then
         python3 test/integration_ghost.py
         python3 test/integration_multicursor.py
         python3 test/integration_comment.py
+        python3 test/integration_terminal_panel.py
     else
         echo ""
         echo "⚠ Skipping integration tests (pexpect not installed)"

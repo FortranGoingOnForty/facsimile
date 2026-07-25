@@ -125,6 +125,14 @@ module terminal_panel_module
             integer(c_int) :: m
         end function
 
+        function c_grid_alt_screen(handle) &
+                result(res) &
+                bind(C, name='vt100_grid_alt_screen_f')
+            import :: c_ptr, c_int
+            type(c_ptr), intent(inout) :: handle
+            integer(c_int) :: res
+        end function
+
         function c_grid_bracketed_paste(handle) &
             bind(C, name='vt100_grid_bracketed_paste_f') &
             result(m)
@@ -205,6 +213,13 @@ module terminal_panel_module
         ! mouse coordinates can be mapped to grid cells.
         integer :: screen_start_row = 0  ! separator-bar row
         integer :: screen_cols = 0
+        ! Where the shell's prompt ends (grid coordinates, 0-based), so an
+        ! empty input line can be told from one with text on it. Updated
+        ! whenever output moves to a new line -- character echo of what the
+        ! user types deliberately does not move it, which is what makes the
+        ! caret drifting right of it mean "there is text here". -1 = unset.
+        integer :: prompt_row = -1
+        integer :: prompt_col = -1
         ! Mouse text selection (grid coordinates, 0-based).
         logical :: sel_active = .false.
         integer :: sel_anchor_row = 0
@@ -347,6 +362,7 @@ contains
             c_len = bytes_read
             call c_grid_feed(panel%grid_handle, read_buf, c_len)
             panel%has_new_output = .true.
+            call note_prompt_position(panel, read_buf, int(bytes_read))
 
             ! Check if grid needs a CPR response
             if (c_grid_cpr_pending(panel%grid_handle) /= 0) then
@@ -539,6 +555,64 @@ contains
 
     ! Handle a key press — translate to bytes and write to PTY
     ! Returns .true. if the key was consumed
+    ! Remember where the prompt ends. Only output that moved to a new line
+    ! counts: that is a shell drawing a fresh prompt. The echo of a character
+    ! the user typed carries no newline, so the prompt mark stays put and the
+    ! caret advances past it -- which is exactly the signal we want.
+    subroutine note_prompt_position(panel, data, n)
+        type(terminal_panel_t), intent(inout) :: panel
+        character(len=1), intent(in) :: data(*)
+        integer, intent(in) :: n
+        integer :: i
+        integer(c_int) :: cr, cc
+        logical :: line_moved
+
+        if (.not. c_associated(panel%grid_handle)) return
+
+        line_moved = panel%prompt_row < 0        ! first output ever
+        do i = 1, n
+            if (data(i) == achar(10) .or. data(i) == achar(13)) then
+                line_moved = .true.
+                exit
+            end if
+        end do
+        if (.not. line_moved) return
+
+        call c_grid_get_cursor(panel%grid_handle, cr, cc)
+        panel%prompt_row = int(cr)
+        panel%prompt_col = int(cc)
+    end subroutine note_prompt_position
+
+    ! True when the shell's input line has nothing typed on it: the caret is
+    ! still sitting where the prompt left it.
+    function terminal_panel_input_is_empty(panel) result(res)
+        type(terminal_panel_t), intent(in) :: panel
+        logical :: res
+        integer(c_int) :: cr, cc
+        type(c_ptr) :: h        ! the C accessors take void**, so pass a copy
+
+        res = .false.
+        if (.not. c_associated(panel%grid_handle)) return
+        if (panel%prompt_row < 0) return
+
+        h = panel%grid_handle
+        call c_grid_get_cursor(h, cr, cc)
+        res = int(cr) == panel%prompt_row .and. int(cc) <= panel%prompt_col
+    end function terminal_panel_input_is_empty
+
+    ! True while a full-screen program owns the terminal. Escape belongs to
+    ! that program then, never to the panel.
+    function terminal_panel_in_fullscreen_app(panel) result(res)
+        type(terminal_panel_t), intent(in) :: panel
+        logical :: res
+        type(c_ptr) :: h
+
+        res = .false.
+        if (.not. c_associated(panel%grid_handle)) return
+        h = panel%grid_handle
+        res = c_grid_alt_screen(h) /= 0
+    end function terminal_panel_in_fullscreen_app
+
     function terminal_panel_handle_key(panel, key_str) &
         result(handled)
         type(terminal_panel_t), intent(inout) :: panel
@@ -566,6 +640,16 @@ contains
             send_buf(1:4) = achar(27) // '[3~'
             send_len = 4
         case('esc')
+            ! Escape closes the panel, but only from a bare prompt. With text
+            ! typed it belongs to the shell (vi-mode, clearing a completion),
+            ! and inside a full-screen program it always does.
+            if (.not. terminal_panel_in_fullscreen_app(panel) .and. &
+                terminal_panel_input_is_empty(panel)) then
+                panel%visible = .false.
+                panel%focused = .false.
+                handled = .true.
+                return
+            end if
             send_buf(1:1) = achar(27); send_len = 1
 
         ! Arrow keys (application mode sends ESC O, normal sends ESC [)
