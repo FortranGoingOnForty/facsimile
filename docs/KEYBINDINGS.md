@@ -45,7 +45,9 @@ Complete keyboard shortcut reference for `fac` editor.
 | `Ctrl+C` | Copy | Copy selection to clipboard |
 | `Ctrl+V` | Paste | Paste from clipboard |
 | `Ctrl+A` | Select All | Select entire file |
+| `Tab` | Accept Suggestion | Accept the whole inline suggestion |
 | `Ctrl+Right` | Accept One Word | Accept a single word of an inline suggestion, keeping the rest offered |
+| `Alt+Right` | Accept One Line | Accept one line of a multi-line suggestion, keeping the rest offered |
 | `Ctrl+/` | Toggle Line Comment | Comment/uncomment the cursor's lines or the selection |
 | `Ctrl+Shift+K` | Delete Line | Delete the cursor's lines outright — nothing is copied or yanked (needs a terminal supporting the kitty keyboard protocol; otherwise use the command palette) |
 | `Alt+Backspace` | Delete Word | Delete word backward; at column 1 it deletes the line break, so blank lines are eaten one press at a time |

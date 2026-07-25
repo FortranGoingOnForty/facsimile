@@ -56,9 +56,15 @@ shortcut, so one Ctrl-Z removes the whole thing.
 
 ### 5. Partial accept
 
-`ctrl-right` accepts one word and re-anchors the remainder rather than
-discarding it. Useful precisely when the model is 80% right, which converts a
-rejected suggestion into a partial win.
+`ctrl-right` accepts one word; `alt-right` accepts one line of a block. Both
+re-anchor the remainder rather than discarding it, which is useful precisely
+when the model is 80% right.
+
+Both shadow word-move-right while a suggestion is showing, the way Copilot
+does, and the cost differs: `ctrl-right` shadows it wherever a suggestion is
+up, `alt-right` only where a *block* is up — and blocks are offered only at end
+of line, where moving a word right does nothing anyway. `alt-f` is untouched
+and still moves by word in both cases.
 
 ---
 

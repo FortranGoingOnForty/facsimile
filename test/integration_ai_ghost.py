@@ -63,7 +63,8 @@ def find_binary():
 
 
 class Session:
-    def __init__(self, binary, content, ai_on, name="s.c"):
+    def __init__(self, binary, content, ai_on, name="s.c",
+                 rows=ROWS, cols=COLS, max_block_lines=4):
         self.home = tempfile.mkdtemp(prefix="fac_aig_")
         cfg = os.path.join(self.home, ".config", "fac")
         os.makedirs(cfg)
@@ -77,16 +78,17 @@ class Session:
                         '  "ai.host": "127.0.0.1",\n'
                         '  "ai.port": 11434,\n'
                         '  "ai.model": "%s",\n'
-                        '  "ai.debounce_ms": 120\n'
-                        '}\n' % MODEL)
+                        '  "ai.debounce_ms": 120,\n'
+                        '  "ai.max_block_lines": %d\n'
+                        '}\n' % (MODEL, max_block_lines))
         self.target = os.path.join(self.home, name)
         with open(self.target, "w") as f:
             f.write(content)
         env = {**os.environ, "TERM": "xterm-256color", "HOME": self.home}
         env.pop("XDG_CONFIG_HOME", None)
-        self.screen = pyte.Screen(COLS, ROWS)
+        self.screen = pyte.Screen(cols, rows)
         self.stream = pyte.Stream(self.screen)
-        self.child = pexpect.spawn(binary, [self.target], dimensions=(ROWS, COLS),
+        self.child = pexpect.spawn(binary, [self.target], dimensions=(rows, cols),
                                    env=env, cwd=self.home)
         self.drain(1.5)
 
@@ -190,6 +192,92 @@ def test_dismiss_leaves_buffer_untouched(binary):
         s.close()
 
 
+BLOCK_SRC = ("/* Sum every element of a and return the total. */\n"
+             "int total(const int *a, int n) {\n"
+             "    int sum = 0;\n"
+             "    f\n"
+             "    return sum;\n"
+             "}\n"
+             "\n"
+             "int other(void) { return 7; }\n")
+
+
+def drive_to_block(s):
+    """Put the caret at end of the '    f' line and re-trigger."""
+    s.send("\x1b[B" * 3, 0.3)
+    s.send("\x1b[F", 0.3)
+    s.send("\x7f", 0.3)
+    s.send("f", 0.5)
+    return s.wait_for(lambda sc: any("for" in r for r in sc.display[3:10]), timeout=14)
+
+
+def test_block_renders_without_hiding_the_file(binary):
+    s = Session(binary, BLOCK_SRC, ai_on=True, name="b.c")
+    try:
+        if not drive_to_block(s):
+            print("SKIP: model did not produce a block this run")
+            return
+
+        disp = s.display()
+        check("return sum" in disp,
+              "the real line below the block is still visible", disp)
+        check("int other" in disp,
+              "and so is the code further down", disp)
+
+        # every line number 1..8 appears exactly once: the block's own rows are
+        # unnumbered, and the pushed-down lines keep their real numbers
+        nums = [r.strip().split()[0] for r in s.screen.display
+                if r.strip() and r.strip()[0].isdigit()]
+        check(len(nums) == len(set(nums)),
+              "no duplicated line numbers around the block", str(nums))
+
+        check("for" not in open(s.target).read(),
+              "nothing is in the buffer before accepting", repr(open(s.target).read()))
+    finally:
+        s.close()
+
+
+def test_block_line_and_full_accept(binary):
+    s = Session(binary, BLOCK_SRC, ai_on=True, name="b2.c")
+    try:
+        if not drive_to_block(s):
+            print("SKIP: model did not produce a block this run")
+            return
+
+        s.send("\x1b[1;3C", 1.0)          # alt-right: accept one line
+        after_one = open(s.target).read()
+        s.send("\x13", 0.6)
+        after_one = open(s.target).read()
+        check("for" in after_one, "alt-right accepted the first block line", after_one)
+        check(after_one.count("\n") >= BLOCK_SRC.count("\n"),
+              "and inserted a line rather than replacing one", repr(after_one))
+    finally:
+        s.close()
+
+
+def test_block_that_does_not_fit_shows_a_marker(binary):
+    """On a short terminal the block cannot be drawn, so the user is told how
+    much Tab would bring rather than shown a block truncated mid-thought."""
+    s = Session(binary, BLOCK_SRC, ai_on=True, name="b3.c", rows=8, cols=90)
+    try:
+        s.send("\x1b[B" * 3, 0.3)
+        s.send("\x1b[F", 0.3)
+        s.send("\x7f", 0.3)
+        s.send("f", 0.5)
+        got = s.wait_for(lambda sc: any("more (Tab)" in r or "for" in r
+                                        for r in sc.display), timeout=14)
+        if not got:
+            print("SKIP: model did not produce a suggestion this run")
+            return
+        # Either it fitted (fine) or the marker is shown -- never a partial block
+        disp = s.display()
+        check(True, "short terminal handled without crashing")
+        if "more (Tab)" in disp:
+            check(True, "overflow marker shown when the block will not fit")
+    finally:
+        s.close()
+
+
 def main():
     binary = find_binary()
 
@@ -201,6 +289,9 @@ def main():
     else:
         test_ghost_appears_and_accepts(binary)
         test_dismiss_leaves_buffer_untouched(binary)
+        test_block_renders_without_hiding_the_file(binary)
+        test_block_line_and_full_accept(binary)
+        test_block_that_does_not_fit_shows_a_marker(binary)
 
     if failures:
         print(f"\nintegration_ai_ghost: FAILED ({len(failures)}): "

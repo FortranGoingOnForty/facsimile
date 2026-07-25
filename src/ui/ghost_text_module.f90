@@ -12,6 +12,7 @@ module ghost_text_module
     public :: ghost_extend_prefix, ghost_may_replace, ghost_apply_text
     public :: ghost_apply_block, ghost_insert_text, ghost_is_block
     public :: ghost_block_line, ghost_take_word
+    public :: ghost_take_line, ghost_set_anchor
     public :: ghost_clear, ghost_clear_pending
     public :: ghost_get_prefix_at_cursor
     public :: ghost_get_include_prefix
@@ -214,6 +215,67 @@ contains
         ghost%anchor_col = ghost%anchor_col + n
         if (.not. ghost_is_active(ghost)) call ghost_clear(ghost)
     end function ghost_take_word
+
+    ! Accept one line of a block, keeping the remaining lines offered.
+    !
+    ! Returns the text to insert -- the first line plus its newline -- and
+    ! leaves the ghost holding lines 2..N. The caller inserts, then calls
+    ! ghost_set_anchor with wherever the caret ended up: only the caller knows
+    ! that, because auto-indent and the buffer decide it.
+    !
+    ! When one line remains the ghost stops being a block, so the renderer's
+    ! row loop and the block accept path both fall back to the simpler
+    ! single-line handling automatically.
+    subroutine ghost_take_line(ghost, text, ok)
+        type(ghost_text_t), intent(inout) :: ghost
+        character(len=:), allocatable, intent(out) :: text
+        logical, intent(out) :: ok
+        character(len=:), allocatable :: rest
+        integer :: nl
+
+        text = ''
+        ok = .false.
+        if (.not. ghost_is_block(ghost)) return
+
+        nl = index(ghost%block_text, achar(10))
+        if (nl <= 0) return
+
+        text = ghost%block_text(1:nl)          ! includes the newline
+        rest = ghost%block_text(nl+1:)
+        if (len(rest) == 0) then
+            call ghost_clear(ghost)
+            ok = .true.
+            return
+        end if
+
+        ! The caret lands on a fresh line, so nothing is typed there yet
+        ghost%prefix = ''
+        ghost%block_lines = ghost%block_lines - 1
+
+        if (ghost%block_lines <= 1) then
+            ! One line left: an ordinary single-line suggestion
+            ghost%block_lines = 0
+            if (allocated(ghost%block_text)) deallocate(ghost%block_text)
+            ghost%suggestion = rest
+        else
+            ghost%block_text = rest
+            ghost%suggestion = first_line_of(rest)
+        end if
+
+        ghost%visible = .true.
+        ok = .true.
+    end subroutine ghost_take_line
+
+    ! Move the anchor after the caller has inserted something. Used by the
+    ! partial-accept paths, which cannot know the new caret position until the
+    ! buffer has been changed.
+    subroutine ghost_set_anchor(ghost, line_num, col)
+        type(ghost_text_t), intent(inout) :: ghost
+        integer, intent(in) :: line_num, col
+
+        ghost%anchor_line = line_num
+        ghost%anchor_col = col
+    end subroutine ghost_set_anchor
 
     ! Whether a newly arrived suggestion may take over the display.
     !

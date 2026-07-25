@@ -27,6 +27,7 @@ program test_ghost_block
     call test_block_accept()
     call test_block_undo_is_one_step()
     call test_word_accept()
+    call test_line_accept()
 
     if (nfail > 0) then
         print '(a,i0,a)', 'FAILED: ', nfail, ' assertion(s)'
@@ -143,6 +144,53 @@ contains
         call check_text('str_length', 'ctrl-right inserts one word')
         call check(ghost_is_active(editor%ghost), 'and the remainder is still offered', '')
     end subroutine test_word_accept
+
+    ! Accept a block one line at a time, keeping the rest offered.
+    subroutine test_line_accept()
+        type(ghost_text_t) :: g
+        character(len=:), allocatable :: t
+        logical :: ok
+
+        call ghost_apply_block(g, 'aa();' // NL // 'bb();' // NL // 'cc();', '', 1, 1, &
+                               GHOST_SRC_LLM)
+        call ghost_take_line(g, t, ok)
+        call check(ok .and. t == 'aa();' // NL, &
+                   'the first line comes back with its newline', t)
+        call check(g%block_lines == 2, 'two lines remain', int_str(g%block_lines))
+        call check(ghost_is_block(g), 'and it is still a block', '')
+        call check(g%prefix == '', &
+                   'the prefix resets: the caret is on a fresh line', g%prefix)
+
+        call ghost_take_line(g, t, ok)
+        call check(ok .and. t == 'bb();' // NL, 'the second line follows', t)
+        call check(.not. ghost_is_block(g), &
+                   'one line left stops being a block', '')
+        call check(ghost_suffix(g) == 'cc();', &
+                   'and becomes an ordinary single-line suggestion', ghost_suffix(g))
+
+        ! a single-line suggestion has no line to take
+        call ghost_take_line(g, t, ok)
+        call check(.not. ok, 'a single-line suggestion has no line to take', '')
+
+        ! ...and through the editor, with the caret re-anchored each time
+        call setup('int f(void) {' // NL // '' // NL // '}')
+        call cursor_at(2, 1)
+        call ghost_apply_block(editor%ghost, '    int n = 0;' // NL // '    return n;', &
+                               '', 2, 1, GHOST_SRC_LLM)
+        call key('alt-right')
+        call check_text('int f(void) {' // NL // '    int n = 0;' // NL // '' // NL // '}', &
+                        'alt-right inserts just the first line')
+        call check(ghost_is_active(editor%ghost), &
+                   'the remainder is still offered', '')
+        call check(editor%ghost%anchor_line == 3, &
+                   'and is re-anchored on the new line', &
+                   int_str(editor%ghost%anchor_line))
+
+        call key('tab')
+        call check_text('int f(void) {' // NL // '    int n = 0;' // NL // &
+                        '    return n;' // NL // '}', &
+                        'Tab then takes the rest')
+    end subroutine test_line_accept
 
     ! ------------------------------------------------------------------
 

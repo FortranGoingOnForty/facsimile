@@ -58,7 +58,8 @@ module command_handler_module
                                  ghost_update_from_buffer, &
                                  ghost_apply_lsp_result, ghost_suffix, ghost_is_active, &
                                  ghost_extend_prefix, GHOST_SRC_LLM, &
-                                 ghost_insert_text, ghost_is_block, ghost_take_word
+                                 ghost_insert_text, ghost_is_block, ghost_take_word, &
+                                 ghost_take_line, ghost_set_anchor
     use hover_tooltip_module, only: show_hover_tooltip, hide_hover_tooltip, &
                                      handle_hover_response, is_hover_visible
     use diagnostics_panel_module, only: toggle_panel => toggle_diagnostics_panel, &
@@ -440,11 +441,21 @@ contains
                     return
                 end if
             end if
-            ! Partial accept: take one word and keep the rest ghosted. Turns a
-            ! suggestion that is mostly right into a partial win instead of an
-            ! all-or-nothing choice.
+            ! Partial accept. Both turn a suggestion that is mostly right into
+            ! a partial win instead of an all-or-nothing choice.
+            !
+            ! These shadow word-move-right while a suggestion is showing, the
+            ! way Copilot does. The cost is small and different for each:
+            ! ctrl-right shadows it anywhere a suggestion is up, alt-right only
+            ! where a BLOCK is up -- and blocks are offered only at end of
+            ! line, where moving a word right does nothing anyway. alt-f is
+            ! untouched and still moves by word in both cases.
             if (trim(key_str) == 'ctrl-right') then
                 call accept_ghost_word(editor, buffer)
+                return
+            end if
+            if (trim(key_str) == 'alt-right' .and. ghost_is_block(editor%ghost)) then
+                call accept_ghost_line(editor, buffer)
                 return
             end if
 
@@ -7173,6 +7184,40 @@ contains
         last_action_was_edit = .true.
         call notify_buffer_change(editor, buffer)
     end subroutine accept_ghost_word
+
+    ! Accept one line of a block, keeping the rest offered below.
+    subroutine accept_ghost_line(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: text
+        logical :: ok
+
+        if (editor%cursors(editor%active_cursor)%line /= editor%ghost%anchor_line .or. &
+            editor%cursors(editor%active_cursor)%column /= editor%ghost%anchor_col) then
+            call ghost_clear(editor%ghost)
+            return
+        end if
+
+        call ghost_take_line(editor%ghost, text, ok)
+        if (.not. ok .or. len(text) == 0) return
+
+        ! Each accepted line gets its own checkpoint, so undo walks back
+        ! through them one at a time rather than collapsing the lot.
+        call save_undo_state(buffer, editor)
+        call insert_block_at_cursor(buffer, editor%cursors(editor%active_cursor), text)
+
+        ! Re-anchor to wherever the caret actually ended up -- only the buffer
+        ! knows that once a newline has been inserted.
+        call ghost_set_anchor(editor%ghost, &
+                              editor%cursors(editor%active_cursor)%line, &
+                              editor%cursors(editor%active_cursor)%column)
+
+        call sync_editor_to_pane(editor)
+        call update_viewport(editor)
+
+        last_action_was_edit = .true.
+        call notify_buffer_change(editor, buffer)
+    end subroutine accept_ghost_line
 
     ! Recompute the shadow suggestion after an edit keystroke. The word-scan
     ! result shows immediately; an LSP completion request may upgrade it when
