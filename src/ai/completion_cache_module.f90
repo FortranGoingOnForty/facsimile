@@ -142,7 +142,7 @@ contains
         integer :: slot
 
         if (len(text) == 0 .or. len(text) > MAX_ENTRY_BYTES) return
-        slot = slot_for(cache, key, now_ms)
+        slot = slot_for(cache, key)
         cache%slots(slot)%key = key
         cache%slots(slot)%occupied = .true.
         cache%slots(slot)%rejected = .false.
@@ -156,7 +156,7 @@ contains
         integer(int64), intent(in) :: key, now_ms
         integer :: slot
 
-        slot = slot_for(cache, key, now_ms)
+        slot = slot_for(cache, key)
         cache%slots(slot)%key = key
         cache%slots(slot)%occupied = .true.
         cache%slots(slot)%rejected = .true.
@@ -166,9 +166,9 @@ contains
     end subroutine cache_store_rejection
 
     ! Reuse the same key, else a free slot, else the least recently used.
-    function slot_for(cache, key, now_ms) result(slot)
+    function slot_for(cache, key) result(slot)
         type(completion_cache_t), intent(in) :: cache
-        integer(int64), intent(in) :: key, now_ms
+        integer(int64), intent(in) :: key
         integer :: slot, i
         integer(int64) :: oldest
 
