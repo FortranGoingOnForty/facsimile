@@ -828,6 +828,30 @@ def main():
                       f"git says {out!r}")
         s.close()
 
+    # With the tree open, a click in the document takes focus. Fuss mode is
+    # modal for the keyboard, so leaving the tree open with the caret in the
+    # document would send the next keystroke to the tree's fuzzy search.
+    s = Session(binary, "".join(f"line{i:02d} alpha beta\n" for i in range(1, 15)),
+                name="doc.txt", extra_files=["other.txt"])
+    s.send("\x02", 1.6)
+    check(s.tree_row("other.txt") is not None, "tree opens")
+    before = s.status_ln_col()
+    s.click(6, 60)                             # the document half
+    check(s.tree_row("other.txt") is None, "clicking the document closes the tree")
+    check(s.status_ln_col() != before, "and puts the caret where it was clicked",
+          f"{before} -> {s.status_ln_col()}")
+    s.send("Z", 0.6)
+    check("Z" in s.save_and_read(), "typing afterwards edits the document")
+
+    # A click on a tree row is still a tree click, not a focus change
+    s.send("\x02", 1.5)
+    row = s.tree_row("other.txt")
+    if row:
+        s.click(row, 6)
+        check(any("other" in s.row_text(y) for y in range(1, 6)),
+              "clicking a tree row still opens that file")
+    s.close()
+
     if failures:
         print(f"integration_mouse: FAILED ({len(failures)}: {', '.join(failures)})")
         sys.exit(1)
