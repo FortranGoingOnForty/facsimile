@@ -249,7 +249,7 @@ contains
         lines(i) = "  F12/alt-g           go to definition"; i = i + 1
         lines(i) = "  shift-F12/alt-r     find all references"; i = i + 1
         lines(i) = "  alt-, (alt-comma)   jump back (navigation history)"; i = i + 1
-        lines(i) = "  F2                  rename symbol"; i = i + 1
+        lines(i) = "  F2 / alt-n          rename symbol"; i = i + 1
         lines(i) = "  F10/alt-.           code actions (quick fixes)"; i = i + 1
         lines(i) = "  F4/alt-o            document symbols (outline)"; i = i + 1
         lines(i) = "  F6/alt-p            workspace symbols (search project)"; i = i + 1

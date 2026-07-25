@@ -1651,8 +1651,13 @@ contains
                 end if
             end block
 
-        case('f2')
-            ! Rename symbol
+        case('f2', 'alt-n')
+            ! Rename symbol (F2 or Alt+N).
+            ! F2 is the VSCode binding but is easily swallowed before any
+            ! program sees it -- window managers and desktop shells bind it
+            ! for rename too. alt-n follows the pattern the other LSP
+            ! commands already use (alt-g definition, alt-r references,
+            ! alt-e diagnostics).
             block
                 integer :: rename_server
                 rename_server = get_lsp_server_for_cap(editor, CAP_RENAME)

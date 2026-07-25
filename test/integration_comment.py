@@ -253,6 +253,23 @@ def test_rename_says_why_it_cannot_run(binary):
         s.close()
 
 
+def test_rename_has_a_working_alternate(binary):
+    """F2 is routinely grabbed by the window manager before any program sees
+    it, so rename must be reachable without it."""
+    src = "int total(int a) {\n    int slen = a;\n    return slen;\n}\n"
+    for label, seq in (("legacy ESC n", "\x1bn"),
+                       ("CSI 110;3u", "\x1b[110;3u")):
+        s = Session(binary, src, name="r.c")
+        try:
+            s.send("\x1b[B", 0.3)
+            s.send("\x1b[C" * 9, 0.3)
+            s.send(seq, 1.4)
+            check(any("Rename" in r for r in s.screen.display),
+                  "alt-n opens rename (%s)" % label, s.display()[-300:])
+        finally:
+            s.close()
+
+
 def test_csi_u_chords_reach_their_commands(binary):
     """Under the protocol every ctrl chord arrives as CSI u, so spot-check
     that the translation actually reaches the same commands."""
@@ -287,6 +304,7 @@ def main():
                test_legacy_csi_sequences_still_parse,
                test_functional_keys_and_unmapped_csi_u,
                test_rename_says_why_it_cannot_run,
+               test_rename_has_a_working_alternate,
                test_csi_u_chords_reach_their_commands):
         try:
             fn(binary)

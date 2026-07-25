@@ -10,7 +10,7 @@ Complete keyboard shortcut reference for `fac` editor.
 |------------|---------|-------------|
 | `F12` or `Ctrl+\` or `Alt+G` | Go to Definition | Jump to where a symbol is defined |
 | `Shift+F12` or `Alt+R` | Find References | Find all usages of a symbol |
-| `F2` | Rename Symbol | Rename symbol across entire project |
+| `F2` or `Alt+N` | Rename Symbol | Rename symbol across entire project |
 | `F10` or `Alt+.` | Code Actions | Quick fixes and refactorings |
 | `F8` or `Alt+E` | Diagnostics Panel | Show all errors and warnings |
 | `F4` or `Alt+O` | Document Symbols | Navigate symbols in current file |
@@ -265,7 +265,7 @@ Some vim-style keybindings work:
 
 **Refactoring:**
 1. `Shift+F12` or `Alt+R` - See all references
-2. `F2` - Rename everywhere
+2. `F2` or `Alt+N` - Rename everywhere
 3. `Shift+Alt+F` - Format code
 4. `Ctrl+S` - Save
 

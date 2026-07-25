@@ -1297,7 +1297,7 @@ contains
 
         ! LSP features
         call register_command('Code Actions', 'code-actions', 'Ctrl+.', 'LSP')
-        call register_command('Rename Symbol', 'rename', 'F2', 'LSP')
+        call register_command('Rename Symbol', 'rename', 'F2 / Alt+N', 'LSP')
         call register_command('Show Diagnostics', 'diagnostics', 'Ctrl+Shift+D', 'LSP')
         call register_command('Show Hover Info', 'hover', 'Ctrl+K Ctrl+I', 'LSP')
 

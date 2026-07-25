@@ -163,6 +163,10 @@ Some keybindings may be intercepted by your terminal emulator:
 - **Ctrl+Shift+Z**: Intercepted by WezTerm in multi-pane mode (use `Ctrl+]` instead)
 - **Ctrl+'**: Most terminals send plain apostrophe (use `Alt+'` instead)
 - **Ctrl+Alt+Backspace**: Most terminals send alt-backspace (use `Alt+Shift+'` instead)
+- **F2**: Frequently grabbed by the window manager or desktop shell (GNOME, KDE and
+  several tiling WMs bind it for "rename"), so no program ever sees it — use
+  `Alt+N` for rename symbol instead. `python3 tools/keycap.py` shows whether a key
+  reaches the terminal at all.
 
 For WezTerm users, add to `~/.wezterm.lua` to enable Ctrl+Shift+Z:
 ```lua

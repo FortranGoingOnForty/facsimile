@@ -99,7 +99,7 @@ That's it! If you have `pylsp` installed, `fac` will automatically:
 2. **View all diagnostics**: Press `F8` to open the diagnostics panel
 3. **Jump to definition**: Put cursor on a function name and press `F12`
 4. **Find references**: Press `Shift+F12` to see everywhere a symbol is used
-5. **Rename**: Press `F2` to rename a variable across all files
+5. **Rename**: Press `F2` (or `Alt+N`) to rename a variable across all files
 6. **Format code**: Press `Shift+Alt+F` to auto-format
 
 ---
@@ -237,13 +237,13 @@ import json  # ← Automatically added!
 
 ---
 
-### 5. Rename Symbol (F2)
+### 5. Rename Symbol (F2 / Alt+N)
 
 **What it does:** Rename a variable, function, or class everywhere it's used.
 
 **How to use:**
 1. Put cursor on a symbol
-2. Press `F2`
+2. Press `F2` (or `Alt+N`)
 3. Type the new name
 4. Press `Enter`
 5. The symbol is renamed everywhere across all files!
@@ -257,7 +257,7 @@ def calc(x, y):
 result = calc(5, 3)
 total = calc(10, 20)
 
-# Put cursor on 'calc', press F2, type 'calculate'
+# Put cursor on 'calc', press F2 (or Alt+N), type 'calculate'
 # After:
 def calculate(x, y):
     return x + y
@@ -272,7 +272,7 @@ total = calculate(10, 20)
 - Unrelated variables with the same name in different scopes
 
 **Keybinding:**
-- `F2` - Rename symbol
+- `F2` / `Alt+N` - Rename symbol
 - Type new name, press `Enter` to confirm
 - Press `Esc` to cancel
 
@@ -725,7 +725,7 @@ When you see an error:
 Before renaming:
 - Press `Shift+F12` to see all references
 - Verify it's safe to rename
-- Press `F2` to rename everywhere at once
+- Press `F2` (or `Alt+N`) to rename everywhere at once
 
 ### 5. Format on Save
 
@@ -744,7 +744,7 @@ Many language servers support format-on-save:
 | **Go to Definition** | `F12` or `Ctrl+\` or `Alt+G` | Jump to where symbol is defined |
 | **Find References** | `Shift+F12` or `Alt+R` | Find all usages of symbol |
 | **Code Actions** | `F10` or `Alt+.` | Quick fixes and refactorings |
-| **Rename Symbol** | `F2` | Rename across entire project |
+| **Rename Symbol** | `F2` or `Alt+N` | Rename across entire project |
 | **Document Symbols** | `F4` or `Alt+O` | Outline of current file |
 | **Workspace Symbols** | `F6` or `Alt+P` | Search symbols across project |
 | **Format Document** | `Shift+Alt+F` | Auto-format code |
@@ -786,6 +786,6 @@ Now that you understand LSP in `fac`:
 2. **Practice the keybindings** - they'll become second nature
 3. **Explore your codebase** with `F6` and `F12`
 4. **Let LSP catch errors** before you run your code
-5. **Refactor confidently** with `F2` and `Ctrl+.`
+5. **Refactor confidently** with `F2`/`Alt+N` and `Ctrl+.`
 
 Welcome to IDE-level coding in the terminal! 🚀
