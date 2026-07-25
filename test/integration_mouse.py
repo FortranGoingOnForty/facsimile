@@ -731,6 +731,19 @@ def main():
         check(s.child.isalive(), "the editor survives the palette round trip")
     s.close()
 
+    # The menu is reachable from the keyboard, anchored at the caret. No caret
+    # rule applies there: the caret is already where the user put it.
+    s = Session(binary, "alpha bravo charlie\n" * 12)
+    s.click(5, 12)
+    pinned = s.status_ln_col()
+    for seq, name in (("\x1b[21;2~", "shift-f10"), ("\x1bz", "alt-z")):
+        s.send(seq, 0.9)
+        check(s.menu_row("Cut Line") is not None, f"{name} opens the menu")
+        check(s.status_ln_col() == pinned, f"{name} leaves the caret alone",
+              f"{pinned} -> {s.status_ln_col()}")
+        s.send("\x1b", 0.5)
+    s.close()
+
     if failures:
         print(f"integration_mouse: FAILED ({len(failures)}: {', '.join(failures)})")
         sys.exit(1)
