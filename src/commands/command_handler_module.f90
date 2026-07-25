@@ -14,7 +14,9 @@ module command_handler_module
                                    context_menu_hide, is_context_menu_visible, &
                                    context_menu_handle_key, context_menu_selected, &
                                    context_menu_kind, context_menu_row_action, &
-                                   context_menu_row_enabled, context_menu_take
+                                   context_menu_row_enabled, context_menu_take, &
+                                   context_menu_hover, context_menu_select
+    use platform_module, only: platform_sleep_ms
     use renderer_module, only: update_viewport, render_screen, render_screen_with_tree, tree_state, &
                                fuss_search_buffer, fuss_search_len, fuss_search_last_time, &
                                fuss_fuzzy_jump, fuss_reset_search, get_time_ms, &
@@ -120,6 +122,9 @@ module command_handler_module
     integer, parameter :: ACT_TREE_ACTIVATE = 20, ACT_TREE_VSPLIT = 21
     integer, parameter :: ACT_TREE_HSPLIT = 22, ACT_TREE_STAGE = 23
     integer, parameter :: ACT_TREE_UNSTAGE = 24, ACT_TREE_DIFF = 25
+    ! How long the clicked row stays highlighted before the menu closes.
+    ! Long enough to register, short enough not to feel like a stall.
+    integer, parameter :: MENU_FLASH_MS = 70
 
     public :: handle_key_command, init_command_handler, cleanup_command_handler
     public :: save_initial_state_for_undo
@@ -493,13 +498,37 @@ contains
                                                    editor, buffer, should_quit)
                     return
                 end if
-                ! A release or a drag is swallowed without dismissing. The
-                ! right-press that opens the menu is followed by its own
-                ! release in the same coalesced burst, with no render in
-                ! between, so treating a release as "some other key" closed
-                ! the menu on the very frame it opened.
+                ! A release is swallowed without dismissing. The right-press
+                ! that opens the menu is followed by its own release in the
+                ! same coalesced burst, with no render in between, so
+                ! treating a release as "some other key" closed the menu on
+                ! the very frame it opened.
                 if (index(key_str, 'mouse-release:') == 1) return
-                if (index(key_str, 'mouse-drag:') == 1) return
+
+                ! Bare pointer motion moves the highlight, so the mouse and
+                ! the arrow keys drive the same selection. Mode 1003 reports
+                ! motion with no button as button 3, which arrives here as a
+                ! drag; a real drag (a button held) still dismisses.
+                if (index(key_str, 'mouse-drag:') == 1) then
+                    block
+                        character(len=16) :: mev
+                        integer :: mbtn, mr, mc
+                        logical :: mok
+
+                        call parse_mouse_event(key_str, mev, mbtn, mr, mc, mok)
+                        if (mok) then
+                            if (iand(mbtn, 3) == 3) then
+                                ! Redraw only when the highlight actually
+                                ! moved, not on every motion event.
+                                if (context_menu_hover(mr, mc)) then
+                                    g_lsp_ui_changed = .true.
+                                end if
+                                return
+                            end if
+                        end if
+                    end block
+                    return
+                end if
                 ! Anything else dismisses, including a wheel tick, which would
                 ! otherwise slide the document out from under the box.
                 call context_menu_hide()
@@ -5396,6 +5425,14 @@ contains
         logical, intent(inout) :: should_quit
         integer :: act, kind
         logical :: enabled, inner_quit
+
+        ! Show which row was hit before acting on it. Clicking a row the
+        ! highlight was not already on would otherwise tear the menu down
+        ! with no acknowledgement that the right thing was chosen.
+        if (context_menu_select(idx)) then
+            call repaint_now(editor, buffer)
+            call platform_sleep_ms(MENU_FLASH_MS)
+        end if
 
         call context_menu_take(idx, act, kind, enabled)
         if (.not. enabled) return        ! a disabled row leaves the menu up

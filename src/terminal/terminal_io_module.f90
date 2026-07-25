@@ -15,6 +15,7 @@ module terminal_io_module
     public :: terminal_move_cursor, terminal_hide_cursor, terminal_show_cursor
     public :: terminal_get_size, terminal_enable_raw_mode, terminal_disable_raw_mode
     public :: terminal_write, terminal_flush, terminal_enable_mouse, terminal_disable_mouse
+    public :: terminal_set_motion_tracking
     public :: terminal_input_available, terminal_read_char
     public :: terminal_read_char_escape, terminal_input_available_count
     public :: terminal_consume_escape, terminal_consume_csi
@@ -240,6 +241,28 @@ contains
         call buf_write_str(CSI // '?1007l')
         call c_term_buf_flush()
     end subroutine terminal_enable_mouse
+
+    !> Turn any-motion reporting (mode 1003) on or off.
+    !>
+    !> The editor normally runs in mode 1002, where the terminal reports
+    !> motion only while a button is held. Mode 1003 reports every pointer
+    !> movement, which is what a hover highlight needs -- and is why it is not
+    !> left on: it would put an event in the input stream for every pixel of
+    !> mouse travel for the whole session. The context menu turns it on while
+    !> it is open and off again when it closes.
+    subroutine terminal_set_motion_tracking(on)
+        logical, intent(in) :: on
+
+        if (on) then
+            call buf_write_str(CSI // '?1003h')
+        else
+            call buf_write_str(CSI // '?1003l')
+            ! 1003 and 1002 are separate modes; re-assert 1002 so dragging
+            ! still reports motion after the menu has gone.
+            call buf_write_str(CSI // '?1002h')
+        end if
+        call c_term_buf_flush()
+    end subroutine terminal_set_motion_tracking
 
     subroutine terminal_disable_mouse()
         call buf_write_str(CSI // '?1006l')

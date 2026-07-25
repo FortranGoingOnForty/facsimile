@@ -9,6 +9,12 @@
 #include <string.h>
 #include <shlobj.h>
 
+// Brief pause, for UI feedback that must be seen before the screen changes
+// again (the context menu flashes the row you clicked before acting on it).
+void fac_sleep_ms_f(int ms) {
+    if (ms > 0) Sleep((DWORD)ms);
+}
+
 // Get temp directory path
 void get_temp_dir_f(char* buffer, int buffer_len, int* result_len) {
     char temp_path[MAX_PATH];
@@ -165,6 +171,12 @@ void get_cwd_f(char* buffer, int buffer_len, int* result_len) {
 #include <unistd.h>
 #include <pwd.h>
 #include <sys/types.h>
+
+// Brief pause, for UI feedback that must be seen before the screen changes
+// again (the context menu flashes the row you clicked before acting on it).
+void fac_sleep_ms_f(int ms) {
+    if (ms > 0) usleep((useconds_t)ms * 1000);
+}
 
 // Get temp directory path
 void get_temp_dir_f(char* buffer, int buffer_len, int* result_len) {

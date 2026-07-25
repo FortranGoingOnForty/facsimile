@@ -86,6 +86,11 @@ module renderer_module
     type(syntax_highlighter_t) :: syntax_highlighter
     character(len=512) :: last_highlighted_filename = ""
 
+    ! Whether the terminal is currently reporting bare pointer motion.
+    ! Owned here because render_menu_overlay is the one place that sees the
+    ! menu's visibility every frame.
+    logical, save :: g_motion_tracking = .false.
+
 contains
 
     subroutine init_renderer(rows, cols, filename)
@@ -414,7 +419,26 @@ contains
     ! dismissed. Hiding the caret both suppresses a caret blinking behind the
     ! box and flushes.
     subroutine render_menu_overlay()
-        if (.not. is_context_menu_visible()) return
+        ! Any-motion reporting is switched here rather than in the menu
+        ! module, for two reasons. The frame loop converges on the right state
+        ! whatever route opened or closed the menu, so there is one place
+        ! instead of one per dismissal path. And unit tests construct menus
+        ! without ever rendering, so they no longer reconfigure the terminal
+        ! they are run from -- an earlier version left mode 1003 on after
+        ! `fpm test`, which makes a shell spew escape bytes on every mouse
+        ! movement.
+        if (.not. is_context_menu_visible()) then
+            if (g_motion_tracking) then
+                call terminal_set_motion_tracking(.false.)
+                g_motion_tracking = .false.
+            end if
+            return
+        end if
+
+        if (.not. g_motion_tracking) then
+            call terminal_set_motion_tracking(.true.)
+            g_motion_tracking = .true.
+        end if
         call render_context_menu()
         call terminal_hide_cursor()
     end subroutine render_menu_overlay

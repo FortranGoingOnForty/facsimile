@@ -7,8 +7,14 @@ module platform_module
     public :: get_config_dir, get_cwd
     public :: platform_copy_to_clipboard, platform_paste_from_clipboard
     public :: detect_system_pkg_mgr, detect_priv_prefix
+    public :: platform_sleep_ms
 
     interface
+        subroutine fac_sleep_ms_c(ms) bind(C, name='fac_sleep_ms_f')
+            import :: c_int
+            integer(c_int), value :: ms
+        end subroutine
+
         subroutine get_temp_dir_c(buffer, buffer_len, result_len) bind(C, name='get_temp_dir_f')
             import :: c_char, c_int
             character(kind=c_char), intent(out) :: buffer(*)
@@ -64,6 +70,14 @@ module platform_module
     end interface
 
 contains
+
+    !> Pause briefly. Only for UI feedback that would otherwise be replaced
+    !> before it could be seen; never for polling.
+    subroutine platform_sleep_ms(ms)
+        integer, intent(in) :: ms
+
+        call fac_sleep_ms_c(int(ms, c_int))
+    end subroutine platform_sleep_ms
 
     function get_temp_dir() result(path)
         character(len=:), allocatable :: path

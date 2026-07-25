@@ -28,7 +28,7 @@ module context_menu_module
 
     public :: context_menu_begin, context_menu_add_item, context_menu_add_separator
     public :: context_menu_show, context_menu_hide, is_context_menu_visible
-    public :: context_menu_take
+    public :: context_menu_take, context_menu_hover, context_menu_select
     public :: render_context_menu, context_menu_handle_key
     public :: context_menu_selected, context_menu_kind
     public :: context_menu_row_action, context_menu_row_enabled
@@ -152,6 +152,42 @@ contains
         g_visible = .true.
         shown = .true.
     end function context_menu_show
+
+    !> Move the highlight to the row under the pointer, if there is one.
+    !> Returns .true. when the highlight moved, so the caller can ask for a
+    !> redraw only when something actually changed rather than on every
+    !> motion event.
+    function context_menu_hover(row, col) result(moved)
+        integer, intent(in) :: row, col
+        logical :: moved
+        integer :: idx
+
+        moved = .false.
+        if (.not. g_visible) return
+
+        idx = context_menu_row_at(row, col)
+        if (idx < 1) return                  ! off the menu, or on a separator
+        if (.not. g_rows(idx)%enabled) return
+        if (idx == g_selected) return
+
+        g_selected = idx
+        moved = .true.
+    end function context_menu_hover
+
+    !> Force the highlight onto a row and report whether it changed. Used to
+    !> show which row a click landed on before acting on it.
+    function context_menu_select(idx) result(moved)
+        integer, intent(in) :: idx
+        logical :: moved
+
+        moved = .false.
+        if (.not. g_visible) return
+        if (.not. context_menu_row_enabled(idx)) return
+        if (idx == g_selected) return
+
+        g_selected = idx
+        moved = .true.
+    end function context_menu_select
 
     !> Take a row: report its action and the menu's kind, and close the menu,
     !> in one step. Atomic on purpose -- hiding clears the row list, so a
