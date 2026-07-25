@@ -28,6 +28,7 @@ program test_settings
     call test_reload_from_disk()
     call test_corrupt_file_moved_aside()
     call test_atomic_write_leaves_no_tmp()
+    call test_set_before_any_get()
 
     call cleanup_home(home)
 
@@ -220,6 +221,35 @@ contains
                    'no .tmp file survives a successful save', '')
         call check(file_exists(settings_path()), 'the real file is in place', '')
     end subroutine test_atomic_write_leaves_no_tmp
+
+    ! Regression: setting a value before any getter had run used to be wiped
+    ! by the lazy load inside the first get, and a save straight afterwards
+    ! dropped every other key in the file.
+    subroutine test_set_before_any_get()
+        logical :: ok
+
+        ! seed a file with two keys
+        call settings_reset()
+        call settings_load()
+        call settings_set_string('keep.me', 'intact')
+        call settings_set_integer('keep.n', 7)
+        call settings_save(ok)
+
+        ! now set WITHOUT loading first, then save
+        call settings_reset()
+        call settings_set_logical('added.later', .true.)
+        call settings_save(ok)
+
+        call settings_reset()
+        call settings_load()
+        call check(settings_get_logical('added.later', .false.), &
+                   'a value set before any get survives the save', '')
+        call check(settings_get_string('keep.me', '') == 'intact', &
+                   'and the pre-existing keys are not wiped', &
+                   settings_get_string('keep.me', ''))
+        call check(settings_get_integer('keep.n', 0) == 7, &
+                   'including numeric ones', '')
+    end subroutine test_set_before_any_get
 
     function int_str(v) result(s)
         integer, intent(in) :: v

@@ -41,6 +41,7 @@ program facsimile
     use editor_state_module
     use text_buffer_module
     use renderer_module
+    use ai_engine_module, only: ai_tick, ai_configure
     use command_handler_module, only: handle_key_command, init_command_handler, cleanup_command_handler, &
                                       save_initial_state_for_undo, search_pattern, match_case_sensitive, &
                                       g_lsp_modified_buffer, g_lsp_ui_changed, g_cursor_only_move
@@ -288,6 +289,11 @@ program facsimile
 
     ! Initialize editor
     call init_editor(editor)
+
+    ! Read AI settings once at startup. Opt-in: with ai.enabled false (the
+    ! default) this resolves nothing, connects to nothing, and the tick above
+    ! returns immediately.
+    call ai_configure(editor%ai)
     running = .true.
 
     ! Set LSP workspace root if explicit -w flag was provided
@@ -559,6 +565,11 @@ program facsimile
 
         ! Process any LSP messages
         call process_server_messages(editor%lsp_manager)
+
+        ! Model-backed completion: decide whether to send, and advance
+        ! anything already in flight. One state per call, never blocking.
+        ! Inert until ai.enabled is turned on.
+        call ai_tick(editor%ai, editor, buffer, g_lsp_ui_changed)
 
         ! Poll integrated terminal for new output
         if (is_terminal_panel_visible(editor%terminal_panel)) then
@@ -1280,6 +1291,10 @@ contains
         call register_command('Undo', 'undo', 'Ctrl+Z', 'Edit')
         call register_command('Redo', 'redo', 'Ctrl+Y', 'Edit')
         call register_command('Toggle Line Comment', 'toggle-comment', 'Ctrl+/', 'Edit')
+
+        ! AI
+        call register_command('AI: Toggle Inline Completion', 'ai-toggle', '', 'AI')
+        call register_command('AI: Status', 'ai-status', '', 'AI')
         call register_command('Delete Line', 'delete-line', 'Ctrl+Shift+K', 'Edit')
 
         ! Search operations

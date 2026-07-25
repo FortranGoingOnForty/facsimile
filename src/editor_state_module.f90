@@ -1,5 +1,6 @@
 module editor_state_module
     use iso_fortran_env, only: int32, int64
+    use ai_state_module, only: ai_state_t
     use text_buffer_module, only: buffer_t, copy_buffer, init_buffer
     use lsp_server_manager_module, only: lsp_manager_t, init_lsp_manager, cleanup_lsp_manager, &
                                          get_or_start_server, process_server_messages, &
@@ -140,7 +141,9 @@ module editor_state_module
         ! LSP support
         type(lsp_manager_t) :: lsp_manager
         type(completion_popup_t) :: completion_popup
-        type(ghost_text_t) :: ghost              ! Inline shadow-text suggestion
+        type(ghost_text_t) :: ghost
+        ! Model-backed completion; inert until ai.enabled is turned on
+        type(ai_state_t) :: ai              ! Inline shadow-text suggestion
         type(hover_tooltip_t) :: hover_tooltip
         type(diagnostics_store_t) :: diagnostics
         type(diagnostics_panel_t) :: diagnostics_panel

@@ -8,7 +8,8 @@ module ghost_text_module
     private
 
     public :: ghost_text_t
-    public :: GHOST_SRC_NONE, GHOST_SRC_WORDS, GHOST_SRC_LSP
+    public :: GHOST_SRC_NONE, GHOST_SRC_WORDS, GHOST_SRC_LSP, GHOST_SRC_LLM
+    public :: ghost_extend_prefix, ghost_may_replace, ghost_apply_text
     public :: ghost_clear, ghost_clear_pending
     public :: ghost_get_prefix_at_cursor
     public :: ghost_get_include_prefix
@@ -21,6 +22,7 @@ module ghost_text_module
     integer, parameter :: GHOST_SRC_NONE = 0
     integer, parameter :: GHOST_SRC_WORDS = 1
     integer, parameter :: GHOST_SRC_LSP = 2
+    integer, parameter :: GHOST_SRC_LLM = 3
 
     ! Inline "shadow text" suggestion state. One global instance lives on
     ! editor_state_t. The suggestion is always a full identifier that starts
@@ -45,6 +47,99 @@ module ghost_text_module
     end type ghost_text_t
 
 contains
+
+    ! The user typed the character the suggestion already predicted. Advance
+    ! in place rather than clearing and re-querying: prefix grows, anchor_col
+    ! moves right, and suggestion is untouched -- ghost_suffix is defined as
+    ! suggestion(len(prefix)+1:), so the visible remainder shrinks for free.
+    !
+    ! This is what makes the feature feel instant. A round trip is ~300ms; by
+    ! not making one at all while the user types into a correct suggestion,
+    ! most keystrokes cost nothing.
+    function ghost_extend_prefix(ghost, ch) result(extended)
+        type(ghost_text_t), intent(inout) :: ghost
+        character(len=*), intent(in) :: ch
+        logical :: extended
+        character(len=:), allocatable :: suffix
+
+        extended = .false.
+        if (.not. ghost_is_active(ghost)) return
+        if (len(ch) /= 1) return
+
+        suffix = ghost_suffix(ghost)
+        if (len(suffix) == 0) return
+        if (suffix(1:1) /= ch) return
+
+        ghost%prefix = ghost%prefix // ch
+        ghost%anchor_col = ghost%anchor_col + 1
+        extended = ghost_is_active(ghost)
+        if (.not. extended) call ghost_clear(ghost)
+    end function ghost_extend_prefix
+
+    ! Whether a newly arrived suggestion may take over the display.
+    !
+    ! Three sources now produce ghosts at very different latencies: the buffer
+    ! word scan is instant, LSP is ~50ms, a local model ~300ms. Last-writer-wins
+    ! would flicker, and worse, would change what Tab does between the user
+    ! deciding to press it and pressing it.
+    !
+    ! Rank alone is not enough. A model completion that is a bare identifier is
+    ! a *guess at a name*, and LSP's names are type-correct and cannot be
+    ! hallucinated -- so the model only outranks LSP when it is predicting
+    ! actual code (punctuation or spaces present). That single rule removes the
+    ! most irritating flicker: one identifier replaced by a different one.
+    function ghost_may_replace(current_source, new_source, new_text) result(ok)
+        integer, intent(in) :: current_source, new_source
+        character(len=*), intent(in) :: new_text
+        logical :: ok
+
+        ok = .false.
+        if (len(new_text) == 0) return
+
+        if (current_source == GHOST_SRC_NONE) then
+            ok = .true.
+            return
+        end if
+
+        if (new_source == GHOST_SRC_LLM .and. current_source == GHOST_SRC_LSP) then
+            ok = .not. is_bare_identifier(new_text)
+            return
+        end if
+
+        ok = new_source > current_source
+    end function ghost_may_replace
+
+    pure function is_bare_identifier(s) result(res)
+        character(len=*), intent(in) :: s
+        logical :: res
+        integer :: i
+
+        res = .true.
+        do i = 1, len(s)
+            if (.not. ghost_word_char(s(i:i))) then
+                res = .false.
+                return
+            end if
+        end do
+    end function is_bare_identifier
+
+    ! Install a suggestion that did not come from the word scan or LSP. text is
+    ! the insertion -- what the user gets on Tab -- so suggestion is prefix
+    ! plus text, keeping the prefix-anchored contract the renderer and the
+    ! accept path both rely on.
+    subroutine ghost_apply_text(ghost, text, prefix, cur_line, cur_col, source)
+        type(ghost_text_t), intent(inout) :: ghost
+        character(len=*), intent(in) :: text, prefix
+        integer, intent(in) :: cur_line, cur_col, source
+
+        if (len(text) == 0) return
+        ghost%suggestion = prefix // text
+        ghost%prefix = prefix
+        ghost%anchor_line = cur_line
+        ghost%anchor_col = cur_col
+        ghost%source = source
+        ghost%visible = .true.
+    end subroutine ghost_apply_text
 
     ! Hide the suggestion. Does NOT cancel a pending LSP request: a response
     ! that is already in flight is revalidated against the cursor on arrival.

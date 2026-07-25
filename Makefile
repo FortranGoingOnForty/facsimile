@@ -100,6 +100,7 @@ SOURCES = src/version_module.f90 \
           src/utils/dir_scan_module.f90 \
           src/syntax/comment_syntax_module.f90 \
           src/ai/ai_http_module.f90 \
+          src/ai/ai_state_module.f90 \
           src/ai/ai_json_module.f90 \
           src/ai/completion_sanitize_module.f90 \
           src/ai/ollama_client_module.f90 \
@@ -159,6 +160,7 @@ SOURCES = src/version_module.f90 \
           src/fortress/ui/fortress_display_module.f90 \
           src/fortress/ui/welcome_menu_module.f90 \
           src/fortress/fortress_navigator_module.f90 \
+          src/ai/ai_engine_module.f90 \
           src/commands/comment_command_module.f90 \
           src/commands/command_handler_module.f90 \
           app/main.f90

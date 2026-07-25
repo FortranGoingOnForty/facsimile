@@ -50,10 +50,14 @@ module command_handler_module
                                         handle_completion_response, navigate_completion_up, &
                                         navigate_completion_down, get_selected_completion, &
                                         is_completion_visible
+    use ai_engine_module, only: ai_configure, ai_note_trigger, ai_tick, ai_cancel, &
+                               ai_is_enabled, ai_set_enabled, ai_status_line
+    use completion_context_module, only: context_line_after_cursor
     use ghost_text_module, only: ghost_clear, ghost_clear_pending, &
                                  ghost_get_prefix_at_cursor, ghost_get_include_prefix, &
                                  ghost_update_from_buffer, &
-                                 ghost_apply_lsp_result, ghost_suffix, ghost_is_active
+                                 ghost_apply_lsp_result, ghost_suffix, ghost_is_active, &
+                                 ghost_extend_prefix, GHOST_SRC_LLM
     use hover_tooltip_module, only: show_hover_tooltip, hide_hover_tooltip, &
                                      handle_hover_response, is_hover_visible
     use diagnostics_panel_module, only: toggle_panel => toggle_diagnostics_panel, &
@@ -210,6 +214,8 @@ contains
         ! Typing a plain character is the only thing that keeps a pending
         ! auto-closed closer live (see clear_pending_closers below)
         logical :: is_text_insert
+        ! True when the keystroke matched the live suggestion and advanced it
+        logical :: ghost_extended
         type(cursor_t), allocatable :: new_cursors(:)
         character(len=:), allocatable :: line
 
@@ -217,6 +223,7 @@ contains
         line_count = buffer_get_line_count(buffer)
         is_edit_action = .false.
         is_text_insert = .false.
+        ghost_extended = .false.
         ! Any keystroke dismisses the message the previous one left behind
         call clear_status_message()
         g_cursor_only_move = .false.
@@ -432,8 +439,16 @@ contains
                     return
                 end if
             end if
+
+            ! Typing the character the suggestion already predicted advances
+            ! it in place instead of discarding it. A round trip is ~300ms;
+            ! not making one at all while the user types into a correct
+            ! suggestion is what makes this feel immediate.
+            if (len_trim(key_str) == 1 .and. iachar(key_str(1:1)) >= 32) then
+                ghost_extended = ghost_extend_prefix(editor%ghost, key_str(1:1))
+            end if
         end if
-        call ghost_clear(editor%ghost)
+        if (.not. ghost_extended) call ghost_clear(editor%ghost)
 
         select case(trim(key_str))
         ! File operations
@@ -2185,7 +2200,7 @@ contains
             call notify_buffer_change(editor, buffer)
             ! Recompute the ghost suggestion after the LSP sync so a
             ! completion request sees the up-to-date document
-            call update_ghost_suggestion(editor, buffer, key_str)
+            call update_ghost_suggestion(editor, buffer, key_str, ghost_extended)
         end if
     end subroutine handle_key_command
 
@@ -7083,15 +7098,20 @@ contains
     ! Recompute the shadow suggestion after an edit keystroke. The word-scan
     ! result shows immediately; an LSP completion request may upgrade it when
     ! the async response arrives.
-    subroutine update_ghost_suggestion(editor, buffer, key_str)
+    subroutine update_ghost_suggestion(editor, buffer, key_str, ghost_was_extended)
         type(editor_state_t), intent(inout), target :: editor
         type(buffer_t), intent(inout), target :: buffer
         character(len=*), intent(in) :: key_str
+        logical, intent(in) :: ghost_was_extended
         character(len=:), allocatable :: prefix
         integer :: completion_server, request_id, cur_line, cur_col
         logical :: trigger_key, in_include
 
         if (.not. editor%ghost%enabled) return
+
+        ! The suggestion already advanced with the keystroke; re-querying
+        ! would throw away a correct answer and pay for another round trip.
+        if (ghost_was_extended) return
 
         if (size(editor%cursors) /= 1) return
         if (editor%cursors(editor%active_cursor)%has_selection) return
@@ -7156,6 +7176,16 @@ contains
                 editor%ghost%pending_include = in_include
                 editor%ghost%pending_doc_revision = current_doc_revision(editor)
             end if
+        end if
+
+        ! Record intent for the model backend. Deliberately just a note: the
+        ! request itself is built and sent from ai_tick, off the keystroke
+        ! path, so a burst of typing costs one request rather than one per
+        ! character -- and prompt construction never delays a keypress.
+        if (ai_is_enabled(editor%ai) .and. .not. in_include) then
+            call ai_note_trigger(editor%ai, cur_line, cur_col, prefix, &
+                                 context_line_after_cursor(buffer, cur_line, cur_col), &
+                                 current_doc_revision(editor))
         end if
     end subroutine update_ghost_suggestion
 
@@ -8139,6 +8169,18 @@ contains
             call handle_key_command('ctrl-y', editor, buffer, should_quit)
         case('toggle-comment')
             call handle_key_command('ctrl-/', editor, buffer, should_quit)
+
+        ! AI completion
+        case('ai-toggle')
+            call ai_set_enabled(editor%ai, .not. ai_is_enabled(editor%ai))
+            if (ai_is_enabled(editor%ai)) then
+                call set_status_message('AI completion enabled - ' // &
+                                        ai_status_line(editor%ai))
+            else
+                call set_status_message('AI completion disabled')
+            end if
+        case('ai-status')
+            call set_status_message(ai_status_line(editor%ai))
         case('delete-line')
             call handle_key_command('ctrl-shift-k', editor, buffer, should_quit)
 

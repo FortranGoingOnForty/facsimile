@@ -291,6 +291,12 @@ contains
         character(len=*), intent(in) :: key, raw_value
         integer :: i
 
+        ! Load first if we have not yet. Without this, a caller that sets a
+        ! value before any getter runs would have it silently wiped by the
+        ! lazy load inside the first get -- and a save straight afterwards
+        ! would drop every other key in the file.
+        if (.not. g_loaded) call settings_load()
+
         if (len_trim(key) == 0 .or. len_trim(key) > KEY_LEN) return
         if (len_trim(raw_value) > VAL_LEN) return
 
