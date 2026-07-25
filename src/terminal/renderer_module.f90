@@ -768,6 +768,15 @@ contains
             else
                 status_center = 'ctrl-?:help'
             end if
+
+            ! Whenever code can leave this machine, say so and keep saying so.
+            ! The user must never have to remember what they configured.
+            block
+                use ai_state_module, only: ai_remote_badge
+                character(len=:), allocatable :: badge
+                badge = ai_remote_badge(editor%ai)
+                if (len(badge) > 0) status_center = badge // ' ' // trim(status_center)
+            end block
         end block
 
         if (size(editor%cursors) > 1) then

@@ -48,6 +48,7 @@ Complete keyboard shortcut reference for `fac` editor.
 | `Tab` | Accept Suggestion | Accept the whole inline suggestion |
 | `Ctrl+Right` | Accept One Word | Accept a single word of an inline suggestion, keeping the rest offered |
 | `Alt+Right` | Accept One Line | Accept one line of a multi-line suggestion, keeping the rest offered |
+| `Alt+\` | Deep Completion | Request a large block from the deep model (see docs/AI_COMPLETION.md) |
 | `Ctrl+/` | Toggle Line Comment | Comment/uncomment the cursor's lines or the selection |
 | `Ctrl+Shift+K` | Delete Line | Delete the cursor's lines outright — nothing is copied or yanked (needs a terminal supporting the kitty keyboard protocol; otherwise use the command palette) |
 | `Alt+Backspace` | Delete Word | Delete word backward; at column 1 it deletes the line break, so blank lines are eaten one press at a time |

@@ -20,6 +20,33 @@ This document specifies the format and location of fac's user configuration file
 
 ---
 
+## settings.json
+
+Added in 0.19.0. User preferences, as a **flat** JSON object with dotted keys:
+
+```json
+{
+  "ai.enabled": false,
+  "ai.model": "qwen2.5-coder:1.5b-base",
+  "ai.remote.enabled": false
+}
+```
+
+Flat dotted keys are deliberate: the reader stays a line scanner, so settings
+need neither a nested parser nor `json_module`. Nesting the objects would buy
+nothing and cost a dependency.
+
+- Missing file is the normal first-run case, not an error. Every key falls back
+  to a default supplied at its call site, so there is no defaults table to drift
+  out of step with the code that reads it.
+- A file that cannot be parsed is moved to `settings.json.corrupted` and
+  defaults are used, rather than being half-read and then saved over.
+- Writes go to `settings.json.tmp` and are `rename()`d into place, per the
+  atomic-write requirement below.
+
+Keys are documented with their feature. See `docs/AI_COMPLETION.md` for the
+`ai.*` group.
+
 ## Directory Structure
 
 ```

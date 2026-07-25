@@ -11,6 +11,7 @@ module ai_state_module
 
     public :: ai_state_t
     public :: AI_HEALTH_UNKNOWN, AI_HEALTH_OK, AI_HEALTH_DOWN, AI_HEALTH_NO_FIM
+    public :: ai_remote_badge, ai_host_is_loopback
 
     integer, parameter :: AI_HEALTH_UNKNOWN = 0
     integer, parameter :: AI_HEALTH_OK      = 1
@@ -34,6 +35,19 @@ module ai_state_module
         logical :: include_header = .true.
         logical :: include_symbols = .true.
         character(len=:), allocatable :: filename
+
+        ! ---- remote tier, a SEPARATE opt-in ----
+        ! Turning on completion enables loopback only. Reaching another
+        ! machine is a second, deliberate decision, because source code
+        ! leaving the box deserves its own switch.
+        logical :: remote_enabled = .false.
+        character(len=:), allocatable :: remote_host
+        integer :: remote_port = 11434
+        character(len=:), allocatable :: remote_model
+        integer :: remote_num_predict = 256
+        type(ai_http_addr_t) :: remote_addr
+        logical :: remote_is_loopback = .true.
+        character(len=:), allocatable :: gate_url
 
         ! ---- backend ----
         type(ai_http_addr_t) :: addr
@@ -75,5 +89,33 @@ module ai_state_module
         integer(int64) :: request_started_ms = 0
         character(len=:), allocatable :: last_reject_reason
     end type ai_state_t
+
+contains
+
+    pure function ai_host_is_loopback(host) result(res)
+        character(len=*), intent(in) :: host
+        logical :: res
+        character(len=:), allocatable :: h
+
+        h = trim(host)
+        res = h == '127.0.0.1' .or. h == 'localhost' .or. h == '::1' .or. &
+              h == '' .or. index(h, '127.') == 1
+    end function ai_host_is_loopback
+
+    ! A persistent marker shown whenever code can leave this machine. Lives
+    ! here rather than in the engine so the renderer can read it without
+    ! depending on the engine, which sits above editor_state_t.
+    function ai_remote_badge(ai) result(text)
+        type(ai_state_t), intent(in) :: ai
+        character(len=:), allocatable :: text
+
+        text = ''
+        if (.not. ai%enabled) return
+        if (.not. ai%remote_enabled) return
+        if (ai%remote_is_loopback) return
+        if (.not. allocated(ai%remote_host)) return
+        if (len_trim(ai%remote_host) == 0) return
+        text = '[AI->' // trim(ai%remote_host) // ']'
+    end function ai_remote_badge
 
 end module ai_state_module

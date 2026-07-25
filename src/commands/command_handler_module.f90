@@ -51,7 +51,8 @@ module command_handler_module
                                         navigate_completion_down, get_selected_completion, &
                                         is_completion_visible
     use ai_engine_module, only: ai_configure, ai_note_trigger, ai_tick, ai_cancel, &
-                               ai_is_enabled, ai_set_enabled, ai_status_line
+                               ai_is_enabled, ai_set_enabled, ai_status_line, &
+                               ai_request_deep, ai_probe_backend
     use completion_context_module, only: context_line_after_cursor
     use ghost_text_module, only: ghost_clear, ghost_clear_pending, &
                                  ghost_get_prefix_at_cursor, ghost_get_include_prefix, &
@@ -8307,13 +8308,30 @@ contains
         case('ai-toggle')
             call ai_set_enabled(editor%ai, .not. ai_is_enabled(editor%ai))
             if (ai_is_enabled(editor%ai)) then
-                call set_status_message('AI completion enabled - ' // &
-                                        ai_status_line(editor%ai))
+                ! Probe now, while a short stall is acceptable. Otherwise the
+                ! first failure a user meets is silence, and silence does not
+                ! say "that model is not pulled" or "that model cannot do FIM".
+                block
+                    character(len=:), allocatable :: msg
+                    call ai_probe_backend(editor%ai, msg)
+                    call set_status_message('AI completion: ' // msg)
+                end block
             else
                 call set_status_message('AI completion disabled')
             end if
         case('ai-status')
             call set_status_message(ai_status_line(editor%ai))
+
+        case('ai-deep', 'alt-\\')
+            ! Explicitly asked for: a bigger model and a longer budget than
+            ! anything the keystroke path would ever spend.
+            block
+                character(len=:), allocatable :: msg
+                call set_status_message('AI: thinking...')
+                call ai_request_deep(editor%ai, editor, buffer, msg)
+                call set_status_message('AI: ' // msg)
+                call sync_editor_to_pane(editor)
+            end block
         case('delete-line')
             call handle_key_command('ctrl-shift-k', editor, buffer, should_quit)
 

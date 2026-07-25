@@ -29,6 +29,7 @@ module ai_engine_module
 
     public :: ai_configure, ai_note_trigger, ai_tick, ai_cancel
     public :: ai_is_enabled, ai_set_enabled, ai_status_line
+    public :: ai_request_deep, ai_probe_backend
 
     integer, parameter :: BUCKET_LIMIT_REQUESTS = 4
     integer, parameter :: BUCKET_WINDOW_MS = 2000
@@ -56,6 +57,16 @@ contains
         ai%max_block_lines = min(8, max(1, settings_get_integer('ai.max_block_lines', 4)))
         ai%include_header = settings_get_logical('ai.context.file_header', .true.)
         ai%include_symbols = settings_get_logical('ai.context.symbols', .true.)
+
+        ! Remote is its own switch. Read it, but resolve nothing yet.
+        ai%remote_enabled = settings_get_logical('ai.remote.enabled', .false.)
+        ai%remote_host = settings_get_string('ai.remote.host', '')
+        ai%remote_port = settings_get_integer('ai.remote.port', 11434)
+        ai%remote_model = settings_get_string('ai.remote.model', 'qwen2.5-coder:32b')
+        ai%remote_num_predict = settings_get_integer('ai.remote.num_predict', 256)
+        ai%gate_url = settings_get_string('ai.remote.gate_url', '')
+        ai%remote_is_loopback = ai_host_is_loopback(ai%remote_host)
+        ai%remote_addr%resolved = .false.
         ai%configured = .true.
 
         if (.not. ai%enabled) then
@@ -77,7 +88,244 @@ contains
             return
         end if
         ai%health = AI_HEALTH_UNKNOWN     ! proven by the first successful reply
+
+        ! The remote address is resolved ONLY when the remote tier is
+        ! explicitly enabled. With it off nothing about that host is looked
+        ! up, contacted, or cached.
+        if (ai%remote_enabled .and. len_trim(ai%remote_host) > 0) then
+            if (ai_http_resolve(ai%remote_host, ai%remote_port, ai%remote_addr)) then
+                ai%remote_is_loopback = ai_host_is_loopback(ai%remote_host)
+            else
+                ai%remote_addr%resolved = .false.
+                ai%last_error = 'cannot resolve ' // ai%remote_host
+            end if
+        end if
     end subroutine ai_configure
+
+    ! Blocking probe, run at enable time only. Answers the two questions that
+    ! otherwise surface as "the feature is broken": is the model actually
+    ! pulled on that host, and can it fill in the middle at all?
+    subroutine ai_probe_backend(ai, message)
+        type(ai_state_t), intent(inout) :: ai
+        character(len=:), allocatable, intent(out) :: message
+        character(len=:), allocatable :: body
+        logical :: ok
+
+        message = ''
+        if (.not. ai%enabled) then
+            message = 'AI completion is off'
+            return
+        end if
+        if (.not. ai%addr%resolved) then
+            ai%health = AI_HEALTH_DOWN
+            message = 'cannot resolve ' // ai%host
+            return
+        end if
+
+        body = fetch_blocking(ai%addr, ai%host, ai%port, 'GET', '/api/tags', '', 3000, ok)
+        if (.not. ok) then
+            ai%health = AI_HEALTH_DOWN
+            ai%last_error = 'no ollama at ' // ai%host // ':' // int_str(ai%port)
+            message = ai%last_error
+            return
+        end if
+        if (index(body, '"' // ai%model // '"') <= 0) then
+            ai%health = AI_HEALTH_DOWN
+            ai%last_error = "model '" // ai%model // "' is not pulled on " // ai%host
+            message = ai%last_error
+            return
+        end if
+
+        body = fetch_blocking(ai%addr, ai%host, ai%port, 'POST', '/api/show', &
+                              ollama_show_body(ai%model), 5000, ok)
+        if (.not. ok) then
+            ai%health = AI_HEALTH_DOWN
+            message = 'could not query model capabilities'
+            return
+        end if
+        if (.not. ollama_model_supports_fim(body)) then
+            ! A chat model cannot see the code after the caret. It guesses,
+            ! and the guesses look plausible -- which is worse than nothing.
+            ai%health = AI_HEALTH_NO_FIM
+            ai%last_error = "model '" // ai%model // &
+                            "' has no FIM support; inline completion disabled"
+            message = ai%last_error
+            return
+        end if
+
+        ai%health = AI_HEALTH_OK
+        ai%last_error = ''
+        message = "ready: " // ai%model // ' on ' // ai%host
+    end subroutine ai_probe_backend
+
+    ! Deliberately blocking, and used only where a short stall is acceptable:
+    ! enabling the feature, or an explicitly requested deep completion. The
+    ! keystroke path never comes here.
+    function fetch_blocking(addr, host, port, method, path, body, timeout_ms, ok) &
+             result(resp)
+        type(ai_http_addr_t), intent(in) :: addr
+        character(len=*), intent(in) :: host, method, path, body
+        integer, intent(in) :: port, timeout_ms
+        logical, intent(out) :: ok
+        character(len=:), allocatable :: resp
+        type(ai_http_t) :: req
+        integer(int64) :: t0
+
+        resp = ''
+        ok = .false.
+        if (.not. addr%resolved) return
+
+        call ai_http_begin(req, addr, &
+            ai_http_build_request(method, path, host // ':' // int_str(port), body), &
+            1000, timeout_ms)
+
+        t0 = now_ms()
+        do
+            call ai_http_pump(req)
+            if (req%state == AI_HTTP_DONE .or. req%state == AI_HTTP_ERROR) exit
+            if (now_ms() - t0 > int(timeout_ms, int64) + 1000_int64) exit
+        end do
+
+        if (req%state == AI_HTTP_DONE .and. req%status == 200) then
+            resp = ai_http_take(req)
+            ok = len(resp) > 0
+        end if
+        call ai_http_abort(req)
+    end function fetch_blocking
+
+    ! Explicitly requested block completion. Uses the remote model when the
+    ! remote tier is on, the local one otherwise -- so the key always does
+    ! something useful rather than failing when remote is off.
+    subroutine ai_request_deep(ai, editor, buffer, message)
+        type(ai_state_t), intent(inout) :: ai
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(in) :: buffer
+        character(len=:), allocatable, intent(out) :: message
+        character(len=:), allocatable :: prefix, suffix, body, raw, reason, text
+        type(prompt_options_t) :: popts
+        type(ai_http_addr_t) :: addr
+        character(len=:), allocatable :: host, model
+        integer :: port, npred, code, line, col
+        logical :: ok, use_remote
+
+        message = ''
+        if (.not. ai%enabled) then
+            message = 'AI completion is off'
+            return
+        end if
+        if (size(editor%cursors) /= 1) return
+
+        line = editor%cursors(editor%active_cursor)%line
+        col = editor%cursors(editor%active_cursor)%column
+
+        use_remote = ai%remote_enabled .and. ai%remote_addr%resolved
+        if (use_remote) then
+            if (.not. remote_gate_open(ai)) then
+                message = 'remote pool is busy; using the local model'
+                use_remote = .false.
+            end if
+        end if
+
+        if (use_remote) then
+            addr = ai%remote_addr
+            host = ai%remote_host
+            port = ai%remote_port
+            model = ai%remote_model
+            npred = ai%remote_num_predict
+        else
+            addr = ai%addr
+            host = ai%host
+            port = ai%port
+            model = ai%model
+            npred = ai%num_predict * 8
+        end if
+
+        popts%prefix_bytes = ai%prefix_bytes
+        popts%suffix_bytes = ai%suffix_bytes
+        popts%include_header = ai%include_header
+        popts%include_symbols = ai%include_symbols
+        call build_completion_prompt(buffer, ai%filename, line, col, popts, '', &
+                                     prefix, suffix)
+
+        body = ollama_generate_body(model, prefix, suffix, npred, &
+                                    ai%temperature_x100, '10m', &
+                                    completion_stop_json(ai%filename))
+
+        ! 30s: a large model on a cold load is worth waiting for when the user
+        ! asked for it explicitly.
+        raw = fetch_blocking(addr, host, port, 'POST', '/api/generate', body, 30000, ok)
+        if (.not. ok) then
+            ! Remote failed: fall back to local once rather than nothing.
+            if (use_remote .and. ai%addr%resolved) then
+                body = ollama_generate_body(ai%model, prefix, suffix, ai%num_predict * 8, &
+                                            ai%temperature_x100, '10m', &
+                                            completion_stop_json(ai%filename))
+                raw = fetch_blocking(ai%addr, ai%host, ai%port, 'POST', '/api/generate', &
+                                     body, 15000, ok)
+                if (ok) message = 'remote unavailable; completed with the local model'
+            end if
+            if (.not. ok) then
+                message = 'deep completion failed'
+                return
+            end if
+        end if
+
+        call ollama_read_completion(raw, text, reason, ok)
+        if (.not. ok) then
+            message = 'no completion in the reply'
+            return
+        end if
+
+        call sanitize_completion(text, ai%flight_line_after, &
+                                 max(ai%max_block_lines, 8), raw, code)
+        if (code /= SAN_OK) then
+            message = 'suggestion rejected: ' // sanitize_reason(code)
+            return
+        end if
+
+        if (index(raw, achar(10)) > 0) then
+            call ghost_apply_block(editor%ghost, raw, '', line, col, GHOST_SRC_LLM)
+        else
+            call ghost_apply_text(editor%ghost, raw, '', line, col, GHOST_SRC_LLM)
+        end if
+        if (len(message) == 0) then
+            if (use_remote) then
+                message = 'deep suggestion from ' // model
+            else
+                message = 'suggestion from ' // model
+            end if
+        end if
+    end subroutine ai_request_deep
+
+    ! Do not evict a model someone else is using, and honour an optional
+    ! availability gate. Reading ~/pool-up would need SSH, which an editor has
+    ! no business doing -- so the gate is a URL the user can point anywhere.
+    function remote_gate_open(ai) result(res)
+        type(ai_state_t), intent(inout) :: ai
+        logical :: res
+        character(len=:), allocatable :: body
+        logical :: ok
+
+        res = .true.
+
+        if (len_trim(ai%gate_url) > 0) then
+            body = fetch_blocking(ai%remote_addr, ai%remote_host, ai%remote_port, &
+                                  'GET', ai%gate_url, '', 1500, ok)
+            if (.not. ok .or. len_trim(body) == 0) then
+                res = .false.
+                return
+            end if
+        end if
+
+        ! If the host has a DIFFERENT model resident, asking for ours would
+        ! evict theirs.
+        body = fetch_blocking(ai%remote_addr, ai%remote_host, ai%remote_port, &
+                              'GET', '/api/ps', '', 1500, ok)
+        if (.not. ok) return
+        if (len_trim(body) == 0) return
+        if (index(body, '"name"') <= 0) return
+        if (index(body, '"' // ai%remote_model // '"') <= 0) res = .false.
+    end function remote_gate_open
 
     function ai_is_enabled(ai) result(res)
         type(ai_state_t), intent(in) :: ai
@@ -362,6 +610,14 @@ contains
         case default
             text = text // ' | not yet contacted'
         end select
+
+        if (ai%remote_enabled) then
+            if (allocated(ai%remote_host)) then
+                text = text // ' | deep: ' // ai%remote_model // ' @ ' // ai%remote_host
+            end if
+        else
+            text = text // ' | deep: off'
+        end if
 
         text = text // ' | sent ' // int_str(ai%requests_sent) // &
                ', shown ' // int_str(ai%accepted_count) // &

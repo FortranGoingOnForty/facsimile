@@ -148,6 +148,27 @@ When in fuss mode (ctrl-b), you get a split view with a git-aware file tree on t
 - `esc` - exit fuss mode back to editor
 - `ctrl-b` - toggle fuss mode off
 
+### AI inline completion (opt-in)
+
+Complete code inline from a local model, shown as dim shadow text. Reads the
+comment above the caret and the code on both sides of it, so it completes
+intent rather than matching identifiers that already exist.
+
+**Off by default** — nothing runs, connects, or leaves your machine until you
+turn it on via `ctrl-p` → *AI: Toggle Inline Completion*.
+
+- `tab` - accept the suggestion
+- `right` - accept, at end of line
+- `ctrl-right` / `alt-right` - accept one word / one line
+- `alt-\` - deep completion here (bigger model, longer budget)
+- any other key dismisses it
+
+Reaching a *remote* model is a second, separate opt-in, and shows a permanent
+`[AI->host]` badge in the status bar while active.
+
+See **[docs/AI_COMPLETION.md](docs/AI_COMPLETION.md)** for setup, settings and
+troubleshooting.
+
 ### Help
 - `ctrl-?` (ctrl-shift-/) or `F1` - show keybindings
 

@@ -1295,6 +1295,7 @@ contains
         ! AI
         call register_command('AI: Toggle Inline Completion', 'ai-toggle', '', 'AI')
         call register_command('AI: Status', 'ai-status', '', 'AI')
+        call register_command('AI: Deep Completion Here', 'ai-deep', 'Alt+\\', 'AI')
         call register_command('Delete Line', 'delete-line', 'Ctrl+Shift+K', 'Edit')
 
         ! Search operations

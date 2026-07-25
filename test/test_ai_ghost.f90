@@ -26,6 +26,8 @@ program test_ai_ghost
     call test_prefix_extension()
     call test_arbitration()
     call test_status_line()
+    call test_remote_is_a_separate_opt_in()
+    call test_remote_badge()
 
     if (nfail > 0) then
         print '(a,i0,a)', 'FAILED: ', nfail, ' assertion(s)'
@@ -200,6 +202,70 @@ contains
         call check(index(line, '127.0.0.1') > 0, 'status names the host', line)
         call settings_reset()
     end subroutine test_status_line
+
+    ! Turning on completion must enable LOOPBACK ONLY. Reaching another
+    ! machine is a second, deliberate decision, and until it is made nothing
+    ! about that host may be looked up or contacted.
+    !
+    ! 192.0.2.1 is TEST-NET-1 (RFC 5737): reserved for documentation and
+    ! guaranteed not to be a real host, so a stray connection attempt cannot
+    ! quietly succeed.
+    subroutine test_remote_is_a_separate_opt_in()
+        type(ai_state_t) :: ai
+
+        call settings_reset()
+        call settings_set_logical('ai.enabled', .true.)
+        call settings_set_string('ai.remote.host', '192.0.2.1')
+        call settings_set_string('ai.remote.model', 'big-model')
+        ! ai.remote.enabled deliberately NOT set -- it must default to false
+        call ai_configure(ai)
+
+        call check(ai_is_enabled(ai), 'completion itself is on', '')
+        call check(.not. ai%remote_enabled, &
+                   'the remote tier is OFF even with a host configured', '')
+        call check(.not. ai%remote_addr%resolved, &
+                   'and the remote address is never even resolved', '')
+
+        ! Now opt in explicitly
+        call settings_set_logical('ai.remote.enabled', .true.)
+        call ai_configure(ai)
+        call check(ai%remote_enabled, 'explicit opt-in turns it on', '')
+        call check(.not. ai%remote_is_loopback, &
+                   'and a non-loopback host is recognised as such', '')
+
+        call settings_reset()
+    end subroutine test_remote_is_a_separate_opt_in
+
+    ! The user must never have to remember what they configured.
+    subroutine test_remote_badge()
+        type(ai_state_t) :: ai
+
+        call settings_reset()
+        call settings_set_logical('ai.enabled', .true.)
+        call ai_configure(ai)
+        call check(len(ai_remote_badge(ai)) == 0, &
+                   'no badge when the remote tier is off', ai_remote_badge(ai))
+
+        call settings_set_logical('ai.remote.enabled', .true.)
+        call settings_set_string('ai.remote.host', '127.0.0.1')
+        call ai_configure(ai)
+        call check(len(ai_remote_badge(ai)) == 0, &
+                   'no badge for a loopback host: nothing leaves the machine', &
+                   ai_remote_badge(ai))
+
+        call settings_set_string('ai.remote.host', '192.0.2.1')
+        call ai_configure(ai)
+        call check(index(ai_remote_badge(ai), '192.0.2.1') > 0, &
+                   'a badge naming the host whenever code can leave', &
+                   ai_remote_badge(ai))
+
+        call settings_set_logical('ai.enabled', .false.)
+        call ai_configure(ai)
+        call check(len(ai_remote_badge(ai)) == 0, &
+                   'and none at all when completion itself is off', &
+                   ai_remote_badge(ai))
+        call settings_reset()
+    end subroutine test_remote_badge
 
     subroutine setup(text)
         character(len=*), intent(in) :: text
