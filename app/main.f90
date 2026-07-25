@@ -1293,7 +1293,7 @@ contains
         call register_command('Toggle Line Comment', 'toggle-comment', 'Ctrl+/', 'Edit')
 
         ! AI
-        call register_command('AI: Toggle Inline Completion', 'ai-toggle', '', 'AI')
+        call register_command('AI: Toggle Inline Completion', 'ai-toggle', 'Alt+I', 'AI')
         call register_command('AI: Status', 'ai-status', '', 'AI')
         call register_command('AI: Deep Completion Here', 'ai-deep', 'Alt+\\', 'AI')
         call register_command('Delete Line', 'delete-line', 'Ctrl+Shift+K', 'Edit')

@@ -751,6 +751,15 @@ contains
                 line_diagnostics = get_diagnostics_for_line(editor%diagnostics, file_uri, cursor%line)
             end if
 
+            ! A one-shot message wins over a diagnostic: the diagnostic is
+            ! still there next frame, but the message is gone. Losing "AI
+            ! completion: ready" to a squiggle the user can already see makes
+            ! commands look like they did nothing.
+            if (has_status_message()) then
+                call write_status_message(editor%screen_cols, ' ' // g_status_message)
+                return
+            end if
+
             if (allocated(line_diagnostics) .and. size(line_diagnostics) > 0) then
                 ! Show first diagnostic message (highest severity)
                 call write_status_message(editor%screen_cols, &

@@ -23,7 +23,11 @@ sudo pacman -S ollama-cuda
 sudo systemctl enable --now ollama
 ```
 
-Then in `fac`: `Ctrl+P` → **AI: Toggle Inline Completion**.
+Then in `fac`: press **`Alt+I`** (or `Ctrl+P` → **AI: Toggle Inline Completion**).
+
+`Alt+I` is also the quick way to silence it: turning off is instant and
+clears any suggestion on screen. The setting persists, so it stays off until
+you turn it back on.
 
 The status bar reports what happened — `ready: <model> on <host>`, or exactly
 why not.
@@ -43,6 +47,7 @@ why not.
 | `Ctrl+Right` | Accept one word, keeping the rest offered |
 | `Alt+Right` | Accept one line of a multi-line suggestion |
 | `Alt+\` | Deep completion here — a bigger model, a longer budget |
+| `Alt+I` | Turn completion on or off |
 | any other key | Dismiss |
 
 Nothing is ever inserted without one of those explicit accepts.

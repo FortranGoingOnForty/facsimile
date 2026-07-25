@@ -122,7 +122,7 @@ contains
             return
         end if
 
-        body = fetch_blocking(ai%addr, ai%host, ai%port, 'GET', '/api/tags', '', 3000, ok)
+        body = fetch_blocking(ai%addr, ai%host, ai%port, 'GET', '/api/tags', '', 2000, ok)
         if (.not. ok) then
             ai%health = AI_HEALTH_DOWN
             ai%last_error = 'no ollama at ' // ai%host // ':' // int_str(ai%port)
@@ -137,7 +137,7 @@ contains
         end if
 
         body = fetch_blocking(ai%addr, ai%host, ai%port, 'POST', '/api/show', &
-                              ollama_show_body(ai%model), 5000, ok)
+                              ollama_show_body(ai%model), 3000, ok)
         if (.not. ok) then
             ai%health = AI_HEALTH_DOWN
             message = 'could not query model capabilities'

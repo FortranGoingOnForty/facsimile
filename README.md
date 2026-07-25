@@ -155,7 +155,8 @@ comment above the caret and the code on both sides of it, so it completes
 intent rather than matching identifiers that already exist.
 
 **Off by default** — nothing runs, connects, or leaves your machine until you
-turn it on via `ctrl-p` → *AI: Toggle Inline Completion*.
+turn it on with `alt-i` (or `ctrl-p` → *AI: Toggle Inline Completion*).
+`alt-i` is also the quick off switch — instant, and it clears anything on screen.
 
 - `tab` - accept the suggestion
 - `right` - accept, at end of line

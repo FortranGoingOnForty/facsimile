@@ -1100,6 +1100,35 @@ contains
             call update_viewport(editor)
             is_edit_action = .true.
 
+        case('alt-i')
+            ! Turning OFF is instant and silent -- this is the key you reach
+            ! for when a suggestion is in the way, so it must not stall.
+            ! Turning ON probes the backend, because otherwise the first
+            ! failure you meet is silence, and silence does not say "that
+            ! model is not pulled" or "that model cannot fill in the middle".
+            if (ai_is_enabled(editor%ai)) then
+                call ai_set_enabled(editor%ai, .false.)
+                call ghost_clear(editor%ghost)
+                call set_status_message('AI completion off (alt-i)')
+            else
+                call ai_set_enabled(editor%ai, .true.)
+                block
+                    character(len=:), allocatable :: msg
+                    call ai_probe_backend(editor%ai, msg)
+                    call set_status_message('AI completion: ' // msg)
+                end block
+            end if
+
+        case('alt-\')
+            ! Explicitly asked for: a bigger model and a longer budget than
+            ! anything the keystroke path would ever spend.
+            block
+                character(len=:), allocatable :: msg
+                call ai_request_deep(editor%ai, editor, buffer, msg)
+                call set_status_message('AI: ' // msg)
+                call sync_editor_to_pane(editor)
+            end block
+
         ! Editing keybinds
         case('ctrl-k')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
@@ -8306,72 +8335,11 @@ contains
 
         ! AI completion
         case('ai-toggle')
-            call ai_set_enabled(editor%ai, .not. ai_is_enabled(editor%ai))
-            if (ai_is_enabled(editor%ai)) then
-                ! Probe now, while a short stall is acceptable. Otherwise the
-                ! first failure a user meets is silence, and silence does not
-                ! say "that model is not pulled" or "that model cannot do FIM".
-                block
-                    character(len=:), allocatable :: msg
-                    call ai_probe_backend(editor%ai, msg)
-                    call set_status_message('AI completion: ' // msg)
-                end block
-            else
-                call set_status_message('AI completion disabled')
-            end if
+            call handle_key_command('alt-i', editor, buffer, should_quit)
+        case('ai-deep')
+            call handle_key_command('alt-\', editor, buffer, should_quit)
         case('ai-status')
             call set_status_message(ai_status_line(editor%ai))
-
-        case('ai-deep', 'alt-\\')
-            ! Explicitly asked for: a bigger model and a longer budget than
-            ! anything the keystroke path would ever spend.
-            block
-                character(len=:), allocatable :: msg
-                call set_status_message('AI: thinking...')
-                call ai_request_deep(editor%ai, editor, buffer, msg)
-                call set_status_message('AI: ' // msg)
-                call sync_editor_to_pane(editor)
-            end block
-        case('delete-line')
-            call handle_key_command('ctrl-shift-k', editor, buffer, should_quit)
-
-        ! Search operations
-        case('find')
-            call handle_key_command('ctrl-f', editor, buffer, should_quit)
-        case('replace')
-            call handle_key_command('ctrl-h', editor, buffer, should_quit)
-        case('find-next')
-            call handle_key_command('ctrl-g', editor, buffer, should_quit)
-
-        ! Navigation
-        case('goto-line')
-            call handle_key_command('alt-g', editor, buffer, should_quit)
-        case('goto-def')
-            call handle_key_command('f12', editor, buffer, should_quit)
-        case('find-refs')
-            call handle_key_command('shift-f12', editor, buffer, should_quit)
-        case('jump-back')
-            call handle_key_command('alt-,', editor, buffer, should_quit)
-        case('goto-symbol')
-            call handle_key_command('f4', editor, buffer, should_quit)
-
-        ! LSP features
-        case('code-actions')
-            call handle_key_command('f8', editor, buffer, should_quit)
-        case('rename')
-            call handle_key_command('f2', editor, buffer, should_quit)
-        case('diagnostics')
-            call handle_key_command('alt-e', editor, buffer, should_quit)
-
-        ! View
-        case('split-v')
-            call handle_key_command('ctrl-\\', editor, buffer, should_quit)
-        case('close-pane')
-            call handle_key_command('ctrl-w', editor, buffer, should_quit)
-
-        ! Help
-        case('help')
-            call handle_key_command('f1', editor, buffer, should_quit)
 
         case default
             ! Unknown command - show message
