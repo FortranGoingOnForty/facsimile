@@ -137,6 +137,15 @@ class Session:
         return [label for label, c0, c1 in self.tab_spans()
                 if any(self.screen.buffer[0][x].reverse for x in range(c0 - 1, c1))]
 
+    def tree_selected_rows(self):
+        """Rows drawn in reverse video inside the tree column. Scanning the
+        whole screen would also pick up the tab bar and the document."""
+        out = []
+        for y in range(ROWS):
+            if any(self.screen.buffer[y][x].reverse for x in range(0, 26)):
+                out.append(y + 1)
+        return out
+
     def attributed_rows(self):
         """Rows carrying any non-default attribute: how the fortress panes
         mark their selection. Text alone does not change when it moves."""
@@ -407,6 +416,43 @@ def main():
     s.click(ROWS, COLS)
     check(s.row_text(3) != plain, "the chevron click actually opens the file tree",
           f"row 3 unchanged: {plain!r}")
+    s.close()
+
+    # File tree rows. render_tree_node already carried the row next to the
+    # item index, so each drawn row claims itself and a click delegates to the
+    # keyboard handler: space expands a directory, enter opens a file. Before
+    # this the tree was a total mouse dead zone.
+    s = Session(binary, "CONTENT OF AAA\n", name="aaa.txt",
+                extra_files=["bbb.txt"])
+    with open(os.path.join(s.home, "bbb.txt"), "w") as f:
+        f.write("CONTENT OF BBB\n")
+    os.makedirs(os.path.join(s.home, "subdir"))
+    with open(os.path.join(s.home, "subdir", "inner.txt"), "w") as f:
+        f.write("INNER FILE\n")
+    s.send("\x02", 1.8)                   # ctrl-b: open the tree
+
+    row = s.find_row("bbb.txt")
+    check(row is not None, "tree lists bbb.txt")
+    if row:
+        s.click(row, 6)
+        check("CONTENT OF BBB" in "".join(s.screen.display),
+              "clicking a file row opens that file")
+
+    # Opening a file leaves the tree open, so subdir is still listed
+    row = s.find_row("subdir")
+    check(row is not None, "tree lists subdir")
+    if row:
+        check(s.find_row("inner.txt") is None, "subdir starts collapsed")
+        s.click(row, 6)
+        check(s.find_row("inner.txt") is not None,
+              "clicking a directory row expands it")
+
+    # Keyboard navigation must still work: the click path delegates to it
+    before = s.tree_selected_rows()
+    s.send("\x1b[B", 0.7)                 # down arrow
+    check(before and s.tree_selected_rows() != before,
+          "arrow keys still move the tree selection",
+          f"{before} -> {s.tree_selected_rows()}")
     s.close()
 
     if failures:
