@@ -1460,6 +1460,27 @@ contains
 
         ! If only one pane, use simple rendering
         if (n_panes == 1) then
+            ! Record the rect before drawing. With the tree open the text
+            ! starts at start_col, but the pane kept the screen_col = 1 it was
+            ! given at tab creation, so anything resolving a click through
+            ! position_cursor_at_screen was wrong by the whole tree width.
+            ! Harmless until now only because fuss mode swallowed every mouse
+            ! event before it got that far. Mirrors render_editor_pane's own
+            ! geometry: rows start below the tab bar and stop above the status
+            ! bar, columns span the editor area it is handed.
+            block
+                integer :: content_row
+
+                if (size(editor%tabs) > 0) then
+                    content_row = 2      ! tab bar occupies row 1
+                else
+                    content_row = 1
+                end if
+                call store_pane_content_rect(editor, tab_idx, 1, start_col, &
+                                             content_row, width, &
+                                             editor%screen_rows - content_row)
+            end block
+
             ! Use the pane's buffer, not the passed buffer parameter
             call render_editor_pane(editor%tabs(tab_idx)%panes(1)%buffer, editor, start_col, width)
             return
