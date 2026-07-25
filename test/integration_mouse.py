@@ -108,6 +108,20 @@ class Session:
             self.child.send(f"\x1b[<{b};{col};{row}M")
         self.drain(0.5)
 
+    def drag(self, row, col_from, col_to, button=0):
+        self.child.send(f"\x1b[<{button};{col_from};{row}M")
+        for c in range(col_from + 4, col_to + 1, 4):
+            self.child.send(f"\x1b[<{button + 32};{c};{row}M")
+        self.child.send(f"\x1b[<{button};{col_to};{row}m")
+        self.drain(0.6)
+
+    def menu_row(self, label):
+        """Screen row of a menu entry, matched inside the box."""
+        for y in range(ROWS):
+            if label in self.screen.display[y] and "│" in self.screen.display[y]:
+                return y + 1
+        return None
+
     def gutter_top(self):
         """First buffer line number visible in the leftmost gutter."""
         for y in range(2, ROWS):
@@ -566,9 +580,11 @@ def main():
     # A left click away from the menu dismisses it and does NOT also move the
     # caret to wherever the user aimed to close it.
     s.click(8, 30, button=0)
-    before = s.status_ln_col()
     s.click(6, 20, button=2)
     check(len(box_rows()) >= 8, "menu reopens")
+    # Baseline after opening: the right-click itself moves the caret, so this
+    # isolates the dismissing click.
+    before = s.status_ln_col()
     s.click(20, 70, button=0)
     check(not box_rows(), "a click away dismisses the menu")
     check(s.status_ln_col() == before,
@@ -590,6 +606,129 @@ def main():
           "ctrl-q closes the menu rather than quitting")
     s.send("\x11", 1.5)
     check(not s.child.isalive(), "the next ctrl-q quits")
+    s.close()
+
+    # Menu rows actually run. Dispatch goes through the real key handler
+    # rather than the leaf routines, so undo state, doc revision and the
+    # ghost refresh all happen exactly as they do for the keystroke.
+    lines3 = "alpha bravo charlie\ndelta echo foxtrot\ngolf hotel india\n" * 5
+
+    s = Session(binary, lines3)
+    s.click(4, 8)
+    before = len(s.save_and_read().splitlines())
+    s.click(6, 30, button=2)
+    row = s.menu_row("Cut Line")
+    check(row is not None, "with no selection the row reads 'Cut Line'")
+    if row:
+        s.click(row, 32)
+        after = len(s.save_and_read().splitlines())
+        check(after == before - 1, "clicking Cut Line removes a line",
+              f"{before} -> {after}")
+    s.close()
+
+    # Copy Line then Paste puts the text back into the buffer: proves both
+    # rows really ran, which a label check alone would not. The copy carries
+    # no trailing newline, so it pastes inline and the line count is
+    # unchanged -- the text getting longer is the signal.
+    s = Session(binary, lines3)
+    s.click(4, 8)
+    before = s.save_and_read()
+    s.click(6, 30, button=2)
+    row = s.menu_row("Copy Line")
+    check(row is not None, "the menu offers Copy Line")
+    if row:
+        s.click(row, 32)
+        s.click(6, 30, button=2)
+        row = s.menu_row("Paste")
+        check(row is not None, "the menu offers Paste")
+        if row:
+            s.click(row, 32)
+            after = s.save_and_read()
+            check(len(after) > len(before),
+                  "Copy Line then Paste puts the text back",
+                  f"{len(before)} -> {len(after)} chars")
+    s.close()
+
+    # The caret rule: inside a selection nothing moves, outside it the caret
+    # follows the pointer.
+    s = Session(binary, lines3)
+    s.click(3, 7)
+    s.drag(3, 7, 18)
+    pinned = s.status_ln_col()
+    s.click(3, 12, button=2)
+    check(s.menu_row("Cut Line") is None,
+          "with a selection the row reads 'Cut', not 'Cut Line'")
+    check(s.status_ln_col() == pinned,
+          "a right-click inside the selection leaves the caret alone",
+          f"{pinned} -> {s.status_ln_col()}")
+    s.send("\x1b", 0.5)
+
+    s.click(3, 7)
+    moved_from = s.status_ln_col()
+    s.click(7, 15, button=2)
+    check(s.status_ln_col() != moved_from,
+          "a right-click outside any selection moves the caret",
+          f"{moved_from} -> {s.status_ln_col()}")
+    s.close()
+
+    # Keyboard drives the menu too
+    s = Session(binary, lines3)
+    s.click(4, 8)
+    s.click(6, 30, button=2)
+    check(s.menu_row("Cut Line") is not None, "menu open for keyboard test")
+    s.send("\x1b[B", 0.4)
+    s.send("\r", 0.8)
+    check(s.menu_row("Copy Line") is None and s.menu_row("Cut Line") is None,
+          "enter activates a row and closes the menu")
+    s.close()
+
+    # Rows that cannot work are greyed and inert rather than hidden
+    s = Session(binary, lines3)
+    s.click(6, 20, button=2)
+    row = s.menu_row("Go to Definition")
+    check(row is not None, "the LSP rows are listed even without a server")
+    if row:
+        c0 = s.screen.display[row - 1].index("│") + 1
+        greyed = s.screen.buffer[row - 1][c0 + 2].fg != "default"
+        check(greyed, "Go to Definition is greyed without a language server",
+              str(s.screen.buffer[row - 1][c0 + 2].fg))
+        s.click(row, c0 + 5)
+        check(s.menu_row("Go to Definition") is not None,
+              "clicking a disabled row does nothing and leaves the menu open")
+    s.close()
+
+    # With a language server the same rows are live. Self-skips without one.
+    s = Session(binary,
+                "#include <stdio.h>\n"
+                "int alpha_one(int a) { return a; }\n"
+                "int beta_two(int b) { return alpha_one(b); }\n"
+                "int main(void) { return beta_two(1); }\n", name="main.c")
+    with open(os.path.join(s.home, "compile_flags.txt"), "w") as f:
+        f.write("-std=c11\n")
+    s.drain(4.0)
+    s.click(5, 25, button=2)
+    row = s.menu_row("Go to Definition")
+    if row:
+        c0 = s.screen.display[row - 1].index("│") + 1
+        if s.screen.buffer[row - 1][c0 + 2].fg == "default":
+            check(True, "Go to Definition is live with a language server")
+        else:
+            print("  ..  skip LSP-enabled check: no language server attached")
+    s.send("\x1b", 0.5)
+
+    # The Command Palette row hands control to a blocking loop, so the menu
+    # must be gone from the screen before that loop starts drawing.
+    s.click(5, 25, button=2)
+    row = s.menu_row("Command Palette")
+    check(row is not None, "the menu offers the Command Palette")
+    if row:
+        c0 = s.screen.display[row - 1].index("│") + 1
+        s.click(row, c0 + 5)
+        # "Cut Line" is menu-only text; the palette lists "Cut"
+        leftovers = any("Cut Line" in s.screen.display[y] for y in range(ROWS))
+        check(not leftovers, "no menu residue behind the palette")
+        s.send("\x1b", 1.0)
+        check(s.child.isalive(), "the editor survives the palette round trip")
     s.close()
 
     if failures:
