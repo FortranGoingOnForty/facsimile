@@ -5,6 +5,7 @@ module completion_popup_module
                            json_get_object, json_has_key, &
                            json_array_size, json_get_array_element, &
                            json_get_array, json_get_number
+    use clickable_region_module, only: region_add, REGION_BLOCK
     implicit none
     private
 
@@ -238,6 +239,14 @@ contains
         ! Draw bottom border
         call terminal_move_cursor(display_row, popup%col)
         call terminal_write("└" // repeat("─", popup%width - 2) // "┘")
+
+        ! Claim the box so a click on it is swallowed instead of moving the
+        ! caret in the document underneath -- which used to leave the popup
+        ! open over a caret that had moved out from under it, so the next
+        ! Enter inserted the completion in the wrong place. display_row is
+        ! the bottom border, the last row actually drawn.
+        call region_add(REGION_BLOCK, popup%row, display_row, &
+                        popup%col, popup%col + popup%width - 1)
 
     end subroutine render_completion_popup
 

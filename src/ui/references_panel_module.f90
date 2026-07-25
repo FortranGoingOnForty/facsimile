@@ -1,6 +1,7 @@
 module references_panel_module
     use iso_fortran_env, only: int32
     use terminal_io_module, only: terminal_move_cursor, terminal_write
+    use clickable_region_module, only: region_add, REGION_BLOCK
     implicit none
     private
 
@@ -317,6 +318,12 @@ contains
                 call terminal_write(char(27) // '[0m')
             end if
         end if
+
+        ! Claim the strip so clicks cannot reach the document behind it.
+        ! This panel already refused clicks by accident, unlike its
+        ! siblings; registering makes that deliberate and uniform.
+        call region_add(REGION_BLOCK, start_row, panel%screen_height, &
+                        start_col, start_col + panel%width - 1)
     end subroutine render_references_panel
 
     subroutine render_empty_line(width)

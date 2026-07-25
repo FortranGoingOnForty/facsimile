@@ -5,6 +5,7 @@ module diagnostics_panel_module
                                   SEVERITY_ERROR, SEVERITY_WARNING, &
                                   SEVERITY_INFO, SEVERITY_HINT
     use terminal_io_module, only: terminal_write, terminal_move_cursor
+    use clickable_region_module, only: region_add, REGION_BLOCK
     implicit none
     private
 
@@ -263,6 +264,10 @@ contains
             call terminal_write(trim(line_buffer))
             call terminal_write(char(27) // '[0m')
         end if
+
+        ! Claim the strip so clicks cannot reach the document behind it
+        call region_add(REGION_BLOCK, 1, screen_rows, start_col, &
+                        start_col + panel%width - 1)
 
     end subroutine render_diagnostics_panel
 

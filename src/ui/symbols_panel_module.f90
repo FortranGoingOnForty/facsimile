@@ -1,6 +1,7 @@
 module symbols_panel_module
     use iso_fortran_env, only: int32
     use terminal_io_module, only: terminal_move_cursor, terminal_write
+    use clickable_region_module, only: region_add, REGION_BLOCK
     implicit none
     private
 
@@ -380,6 +381,13 @@ contains
         call terminal_write(line(1:min(len_trim(line), panel%panel_width)))
         call terminal_write(repeat(" ", max(0, panel%panel_width - len_trim(line))))
         call terminal_write(ESC // '[0m')
+
+        ! Claim the column strip. A click here used to reach the document
+        ! behind the panel and move the caret, so typing afterwards edited
+        ! the file while the user was looking at a symbol list.
+        call region_add(REGION_BLOCK, 1, screen_height, &
+                        panel%panel_start_col, &
+                        panel%panel_start_col + panel%panel_width - 1)
     end subroutine render_symbols_panel
 
     function get_symbol_icon(kind) result(icon)

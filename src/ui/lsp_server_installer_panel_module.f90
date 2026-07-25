@@ -3,6 +3,7 @@ module lsp_server_installer_panel_module
     use server_detection_module, only: detected_server_t, detect_all_servers, check_server_installed
     use server_installer_module, only: run_install_command, install_result_t
     use clipboard_module, only: copy_to_clipboard
+    use clickable_region_module, only: region_add, REGION_BLOCK
     implicit none
     private
 
@@ -326,6 +327,12 @@ contains
         row = row + 1
         call terminal_move_cursor(row, start_col)
         call terminal_write(border_bottom)
+
+        ! Claim the dialog. This one mattered most: the cursor is hidden
+        ! below, so a click falling through to the document moved the caret
+        ! with nothing on screen to show it had moved.
+        call region_add(REGION_BLOCK, start_row, row, start_col, &
+                        start_col + content_width - 1)
 
         ! Hide cursor while panel is shown
         call terminal_hide_cursor()

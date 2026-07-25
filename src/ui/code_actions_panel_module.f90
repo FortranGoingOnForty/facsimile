@@ -1,6 +1,7 @@
 module code_actions_panel_module
     use iso_fortran_env, only: int32
     use terminal_io_module, only: terminal_move_cursor, terminal_write
+    use clickable_region_module, only: region_add, REGION_BLOCK
     implicit none
     private
 
@@ -249,6 +250,10 @@ contains
         call pad_to_width(line_buffer, panel%width)
         call terminal_write(line_buffer(1:panel%width))
         call terminal_write(char(27) // '[0m')
+
+        ! Claim the strip so clicks cannot reach the document behind it
+        call region_add(REGION_BLOCK, 1, screen_rows, start_col, &
+                        start_col + panel%width - 1)
 
     end subroutine render_code_actions_panel
 
