@@ -316,6 +316,10 @@ contains
                 logical :: ok, copied
                 call parse_mouse_event(key_str, ev, btn, &
                     mrow, mcol, ok)
+                ! Wheel events now carry coordinates and so parse here too,
+                ! but the panel's scrollback handler below owns them; taking
+                ! them here would silently disable panel scrolling.
+                if (index(key_str, 'mouse-scroll-') == 1) ok = .false.
                 if (ok) then
                     if (terminal_panel_in_region( &
                         editor%terminal_panel, mrow)) then
@@ -401,11 +405,11 @@ contains
                     get_paste_text())
                 return
             end if
-            if (trim(key_str) == 'mouse-scroll-up') then
+            if (index(key_str, 'mouse-scroll-up') == 1) then
                 call terminal_panel_scroll(editor%terminal_panel, 3)
                 return
             end if
-            if (trim(key_str) == 'mouse-scroll-down') then
+            if (index(key_str, 'mouse-scroll-down') == 1) then
                 call terminal_panel_scroll(editor%terminal_panel, -3)
                 return
             end if
@@ -960,16 +964,9 @@ contains
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
-        case('mouse-scroll-up')
-            ! Scroll viewport up by 3 lines (don't move cursor)
-            editor%viewport_line = max(1, editor%viewport_line - 3)
-            call sync_editor_to_pane(editor)
-
-        case('mouse-scroll-down')
-            ! Scroll viewport down by 3 lines (don't move cursor)
-            editor%viewport_line = min(max(1, line_count - editor%screen_rows + 2), &
-                                      editor%viewport_line + 3)
-            call sync_editor_to_pane(editor)
+        ! Wheel events are no longer bare strings: they carry row and column,
+        ! so they fall through to handle_mouse_event_action like every other
+        ! mouse event and scroll whatever is under the pointer.
 
         case('ctrl-home')
             ! Jump to beginning of file
@@ -4761,15 +4758,10 @@ contains
             continue
 
         case('mouse-scroll-up')
-            ! Scroll up by 3 lines
-            editor%viewport_line = max(1, editor%viewport_line - 3)
-            call sync_editor_to_pane(editor)
+            call scroll_pane_at(editor, buffer, row, col, -3)
 
         case('mouse-scroll-down')
-            ! Scroll down by 3 lines
-            editor%viewport_line = min(buffer_get_line_count(buffer) - editor%screen_rows + 2, &
-                                      editor%viewport_line + 3)
-            call sync_editor_to_pane(editor)
+            call scroll_pane_at(editor, buffer, row, col, 3)
 
         case('mouse-alt')
             ! Alt+click - add or remove cursor
@@ -4936,6 +4928,49 @@ contains
         ! Sync the updated cursor position back to the active pane
         call sync_editor_to_pane(editor)
     end subroutine position_cursor_at_screen
+
+    !> Scroll whichever pane the pointer is over by `delta` lines.
+    !>
+    !> A wheel tick used to move the active pane wherever the pointer was, so
+    !> scrolling over the tab bar, the status bar, the file tree or an
+    !> inactive pane moved a document the pointer was not on. Landing outside
+    !> every pane now does nothing, which is the honest answer for the bars.
+    subroutine scroll_pane_at(editor, buffer, screen_row, screen_col, delta)
+        use editor_state_module, only: get_active_pane_indices
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: screen_row, screen_col, delta
+        integer :: tab_idx, pane_idx, i, line_count, top, last_top
+
+        call get_active_pane_indices(editor, tab_idx, pane_idx)
+        if (tab_idx < 1) return
+        if (tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+
+        line_count = buffer_get_line_count(buffer)
+        ! Same clamp the keyboard scroll uses: keep a couple of lines visible
+        last_top = max(1, line_count - editor%screen_rows + 2)
+
+        do i = 1, size(editor%tabs(tab_idx)%panes)
+            associate(pane => editor%tabs(tab_idx)%panes(i))
+                if (screen_row >= pane%screen_row .and. &
+                    screen_row < pane%screen_row + pane%screen_height .and. &
+                    screen_col >= pane%screen_col .and. &
+                    screen_col < pane%screen_col + pane%screen_width) then
+
+                    top = max(1, pane%viewport_line + delta)
+                    if (top > last_top) top = last_top
+                    pane%viewport_line = top
+
+                    ! The renderer reads the editor-level viewport for the
+                    ! active pane, so keep the two in step; scrolling an
+                    ! inactive pane must leave it alone.
+                    if (i == pane_idx) editor%viewport_line = top
+                    return
+                end if
+            end associate
+        end do
+    end subroutine scroll_pane_at
 
     !> Close the one surface sitting closest to the user, if any.
     !>

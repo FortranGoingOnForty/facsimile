@@ -1225,11 +1225,31 @@ contains
                             if (is_release) then
                                 write(key_str, '(a,i0,a,i0,a,i0)') 'mouse-release:', button, ':', row, ':', col
                             else
-                                ! Check for scroll wheel events (button 64 = scroll up, 65 = scroll down)
-                                if (button == 64) then
-                                    key_str = 'mouse-scroll-up'
-                                else if (button == 65) then
-                                    key_str = 'mouse-scroll-down'
+                                ! Wheel events carry bit 6. Tested before the
+                                ! modifier bits so a modified wheel (ctrl 80,
+                                ! alt 72, shift 68) still reads as a wheel
+                                ! rather than falling into the shift/alt/ctrl
+                                ! click branches, which have no handler and
+                                ! dropped it. The low two bits pick the
+                                ! direction: 0 up, 1 down, 2 and 3 horizontal,
+                                ! which nothing binds.
+                                !
+                                ! Coordinates are carried now. Without them a
+                                ! wheel tick could only ever move the active
+                                ! pane, so scrolling over the tab bar, the
+                                ! tree or an inactive pane moved the document
+                                ! the pointer was not even over.
+                                if (iand(button, 64) /= 0) then
+                                    select case (iand(button, 3))
+                                    case (0)
+                                        write(key_str, '(a,i0,a,i0,a,i0)') &
+                                            'mouse-scroll-up:', button, ':', row, ':', col
+                                    case (1)
+                                        write(key_str, '(a,i0,a,i0,a,i0)') &
+                                            'mouse-scroll-down:', button, ':', row, ':', col
+                                    case default
+                                        key_str = ''   ! horizontal wheel
+                                    end select
                                 ! Check modifiers in button code
                                 else if (iand(button, 4) /= 0) then  ! Shift
                                     write(key_str, '(a,i0,a,i0,a,i0)') 'mouse-shift:', button, ':', row, ':', col
