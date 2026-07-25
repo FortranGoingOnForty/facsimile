@@ -33,6 +33,8 @@ module renderer_module
     public :: render_status_bar, render_cursor
     public :: set_status_message, clear_status_message, has_status_message
     public :: show_line_numbers, LINE_NUMBER_WIDTH
+    ! clip_to_cells now lives in utf8_module; re-exported here so existing
+    ! importers (and test_ghost_render_safety) keep resolving it
     public :: clip_to_cells, is_terminal_safe  ! exposed for unit tests
     public :: render_screen_with_tree, render_screen_with_lsp_panel
 
@@ -2514,36 +2516,6 @@ contains
     ! Cut text to at most `cells` display columns, only ever on a character
     ! boundary, and report the width actually used. Wide characters that would
     ! straddle the limit are dropped rather than half-drawn.
-    subroutine clip_to_cells(text, cells, clipped, used)
-        character(len=*), intent(in) :: text
-        integer, intent(in) :: cells
-        character(len=:), allocatable, intent(out) :: clipped
-        integer, intent(out) :: used
-        character(len=:), allocatable :: ch
-        integer :: ci, nchars, w, last_byte, start_byte
-
-        used = 0
-        last_byte = 0
-        nchars = utf8_char_count(text)
-
-        do ci = 1, nchars
-            ch = utf8_char_at(text, ci)
-            if (len(ch) == 0) exit
-            w = utf8_display_width(ch)
-            if (used + w > cells) exit
-            used = used + w
-            start_byte = utf8_char_to_byte_index(text, ci)
-            if (start_byte <= 0) exit
-            last_byte = start_byte + len(ch) - 1
-        end do
-
-        if (last_byte <= 0) then
-            clipped = ''
-        else
-            clipped = text(1:last_byte)
-        end if
-    end subroutine clip_to_cells
-
     ! True when every byte can be written to the terminal without being taken
     ! as a control code. Rejects C0 (except tab), DEL, and the C1 range's lead
     ! byte pattern is left to the caller's UTF-8 validation.

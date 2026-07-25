@@ -6,6 +6,7 @@ module utf8_module
     public :: utf8_char_count, utf8_byte_to_char_index, utf8_char_to_byte_index
     public :: utf8_char_at, utf8_display_width, utf8_is_valid_start
     public :: utf8_char_col_to_utf16, utf16_to_utf8_char_col
+    public :: clip_to_cells
 
 contains
 
@@ -335,5 +336,42 @@ contains
             width = 1
         end if
     end function utf8_char_width
+
+    ! Longest prefix of `text` that fits in `cells` display columns, cutting
+    ! only on character boundaries and dropping a wide character that would
+    ! straddle the limit. `used` reports the width actually taken, so callers
+    ! can pad the remainder exactly.
+    !
+    ! Lives here rather than in renderer_module because UI modules that must
+    ! compile before the renderer need it too, and it depends on nothing else.
+    subroutine clip_to_cells(text, cells, clipped, used)
+        character(len=*), intent(in) :: text
+        integer, intent(in) :: cells
+        character(len=:), allocatable, intent(out) :: clipped
+        integer, intent(out) :: used
+        character(len=:), allocatable :: ch
+        integer :: ci, nchars, w, last_byte, start_byte
+
+        used = 0
+        last_byte = 0
+        nchars = utf8_char_count(text)
+
+        do ci = 1, nchars
+            ch = utf8_char_at(text, ci)
+            if (len(ch) == 0) exit
+            w = utf8_display_width(ch)
+            if (used + w > cells) exit
+            used = used + w
+            start_byte = utf8_char_to_byte_index(text, ci)
+            if (start_byte <= 0) exit
+            last_byte = start_byte + len(ch) - 1
+        end do
+
+        if (last_byte <= 0) then
+            clipped = ''
+        else
+            clipped = text(1:last_byte)
+        end if
+    end subroutine clip_to_cells
 
 end module utf8_module
