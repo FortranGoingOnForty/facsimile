@@ -13,6 +13,7 @@ Requires: pip3 install pexpect pyte
 """
 
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -95,6 +96,11 @@ class Session:
                 return r.rstrip()
         return None
 
+    def cursor_count(self):
+        """The status bar shows '[n cursors]' only while there are several."""
+        m = re.search(r"\[(\d+) cursors\]", self.screen.display[ROWS - 1])
+        return int(m.group(1)) if m else 1
+
     def save(self):
         self.child.send("\x13")
         self.drain(0.8)
@@ -170,6 +176,30 @@ def main():
     check(saved.count("Y") == 1 and "aa [1]Y bb" in saved,
           "alt-click toggles a cursor off", saved.strip())
     s.close()
+
+    # --- Alt-click toggle must work in split panes, not just unsplit.
+    #
+    # is_cursor_at_screen_pos assumed content began at row 2 and read the
+    # editor-level viewport instead of the pane's. That error used to cancel
+    # against an identical one in position_cursor_at_screen, so the toggle
+    # looked fine while every click was one line off; correcting the pane rect
+    # alone turned a second alt-click on the same spot into a third cursor.
+    # Every other case in this file is single-pane, which is why it was missed.
+    for split_key, label in (("", "unsplit"), ("\x1bv", "vertical split"),
+                             ("\x1bs", "horizontal split")):
+        s = Session(binary, "".join(f"line{i:02d} alpha beta\n" for i in range(1, 41)))
+        if split_key:
+            s.child.send(split_key)
+            s.drain(1.2)
+        s.click(4, 12)                    # primary cursor
+        s.click(6, 12, button=8)          # add one
+        added = s.cursor_count()
+        s.click(6, 12, button=8)          # same spot: must remove it
+        removed = s.cursor_count()
+        check(added == 2, f"{label}: alt-click adds a cursor", f"{added} cursors")
+        check(removed == 1, f"{label}: alt-click on the same spot removes it",
+              f"{removed} cursors")
+        s.close()
 
     if failures:
         print(f"integration_multicursor: FAILED ({len(failures)}: {', '.join(failures)})")
