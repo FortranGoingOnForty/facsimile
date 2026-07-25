@@ -19,6 +19,7 @@ Requires: pip3 install pexpect pyte
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -119,6 +120,23 @@ class Session:
         """Screen row of a menu entry, matched inside the box."""
         for y in range(ROWS):
             if label in self.screen.display[y] and "│" in self.screen.display[y]:
+                return y + 1
+        return None
+
+    def menu_row_enabled(self, label):
+        """False when the row is drawn dim. None when the row is absent."""
+        row = self.menu_row(label)
+        if row is None:
+            return None
+        c0 = self.screen.display[row - 1].index("│") + 1
+        return self.screen.buffer[row - 1][c0 + 2].fg == "default"
+
+    def tree_row(self, name):
+        """Row of a name within the tree column only. Searching the whole
+        screen would match the tab bar and the document, which is how an
+        earlier version of this test right-clicked a tab by accident."""
+        for y in range(1, ROWS):
+            if name in self.screen.display[y][:30]:
                 return y + 1
         return None
 
@@ -743,6 +761,72 @@ def main():
               f"{pinned} -> {s.status_ln_col()}")
         s.send("\x1b", 0.5)
     s.close()
+
+    # Tree menu. Git rows are greyed from the per-file status the tree already
+    # tracks, and invoked by setting the ctrl-g prefix and sending the letter,
+    # so the menu and the keyboard cannot diverge.
+    if shutil.which("git") is None:
+        print("  ..  skip tree context menu: git not available")
+    else:
+        s = Session(binary, "open me\n", name="anchor.md")
+
+        def git(*args):
+            return subprocess.run(("git",) + args, cwd=s.home,
+                                  capture_output=True, text=True)
+
+        git("init", "-q")
+        git("config", "user.email", "t@t")
+        git("config", "user.name", "t")
+        git("add", "anchor.md")
+        git("commit", "-qm", "init")
+        with open(os.path.join(s.home, "zulu.txt"), "w") as f:
+            f.write("new\n")                       # untracked
+        with open(os.path.join(s.home, "yankee.txt"), "w") as f:
+            f.write("s\n")
+        git("add", "yankee.txt")                   # staged
+        os.makedirs(os.path.join(s.home, "sub"))
+        with open(os.path.join(s.home, "sub", "i.txt"), "w") as f:
+            f.write("i\n")
+
+        s.send("\x02", 1.8)                        # ctrl-b: open the tree
+
+        for name, want_stage, want_unstage in (("zulu.txt", True, False),
+                                               ("yankee.txt", False, True)):
+            row = s.tree_row(name)
+            check(row is not None, f"{name} appears in the tree")
+            if row:
+                s.click(row, 6, button=2)
+                check(s.menu_row_enabled("Stage") == want_stage,
+                      f"{name}: Stage is {'live' if want_stage else 'greyed'}",
+                      str(s.menu_row_enabled("Stage")))
+                check(s.menu_row_enabled("Unstage") == want_unstage,
+                      f"{name}: Unstage is {'live' if want_unstage else 'greyed'}",
+                      str(s.menu_row_enabled("Unstage")))
+                s.send("\x1b", 0.6)
+
+        row = s.tree_row("sub")
+        if row:
+            s.click(row, 6, button=2)
+            check(s.menu_row("Expand or Collapse") is not None,
+                  "a directory row offers Expand or Collapse")
+            check(s.menu_row("Open to the Side") is None,
+                  "a directory row offers no splits")
+            check(s.menu_row("Stage") is None,
+                  "a directory row offers no git actions")
+            s.send("\x1b", 0.6)
+
+        # And the action really runs
+        row = s.tree_row("zulu.txt")
+        if row:
+            s.click(row, 6, button=2)
+            mr = s.menu_row("Stage")
+            if mr:
+                c0 = s.screen.display[mr - 1].index("│") + 1
+                s.click(mr, c0 + 3)
+                out = git("status", "--porcelain", "zulu.txt").stdout.strip()
+                check(out.startswith("A"), "clicking Stage stages the file",
+                      f"git says {out!r}")
+        s.close()
 
     if failures:
         print(f"integration_mouse: FAILED ({len(failures)}: {', '.join(failures)})")
