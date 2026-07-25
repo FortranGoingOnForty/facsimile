@@ -17,6 +17,7 @@ Requires: pip3 install pexpect pyte
 """
 
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -101,6 +102,18 @@ class Session:
 
     def row_text(self, row):
         return self.screen.display[row - 1].rstrip()
+
+    def gutter_line(self, row):
+        """The buffer line number the gutter shows on this screen row."""
+        m = re.match(r"\s*(\d+)\s", self.screen.display[row - 1])
+        return int(m.group(1)) if m else None
+
+    def status_line_no(self):
+        m = re.search(r"Ln (\d+)", self.screen.display[ROWS - 1])
+        return int(m.group(1)) if m else None
+
+    def cursor_row(self):
+        return self.screen.cursor.y + 1
 
     def find_row(self, needle):
         for y, r in enumerate(self.screen.display):
@@ -216,6 +229,34 @@ def main():
     check(not any("[<" in r for r in after),
           "navigator: no mouse bytes echoed")
     s.close()
+
+    # Split panes: a click must select the line it points at. The stored pane
+    # rect used to be the header row while the caret renderers added the
+    # header offset themselves, so every click in a split landed one line
+    # low and the caret was drawn one row below the pointer.
+    lines = "".join(f"line{i:02d} alpha beta\n" for i in range(1, 41))
+    for split_key, label in (("", "unsplit"), ("\x1bv", "alt-v split"),
+                             ("\x1bs", "alt-s split")):
+        s = Session(binary, lines)
+        if split_key:
+            s.send(split_key, 1.2)
+        wrong_line, wrong_caret, probed = [], [], 0
+        for row in range(3, 16):
+            shown = s.gutter_line(row)
+            if shown is None:
+                continue
+            s.click(row, 12)
+            probed += 1
+            if s.status_line_no() != shown:
+                wrong_line.append((row, shown, s.status_line_no()))
+            if s.cursor_row() != row:
+                wrong_caret.append((row, s.cursor_row()))
+        check(probed >= 8, f"{label}: probed enough rows", f"only {probed}")
+        check(not wrong_line, f"{label}: click selects the line it points at",
+              str(wrong_line[:3]))
+        check(not wrong_caret, f"{label}: caret is drawn on the clicked row",
+              str(wrong_caret[:3]))
+        s.close()
 
     if failures:
         print(f"integration_mouse: FAILED ({len(failures)}: {', '.join(failures)})")
