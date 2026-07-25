@@ -8,7 +8,13 @@ module command_handler_module
     use text_buffer_module
     use clickable_region_module, only: clickable_region_t, region_at, &
                                        REGION_TAB, REGION_BLOCK, REGION_FUSS_TOGGLE, &
-                                       REGION_TREE_ROW
+                                       REGION_TREE_ROW, REGION_CTX_ROW, REGION_NONE
+    use context_menu_module, only: context_menu_begin, context_menu_add_item, &
+                                   context_menu_add_separator, context_menu_show, &
+                                   context_menu_hide, is_context_menu_visible, &
+                                   context_menu_handle_key, context_menu_selected, &
+                                   context_menu_kind, context_menu_row_action, &
+                                   context_menu_row_enabled
     use renderer_module, only: update_viewport, render_screen, render_screen_with_tree, tree_state, &
                                fuss_search_buffer, fuss_search_len, fuss_search_last_time, &
                                fuss_fuzzy_jump, fuss_reset_search, get_time_ms, &
@@ -29,6 +35,7 @@ module command_handler_module
         is_terminal_panel_visible, terminal_panel_handle_key, &
         terminal_panel_handle_mouse, terminal_panel_in_region, &
         terminal_panel_paste, terminal_panel_scroll, &
+        get_terminal_panel_height, &
         terminal_panel_is_alive, terminal_panel_restart
     use input_handler_module, only: get_paste_text
     use bracket_matching_module, only: find_matching_bracket
@@ -103,6 +110,15 @@ module command_handler_module
                                                   refresh_server_status
     implicit none
     private
+
+    ! Context-menu kinds and row actions. The menu module treats these as
+    ! opaque integers; the meaning lives here, next to the dispatch.
+    integer, parameter :: CTX_KIND_DOC = 1, CTX_KIND_TREE = 2
+    integer, parameter :: ACT_CUT = 1, ACT_COPY = 2, ACT_PASTE = 3
+    integer, parameter :: ACT_COMMENT = 4, ACT_SELECT_ALL = 5
+    integer, parameter :: ACT_GOTO_DEF = 6, ACT_FIND_REFS = 7, ACT_PALETTE = 8
+    integer, parameter :: ACT_TREE_ACTIVATE = 20, ACT_TREE_VSPLIT = 21
+    integer, parameter :: ACT_TREE_HSPLIT = 22
 
     public :: handle_key_command, init_command_handler, cleanup_command_handler
     public :: save_initial_state_for_undo
@@ -350,9 +366,37 @@ contains
 
                 call parse_mouse_event(key_str, ev, btn, mrow, mcol, ok)
                 if (ok) then
+                    if (btn == 2) then
+                        ! Right-click. A second one re-anchors an open menu
+                        ! rather than stacking, as every other editor does.
+                        if (is_context_menu_visible()) call context_menu_hide()
+                        hit = region_at(mrow, mcol)
+                        if (hit%kind == REGION_TREE_ROW) then
+                            call open_tree_context_menu(editor, hit%payload, mrow, mcol)
+                        else if (hit%kind == REGION_NONE) then
+                            call open_document_context_menu(editor, mrow, mcol)
+                        end if
+                        ! Tabs, the chevron and panel blocks get no menu, and
+                        ! the click is swallowed rather than acted on.
+                        return
+                    end if
                     if (btn == 0) then
+                        ! A left click anywhere but on a row dismisses an open
+                        ! menu and goes no further -- it must not also move the
+                        ! caret to wherever the user aimed to close the box.
+                        if (is_context_menu_visible()) then
+                            hit = region_at(mrow, mcol)
+                            if (hit%kind /= REGION_CTX_ROW) then
+                                call context_menu_hide()
+                                return
+                            end if
+                        end if
                         hit = region_at(mrow, mcol)
                         select case (hit%kind)
+                        case (REGION_CTX_ROW)
+                            ! Activation lands in stage 3; for now the click is
+                            ! swallowed so it cannot reach the document.
+                            return
                         case (REGION_TAB)
                             if (hit%payload >= 1 .and. &
                                 hit%payload <= size(editor%tabs)) then
@@ -386,6 +430,28 @@ contains
                     end if
                 end if
             end block
+        end if
+
+        ! The context menu is topmost, so its keys are taken before the
+        ! terminal panel's and long before fuss mode's.
+        if (is_context_menu_visible()) then
+            ! ctrl-q must pass through. A surface that can swallow it forever
+            ! is exactly the trap integration_ctrlq.py exists to catch; the
+            ! cascade closes the menu instead.
+            if (trim(key_str) /= 'ctrl-q') then
+                if (context_menu_handle_key(trim(key_str))) return
+                ! A release or a drag is swallowed without dismissing. The
+                ! right-press that opens the menu is followed by its own
+                ! release in the same coalesced burst, with no render in
+                ! between, so treating a release as "some other key" closed
+                ! the menu on the very frame it opened.
+                if (index(key_str, 'mouse-release:') == 1) return
+                if (index(key_str, 'mouse-drag:') == 1) return
+                ! Anything else dismisses, including a wheel tick, which would
+                ! otherwise slide the document out from under the box.
+                call context_menu_hide()
+                return
+            end if
         end if
 
         ! Route keys to integrated terminal when focused (highest priority)
@@ -4978,6 +5044,133 @@ contains
         end do
     end subroutine scroll_pane_at
 
+    !> Would a synthetic key sent from a menu row actually reach the main
+    !> dispatcher? Every one of these routes input away before the select
+    !> case, so a menu offered here would have inert rows. Refusing to open
+    !> is honest; opening a menu whose rows do nothing is not.
+    !>
+    !> Fuss mode is included deliberately. With the tree open the keyboard
+    !> belongs to the tree: ctrl-x, ctrl-c, ctrl-v, ctrl-/ and ctrl-p are all
+    !> outside its exemption list and would reach handle_fuss_input instead.
+    !> A left click in the document is already inert there, so this is
+    !> consistent rather than a new limitation.
+    function document_menu_available(editor) result(ok)
+        type(editor_state_t), intent(in) :: editor
+        logical :: ok
+
+        ok = .false.
+        if (editor%fuss_mode_active) return
+        if (is_terminal_panel_visible(editor%terminal_panel)) then
+            if (editor%terminal_panel%focused) return
+        end if
+        if (is_completion_visible(editor%completion_popup)) return
+        if (is_diagnostics_panel_visible(editor%diagnostics_panel)) return
+        if (is_code_actions_panel_visible(editor%code_actions_panel)) return
+        if (is_references_panel_visible(editor%references_panel)) return
+        if (is_symbols_panel_visible(editor%symbols_panel)) return
+        if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel)) return
+        ok = .true.
+    end function document_menu_available
+
+    !> The rectangle a menu may occupy: below the tab bar, above the status
+    !> bar, and clear of the terminal panel when it is up.
+    subroutine menu_bounds(editor, top_row, bottom_row, left_col, right_col)
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(out) :: top_row, bottom_row, left_col, right_col
+
+        top_row = 2
+        if (size(editor%tabs) == 0) top_row = 1
+        bottom_row = editor%screen_rows - 1
+        if (is_terminal_panel_visible(editor%terminal_panel)) then
+            bottom_row = bottom_row - get_terminal_panel_height(editor%terminal_panel)
+        end if
+        left_col = 1
+        right_col = editor%screen_cols
+    end subroutine menu_bounds
+
+    !> True when the cell lies inside some pane of the active tab. Without it
+    !> a right-click on blank space would open a menu whose caret rule had
+    !> nothing to act on.
+    function cell_in_a_pane(editor, screen_row, screen_col) result(inside)
+        use editor_state_module, only: get_active_pane_indices
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(in) :: screen_row, screen_col
+        logical :: inside
+        integer :: tab_idx, pane_idx, i
+
+        inside = .false.
+        call get_active_pane_indices(editor, tab_idx, pane_idx)
+        if (tab_idx < 1) return
+        if (tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+
+        do i = 1, size(editor%tabs(tab_idx)%panes)
+            associate(pane => editor%tabs(tab_idx)%panes(i))
+                if (screen_row >= pane%screen_row .and. &
+                    screen_row < pane%screen_row + pane%screen_height .and. &
+                    screen_col >= pane%screen_col .and. &
+                    screen_col < pane%screen_col + pane%screen_width) then
+                    inside = .true.
+                end if
+            end associate
+            if (inside) return
+        end do
+    end function cell_in_a_pane
+
+    !> Right-click in the document. Rows are wired up in a later stage.
+    subroutine open_document_context_menu(editor, mrow, mcol)
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: mrow, mcol
+        integer :: top_row, bottom_row, left_col, right_col
+        logical :: shown
+
+        if (.not. document_menu_available(editor)) return
+        if (.not. cell_in_a_pane(editor, mrow, mcol)) return
+
+        call context_menu_begin(CTX_KIND_DOC)
+        call context_menu_add_item('Cut', 'Ctrl+X', ACT_CUT)
+        call context_menu_add_item('Copy', 'Ctrl+C', ACT_COPY)
+        call context_menu_add_item('Paste', 'Ctrl+V', ACT_PASTE)
+        call context_menu_add_separator()
+        call context_menu_add_item('Toggle Comment', 'Ctrl+/', ACT_COMMENT)
+        call context_menu_add_item('Select All', 'Alt+A', ACT_SELECT_ALL)
+        call context_menu_add_separator()
+        call context_menu_add_item('Go to Definition', 'F12', ACT_GOTO_DEF)
+        call context_menu_add_item('Find References', 'Shift+F12', ACT_FIND_REFS)
+        call context_menu_add_separator()
+        call context_menu_add_item('Command Palette', 'Ctrl+P', ACT_PALETTE)
+
+        call menu_bounds(editor, top_row, bottom_row, left_col, right_col)
+        shown = context_menu_show(mrow, mcol, top_row, bottom_row, left_col, right_col)
+        if (shown) g_lsp_ui_changed = .true.
+    end subroutine open_document_context_menu
+
+    !> Right-click on a file-tree row. Rows are wired up in a later stage.
+    subroutine open_tree_context_menu(editor, item_idx, mrow, mcol)
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: item_idx, mrow, mcol
+        integer :: top_row, bottom_row, left_col, right_col
+        logical :: shown, is_dir
+
+        if (item_idx < 1) return
+        if (item_idx > tree_state%n_selectable) return
+        tree_state%selected_index = item_idx
+        is_dir = tree_state%selectable_files(item_idx)%is_directory
+
+        call context_menu_begin(CTX_KIND_TREE)
+        if (is_dir) then
+            call context_menu_add_item('Expand or Collapse', 'Space', ACT_TREE_ACTIVATE)
+        else
+            call context_menu_add_item('Open', 'Enter', ACT_TREE_ACTIVATE)
+            call context_menu_add_item('Open to the Side', 'Alt+V', ACT_TREE_VSPLIT)
+            call context_menu_add_item('Open Below', 'Alt+S', ACT_TREE_HSPLIT)
+        end if
+
+        call menu_bounds(editor, top_row, bottom_row, left_col, right_col)
+        shown = context_menu_show(mrow, mcol, top_row, bottom_row, left_col, right_col)
+        if (shown) g_lsp_ui_changed = .true.
+    end subroutine open_tree_context_menu
+
     !> Close the one surface sitting closest to the user, if any.
     !>
     !> The order is the same "what is on top" the mouse router uses: the
@@ -4991,6 +5184,13 @@ contains
         logical, intent(out) :: closed
 
         closed = .true.
+
+        ! The menu floats above everything and is the most transient thing on
+        ! screen, so it goes first.
+        if (is_context_menu_visible()) then
+            call context_menu_hide()
+            return
+        end if
 
         if (is_terminal_panel_visible(editor%terminal_panel)) then
             editor%terminal_panel%visible = .false.

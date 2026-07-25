@@ -7,6 +7,7 @@ module renderer_module
     use bracket_matching_module
     use clickable_region_module, only: regions_begin_frame, region_add, REGION_TAB, &
                                        REGION_FUSS_TOGGLE
+    use context_menu_module, only: render_context_menu, is_context_menu_visible
     use file_tree_module
     use file_tree_renderer_module
     use syntax_highlighter_module
@@ -291,6 +292,7 @@ contains
                     call render_completion_popup(editor%completion_popup)
                     call render_cursor_for_panes(editor)
                 end if
+                call render_menu_overlay()
                 return  ! Exit after rendering panes
             end if
         end if
@@ -399,7 +401,23 @@ contains
                 call render_cursor(editor, buffer)
             end if
         end if
+        call render_menu_overlay()
     end subroutine render_screen
+
+    ! Draw the context menu, if any, as the last thing in a frame.
+    !
+    ! Must come after the caret renderers: they write reverse-video cells at
+    ! every inactive multi-cursor position, which would punch holes through
+    ! the box. And the frame's only flush is the caret call, so anything
+    ! written after it would otherwise sit in the output buffer until the
+    ! next frame -- a menu one frame late, and stale bytes on the frame it is
+    ! dismissed. Hiding the caret both suppresses a caret blinking behind the
+    ! box and flushes.
+    subroutine render_menu_overlay()
+        if (.not. is_context_menu_visible()) return
+        call render_context_menu()
+        call terminal_hide_cursor()
+    end subroutine render_menu_overlay
 
     subroutine render_line_with_selections(buffer, editor, line_num, start_col, width)
         type(buffer_t), intent(in) :: buffer
@@ -1422,6 +1440,7 @@ contains
             end if
             call show_caret_unless_selecting(editor)
         end if
+        call render_menu_overlay()
     end subroutine render_screen_with_tree
 
     subroutine render_vertical_separator(col, start_row, end_row)
@@ -2282,6 +2301,7 @@ contains
         ! rather than covering it, and are already accounted for in the
         ! width calculation below.
         if (editor%completion_popup%visible) return
+        if (is_context_menu_visible()) return
         if (is_symbols_panel_visible(editor%symbols_panel)) return
         if (is_code_actions_panel_visible(editor%code_actions_panel)) return
         if (is_lsp_server_installer_panel_visible(editor%lsp_installer_panel)) return
@@ -2904,6 +2924,7 @@ contains
         call render_cursor_for_lsp_panel(editor, buffer, 1, editor_width)
 
         call terminal_show_cursor()
+        call render_menu_overlay()
     end subroutine render_screen_with_lsp_panel
 
     ! Helper to render editor area when LSP panel is on right
