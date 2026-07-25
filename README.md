@@ -39,9 +39,10 @@ fpm run -- [filename]
   and closes the tree, since the tree owns the keyboard while it is up
 - `drag` - select text (left button only)
 - `alt-click` - add or remove a cursor
-- `right-click` - context menu at the pointer; `shift-f10` or `alt-z` opens the
-  same menu at the caret. Right-clicking inside a selection keeps it, so Cut
-  and Copy act on the selection rather than the line
+- `right-click` (or `ctrl-click`, for a one-button pointer) - context menu at
+  the pointer; `shift-f10` or `alt-z` opens the same menu at the caret.
+  Right-clicking inside a selection keeps it, so Cut and Copy act on the
+  selection rather than the line
 - `wheel` - scrolls whatever is under the pointer: the pane, an inactive pane,
   or the terminal panel's scrollback. Over the tab bar or status bar it does
   nothing rather than moving a document you are not pointing at

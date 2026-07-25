@@ -295,7 +295,8 @@ Some vim-style keybindings work:
 | Click | Position the cursor. With the file tree open this also closes it and takes focus, since the tree owns the keyboard while it is up |
 | Drag | Select text. Left button only — a right- or middle-drag does nothing |
 | `Alt+Click` | Add or remove a cursor |
-| Right-click | Context menu at the pointer |
+| Right-click | Context menu at the pointer. Any modifier held still counts |
+| `Ctrl+Click` | The same menu, for a one-button pointer |
 | `Shift+F10` or `Alt+Z` | The same menu at the caret |
 | Wheel | Scrolls whatever is under the pointer: the pane, an inactive pane, or the terminal panel's scrollback. Over the tab bar or status bar it does nothing |
 | Click a tab | Switch to it |

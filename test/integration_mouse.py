@@ -852,6 +852,39 @@ def main():
               "clicking a tree row still opens that file")
     s.close()
 
+    # Modifier clicks. The decoder classifies by modifier before button, so a
+    # right-click with anything held arrives as mouse-ctrl:/mouse-shift:/
+    # mouse-alt: rather than mouse-click: and used to be dropped entirely.
+    # Ctrl+left-click opens the menu too, the macOS convention.
+    s = Session(binary, "".join(f"line{i:02d} alpha beta\n" for i in range(1, 15)))
+
+    def opens_menu(button):
+        s.click(4, 10)                          # reset somewhere harmless
+        s.click(7, 30, button=button)
+        got = s.menu_row("Cut Line") is not None or s.menu_row("Cut") is not None
+        if got:
+            s.send("\x1b", 0.4)
+        return got
+
+    check(opens_menu(2), "plain right-click opens the menu")
+    check(opens_menu(16), "ctrl+left-click opens the menu")
+    check(opens_menu(18), "ctrl+right-click opens the menu")
+    check(opens_menu(6), "shift+right-click opens the menu")
+    check(not opens_menu(4), "shift+left-click stays unbound")
+    check(not opens_menu(8), "alt+left-click stays the multi-cursor toggle")
+
+    # A ctrl-drag must not spawn a menu per motion event
+    s.click(4, 10)
+    s.child.send("\x1b[<16;10;8M")
+    for c in (14, 18, 22, 26):
+        s.child.send(f"\x1b[<48;{c};8M")
+    s.drain(0.8)
+    s.child.send("\x1b[<16;26;8m")
+    s.drain(0.5)
+    boxes = sum(1 for y in range(ROWS) if "┌" in s.screen.display[y])
+    check(boxes <= 1, "a ctrl-drag does not stack menus", f"{boxes} boxes")
+    s.close()
+
     if failures:
         print(f"integration_mouse: FAILED ({len(failures)}: {', '.join(failures)})")
         sys.exit(1)
