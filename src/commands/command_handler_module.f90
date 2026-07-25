@@ -25,7 +25,8 @@ module command_handler_module
     use terminal_panel_module, only: toggle_terminal_panel, &
         is_terminal_panel_visible, terminal_panel_handle_key, &
         terminal_panel_handle_mouse, terminal_panel_in_region, &
-        terminal_panel_paste, terminal_panel_scroll
+        terminal_panel_paste, terminal_panel_scroll, &
+        terminal_panel_is_alive, terminal_panel_restart
     use input_handler_module, only: get_paste_text
     use bracket_matching_module, only: find_matching_bracket
     use comment_command_module, only: toggle_comment_lines, comment_syntax_available
@@ -353,10 +354,33 @@ contains
                 call terminal_panel_scroll(editor%terminal_panel, -3)
                 return
             end if
+            ! A dead shell must not turn the panel into a passthrough.
+            ! `exit`, Ctrl-D or an idle timeout (bash TMOUT) kills the child
+            ! while the panel stays visible and focused, and every keystroke
+            ! after that was landing in the document -- silently editing the
+            ! file the user thought they were typing a shell command next to.
+            if (.not. terminal_panel_is_alive(editor%terminal_panel)) then
+                if (trim(key_str) == 'enter') then
+                    call terminal_panel_restart(editor%terminal_panel, &
+                        editor%screen_rows, editor%screen_cols)
+                else if (trim(key_str) == 'esc') then
+                    editor%terminal_panel%visible = .false.
+                    editor%terminal_panel%focused = .false.
+                    call terminal_write(achar(27) // '[2J')
+                end if
+                return
+            end if
+
             if (terminal_panel_handle_key(editor%terminal_panel, &
                                           trim(key_str))) then
                 return
             end if
+
+            ! The panel did not recognise the key. It must still not reach
+            ! the editor: an unmapped chord like ctrl-shift-k would run its
+            ! editor command against the document while the user is looking
+            ! at a shell prompt. Ctrl-Q stays live as the way out.
+            if (trim(key_str) /= 'ctrl-q') return
         end if
 
         ! Route input when in fuss mode (except keys that work in both modes)

@@ -9,6 +9,7 @@ module terminal_panel_module
     public :: terminal_panel_t
     public :: init_terminal_panel, cleanup_terminal_panel
     public :: toggle_terminal_panel, is_terminal_panel_visible
+    public :: terminal_panel_is_alive, terminal_panel_restart
     public :: terminal_panel_poll, terminal_panel_render
     public :: terminal_panel_handle_key
     public :: terminal_panel_paste
@@ -329,6 +330,39 @@ contains
         vis = panel%visible
     end function is_terminal_panel_visible
 
+    ! A shell can exit while the panel is still on screen -- `exit`, Ctrl-D,
+    ! or an idle timeout such as bash's TMOUT. The panel then looks exactly
+    ! as it did a moment earlier, so the state has to be queryable: without
+    ! this the caller cannot tell a working terminal from a dead one, and
+    ! keystrokes meant for the shell end up in the document.
+    function terminal_panel_is_alive(panel) result(res)
+        type(terminal_panel_t), intent(in) :: panel
+        logical :: res
+        res = panel%pty_alive .and. c_associated(panel%pty_handle)
+    end function terminal_panel_is_alive
+
+    ! Replace a dead shell with a fresh one, keeping the panel where it is.
+    subroutine terminal_panel_restart(panel, screen_rows, screen_cols)
+        type(terminal_panel_t), intent(inout) :: panel
+        integer, intent(in) :: screen_rows, screen_cols
+
+        if (c_associated(panel%pty_handle)) then
+            call c_pty_close(panel%pty_handle)
+            panel%pty_handle = c_null_ptr
+        end if
+        if (c_associated(panel%grid_handle)) then
+            call c_grid_destroy(panel%grid_handle)
+            panel%grid_handle = c_null_ptr
+        end if
+        panel%pty_alive = .false.
+        panel%sel_active = .false.
+
+        ! toggle_terminal_panel spawns when there is no live handle, but it
+        ! toggles off first when visible -- so clear the flag and let it open.
+        panel%visible = .false.
+        call toggle_terminal_panel(panel, screen_rows, screen_cols)
+    end subroutine terminal_panel_restart
+
     function get_terminal_panel_height(panel) result(h)
         type(terminal_panel_t), intent(in) :: panel
         integer :: h
@@ -429,6 +463,14 @@ contains
             call terminal_write(trim(scroll_lbl))
             call terminal_write(repeat('-', &
                 max(0, cols - 6 - len_trim(scroll_lbl))))
+        else if (.not. panel%pty_alive .and. cols > 40) then
+            ! The shell exited but the panel is still up. Say so, and say how
+            ! to get out -- otherwise it looks like a working terminal that
+            ! has silently stopped accepting input.
+            call terminal_write(ESC_CH // '[93m')
+            call terminal_write(repeat('-', 6))
+            call terminal_write(' PROCESS EXITED - Enter: new shell, Esc: close ')
+            call terminal_write(repeat('-', max(0, cols - 6 - 47)))
         else
             call terminal_write(ESC_CH // '[90m')
             call terminal_write(repeat('-', min(cols, 6)))

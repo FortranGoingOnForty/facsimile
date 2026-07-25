@@ -93,6 +93,13 @@ class Session:
         # The panel draws a separator bar labelled TERMINAL whenever visible
         return any("TERMINAL" in r for r in self.screen.display)
 
+    def saved_file(self):
+        with open(self.target) as f:
+            return f.read()
+
+    def display(self):
+        return "\n".join(r.rstrip() for r in self.screen.display)
+
     def close(self):
         try:
             self.child.terminate(force=True)
@@ -164,13 +171,80 @@ def test_escape_belongs_to_a_fullscreen_program(binary):
         s.close()
 
 
+# --- A dead shell must not turn the panel into a passthrough -----------------
+#
+# The child can exit while the panel is still on screen: `exit`, Ctrl-D, or an
+# idle timeout such as bash's TMOUT. The panel looks identical afterwards, so
+# every keystroke the user aims at the shell was being executed by the editor
+# instead -- typing text straight into the file, silently.
+
+def test_dead_shell_does_not_leak_keys_into_the_document(binary):
+    s = Session(binary)
+    try:
+        s.send(ALT_T, 2.0)
+        s.send("exit\r", 1.5)
+        check("PROCESS EXITED" in s.display(),
+              "a shell that exits says so instead of looking alive", s.screen)
+        s.send("XXXX", 1.0)
+        check("[modified]" not in s.display(),
+              "typing at a dead shell does not modify the document", s.screen)
+        check(s.saved_file() == "editor text\n",
+              "the file on disk is untouched", repr(s.saved_file()))
+    finally:
+        s.close()
+
+
+def test_enter_respawns_a_dead_shell(binary):
+    s = Session(binary)
+    try:
+        s.send(ALT_T, 2.0)
+        s.send("exit\r", 1.5)
+        s.send("\r", 2.0)
+        s.send("echo REVIVED\r", 1.5)
+        check("REVIVED" in s.display() and "PROCESS EXITED" not in s.display(),
+              "Enter replaces a dead shell with a working one", s.screen)
+    finally:
+        s.close()
+
+
+def test_escape_closes_a_dead_panel(binary):
+    s = Session(binary)
+    try:
+        s.send(ALT_T, 2.0)
+        s.send("exit\r", 1.5)
+        s.send(ESC, 1.2)
+        check(not s.panel_open() and "PROCESS EXITED" not in s.display(),
+              "escape closes the panel once the shell has exited", s.screen)
+    finally:
+        s.close()
+
+
+def test_unmapped_chord_does_not_reach_the_editor(binary):
+    """A live shell that does not consume a key must not hand it to the editor:
+    ctrl-shift-k would kill a line of the file while the user is looking at a
+    shell prompt."""
+    s = Session(binary)
+    try:
+        s.send(ALT_T, 2.0)
+        s.send("echo alive\r", 1.2)
+        s.send("\x1b[107;6u", 1.0)          # ctrl-shift-k, unmapped in the panel
+        check("[modified]" not in s.display(),
+              "an unmapped chord does not edit the document", s.screen)
+    finally:
+        s.close()
+
+
 def main():
     binary = find_binary()
     for fn in (test_escape_closes_on_bare_prompt,
                test_escape_kept_by_shell_when_line_has_text,
                test_escape_closes_after_the_line_is_cleared,
                test_escape_closes_on_the_prompt_after_a_command,
-               test_escape_belongs_to_a_fullscreen_program):
+               test_escape_belongs_to_a_fullscreen_program,
+               test_dead_shell_does_not_leak_keys_into_the_document,
+               test_enter_respawns_a_dead_shell,
+               test_escape_closes_a_dead_panel,
+               test_unmapped_chord_does_not_reach_the_editor):
         try:
             fn(binary)
         except Exception as exc:            # noqa: BLE001 - report and keep going
