@@ -100,6 +100,7 @@ SOURCES = src/version_module.f90 \
           src/utils/dir_scan_module.f90 \
           src/syntax/comment_syntax_module.f90 \
           src/ai/ai_http_module.f90 \
+          src/ai/ai_json_module.f90 \
           src/buffer/text_buffer_module.f90 \
           src/clipboard/yank_stack_module.f90 \
           src/clipboard/clipboard_module.f90 \
