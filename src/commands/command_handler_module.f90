@@ -4710,6 +4710,12 @@ contains
             ! Mouse drag - extend selection within current pane only
             ! We shouldn't switch panes while dragging, only move cursor within current pane
 
+            ! Left button only. Mouse mode 1002 reports motion whichever button
+            ! is held, so without this a right- or middle-drag arrives here as
+            ! button 34 or 33 and silently starts a selection. The terminal
+            ! panel already guards its own drag the same way.
+            if (iand(button, 3) /= 0) return
+
             ! Check if we're in the current active pane - don't switch panes during drag
             call get_active_pane_indices(editor, tab_idx, pane_idx)
             in_active_pane = .false.
