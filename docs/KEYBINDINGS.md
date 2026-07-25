@@ -40,11 +40,12 @@ Complete keyboard shortcut reference for `fac` editor.
 |------------|---------|-------------|
 | `Ctrl+D` | Select Next Match | Add cursor at next occurrence of selection |
 | `Ctrl+Z` | Undo | Undo last change |
-| `Ctrl+Y` | Redo | Redo last undone change |
-| `Ctrl+X` | Cut | Cut selection to clipboard |
-| `Ctrl+C` | Copy | Copy selection to clipboard |
+| `Ctrl+Shift+Z` or `Ctrl+]` | Redo | Redo last undone change |
+| `Ctrl+Y` | Yank | Paste from the Emacs-style yank stack (not redo) |
+| `Ctrl+X` | Cut | Cut selection, or the whole line when nothing is selected |
+| `Ctrl+C` | Copy | Copy selection, or the whole line when nothing is selected |
 | `Ctrl+V` | Paste | Paste from clipboard |
-| `Ctrl+A` | Select All | Select entire file |
+| `Alt+A` | Select All | Select entire file |
 | `Tab` | Accept Suggestion | Accept the whole inline suggestion |
 | `Ctrl+Right` | Accept One Word | Accept a single word of an inline suggestion, keeping the rest offered |
 | `Alt+Right` | Accept One Line | Accept one line of a multi-line suggestion, keeping the rest offered |
@@ -122,7 +123,7 @@ Complete keyboard shortcut reference for `fac` editor.
 | `Shift+↑↓←→` | Select | Extend selection with arrow keys |
 | `Ctrl+Shift+Home` | Select to Start | Select from cursor to file start |
 | `Ctrl+Shift+End` | Select to End | Select from cursor to file end |
-| `Ctrl+A` | Select All | Select entire file |
+| `Alt+A` | Select All | Select entire file (`Ctrl+A` is Line Start) |
 | `Ctrl+D` | Select Next | Add cursor at next match of selection |
 | `Esc` | Clear Selection | Deselect and return to single cursor |
 
