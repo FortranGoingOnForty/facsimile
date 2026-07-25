@@ -1431,11 +1431,8 @@ contains
             pane_row = 2 + int(pane%y_start * real(screen_height))
             pane_height = int((pane%y_end - pane%y_start) * real(screen_height))
 
-            ! Store the calculated screen coordinates in the pane
-            editor%tabs(tab_idx)%panes(i)%screen_col = pane_col
-            editor%tabs(tab_idx)%panes(i)%screen_row = pane_row
-            editor%tabs(tab_idx)%panes(i)%screen_width = pane_width
-            editor%tabs(tab_idx)%panes(i)%screen_height = pane_height
+            call store_pane_content_rect(editor, tab_idx, i, pane_col, pane_row, &
+                                         pane_width, pane_height)
 
             ! Render the pane content
             call render_single_pane(editor, i, pane_col, pane_row, pane_width, pane_height)
@@ -1617,11 +1614,8 @@ contains
             pane_row = 2 + int(pane%y_start * real(screen_height))
             pane_height = int((pane%y_end - pane%y_start) * real(screen_height))
 
-            ! Store the calculated screen coordinates in the pane
-            editor%tabs(tab_idx)%panes(i)%screen_col = pane_col
-            editor%tabs(tab_idx)%panes(i)%screen_row = pane_row
-            editor%tabs(tab_idx)%panes(i)%screen_width = pane_width
-            editor%tabs(tab_idx)%panes(i)%screen_height = pane_height
+            call store_pane_content_rect(editor, tab_idx, i, pane_col, pane_row, &
+                                         pane_width, pane_height)
 
             ! Render the pane content
             call render_single_pane(editor, i, pane_col, pane_row, pane_width, pane_height)
@@ -1632,6 +1626,31 @@ contains
             end if
         end do
     end subroutine render_all_panes
+
+    ! Record what a click can actually land on: the pane's CONTENT rectangle,
+    ! excluding the header row that render_single_pane draws when more than
+    ! one pane exists. (col, row, width, height) are the full pane rect as
+    ! passed to render_single_pane.
+    !
+    ! Storing the header row here instead was an off-by-one for every click in
+    ! a split: the caret renderers add the header offset themselves, but
+    ! position_cursor_at_screen inverts the stored value directly, so clicking
+    ! the row showing line 1 selected line 2. Excluding the header also means
+    ! a click on it falls outside every pane and is ignored, rather than
+    ! silently selecting the top visible line.
+    subroutine store_pane_content_rect(editor, tab_idx, pane_idx, col, row, width, height)
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: tab_idx, pane_idx, col, row, width, height
+        integer :: header
+
+        header = 0
+        if (size(editor%tabs(tab_idx)%panes) > 1) header = 1
+
+        editor%tabs(tab_idx)%panes(pane_idx)%screen_col = col
+        editor%tabs(tab_idx)%panes(pane_idx)%screen_row = row + header
+        editor%tabs(tab_idx)%panes(pane_idx)%screen_width = width
+        editor%tabs(tab_idx)%panes(pane_idx)%screen_height = height - header
+    end subroutine store_pane_content_rect
 
     subroutine render_single_pane(editor, pane_idx, col, row, width, height)
         use editor_state_module, only: pane_t
@@ -2876,10 +2895,8 @@ contains
             pane_row = 2 + int(pane%y_start * real(screen_height))
             pane_height = int((pane%y_end - pane%y_start) * real(screen_height))
 
-            editor%tabs(tab_idx)%panes(i)%screen_col = pane_col
-            editor%tabs(tab_idx)%panes(i)%screen_row = pane_row
-            editor%tabs(tab_idx)%panes(i)%screen_width = pane_width
-            editor%tabs(tab_idx)%panes(i)%screen_height = pane_height
+            call store_pane_content_rect(editor, tab_idx, i, pane_col, pane_row, &
+                                         pane_width, pane_height)
 
             call render_single_pane(editor, i, pane_col, pane_row, pane_width, pane_height)
 

@@ -4811,7 +4811,10 @@ contains
 
                     ! Now use the active pane's data
                     associate(pane => editor%tabs(tab_idx)%panes(pane_idx))
-                        ! Invert the renderer's forward mapping
+                        ! Invert the renderer's forward mapping. The stored
+                        ! rect is the pane's CONTENT area (see
+                        ! store_pane_content_rect), so no header adjustment
+                        ! belongs here:
                         !   screen_row = pane%screen_row
                         !              + (line - viewport_line)
                         !   screen_col = pane%screen_col + col_offset
