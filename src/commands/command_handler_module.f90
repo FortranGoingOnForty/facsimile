@@ -358,18 +358,40 @@ contains
         ! fuss mode swallows every unrecognised key, and the panels return
         ! "unhandled" for mouse events, so a region registered by either
         ! would never be reached from further down.
-        if (index(key_str, 'mouse-click:') == 1) then
+        ! Anything that opens the context menu. The decoder classifies by
+        ! modifier before button, so a right-click with any modifier held
+        ! arrives as mouse-ctrl:/mouse-shift:/mouse-alt: rather than
+        ! mouse-click:, and matching only the latter lost it. Ctrl+left-click
+        ! opens the menu too, the macOS convention for a one-button pointer.
+        if (index(key_str, 'mouse-click:') == 1 .or. &
+            index(key_str, 'mouse-ctrl:') == 1 .or. &
+            index(key_str, 'mouse-shift:') == 1 .or. &
+            index(key_str, 'mouse-alt:') == 1) then
             block
                 character(len=16) :: ev
-                integer :: btn, mrow, mcol
-                logical :: ok
+                integer :: btn, mrow, mcol, base_button
+                logical :: ok, wants_menu
                 type(clickable_region_t) :: hit
 
                 call parse_mouse_event(key_str, ev, btn, mrow, mcol, ok)
                 if (ok) then
-                    if (btn == 2) then
-                        ! Right-click. A second one re-anchors an open menu
-                        ! rather than stacking, as every other editor does.
+                    ! Low two bits are the button; the rest are modifiers.
+                    base_button = iand(btn, 3)
+                    wants_menu = .false.
+                    if (base_button == 2) then
+                        wants_menu = .true.              ! right button, any modifier
+                    else if (base_button == 0) then
+                        if (iand(btn, 16) /= 0) wants_menu = .true.   ! ctrl + left
+                    end if
+                    ! Motion carries bit 5, so a ctrl- or shift-drag arrives
+                    ! here too and must not spawn a menu per motion event.
+                    if (iand(btn, 32) /= 0) wants_menu = .false.
+                    ! Alt+left stays the multi-cursor toggle.
+                    if (btn == 8) wants_menu = .false.
+
+                    if (wants_menu) then
+                        ! A second right-click re-anchors an open menu rather
+                        ! than stacking, as every other editor does.
                         if (is_context_menu_visible()) call context_menu_hide()
                         hit = region_at(mrow, mcol)
                         if (hit%kind == REGION_TREE_ROW) then
