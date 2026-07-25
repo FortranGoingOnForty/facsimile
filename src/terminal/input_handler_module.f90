@@ -113,6 +113,11 @@ contains
             key_str = 'ctrl-space'
         case(27)  ! ESC
             call handle_escape_sequence(key_str)
+            ! A blank name means the sequence was understood but maps to
+            ! nothing we bind (a media key, an unparsable modifier). Report
+            ! no key at all -- an empty key_str would otherwise reach the
+            ! command layer as a space and type one.
+            if (len_trim(key_str) == 0) status = -1
         case(9)  ! Tab
             key_str = 'tab'
         case(10, 13)  ! Enter (LF or CR)
@@ -218,6 +223,7 @@ contains
         character(len=PUSHBACK_CAP) :: params
         integer :: n, code
         character :: c
+        logical :: decoded
 
         handled = .false.
         params = ''
@@ -241,7 +247,14 @@ contains
             end if
 
             if (c == 'u') then
-                call decode_csi_u(params(1:n), key_str, handled)
+                ! Whatever we make of it, a 'u'-terminated sequence IS a key
+                ! event and has been fully read. Falling through to the legacy
+                ! parser here would leave it re-reading the NEXT keystroke's
+                ! bytes as if they belonged to this sequence, which corrupts
+                ! everything typed afterwards.
+                call decode_csi_u(params(1:n), key_str, decoded)
+                handled = .true.
+                if (.not. decoded) key_str = ''
                 return
             end if
 
@@ -362,12 +375,66 @@ contains
             name = 'space'
         case(33:126)
             name = achar(codepoint)
+
+        ! Kitty functional keys live in the Unicode private-use area. F1-F12
+        ! and the keypad have names the command layer already knows; the rest
+        ! (F13+, media keys, lone modifiers) map to nothing and are ignored.
+        case(57364:57375)
+            name = fkey_name(codepoint - 57363)
+        case(57399:57408)
+            name = achar(iachar('0') + codepoint - 57399)   ! keypad 0-9
+        case(57409)
+            name = '.'
+        case(57410)
+            name = '/'
+        case(57411)
+            name = '*'
+        case(57412)
+            name = '-'
+        case(57413)
+            name = '+'
+        case(57414)
+            name = 'enter'
+        case(57415)
+            name = '='
+        case(57416)
+            name = ','
+        case(57417)
+            name = 'left'
+        case(57418)
+            name = 'right'
+        case(57419)
+            name = 'up'
+        case(57420)
+            name = 'down'
+        case(57421)
+            name = 'pageup'
+        case(57422)
+            name = 'pagedown'
+        case(57423)
+            name = 'home'
+        case(57424)
+            name = 'end'
+        case(57425)
+            name = 'insert'
+        case(57426)
+            name = 'delete'
+
         case default
             ! Keypad, media and lone-modifier keys live in kitty's private-use
             ! range; nothing here is bound, so report no key at all.
             name = ''
         end select
     end function csi_u_key_name
+
+    pure function fkey_name(n) result(name)
+        integer, intent(in) :: n
+        character(len=:), allocatable :: name
+        character(len=3) :: digits
+
+        write(digits, '(i0)') n
+        name = 'f' // trim(digits)
+    end function fkey_name
 
     ! Value of the idx-th ';'-separated parameter, up to any ':' sub-parameter.
     function param_int(params, idx, default_value) result(val)

@@ -63,9 +63,31 @@ program test_csi_u_keys
     call expect('97;5:1', 'ctrl-a', 'press event')
     call expect('97;5:2', 'ctrl-a', 'key repeat is treated as a press')
 
+    ! --- Kitty reports functional keys in the Unicode private-use area.
+    !     F2 is rename; if these are unmapped the key silently does nothing
+    !     and, worse, used to leave the legacy parser eating the bytes of
+    !     whatever was typed next. ---
+    call expect('57364', 'f1',  'F1 as a functional key code')
+    call expect('57365', 'f2',  'F2 as a functional key code (rename)')
+    call expect('57375', 'f12', 'F12 as a functional key code')
+    call expect('57365;2', 'shift-f2', 'shift+F2')
+    call expect('57375;2', 'shift-f12', 'shift+F12 (find references)')
+
+    ! --- Keypad keys resolve to their ordinary equivalents ---
+    call expect('57399', '0',        'keypad 0')
+    call expect('57408', '9',        'keypad 9')
+    call expect('57413', '+',        'keypad plus')
+    call expect('57414', 'enter',    'keypad enter')
+    call expect('57417', 'left',     'keypad left')
+    call expect('57421', 'pageup',   'keypad page up')
+    call expect('57424', 'end',      'keypad end')
+    call expect('57426', 'delete',   'keypad delete')
+
     ! --- Events and keys with no name here produce nothing at all ---
     call expect_none('97;5:3', 'key release is dropped')
-    call expect_none('57399',  'keypad/private-use keys are unhandled')
+    call expect_none('57376',  'F13 has no binding here')
+    call expect_none('57430',  'media keys have no binding')
+    call expect_none('57441',  'a lone modifier keypress has no binding')
     call expect_none('',       'empty parameters')
     call expect_none('x',      'garbage parameters')
 
