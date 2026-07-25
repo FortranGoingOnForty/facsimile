@@ -209,6 +209,50 @@ def test_legacy_csi_sequences_still_parse(binary):
         s.close()
 
 
+def test_functional_keys_and_unmapped_csi_u(binary):
+    """Kitty reports F-keys in the private-use area under the protocol. F2 is
+    rename; an unmapped code must be swallowed, not left for the legacy parser
+    to eat the next keystroke's bytes with."""
+    s = Session(binary, "int total(int a) { return a; }\n", name="k.c")
+    try:
+        s.send("\x1b[57365u", 1.2)              # F2 as a functional key code
+        check(any("Rename" in r for r in s.screen.display),
+              "CSI 57365u reaches F2 (rename)", s.display()[-400:])
+        s.send("\x1b", 0.4)                     # dismiss the prompt
+    finally:
+        s.close()
+
+    s = Session(binary, "abc\n", name="k2.c")
+    try:
+        s.send("\x1b[57430u", 0.5)              # a media key: no binding here
+        s.send("ZZZ", 0.5)
+        check(s.saved_text() == "ZZZabc\n",
+              "an unmapped CSI-u does not corrupt what is typed next",
+              s.saved_text())
+    finally:
+        s.close()
+
+
+def test_rename_says_why_it_cannot_run(binary):
+    """F2 doing nothing at all is indistinguishable from F2 not arriving."""
+    s = Session(binary, "hello world\n", name="plain.txt")
+    try:
+        s.send("\x1bOQ", 1.0)
+        check("No language server" in s.display(),
+              "F2 with no server explains itself", s.display()[-300:])
+    finally:
+        s.close()
+
+    s = Session(binary, "int a;\n\n\n", name="sym.c")
+    try:
+        s.send("\x1b[B", 0.4)                   # blank line 2
+        s.send("\x1bOQ", 1.2)
+        check("No symbol under the cursor" in s.display(),
+              "F2 off a symbol explains itself", s.display()[-300:])
+    finally:
+        s.close()
+
+
 def test_csi_u_chords_reach_their_commands(binary):
     """Under the protocol every ctrl chord arrives as CSI u, so spot-check
     that the translation actually reaches the same commands."""
@@ -241,6 +285,8 @@ def main():
                test_help_hint_and_f1,
                test_selection_indent_baseline,
                test_legacy_csi_sequences_still_parse,
+               test_functional_keys_and_unmapped_csi_u,
+               test_rename_says_why_it_cannot_run,
                test_csi_u_chords_reach_their_commands):
         try:
             fn(binary)

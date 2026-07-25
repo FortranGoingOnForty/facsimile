@@ -28,8 +28,12 @@ module renderer_module
     public :: render_screen, update_viewport, init_renderer, cleanup_renderer
     public :: resize_renderer
     public :: render_status_bar, render_cursor
+    public :: set_status_message, clear_status_message, has_status_message
     public :: show_line_numbers, LINE_NUMBER_WIDTH
     public :: render_screen_with_tree, render_screen_with_lsp_panel
+
+    ! Transient status-bar message (see set_status_message)
+    character(len=:), allocatable :: g_status_message
     public :: tree_state
     public :: update_syntax_highlighter
     public :: render_cursor_only  ! Fast path for cursor-only updates
@@ -662,6 +666,28 @@ contains
         if (allocated(utf8_ch)) deallocate(utf8_ch)
     end subroutine render_line_with_selections
 
+    ! One-shot status-bar message. Commands used to write straight to the
+    ! status row, which the very next render painted over -- so a failure like
+    ! "no LSP server with rename support" was on screen for microseconds and
+    ! the command looked like it had done nothing at all. Set it here instead
+    ! and the status bar carries it until the next keystroke.
+    subroutine set_status_message(msg)
+        character(len=*), intent(in) :: msg
+
+        if (allocated(g_status_message)) deallocate(g_status_message)
+        g_status_message = trim(msg)
+    end subroutine set_status_message
+
+    subroutine clear_status_message()
+        if (allocated(g_status_message)) deallocate(g_status_message)
+    end subroutine clear_status_message
+
+    function has_status_message() result(res)
+        logical :: res
+        res = .false.
+        if (allocated(g_status_message)) res = len_trim(g_status_message) > 0
+    end function has_status_message
+
     subroutine render_status_bar(editor, buffer, match_mode_active, match_case_sens)
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(in) :: buffer
@@ -747,6 +773,13 @@ contains
                    'Ln ', cursor%line, ', Col ', cursor%column, ' '
         else
             write(status_right, '(a,i0,a,i0,a)') 'Ln ', cursor%line, ', Col ', cursor%column, ' '
+        end if
+
+        ! A pending message replaces the left section; the caret position on
+        ! the right is still worth keeping visible.
+        if (has_status_message()) then
+            status_left = ' ' // g_status_message
+            status_center = ''
         end if
 
         ! Create full status bar with center text

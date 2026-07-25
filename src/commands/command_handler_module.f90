@@ -10,7 +10,8 @@ module command_handler_module
                                fuss_search_buffer, fuss_search_len, fuss_search_last_time, &
                                fuss_fuzzy_jump, fuss_reset_search, get_time_ms, &
                                fuss_git_prefix_active, &
-                               display_offset_of, char_col_at_offset
+                               display_offset_of, char_col_at_offset, &
+                               set_status_message, clear_status_message
     use yank_stack_module
     use clipboard_module
     use help_display_module, only: show_help
@@ -132,6 +133,25 @@ module command_handler_module
 contains
 
     ! Helper to get a server index for a specific capability
+    ! Why rename cannot run right now. "Nothing happened" is the least
+    ! useful thing F2 can do, so name the actual obstacle.
+    function rename_unavailable_reason(editor) result(msg)
+        type(editor_state_t), intent(in) :: editor
+        character(len=:), allocatable :: msg
+        integer :: tab_idx
+
+        tab_idx = editor%active_tab_index
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) then
+            msg = '[F2] No file open'
+        else if (editor%tabs(tab_idx)%num_lsp_servers < 1 .or. &
+                 .not. allocated(editor%tabs(tab_idx)%lsp_server_indices)) then
+            msg = '[F2] No language server running for this file ' // &
+                  '(check it is installed and the file type is supported)'
+        else
+            msg = '[F2] The language server for this file does not support rename'
+        end if
+    end function rename_unavailable_reason
+
     function get_lsp_server_for_cap(editor, capability) result(server_idx)
         type(editor_state_t), intent(in) :: editor
         integer, intent(in) :: capability
@@ -197,6 +217,8 @@ contains
         line_count = buffer_get_line_count(buffer)
         is_edit_action = .false.
         is_text_insert = .false.
+        ! Any keystroke dismisses the message the previous one left behind
+        call clear_status_message()
         g_cursor_only_move = .false.
 
         ! Ignore empty key strings (from terminal position reports, etc)
@@ -1731,15 +1753,14 @@ contains
 
                             if (allocated(old_name)) deallocate(old_name)
                         else
-                            call terminal_move_cursor(editor%screen_rows, 1)
-                            call terminal_write('No symbol under cursor                     ')
+                            call set_status_message( &
+                                '[F2] No symbol under the cursor to rename')
                         end if
 
                         if (allocated(line)) deallocate(line)
                     end block
                 else
-                    call terminal_move_cursor(editor%screen_rows, 1)
-                    call terminal_write('[F2] No LSP server with rename support      ')
+                    call set_status_message(rename_unavailable_reason(editor))
                 end if
             end block
 
