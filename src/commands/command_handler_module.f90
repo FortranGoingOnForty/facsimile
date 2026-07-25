@@ -139,6 +139,14 @@ module command_handler_module
 contains
 
     ! Helper to get a server index for a specific capability
+    function ai_active_filename(editor) result(name)
+        type(editor_state_t), intent(in) :: editor
+        character(len=:), allocatable :: name
+
+        name = ''
+        if (allocated(editor%filename)) name = editor%filename
+    end function ai_active_filename
+
     ! Why rename cannot run right now. "Nothing happened" is the least
     ! useful thing F2 can do, so name the actual obstacle.
     function rename_unavailable_reason(editor) result(msg)
@@ -7309,7 +7317,8 @@ contains
         if (ai_is_enabled(editor%ai) .and. .not. in_include) then
             call ai_note_trigger(editor%ai, cur_line, cur_col, prefix, &
                                  context_line_after_cursor(buffer, cur_line, cur_col), &
-                                 current_doc_revision(editor))
+                                 current_doc_revision(editor), &
+                                 ai_active_filename(editor))
         end if
     end subroutine update_ghost_suggestion
 

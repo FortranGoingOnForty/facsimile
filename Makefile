@@ -106,6 +106,7 @@ SOURCES = src/version_module.f90 \
           src/ai/ollama_client_module.f90 \
           src/buffer/text_buffer_module.f90 \
           src/ai/completion_context_module.f90 \
+          src/ai/completion_prompt_module.f90 \
           src/clipboard/yank_stack_module.f90 \
           src/clipboard/clipboard_module.f90 \
           src/terminal/raw_mode_module.f90 \

@@ -31,6 +31,9 @@ module ai_state_module
         integer :: suffix_bytes = 2000
         ! 1 disables block suggestions entirely
         integer :: max_block_lines = 4
+        logical :: include_header = .true.
+        logical :: include_symbols = .true.
+        character(len=:), allocatable :: filename
 
         ! ---- backend ----
         type(ai_http_addr_t) :: addr

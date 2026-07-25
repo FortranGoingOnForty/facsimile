@@ -26,15 +26,25 @@ module ollama_client_module
 contains
 
     ! Body for POST /api/generate. suffix is always present.
+    ! stop_json is a bare JSON array body ("\n}","\n\n\n") or ''. Stopping the
+    ! model at the end of the construct is far cheaper and more reliable than
+    ! trying to make a base model stop on its own: asked for 96 tokens it will
+    ! otherwise carry on and start writing the next function.
     function ollama_generate_body(model, prefix, suffix, num_predict, &
-                                  temperature_x100, keep_alive) result(body)
+                                  temperature_x100, keep_alive, stop_json) result(body)
         character(len=*), intent(in) :: model, prefix, suffix, keep_alive
         integer, intent(in) :: num_predict, temperature_x100
-        character(len=:), allocatable :: body
+        character(len=*), intent(in), optional :: stop_json
+        character(len=:), allocatable :: body, stops
         character(len=16) :: np, temp
 
         write(np, '(i0)') num_predict
         write(temp, '(f5.2)') real(temperature_x100) / 100.0
+
+        stops = ''
+        if (present(stop_json)) then
+            if (len_trim(stop_json) > 0) stops = ',"stop":[' // trim(stop_json) // ']'
+        end if
 
         body = '{"model":"' // trim(model) // '",' // &
                '"prompt":"' // ai_json_escape(prefix) // '",' // &
@@ -44,7 +54,7 @@ contains
                '"options":{' // &
                '"num_predict":' // trim(adjustl(np)) // ',' // &
                '"temperature":' // trim(adjustl(temp)) // ',' // &
-               '"repeat_penalty":1.05' // &
+               '"repeat_penalty":1.05' // stops // &
                '}}'
     end function ollama_generate_body
 

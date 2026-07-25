@@ -18,6 +18,7 @@ module ai_engine_module
     use ai_json_module, only: ai_json_get_string
     use ollama_client_module
     use completion_context_module
+    use completion_prompt_module
     use completion_sanitize_module
     use ghost_text_module, only: ghost_is_active, ghost_apply_text, ghost_may_replace, &
                                  ghost_clear, ghost_apply_block, &
@@ -53,6 +54,8 @@ contains
         ai%prefix_bytes = settings_get_integer('ai.prefix_bytes', DEFAULT_PREFIX_BYTES)
         ai%suffix_bytes = settings_get_integer('ai.suffix_bytes', DEFAULT_SUFFIX_BYTES)
         ai%max_block_lines = min(8, max(1, settings_get_integer('ai.max_block_lines', 4)))
+        ai%include_header = settings_get_logical('ai.context.file_header', .true.)
+        ai%include_symbols = settings_get_logical('ai.context.symbols', .true.)
         ai%configured = .true.
 
         if (.not. ai%enabled) then
@@ -95,11 +98,12 @@ contains
 
     ! Record that a completion might be wanted here. Cheap: no allocation
     ! beyond two short strings, no syscall, no network.
-    subroutine ai_note_trigger(ai, line, col, prefix, line_after, doc_revision)
+    subroutine ai_note_trigger(ai, line, col, prefix, line_after, doc_revision, filename)
         type(ai_state_t), intent(inout) :: ai
         integer, intent(in) :: line, col
         character(len=*), intent(in) :: prefix, line_after
         integer(int64), intent(in) :: doc_revision
+        character(len=*), intent(in), optional :: filename
 
         if (.not. ai%enabled) return
         if (ai%health == AI_HEALTH_DOWN .or. ai%health == AI_HEALTH_NO_FIM) return
@@ -117,6 +121,15 @@ contains
         ! line to go, and it keeps the renderer's "open the line up" trick and
         ! the block row loop from ever interacting.
         ai%trig_at_eol = len_trim(line_after) == 0
+
+        ! Language detection drives the stop sequences and the comment token
+        ! used for the header and symbol digest, so the filename has to come
+        ! along with the trigger.
+        if (present(filename)) then
+            ai%filename = filename
+        else
+            ai%filename = ''
+        end if
     end subroutine ai_note_trigger
 
     subroutine ai_cancel(ai)
@@ -150,6 +163,7 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(in) :: buffer
         character(len=:), allocatable :: prefix, suffix, body
+        type(prompt_options_t) :: popts
         integer :: npredict
         integer(int64) :: t
 
@@ -176,8 +190,12 @@ contains
             return
         end if
 
-        call build_fim_context(buffer, ai%trig_line, ai%trig_col, &
-                               ai%prefix_bytes, ai%suffix_bytes, prefix, suffix)
+        popts%prefix_bytes = ai%prefix_bytes
+        popts%suffix_bytes = ai%suffix_bytes
+        popts%include_header = ai%include_header
+        popts%include_symbols = ai%include_symbols
+        call build_completion_prompt(buffer, ai%filename, ai%trig_line, ai%trig_col, &
+                                     popts, '', prefix, suffix)
 
         ! Ask for more tokens when a block is possible; latency is dominated
         ! by num_predict, so a single-line request stays deliberately tight.
@@ -188,7 +206,8 @@ contains
         end if
 
         body = ollama_generate_body(ai%model, prefix, suffix, npredict, &
-                                    ai%temperature_x100, '10m')
+                                    ai%temperature_x100, '10m', &
+                                    completion_stop_json(ai%filename))
 
         call ai_http_begin(ai%req, ai%addr, &
             ai_http_build_request('POST', '/api/generate', &
