@@ -14,7 +14,7 @@ contains
         logical, intent(out) :: cancelled
         integer(int32), intent(in) :: screen_rows
         character(len=512) :: input_buffer
-        integer :: input_pos, ch
+        integer :: input_pos, ch, esc_kind
 
         ! Initialize
         input_buffer = ''
@@ -36,8 +36,12 @@ contains
             if (ch == -1) then
                 ! No input, continue
                 cycle
-            else if (ch == 27) then  ! ESC
-                ! Cancel
+            else if (ch == 27) then  ! ESC, or the start of a longer sequence
+                ! A mouse report must not cancel the prompt, and must not be
+                ! left half-read in the tty for the main loop to type into
+                ! the document.
+                esc_kind = terminal_consume_escape()
+                if (esc_kind /= ESC_STANDALONE) cycle
                 cancelled = .true.
                 input_text = ''
                 exit
@@ -74,7 +78,7 @@ contains
         logical, intent(out) :: answer
         logical, intent(out) :: cancelled
         integer(int32), intent(in) :: screen_rows
-        integer :: ch
+        integer :: ch, esc_kind
 
         ! Initialize
         cancelled = .false.
@@ -94,8 +98,9 @@ contains
             if (ch == -1) then
                 ! No input, continue
                 cycle
-            else if (ch == 27) then  ! ESC
-                ! Cancel
+            else if (ch == 27) then  ! ESC, or the start of a longer sequence
+                esc_kind = terminal_consume_escape()
+                if (esc_kind /= ESC_STANDALONE) cycle
                 cancelled = .true.
                 exit
             else if (ch == 121 .or. ch == 89) then  ! 'y' or 'Y'

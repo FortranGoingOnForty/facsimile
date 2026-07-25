@@ -28,7 +28,7 @@ contains
         type(buffer_t), intent(inout) :: buffer
         character(len=256) :: input_buffer
         character(len=128) :: prompt
-        integer :: input_pos, ch
+        integer :: input_pos, ch, esc_kind
         logical :: found
         integer :: found_line, found_col
         logical :: in_alt_sequence
@@ -87,6 +87,13 @@ contains
                     call terminal_write(prompt // input_buffer(1:input_pos))
                     call terminal_move_cursor(editor%screen_rows, len_trim(prompt) + input_pos + 1)
                     call terminal_flush()
+                    in_alt_sequence = .false.
+                else if (ch == iachar('[') .or. ch == iachar('O')) then
+                    ! A CSI/SS3 sequence, not an alt chord. Swallow the rest:
+                    ! the bytes of a mouse report would otherwise reach the
+                    ! printable branch below and be appended to the search
+                    ! pattern, running an incremental search on "<0;12;30M".
+                    esc_kind = terminal_consume_csi(terminal_read_char_escape())
                     in_alt_sequence = .false.
                 else
                     ! Unknown Alt sequence, ignore

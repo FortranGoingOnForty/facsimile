@@ -22,7 +22,7 @@ contains
         type(buffer_t), intent(inout) :: buffer
         character(len=256) :: find_buffer, replace_buffer
         character(len=64) :: prompt
-        integer :: input_pos, ch
+        integer :: input_pos, ch, esc_kind
         logical :: entering_find, entering_replace
         integer :: replace_count
         character(len=:), allocatable :: find_pattern, replace_text
@@ -51,7 +51,9 @@ contains
 
             if (ch == -1) then
                 cycle
-            else if (ch == 27) then  ! ESC - cancel
+            else if (ch == 27) then  ! ESC, or the start of a longer sequence
+                esc_kind = terminal_consume_escape()
+                if (esc_kind /= ESC_STANDALONE) cycle
                 exit
             else if (ch == 10 .or. ch == 13) then  ! Enter - proceed to replacement
                 if (input_pos > 0 .and. entering_find) then

@@ -15,7 +15,7 @@ contains
         type(buffer_t), intent(inout) :: buffer
         character(len=256) :: input_buffer
         character(len=32) :: prompt
-        integer :: input_pos, ch
+        integer :: input_pos, ch, esc_kind
         integer :: target_line, target_col
         integer :: line_count
 
@@ -43,7 +43,11 @@ contains
             if (ch == -1) then
                 ! No input, continue
                 cycle
-            else if (ch == 27) then  ! ESC - cancel
+            else if (ch == 27) then  ! ESC, or the start of a longer sequence
+                ! Nudging the mouse here used to cancel the prompt and leave
+                ! the rest of the report to be typed into the document.
+                esc_kind = terminal_consume_escape()
+                if (esc_kind /= ESC_STANDALONE) cycle
                 exit
             else if (ch == 10 .or. ch == 13) then  ! Enter - accept
                 if (input_pos > 0) then

@@ -5,12 +5,17 @@ module fortress_navigator_module
     use iso_fortran_env, only: output_unit, input_unit
     use fortress_fs_module
     use fortress_display_module
-    use terminal_io_module, only: terminal_read_char, terminal_write, terminal_move_cursor, terminal_flush
+    use terminal_io_module, only: terminal_read_char, terminal_write, terminal_move_cursor, terminal_flush, &
+                                  terminal_consume_csi, ESC_STANDALONE
     use favorites_module, only: favorites_add
     implicit none
     private
 
     public :: open_fortress_navigator
+
+    ! classify_escape result for a navigation key, distinct from the ESC_*
+    ! values terminal_io returns for sequences it swallowed
+    integer, parameter :: NAV_ARROW = 3
 
     ! Navigation state
     character(len=MAX_PATH), dimension(MAX_FILES) :: current_files, parent_files
@@ -38,6 +43,7 @@ contains
         character(len=*), intent(in), optional :: initial_path
         character(len=MAX_PATH) :: current_dir, parent_dir, temp_dir, last_dir, last_parent
         character(len=1) :: key
+        integer :: esc_kind
         integer :: rows, cols, ios, last_selected, last_scroll
         logical :: running, dir_changed, first_draw, need_redraw
 
@@ -163,18 +169,20 @@ contains
 
             ! Handle control/special keys
             select case (key)
-                case (char(27))  ! ESC — arrow key or quit
+                case (char(27))  ! ESC — arrow key, swallowed sequence, or quit
                     search_len = 0; search_buffer = ''
-                    if (check_arrow_key(key)) then
+                    esc_kind = classify_escape(key)
+                    if (esc_kind == NAV_ARROW) then
                         call handle_arrow_key(key, selected, &
                             current_dir, temp_dir, &
                             current_files, &
                             current_is_dir, current_count)
-                    else
+                    else if (esc_kind == ESC_STANDALONE) then
                         ! Standalone ESC — always quit
                         cancelled = .true.
                         running = .false.
                     end if
+                    ! A mouse report or other CSI was consumed: stay put
 
                 case (char(17))  ! Ctrl-Q — quit
                     cancelled = .true.
@@ -276,29 +284,45 @@ contains
         offset = max(0, min(offset, max(0, total - visible_height)))
     end subroutine adjust_parent_scroll
 
-    !> Check if ESC is start of arrow key sequence
-    function check_arrow_key(key) result(is_arrow)
+    !> Classify an ESC byte: a navigation key, a sequence to swallow, or a
+    !> real ESC keypress. Returns NAV_ARROW with `key` set to the final byte,
+    !> or one of terminal_io's ESC_* values.
+    !>
+    !> The swallow case matters: a click arrives as ESC [ < b ; c ; r M, and
+    !> the old two-way version returned '<' as an "arrow", after which the
+    !> digits and the trailing M came back round the loop and were fed to
+    !> type-to-jump one at a time, moving the selection on every click.
+    function classify_escape(key) result(kind)
         character(len=1), intent(inout) :: key
-        logical :: is_arrow
+        integer :: kind
         integer :: char_code
 
-        is_arrow = .false.
+        ! Deliberately narrow: every path except a mouse report behaves
+        ! exactly as the previous two-way version did, because the navigator
+        ! is hard to exercise in a pty and a broader change could not be
+        ! verified. Only the '<' (SGR) and 'M' (legacy X10) introducers are
+        ! new, and both were previously mishandled.
+        kind = ESC_STANDALONE
+        if (key /= char(27)) return
 
-        if (key == char(27)) then
-            ! Try to read next character
-            char_code = terminal_read_char()
-            if (char_code >= 0) then
-                if (achar(char_code) == '[') then
-                    ! It's an arrow key sequence - read the direction
-                    char_code = terminal_read_char()
-                    if (char_code >= 0) then
-                        key = achar(char_code)
-                        is_arrow = .true.
-                    end if
-                end if
-            end if
+        char_code = terminal_read_char()
+        if (char_code < 0) return          ! nothing followed: a real ESC
+        if (achar(char_code) /= '[') return
+
+        char_code = terminal_read_char()
+        if (char_code < 0) return
+
+        if (char_code == iachar('<') .or. char_code == iachar('M')) then
+            ! A mouse report. Swallow it whole: the old code returned '<' as
+            ! an unrecognised "arrow" and the digits then reached
+            ! type-to-jump one at a time.
+            kind = terminal_consume_csi(char_code)
+            return
         end if
-    end function check_arrow_key
+
+        key = achar(char_code)
+        kind = NAV_ARROW
+    end function classify_escape
 
     !> Handle arrow key navigation
     subroutine handle_arrow_key(key, sel, curr_dir, temp_dir, files, is_dir, file_count)

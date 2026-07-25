@@ -17,10 +17,17 @@ module terminal_io_module
     public :: terminal_write, terminal_flush, terminal_enable_mouse, terminal_disable_mouse
     public :: terminal_input_available, terminal_read_char
     public :: terminal_read_char_escape, terminal_input_available_count
+    public :: terminal_consume_escape, terminal_consume_csi
+    public :: ESC_STANDALONE, ESC_MOUSE, ESC_OTHER
 
     ! ANSI escape codes
     character(len=*), parameter :: ESC = char(27)
     character(len=*), parameter :: CSI = ESC // '['
+
+    ! Results of terminal_consume_escape
+    integer, parameter :: ESC_STANDALONE = 0   ! a real ESC keypress
+    integer, parameter :: ESC_MOUSE = 1        ! a mouse report, now swallowed
+    integer, parameter :: ESC_OTHER = 2        ! some other sequence, swallowed
 
     ! C output buffer interface
     interface
@@ -136,6 +143,82 @@ contains
         integer :: count
         count = raw_input_available_count()
     end function terminal_input_available_count
+
+    ! Call this the moment a raw-byte input loop reads byte 27, to find out
+    ! whether it was a real ESC keypress or the start of a longer sequence.
+    !
+    ! A mouse report (SGR: ESC [ < b ; c ; r M|m) arrives as a burst of
+    ! ordinary bytes. A prompt loop that treats 27 as "cancel" and exits
+    ! leaves the remaining bytes in the tty, and the main loop then reads
+    ! them as printable keys and types them into the document -- moving the
+    ! mouse while Ctrl-G was open used to write "[<0;30;10M" into the file.
+    ! Returning ESC_MOUSE lets those loops ignore the event and stay open.
+    !
+    ! Continuation bytes are read with the 5ms reader, not the 50ms one: the
+    ! whole sequence arrives in a single burst, so a longer wait would only
+    ! stall a genuine lone ESC.
+    function terminal_consume_escape() result(kind)
+        integer :: kind
+        integer :: ch
+
+        ch = terminal_read_char_escape()
+
+        ! Nothing followed, or a second ESC: a real keypress either way
+        if (ch == -1 .or. ch == 27) then
+            kind = ESC_STANDALONE
+            return
+        end if
+
+        if (ch /= iachar('[') .and. ch /= iachar('O')) then
+            ! ESC + a single byte, e.g. an alt-chord. Consumed, not a cancel.
+            kind = ESC_OTHER
+            return
+        end if
+
+        kind = terminal_consume_csi(terminal_read_char_escape())
+    end function terminal_consume_escape
+
+    ! The tail of terminal_consume_escape, for loops that have already read
+    ! ESC and the '['/'O' introducer and so cannot call it. first_byte is the
+    ! byte immediately after the introducer.
+    function terminal_consume_csi(first_byte) result(kind)
+        integer, intent(in) :: first_byte
+        integer :: kind
+        integer :: ch, i
+
+        ch = first_byte
+
+        ! SGR mouse (mode 1006), what fac asks for: runs to 'M' or 'm'
+        if (ch == iachar('<')) then
+            do
+                ch = terminal_read_char_escape()
+                if (ch == -1) exit
+                if (ch == iachar('M') .or. ch == iachar('m')) exit
+            end do
+            kind = ESC_MOUSE
+            return
+        end if
+
+        ! Legacy X10 mouse, in case a terminal ignored the 1006 request:
+        ! ESC [ M then exactly three bytes, which are binary and so cannot
+        ! be found by scanning for a final byte.
+        if (ch == iachar('M')) then
+            do i = 1, 3
+                if (terminal_read_char_escape() == -1) exit
+            end do
+            kind = ESC_MOUSE
+            return
+        end if
+
+        ! Any other CSI/SS3 sequence: parameter bytes, then a final byte in
+        ! 0x40-0x7E. ch already holds the first byte after the introducer.
+        do
+            if (ch == -1) exit
+            if (ch >= 64 .and. ch <= 126) exit
+            ch = terminal_read_char_escape()
+        end do
+        kind = ESC_OTHER
+    end function terminal_consume_csi
 
     subroutine terminal_write(text)
         character(len=*), intent(in) :: text
