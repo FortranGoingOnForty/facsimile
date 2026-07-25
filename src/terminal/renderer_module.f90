@@ -30,6 +30,7 @@ module renderer_module
     public :: render_status_bar, render_cursor
     public :: set_status_message, clear_status_message, has_status_message
     public :: show_line_numbers, LINE_NUMBER_WIDTH
+    public :: clip_to_cells, is_terminal_safe  ! exposed for unit tests
     public :: render_screen_with_tree, render_screen_with_lsp_panel
 
     ! Transient status-bar message (see set_status_message)
@@ -2135,12 +2136,12 @@ contains
         type(buffer_t), intent(in) :: buffer
         type(pane_t) :: pane
         type(cursor_t) :: cursor
-        character(len=:), allocatable :: suffix, line
+        character(len=:), allocatable :: suffix, shown, line
         integer :: tab_idx, pane_idx, col_offset
         integer :: screen_row, screen_col, avail, disp
         integer :: screen_width, screen_height
         integer :: pane_col, pane_row, pane_width, pane_height
-        integer :: row_offset, min_row
+        integer :: row_offset, min_row, ghost_cells
         logical :: use_panes
 
         if (.not. ghost_is_active(editor%ghost)) return
@@ -2148,6 +2149,11 @@ contains
 
         suffix = ghost_suffix(editor%ghost)
         if (len(suffix) == 0) return
+        ! The suggestion is written straight to the terminal, so a control
+        ! byte in it would be interpreted as an escape sequence and corrupt
+        ! the screen. Today's sources are filtered to identifiers, but this
+        ! keeps the renderer safe whatever produces the text.
+        if (.not. is_terminal_safe(suffix)) return
 
         if (show_line_numbers) then
             col_offset = LINE_NUMBER_WIDTH + 1
@@ -2227,19 +2233,74 @@ contains
         end if
 
         if (avail < 1) return
-        if (len(suffix) > avail) suffix = suffix(1:avail)
+        ! avail is a count of screen CELLS, so the suggestion has to be
+        ! measured and cut the same way. Clipping by byte count would both
+        ! overshoot the pane on multibyte text and slice a character in half,
+        ! emitting a partial UTF-8 sequence to the terminal.
+        call clip_to_cells(suffix, avail, shown, ghost_cells)
+        if (len(shown) == 0) return
 
         call terminal_move_cursor(screen_row, screen_col)
         call terminal_write(char(27) // '[2m' // char(27) // '[90m' // &
-                            suffix // char(27) // '[0m')
+                            shown // char(27) // '[0m')
 
         ! Mid-line: redraw the real text right of the cursor, shifted past
         ! the suggestion, so nothing is hidden while the ghost is up
         if (cursor%column <= utf8_char_count(line)) then
             call render_line_tail_shifted(line, cursor%column, &
-                disp + len(suffix), avail - len(suffix))
+                disp + ghost_cells, avail - ghost_cells)
         end if
     end subroutine render_ghost_text
+
+    ! Cut text to at most `cells` display columns, only ever on a character
+    ! boundary, and report the width actually used. Wide characters that would
+    ! straddle the limit are dropped rather than half-drawn.
+    subroutine clip_to_cells(text, cells, clipped, used)
+        character(len=*), intent(in) :: text
+        integer, intent(in) :: cells
+        character(len=:), allocatable, intent(out) :: clipped
+        integer, intent(out) :: used
+        character(len=:), allocatable :: ch
+        integer :: ci, nchars, w, last_byte, start_byte
+
+        used = 0
+        last_byte = 0
+        nchars = utf8_char_count(text)
+
+        do ci = 1, nchars
+            ch = utf8_char_at(text, ci)
+            if (len(ch) == 0) exit
+            w = utf8_display_width(ch)
+            if (used + w > cells) exit
+            used = used + w
+            start_byte = utf8_char_to_byte_index(text, ci)
+            if (start_byte <= 0) exit
+            last_byte = start_byte + len(ch) - 1
+        end do
+
+        if (last_byte <= 0) then
+            clipped = ''
+        else
+            clipped = text(1:last_byte)
+        end if
+    end subroutine clip_to_cells
+
+    ! True when every byte can be written to the terminal without being taken
+    ! as a control code. Rejects C0 (except tab), DEL, and the C1 range's lead
+    ! byte pattern is left to the caller's UTF-8 validation.
+    pure function is_terminal_safe(text) result(ok)
+        character(len=*), intent(in) :: text
+        logical :: ok
+        integer :: i, b
+
+        ok = .false.
+        do i = 1, len(text)
+            b = iachar(text(i:i))
+            if (b < 32 .and. b /= 9) return
+            if (b == 127) return
+        end do
+        ok = .true.
+    end function is_terminal_safe
 
     ! Draw buffer_line from start_char onward at the current terminal cursor,
     ! stopping when budget screen cells are used. start_off is the display

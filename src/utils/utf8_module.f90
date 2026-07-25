@@ -314,7 +314,14 @@ contains
                  (code_point >= int(z'FF00') .and. code_point <= int(z'FF60')) .or. &  ! Fullwidth Forms
                  (code_point >= int(z'FFE0') .and. code_point <= int(z'FFE6')) .or. &  ! Fullwidth Forms
                  (code_point >= int(z'20000') .and. code_point <= int(z'2FFFD')) .or. & ! CJK Extension B-F
-                 (code_point >= int(z'30000') .and. code_point <= int(z'3FFFD'))) then
+                 (code_point >= int(z'30000') .and. code_point <= int(z'3FFFD')) .or. & ! CJK Extension G
+                 ! Emoji. Terminals draw these two cells wide, so leaving them
+                 ! at 1 put every column after an emoji one cell out -- the
+                 ! caret, the ghost-text clip, and the shifted line tail alike.
+                 (code_point >= int(z'1F300') .and. code_point <= int(z'1F64F')) .or. & ! pictographs, emoticons
+                 (code_point >= int(z'1F680') .and. code_point <= int(z'1F6FF')) .or. & ! transport & map
+                 (code_point >= int(z'1F900') .and. code_point <= int(z'1F9FF')) .or. & ! supplemental symbols
+                 (code_point >= int(z'1FA70') .and. code_point <= int(z'1FAFF'))) then  ! symbols extended-A
             width = 2
         ! Combining characters (simplified - just a few ranges)
         else if ((code_point >= int(z'0300') .and. code_point <= int(z'036F')) .or. &  ! Combining Diacriticals
