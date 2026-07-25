@@ -175,6 +175,7 @@ Complete keyboard shortcut reference for `fac` editor.
 |------------|---------|-------------|
 | `Ctrl+D` | Select Word & Next | Select word under cursor, add cursor at next match |
 | `Alt+Click` | Add/Remove Cursor | Add or remove cursor at mouse position |
+| *(see the Mouse section below for the rest)* | | |
 | `Ctrl+Alt+↑` | Add Cursor Above | Add cursor on line above |
 | `Ctrl+Alt+↓` | Add Cursor Below | Add cursor on line below |
 | `Esc` | Single Cursor | Return to single cursor mode |
@@ -284,6 +285,37 @@ Some vim-style keybindings work:
 3. `Ctrl+PageDown/Up` - Switch between tabs
 4. `Alt+V` / `Alt+S` - Split panes vertical/horizontal
 5. `Alt+H/J/K/L` - Navigate panes
+
+---
+
+## Mouse
+
+| Gesture | Action |
+|---------|--------|
+| Click | Position the cursor. With the file tree open this also closes it and takes focus, since the tree owns the keyboard while it is up |
+| Drag | Select text. Left button only — a right- or middle-drag does nothing |
+| `Alt+Click` | Add or remove a cursor |
+| Right-click | Context menu at the pointer |
+| `Shift+F10` or `Alt+Z` | The same menu at the caret |
+| Wheel | Scrolls whatever is under the pointer: the pane, an inactive pane, or the terminal panel's scrollback. Over the tab bar or status bar it does nothing |
+| Click a tab | Switch to it |
+| Click a tree row | Open a file, or expand a directory |
+| Right-click a tree row | Open in a split, or stage / unstage / diff |
+| Click the `»` / `«` chevron | Toggle the file tree. It points the way the tree will move |
+
+Right-clicking **inside a selection** keeps that selection, so Cut and Copy act
+on it. Right-clicking anywhere else moves the caret there first, as most
+editors do.
+
+The context menu greys out what cannot work rather than hiding it: Go to
+Definition and Find References are dim without a language server, and a tree
+row's git actions are dim outside a repository or when the file's status makes
+them meaningless. Cut and Copy are never dim — with no selection they act on
+the whole line, and the label says so.
+
+`F10` is frequently claimed by the terminal or desktop for its own menubar,
+which is why `Alt+Z` exists. `python3 tools/keycap.py` shows what your terminal
+actually delivers.
 
 ---
 

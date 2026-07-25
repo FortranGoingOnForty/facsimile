@@ -31,9 +31,26 @@ fpm run -- [filename]
 - `ctrl-e` / `end` - end of line
 - `alt-left/right` - jump by word/punctuation group
 - `pageup/pagedown` - page scroll
-- `mouse click` - position cursor
-- `mouse wheel/trackpad` - scroll viewport
 - `alt-[` / `alt-]` - jump to matching bracket
+
+### Mouse
+
+- `click` - position the cursor; with the file tree open this also takes focus
+  and closes the tree, since the tree owns the keyboard while it is up
+- `drag` - select text (left button only)
+- `alt-click` - add or remove a cursor
+- `right-click` - context menu at the pointer; `shift-f10` or `alt-z` opens the
+  same menu at the caret. Right-clicking inside a selection keeps it, so Cut
+  and Copy act on the selection rather than the line
+- `wheel` - scrolls whatever is under the pointer: the pane, an inactive pane,
+  or the terminal panel's scrollback. Over the tab bar or status bar it does
+  nothing rather than moving a document you are not pointing at
+- click a `[n: name]` tab to switch to it
+- click a file tree row to open it, a directory row to expand it; right-click a
+  row for open-in-split and the git actions (stage, unstage, diff) that
+  otherwise hide behind the `ctrl-g` prefix
+- click the `»`/`«` chevron at the far right of the status bar to toggle the
+  file tree; it points the way the tree will move
 
 ### Selection
 - `shift-arrows` - character selection
@@ -41,7 +58,7 @@ fpm run -- [filename]
 - `shift-ctrl-a/e` - select to line start/end
 - `shift-home/end` - select to line boundaries
 - `shift-pageup/pagedown` - page selection
-- `mouse drag` - select text
+- `alt-a` - select all
 - `esc` - clear selection / exit multi-cursor mode
 
 ### Editing

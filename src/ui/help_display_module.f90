@@ -102,7 +102,8 @@ contains
 
         ! Count total lines needed (sections + items + spacing)
         n_lines = 0
-        n_lines = n_lines + 11 + 2  ! NAVIGATION
+        n_lines = n_lines + 9 + 2   ! NAVIGATION (mouse moved to its own section)
+        n_lines = n_lines + 10 + 2  ! MOUSE
         n_lines = n_lines + 6 + 2   ! SELECTION
         n_lines = n_lines + 13 + 2  ! EDITING
         n_lines = n_lines + 4 + 2   ! CLIPBOARD
@@ -129,8 +130,20 @@ contains
         lines(i) = "  alt-[/alt-]         jump to matching bracket"; i = i + 1
         lines(i) = "  pageup/down         page scroll"; i = i + 1
         lines(i) = "  ctrl-g              go to line:column"; i = i + 1
-        lines(i) = "  click               position cursor"; i = i + 1
+        lines(i) = ""; i = i + 1
+
+        ! MOUSE
+        lines(i) = "MOUSE"; i = i + 1
+        lines(i) = "  click               position cursor (closes the tree)"; i = i + 1
+        lines(i) = "  drag                select text"; i = i + 1
         lines(i) = "  alt-click           add/remove cursor"; i = i + 1
+        lines(i) = "  right-click         context menu at the pointer"; i = i + 1
+        lines(i) = "  shift-f10 / alt-z   context menu at the caret"; i = i + 1
+        lines(i) = "  wheel               scroll whatever is under it"; i = i + 1
+        lines(i) = "  click a tab         switch to it"; i = i + 1
+        lines(i) = "  click a tree row    open a file / expand a folder"; i = i + 1
+        lines(i) = "  right-click a row   splits and git actions"; i = i + 1
+        lines(i) = "  click the chevron   toggle the file tree"; i = i + 1
         lines(i) = ""; i = i + 1
 
         ! SELECTION
