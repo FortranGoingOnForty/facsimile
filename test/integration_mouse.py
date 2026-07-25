@@ -57,8 +57,11 @@ def find_binary():
 
 
 class Session:
-    def __init__(self, binary, content, name="a.txt", args=None):
-        self.home = tempfile.mkdtemp(prefix="fac_mouse_home_")
+    def __init__(self, binary, content, name="a.txt", args=None, extra_files=()):
+        # HOME is nested one level down so the fortress navigator's parent
+        # pane shows a directory we control rather than all of /tmp
+        self.base = tempfile.mkdtemp(prefix="fac_mouse_")
+        self.home = os.path.join(self.base, "home")
         os.makedirs(os.path.join(self.home, ".config", "fac"))
         with open(os.path.join(self.home, ".config", "fac", "state.json"), "w") as f:
             f.write('{"first_run_completed": true, "lsp_installer_seen": true,'
@@ -66,6 +69,9 @@ class Session:
         self.target = os.path.join(self.home, name)
         with open(self.target, "w") as f:
             f.write(content)
+        for extra in extra_files:
+            with open(os.path.join(self.home, extra), "w") as f:
+                f.write("hello\n")
         env = {**os.environ, "TERM": "xterm-256color", "HOME": self.home}
         env.pop("XDG_CONFIG_HOME", None)
         self.screen = pyte.Screen(COLS, ROWS)
@@ -115,6 +121,21 @@ class Session:
     def cursor_row(self):
         return self.screen.cursor.y + 1
 
+    def attributed_rows(self):
+        """Rows carrying any non-default attribute: how the fortress panes
+        mark their selection. Text alone does not change when it moves."""
+        out = []
+        for y in range(ROWS):
+            text = self.screen.display[y].rstrip()
+            if not text:
+                continue
+            for x in range(COLS):
+                c = self.screen.buffer[y][x]
+                if c.reverse or c.bold or c.fg != "default" or c.bg != "default":
+                    out.append((y + 1, text[:34]))
+                    break
+        return out
+
     def find_row(self, needle):
         for y, r in enumerate(self.screen.display):
             if needle in r:
@@ -129,7 +150,7 @@ class Session:
 
     def close(self):
         self.child.close(force=True)
-        shutil.rmtree(self.home, ignore_errors=True)
+        shutil.rmtree(self.base, ignore_errors=True)
 
 
 def changed_lines(text):
@@ -206,28 +227,41 @@ def main():
           str([r for r in onscreen if "[<" in r]))
     s.close()
 
-    # Fortress navigator (welcome menu -> 'b' to browse). A smoke check only:
-    # the navigator swallows mouse reports rather than feeding their digits to
-    # type-to-jump, but the selection move was never reproduced in a pty, so
-    # this asserts the safe outcome rather than a fixed symptom. The welcome
-    # menu is a separate module and was never affected.
-    s = Session(binary, CONTENT, args=[])
+    # Fortress navigator (welcome menu -> 'b' to browse). The old ESC handler
+    # returned '<' as an unrecognised "arrow", after which the report's digits
+    # reached type-to-jump one at a time and moved the selection. Two things
+    # make this observable: the selection is marked by cell attributes, not by
+    # the row's text, and the sandbox must contain names starting with the
+    # digits a click's coordinates produce. The welcome menu is a separate
+    # module and was never affected.
+    s = Session(binary, CONTENT, args=[],
+                extra_files=["0alpha.txt", "2beta.txt", "6gamma.txt", "zeta.txt"])
     s.drain(1.0)
     check(s.find_row("Welcome Menu") is not None, "welcome menu reached",
           str(s.row_text(2)))
-    s.send("b", 1.2)                  # browse: opens the navigator
-    check(s.find_row("Welcome Menu") is None, "navigator reached from menu",
-          str(s.row_text(2)))
-    before = [s.row_text(y) for y in range(1, ROWS + 1)]
-    s.click(6, 20)
+    s.send("b", 1.4)                  # browse: opens the navigator
+    check(s.find_row("FORTRESS") is not None, "navigator reached from menu",
+          str(s.row_text(1)))
+
+    sel = s.attributed_rows()
+    check(len(sel) > 0, "navigator selection is detectable", "no attributed rows")
+    s.send("\x1b[B", 0.7)             # a real arrow must still move it
+    moved = s.attributed_rows()
+    check(moved != sel, "navigator: arrow key still moves the selection")
+
+    s.click(6, 20)                    # a click must not
     s.click(7, 20, button=2)
+    after_click = s.attributed_rows()
+    check(after_click == moved, "navigator: a click does not move the selection",
+          f"{moved[:2]} -> {after_click[:2]}")
     s.wheel(6, 20)
-    after = [s.row_text(y) for y in range(1, ROWS + 1)]
-    check(before == after,
-          "navigator: clicks do not move the selection",
-          f"{sum(1 for a, b in zip(before, after) if a != b)} rows changed")
-    check(not any("[<" in r for r in after),
+    check(s.attributed_rows() == moved,
+          "navigator: the wheel does not move the selection")
+    check(not any("[<" in s.row_text(y) for y in range(1, ROWS + 1)),
           "navigator: no mouse bytes echoed")
+
+    s.send("\x1b", 1.4)               # lone ESC must still quit
+    check(not s.child.isalive(), "navigator: lone ESC still quits")
     s.close()
 
     # Split panes: a click must select the line it points at. The stored pane
