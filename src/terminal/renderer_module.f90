@@ -21,7 +21,8 @@ module renderer_module
     use terminal_panel_module, only: is_terminal_panel_visible, &
         terminal_panel_render, get_terminal_panel_height
     use completion_popup_module, only: render_completion_popup
-    use ghost_text_module, only: ghost_is_active, ghost_suffix
+    use ghost_text_module, only: ghost_is_active, ghost_suffix, ghost_is_block, &
+                                ghost_block_line
     implicit none
     private
 
@@ -2146,6 +2147,7 @@ contains
         integer :: screen_width, screen_height
         integer :: pane_col, pane_row, pane_width, pane_height
         integer :: row_offset, min_row, ghost_cells
+        integer :: block_col0, block_width
         logical :: use_panes
 
         if (.not. ghost_is_active(editor%ghost)) return
@@ -2229,6 +2231,8 @@ contains
             if (screen_row < pane_row .or. screen_row >= pane_row + pane_height) return
             if (screen_col < pane_col + col_offset .or. screen_col >= pane_col + pane_width) return
             avail = pane_col + pane_width - screen_col
+            block_col0 = pane_col
+            block_width = pane_width
         else
             if (size(editor%cursors) /= 1) return
             cursor = editor%cursors(editor%active_cursor)
@@ -2249,6 +2253,8 @@ contains
             if (screen_row < min_row .or. screen_row >= editor%screen_rows) return
             if (screen_col < 1 .or. screen_col > screen_width) return
             avail = screen_width - screen_col + 1
+            block_col0 = 1
+            block_width = screen_width
         end if
 
         if (avail < 1) return
@@ -2264,12 +2270,128 @@ contains
                             shown // char(27) // '[0m')
 
         ! Mid-line: redraw the real text right of the cursor, shifted past
-        ! the suggestion, so nothing is hidden while the ghost is up
+        ! the suggestion, so nothing is hidden while the ghost is up.
+        ! Blocks are only ever offered at end of line, so this and the block
+        ! row loop below can never both run.
         if (cursor%column <= utf8_char_count(line)) then
             call render_line_tail_shifted(line, cursor%column, &
                 disp + ghost_cells, avail - ghost_cells)
         end if
+
+        if (ghost_is_block(editor%ghost)) then
+            call render_ghost_block(editor, buffer, screen_row, block_col0, block_width)
+        end if
     end subroutine render_ghost_text
+
+    ! Draw rows 2..N of a block suggestion below the caret, then redraw the
+    ! real buffer lines those rows were showing, shifted down so nothing is
+    ! hidden. Overlaying instead would make the file look like it had already
+    ! changed, which is exactly the impression a suggestion must not give.
+    subroutine render_ghost_block(editor, buffer, anchor_row, col0, cwidth)
+        type(editor_state_t), intent(in) :: editor
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: anchor_row, col0, cwidth
+        character(len=:), allocatable :: text, shown
+        integer :: n, i, row, bottom, gutter, content_w, used
+        integer :: src_line, line_count
+
+        n = editor%ghost%block_lines
+        if (n < 2) return
+
+        if (show_line_numbers) then
+            gutter = LINE_NUMBER_WIDTH + 1
+        else
+            gutter = 0
+        end if
+        content_w = cwidth - gutter
+        if (content_w < 1) return
+
+        bottom = last_content_row(editor)
+        line_count = buffer_get_line_count(buffer)
+
+        ! The block must fit entirely, or it is not shown as a block at all --
+        ! a half-drawn block reads as a suggestion that stops mid-thought.
+        if (anchor_row + n - 1 > bottom) then
+            call render_block_overflow_marker(anchor_row, col0, cwidth, n - 1)
+            return
+        end if
+
+        do i = 2, n
+            row = anchor_row + i - 2 + 1
+            text = ghost_block_line(editor%ghost, i)
+            if (.not. is_terminal_safe(text)) return
+            call clip_to_cells(text, content_w, shown, used)
+            call terminal_move_cursor(row, col0)
+            ! Blank the gutter: these rows are not lines in the file yet, and
+            ! leaving the number the base render put there would duplicate it
+            ! against the real line pushed down below.
+            if (gutter > 0) call terminal_write(repeat(' ', gutter))
+            call terminal_write(char(27) // '[2m' // char(27) // '[90m' // &
+                                shown // char(27) // '[0m' // char(27) // '[K')
+        end do
+
+        ! The ghost occupies rows anchor_row .. anchor_row + n - 1, so the
+        ! real lines resume at anchor_row + n. Starting a row earlier would
+        ! paint over the last row of the suggestion.
+        do i = 0, bottom - (anchor_row + n)
+            row = anchor_row + n + i
+            if (row > bottom) exit
+            src_line = editor%ghost%anchor_line + 1 + i
+            call terminal_move_cursor(row, col0)
+            call render_line_number(src_line, line_count, gutter)
+            if (src_line <= line_count) then
+                call render_line_with_selections(buffer, editor, src_line, &
+                                                 editor%viewport_column, content_w)
+            else
+                call terminal_write('~')
+            end if
+            call terminal_write(char(27) // '[K')
+        end do
+    end subroutine render_ghost_block
+
+    ! Line-number gutter for a pushed-down row. Matching what render_screen
+    ! draws matters: a shifted row with a blank gutter reads as though the
+    ! file has lost its numbering.
+    subroutine render_line_number(buffer_line, line_count, gutter)
+        integer, intent(in) :: buffer_line, line_count, gutter
+        character(len=8) :: num_str
+
+        if (gutter <= 0) return
+        if (buffer_line <= line_count) then
+            write(num_str, '(i5)') buffer_line
+            call terminal_write(char(27) // '[90m' // &
+                                adjustl(num_str(1:LINE_NUMBER_WIDTH)) // &
+                                char(27) // '[0m ')
+        else
+            call terminal_write(repeat(' ', gutter))
+        end if
+    end subroutine render_line_number
+
+    ! When a block will not fit, show only its first line plus how much more
+    ! Tab would bring, rather than truncating it mid-thought.
+    subroutine render_block_overflow_marker(anchor_row, col0, cwidth, extra)
+        integer, intent(in) :: anchor_row, col0, cwidth, extra
+        character(len=32) :: marker
+
+        if (extra < 1) return
+        write(marker, '(a,i0,a)') ' +', extra, ' more (Tab)'
+        if (col0 + cwidth - 1 - len_trim(marker) < col0) return
+        call terminal_move_cursor(anchor_row, col0 + cwidth - len_trim(marker))
+        call terminal_write(char(27) // '[2m' // char(27) // '[90m' // &
+                            trim(marker) // char(27) // '[0m')
+    end subroutine render_block_overflow_marker
+
+    ! Last row the editor may draw content on: above the status bar, and above
+    ! the terminal panel when it is up.
+    function last_content_row(editor) result(row)
+        type(editor_state_t), intent(in) :: editor
+        integer :: row
+
+        row = editor%screen_rows - 1
+        if (is_terminal_panel_visible(editor%terminal_panel)) then
+            row = row - get_terminal_panel_height(editor%terminal_panel)
+        end if
+    end function last_content_row
 
     ! Cut text to at most `cells` display columns, only ever on a character
     ! boundary, and report the width actually used. Wide characters that would

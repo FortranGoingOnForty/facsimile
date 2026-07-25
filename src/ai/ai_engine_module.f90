@@ -20,7 +20,8 @@ module ai_engine_module
     use completion_context_module
     use completion_sanitize_module
     use ghost_text_module, only: ghost_is_active, ghost_apply_text, ghost_may_replace, &
-                                 ghost_clear, GHOST_SRC_LLM, GHOST_SRC_NONE
+                                 ghost_clear, ghost_apply_block, &
+                                 GHOST_SRC_LLM, GHOST_SRC_NONE
     use settings_module
     implicit none
     private
@@ -51,6 +52,7 @@ contains
         ai%temperature_x100 = settings_get_integer('ai.temperature_x100', 15)
         ai%prefix_bytes = settings_get_integer('ai.prefix_bytes', DEFAULT_PREFIX_BYTES)
         ai%suffix_bytes = settings_get_integer('ai.suffix_bytes', DEFAULT_SUFFIX_BYTES)
+        ai%max_block_lines = min(8, max(1, settings_get_integer('ai.max_block_lines', 4)))
         ai%configured = .true.
 
         if (.not. ai%enabled) then
@@ -109,6 +111,12 @@ contains
         ai%trig_prefix = prefix
         ai%trig_line_after = line_after
         ai%trig_doc_revision = doc_revision
+
+        ! A block is only ever offered with the caret past the last character
+        ! of its line. Mid-line there is no coherent place for the rest of the
+        ! line to go, and it keeps the renderer's "open the line up" trick and
+        ! the block row loop from ever interacting.
+        ai%trig_at_eol = len_trim(line_after) == 0
     end subroutine ai_note_trigger
 
     subroutine ai_cancel(ai)
@@ -142,6 +150,7 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(in) :: buffer
         character(len=:), allocatable :: prefix, suffix, body
+        integer :: npredict
         integer(int64) :: t
 
         t = now_ms()
@@ -170,7 +179,15 @@ contains
         call build_fim_context(buffer, ai%trig_line, ai%trig_col, &
                                ai%prefix_bytes, ai%suffix_bytes, prefix, suffix)
 
-        body = ollama_generate_body(ai%model, prefix, suffix, ai%num_predict, &
+        ! Ask for more tokens when a block is possible; latency is dominated
+        ! by num_predict, so a single-line request stays deliberately tight.
+        if (ai%trig_at_eol .and. ai%max_block_lines > 1) then
+            npredict = ai%num_predict * 4
+        else
+            npredict = ai%num_predict
+        end if
+
+        body = ollama_generate_body(ai%model, prefix, suffix, npredict, &
                                     ai%temperature_x100, '10m')
 
         call ai_http_begin(ai%req, ai%addr, &
@@ -187,6 +204,7 @@ contains
         ai%flight_prefix = ai%trig_prefix
         ai%flight_line_after = ai%trig_line_after
         ai%flight_doc_revision = ai%trig_doc_revision
+        ai%flight_at_eol = ai%trig_at_eol
         ai%requests_sent = ai%requests_sent + 1
         ai%request_started_ms = t
     end subroutine maybe_send
@@ -226,7 +244,11 @@ contains
             return
         end if
 
-        call sanitize_completion(raw, ai%flight_line_after, 1, text, code)
+        if (ai%flight_at_eol .and. ai%max_block_lines > 1) then
+            call sanitize_completion(raw, ai%flight_line_after, ai%max_block_lines, text, code)
+        else
+            call sanitize_completion(raw, ai%flight_line_after, 1, text, code)
+        end if
         if (code /= SAN_OK) then
             ai%last_reject_reason = sanitize_reason(code)
             ai%rejected_count = ai%rejected_count + 1
@@ -254,8 +276,13 @@ contains
 
         if (.not. ghost_may_replace(editor%ghost%source, GHOST_SRC_LLM, text)) return
 
-        call ghost_apply_text(editor%ghost, text, ai%flight_prefix, &
-                              ai%flight_line, ai%flight_col, GHOST_SRC_LLM)
+        if (index(text, achar(10)) > 0) then
+            call ghost_apply_block(editor%ghost, text, ai%flight_prefix, &
+                                   ai%flight_line, ai%flight_col, GHOST_SRC_LLM)
+        else
+            call ghost_apply_text(editor%ghost, text, ai%flight_prefix, &
+                                  ai%flight_line, ai%flight_col, GHOST_SRC_LLM)
+        end if
         ai%accepted_count = ai%accepted_count + 1
         ui_changed = .true.
     end subroutine apply_to_ghost

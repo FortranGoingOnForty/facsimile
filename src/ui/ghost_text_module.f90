@@ -10,6 +10,8 @@ module ghost_text_module
     public :: ghost_text_t
     public :: GHOST_SRC_NONE, GHOST_SRC_WORDS, GHOST_SRC_LSP, GHOST_SRC_LLM
     public :: ghost_extend_prefix, ghost_may_replace, ghost_apply_text
+    public :: ghost_apply_block, ghost_insert_text, ghost_is_block
+    public :: ghost_block_line, ghost_take_word
     public :: ghost_clear, ghost_clear_pending
     public :: ghost_get_prefix_at_cursor
     public :: ghost_get_include_prefix
@@ -44,6 +46,13 @@ module ghost_text_module
         ! document changes, so they are not enough on their own to tell that
         ! a reply still applies.
         integer(int64) :: pending_doc_revision = 0
+
+        ! Multi-line suggestion. Added alongside the single-line fields rather
+        ! than replacing them, so the word-scan and LSP sources keep exactly
+        ! their existing behaviour. block_lines == 0 means "not a block", which
+        ! is what every pre-existing check already assumes.
+        character(len=:), allocatable :: block_text
+        integer :: block_lines = 0
     end type ghost_text_t
 
 contains
@@ -75,6 +84,136 @@ contains
         extended = ghost_is_active(ghost)
         if (.not. extended) call ghost_clear(ghost)
     end function ghost_extend_prefix
+
+    ! Install a multi-line suggestion. Only ever offered with the caret at end
+    ! of line: that keeps the mid-line "open the line up" trick and the block
+    ! row loop from ever meeting, and a block mid-line is incoherent anyway --
+    ! there is no sensible place for the rest of the line to go.
+    subroutine ghost_apply_block(ghost, text, prefix, cur_line, cur_col, source)
+        type(ghost_text_t), intent(inout) :: ghost
+        character(len=*), intent(in) :: text, prefix
+        integer, intent(in) :: cur_line, cur_col, source
+        integer :: i, n
+
+        if (len(text) == 0) return
+
+        n = 1
+        do i = 1, len(text)
+            if (text(i:i) == achar(10)) n = n + 1
+        end do
+
+        ! The first line still lives in suggestion/prefix so the renderer's
+        ! row-1 path and ghost_suffix keep working unchanged.
+        ghost%suggestion = prefix // first_line_of(text)
+        ghost%prefix = prefix
+        ghost%anchor_line = cur_line
+        ghost%anchor_col = cur_col
+        ghost%source = source
+        ghost%visible = .true.
+        ghost%block_text = text
+        ghost%block_lines = n
+    end subroutine ghost_apply_block
+
+    function ghost_is_block(ghost) result(res)
+        type(ghost_text_t), intent(in) :: ghost
+        logical :: res
+        res = ghost%block_lines > 1 .and. allocated(ghost%block_text)
+    end function ghost_is_block
+
+    ! What gets inserted on accept: the whole block when there is one, the
+    ! single-line suffix otherwise. Every insert path goes through this.
+    function ghost_insert_text(ghost) result(text)
+        type(ghost_text_t), intent(in) :: ghost
+        character(len=:), allocatable :: text
+
+        if (ghost_is_block(ghost)) then
+            text = ghost%block_text
+        else
+            text = ghost_suffix(ghost)
+        end if
+    end function ghost_insert_text
+
+    ! 1-based line of the block, for the renderer's row loop.
+    function ghost_block_line(ghost, n) result(text)
+        type(ghost_text_t), intent(in) :: ghost
+        integer, intent(in) :: n
+        character(len=:), allocatable :: text
+        integer :: i, seen, start
+
+        text = ''
+        if (.not. ghost_is_block(ghost)) return
+        if (n < 1 .or. n > ghost%block_lines) return
+
+        seen = 1
+        start = 1
+        do i = 1, len(ghost%block_text)
+            if (ghost%block_text(i:i) == achar(10)) then
+                if (seen == n) then
+                    text = ghost%block_text(start:i-1)
+                    return
+                end if
+                seen = seen + 1
+                start = i + 1
+            end if
+        end do
+        if (seen == n) text = ghost%block_text(start:)
+    end function ghost_block_line
+
+    pure function first_line_of(s) result(out)
+        character(len=*), intent(in) :: s
+        character(len=:), allocatable :: out
+        integer :: i
+
+        out = s
+        do i = 1, len(s)
+            if (s(i:i) == achar(10)) then
+                out = s(1:i-1)
+                return
+            end if
+        end do
+    end function first_line_of
+
+    ! Accept one word of the suggestion and keep the rest, re-anchored. Useful
+    ! exactly when the model is mostly right: it turns a suggestion that would
+    ! otherwise be rejected wholesale into a partial win.
+    !
+    ! Returns the text to insert; the caller advances the buffer and cursor,
+    ! then the ghost's prefix/anchor have already been moved to match.
+    function ghost_take_word(ghost) result(word)
+        type(ghost_text_t), intent(inout) :: ghost
+        character(len=:), allocatable :: word
+        character(len=:), allocatable :: suffix
+        integer :: i, n
+
+        word = ''
+        if (.not. ghost_is_active(ghost)) return
+        if (ghost_is_block(ghost)) return       ! blocks accept by line, not word
+
+        suffix = ghost_suffix(ghost)
+        if (len(suffix) == 0) return
+
+        ! Leading non-word run (punctuation, spaces) counts as one step, then
+        ! a word run. That way '(x' hands over '(' first rather than jumping
+        ! past the paren the user may not want.
+        n = 0
+        if (.not. ghost_word_char(suffix(1:1))) then
+            do i = 1, len(suffix)
+                if (ghost_word_char(suffix(i:i))) exit
+                n = i
+            end do
+        else
+            do i = 1, len(suffix)
+                if (.not. ghost_word_char(suffix(i:i))) exit
+                n = i
+            end do
+        end if
+        if (n == 0) return
+
+        word = suffix(1:n)
+        ghost%prefix = ghost%prefix // word
+        ghost%anchor_col = ghost%anchor_col + n
+        if (.not. ghost_is_active(ghost)) call ghost_clear(ghost)
+    end function ghost_take_word
 
     ! Whether a newly arrived suggestion may take over the display.
     !
@@ -152,6 +291,8 @@ contains
         ghost%anchor_col = 0
         if (allocated(ghost%suggestion)) deallocate(ghost%suggestion)
         if (allocated(ghost%prefix)) deallocate(ghost%prefix)
+        if (allocated(ghost%block_text)) deallocate(ghost%block_text)
+        ghost%block_lines = 0
     end subroutine ghost_clear
 
     subroutine ghost_clear_pending(ghost)

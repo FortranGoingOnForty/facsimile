@@ -29,6 +29,8 @@ module ai_state_module
         integer :: temperature_x100 = 15
         integer :: prefix_bytes = 6000
         integer :: suffix_bytes = 2000
+        ! 1 disables block suggestions entirely
+        integer :: max_block_lines = 4
 
         ! ---- backend ----
         type(ai_http_addr_t) :: addr
@@ -44,6 +46,7 @@ module ai_state_module
         integer(int64) :: trig_doc_revision = -1
         character(len=:), allocatable :: trig_prefix
         character(len=:), allocatable :: trig_line_after
+        logical :: trig_at_eol = .false.
 
         ! ---- request in flight ----
         type(ai_http_t) :: req
@@ -55,6 +58,7 @@ module ai_state_module
         integer(int64) :: flight_doc_revision = -1
         character(len=:), allocatable :: flight_prefix
         character(len=:), allocatable :: flight_line_after
+        logical :: flight_at_eol = .false.
 
         ! ---- rate limiting ----
         integer(int64) :: bucket_window_ms = 0

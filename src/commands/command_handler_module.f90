@@ -57,7 +57,8 @@ module command_handler_module
                                  ghost_get_prefix_at_cursor, ghost_get_include_prefix, &
                                  ghost_update_from_buffer, &
                                  ghost_apply_lsp_result, ghost_suffix, ghost_is_active, &
-                                 ghost_extend_prefix, GHOST_SRC_LLM
+                                 ghost_extend_prefix, GHOST_SRC_LLM, &
+                                 ghost_insert_text, ghost_is_block, ghost_take_word
     use hover_tooltip_module, only: show_hover_tooltip, hide_hover_tooltip, &
                                      handle_hover_response, is_hover_visible
     use diagnostics_panel_module, only: toggle_panel => toggle_diagnostics_panel, &
@@ -438,6 +439,13 @@ contains
                     call accept_ghost_suggestion(editor, buffer)
                     return
                 end if
+            end if
+            ! Partial accept: take one word and keep the rest ghosted. Turns a
+            ! suggestion that is mostly right into a partial win instead of an
+            ! all-or-nothing choice.
+            if (trim(key_str) == 'ctrl-right') then
+                call accept_ghost_word(editor, buffer)
+                return
             end if
 
             ! Typing the character the suggestion already predicted advances
@@ -7065,7 +7073,8 @@ contains
     subroutine accept_ghost_suggestion(editor, buffer)
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
-        character(len=:), allocatable :: suffix
+        character(len=:), allocatable :: text
+        logical :: is_block
 
         ! Revalidate: the suggestion must still be anchored at the live
         ! cursor (mid-line is fine; insertion pushes the tail right)
@@ -7075,14 +7084,29 @@ contains
             return
         end if
 
-        suffix = ghost_suffix(editor%ghost)
-        if (len(suffix) == 0) then
+        text = ghost_insert_text(editor%ghost)
+        if (len(text) == 0) then
             call ghost_clear(editor%ghost)
             return
         end if
 
-        if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
-        call insert_line_text(buffer, editor%cursors(editor%active_cursor), suffix)
+        is_block = ghost_is_block(editor%ghost)
+
+        ! A block ALWAYS gets its own checkpoint. Without this, accepting one
+        ! straight after typing coalesces with that typing run and Ctrl-Z
+        ! cannot remove the block on its own.
+        if (is_block .or. .not. last_action_was_edit) call save_undo_state(buffer, editor)
+
+        if (is_block) then
+            ! One insert for the whole block. insert_line_text moves the gap
+            ! once per character and mis-tracks the column across a newline;
+            ! buffer_insert is byte-oriented and line count is derived by
+            ! scanning for LF, so embedded newlines just work.
+            call insert_block_at_cursor(buffer, editor%cursors(editor%active_cursor), text)
+        else
+            call insert_line_text(buffer, editor%cursors(editor%active_cursor), text)
+        end if
+
         editor%cursors(editor%active_cursor)%desired_column = &
             editor%cursors(editor%active_cursor)%column
         call sync_editor_to_pane(editor)
@@ -7094,6 +7118,61 @@ contains
         last_action_was_edit = .true.
         call notify_buffer_change(editor, buffer)
     end subroutine accept_ghost_suggestion
+
+    ! Insert LF-separated text at the cursor in one buffer operation, then
+    ! place the caret at the end of what was inserted.
+    subroutine insert_block_at_cursor(buffer, cursor, text)
+        type(buffer_t), intent(inout) :: buffer
+        type(cursor_t), intent(inout) :: cursor
+        character(len=*), intent(in) :: text
+        integer :: pos, i, newlines, last_nl
+
+        pos = get_buffer_position(buffer, cursor%line, cursor%column)
+        call buffer_insert(buffer, pos, text)
+
+        newlines = 0
+        last_nl = 0
+        do i = 1, len(text)
+            if (text(i:i) == achar(10)) then
+                newlines = newlines + 1
+                last_nl = i
+            end if
+        end do
+
+        if (newlines == 0) then
+            cursor%column = cursor%column + utf8_char_count(text)
+        else
+            cursor%line = cursor%line + newlines
+            cursor%column = utf8_char_count(text(last_nl+1:)) + 1
+        end if
+        cursor%desired_column = cursor%column
+    end subroutine insert_block_at_cursor
+
+    ! Accept one word of the suggestion, keeping the rest ghosted.
+    subroutine accept_ghost_word(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: word
+
+        if (editor%cursors(editor%active_cursor)%line /= editor%ghost%anchor_line .or. &
+            editor%cursors(editor%active_cursor)%column /= editor%ghost%anchor_col) then
+            call ghost_clear(editor%ghost)
+            return
+        end if
+
+        word = ghost_take_word(editor%ghost)
+        if (len(word) == 0) return
+
+        if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+        call insert_line_text(buffer, editor%cursors(editor%active_cursor), word)
+        editor%cursors(editor%active_cursor)%desired_column = &
+            editor%cursors(editor%active_cursor)%column
+        call sync_editor_to_pane(editor)
+        call update_viewport(editor)
+
+        last_action_was_edit = .true.
+        call notify_buffer_change(editor, buffer)
+    end subroutine accept_ghost_word
 
     ! Recompute the shadow suggestion after an edit keystroke. The word-scan
     ! result shows immediately; an LSP completion request may upgrade it when
