@@ -121,6 +121,17 @@ class Session:
     def cursor_row(self):
         return self.screen.cursor.y + 1
 
+    def tab_spans(self):
+        """[(label, col0, col1)] for each tab drawn on row 1, 1-based."""
+        bar = self.screen.display[0]
+        return [(m.group(0), m.start() + 1, m.end())
+                for m in re.finditer(r"\[\d+: [^\]]*\]", bar)]
+
+    def active_tabs(self):
+        """Labels drawn in reverse video: the tab bar marks the active one."""
+        return [label for label, c0, c1 in self.tab_spans()
+                if any(self.screen.buffer[0][x].reverse for x in range(c0 - 1, c1))]
+
     def attributed_rows(self):
         """Rows carrying any non-default attribute: how the fortress panes
         mark their selection. Text alone does not change when it moves."""
@@ -291,6 +302,35 @@ def main():
         check(not wrong_caret, f"{label}: caret is drawn on the clicked row",
               str(wrong_caret[:3]))
         s.close()
+
+    # Tab bar: clicking a [n: name] region activates that tab. The layout
+    # only ever existed during the draw -- label widths vary with the
+    # filename and the modified marker, and in tree mode the bar does not
+    # start at column 1 -- so the renderer now records each span.
+    s = Session(binary, "AAA first\n", name="alpha.txt",
+                extra_files=["beta.txt", "gamma.txt"])
+    for name in ("beta.txt", "gamma.txt"):
+        s.send("\x14", 0.7)               # ctrl-t: new tab
+        s.send("\x0f", 1.0)               # ctrl-o: fortress navigator
+        s.send(name, 0.8)                 # type-to-jump
+        s.send("\r", 1.2)                 # open
+    spans = s.tab_spans()
+    check(len(spans) >= 3, "several tabs are open", f"{len(spans)} tabs")
+
+    wrong = []
+    for label, c0, c1 in spans:
+        s.click(1, (c0 + c1) // 2)
+        if s.active_tabs() != [label]:
+            wrong.append((label, s.active_tabs()))
+    check(not wrong, "clicking a tab activates it", str(wrong[:3]))
+
+    # and the document really follows the tab, not just the highlight
+    named = [(lbl, c0, c1) for lbl, c0, c1 in spans if "alpha.txt" in lbl]
+    if named:
+        s.click(1, (named[0][1] + named[0][2]) // 2)
+        check("AAA first" in s.row_text(2),
+              "the document follows the clicked tab", s.row_text(2))
+    s.close()
 
     if failures:
         print(f"integration_mouse: FAILED ({len(failures)}: {', '.join(failures)})")
