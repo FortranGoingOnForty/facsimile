@@ -781,10 +781,15 @@ contains
             ! Whenever code can leave this machine, say so and keep saying so.
             ! The user must never have to remember what they configured.
             block
-                use ai_state_module, only: ai_remote_badge
-                character(len=:), allocatable :: badge
+                use ai_state_module, only: ai_remote_badge, ai_indicator
+                character(len=:), allocatable :: badge, ind
                 badge = ai_remote_badge(editor%ai)
-                if (len(badge) > 0) status_center = badge // ' ' // trim(status_center)
+                if (len(badge) > 0) then
+                    status_center = badge // ' ' // trim(status_center)
+                else
+                    ind = ai_indicator(editor%ai)
+                    if (len(ind) > 0) status_center = ind // ' ' // trim(status_center)
+                end if
             end block
         end block
 

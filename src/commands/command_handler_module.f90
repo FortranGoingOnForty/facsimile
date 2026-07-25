@@ -140,6 +140,53 @@ module command_handler_module
 contains
 
     ! Helper to get a server index for a specific capability
+    ! Keys that should ask the model for a suggestion. Wider than the LSP
+    ! set: Enter especially, because finishing a comment and pressing Enter is
+    ! precisely when the user wants the code written.
+    pure function is_cursor_move_key(key_str) result(res)
+        character(len=*), intent(in) :: key_str
+        logical :: res
+
+        select case(trim(key_str))
+        case('up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown', &
+             'ctrl-left', 'ctrl-right', 'alt-left', 'alt-right', 'ctrl-home', &
+             'ctrl-end', 'esc')
+            res = .true.
+        case default
+            res = index(key_str, 'mouse-') == 1
+        end select
+    end function is_cursor_move_key
+
+    function ai_trigger_key(key_str) result(res)
+        character(len=*), intent(in) :: key_str
+        logical :: res
+
+        res = .false.
+        if (trim(key_str) == 'enter') then
+            res = .true.
+        else if (trim(key_str) == 'backspace') then
+            res = .true.
+        else if (len_trim(key_str) == 1) then
+            select case(key_str(1:1))
+            case('(', ',', '{', ':', '.', '=', ' ')
+                res = .true.
+            case default
+                res = is_word_char(key_str(1:1))
+            end select
+        end if
+    end function ai_trigger_key
+
+    ! The typed word before the caret, or '' on a fresh line. A block
+    ! suggestion after Enter legitimately has no prefix at all.
+    function ai_prefix_at(buffer, line_num, col) result(prefix)
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: line_num, col
+        character(len=:), allocatable :: prefix
+
+        call ghost_get_prefix_at_cursor(buffer, line_num, col, prefix)
+        if (.not. allocated(prefix)) prefix = ''
+    end function ai_prefix_at
+
     function ai_active_filename(editor) result(name)
         type(editor_state_t), intent(in) :: editor
         character(len=:), allocatable :: name
@@ -235,8 +282,10 @@ contains
         is_edit_action = .false.
         is_text_insert = .false.
         ghost_extended = .false.
-        ! Any keystroke dismisses the message the previous one left behind
-        call clear_status_message()
+        ! A message stays up until the caret moves, rather than vanishing on
+        ! the next keystroke. "AI completion: ready" is worth reading, and it
+        ! was disappearing before the user had looked at it.
+        if (is_cursor_move_key(key_str)) call clear_status_message()
         g_cursor_only_move = .false.
 
         ! Ignore empty key strings (from terminal position reports, etc)
@@ -1100,7 +1149,7 @@ contains
             call update_viewport(editor)
             is_edit_action = .true.
 
-        case('alt-i')
+        case('alt-i', 'alt-shift-i')
             ! Turning OFF is instant and silent -- this is the key you reach
             ! for when a suggestion is in the way, so it must not stall.
             ! Turning ON probes the backend, because otherwise the first
@@ -7298,6 +7347,25 @@ contains
         else if (trim(key_str) == 'backspace') then
             trigger_key = .true.
         end if
+
+        ! The model backend gets a WIDER trigger set than LSP, and is asked
+        ! before the LSP early-return below.
+        !
+        ! Enter is the single most valuable moment: you finish a comment
+        ! describing what you want, press Enter, and that is exactly when a
+        ! completion should appear. Sharing the LSP trigger set meant the AI
+        ! only ever fired on word characters, so "write the comment, get the
+        ! code" -- the headline capability -- never actually happened.
+        if (ai_is_enabled(editor%ai) .and. .not. in_include) then
+            if (ai_trigger_key(key_str)) then
+                call ai_note_trigger(editor%ai, cur_line, cur_col, &
+                                     ai_prefix_at(buffer, cur_line, cur_col), &
+                                     context_line_after_cursor(buffer, cur_line, cur_col), &
+                                     current_doc_revision(editor), &
+                                     ai_active_filename(editor))
+            end if
+        end if
+
         if (.not. trigger_key) return
 
         if (.not. in_include) then
@@ -7338,17 +7406,6 @@ contains
                 editor%ghost%pending_include = in_include
                 editor%ghost%pending_doc_revision = current_doc_revision(editor)
             end if
-        end if
-
-        ! Record intent for the model backend. Deliberately just a note: the
-        ! request itself is built and sent from ai_tick, off the keystroke
-        ! path, so a burst of typing costs one request rather than one per
-        ! character -- and prompt construction never delays a keypress.
-        if (ai_is_enabled(editor%ai) .and. .not. in_include) then
-            call ai_note_trigger(editor%ai, cur_line, cur_col, prefix, &
-                                 context_line_after_cursor(buffer, cur_line, cur_col), &
-                                 current_doc_revision(editor), &
-                                 ai_active_filename(editor))
         end if
     end subroutine update_ghost_suggestion
 

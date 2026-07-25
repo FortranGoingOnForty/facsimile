@@ -87,7 +87,7 @@ contains
             ai%last_error = 'cannot resolve ' // ai%host
             return
         end if
-        ai%health = AI_HEALTH_UNKNOWN     ! proven by the first successful reply
+        ai%health = AI_HEALTH_UNKNOWN     ! proven by the probe or first reply
 
         ! The remote address is resolved ONLY when the remote tier is
         ! explicitly enabled. With it off nothing about that host is looked

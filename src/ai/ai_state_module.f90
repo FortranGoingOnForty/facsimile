@@ -11,7 +11,7 @@ module ai_state_module
 
     public :: ai_state_t
     public :: AI_HEALTH_UNKNOWN, AI_HEALTH_OK, AI_HEALTH_DOWN, AI_HEALTH_NO_FIM
-    public :: ai_remote_badge, ai_host_is_loopback
+    public :: ai_remote_badge, ai_host_is_loopback, ai_indicator
 
     integer, parameter :: AI_HEALTH_UNKNOWN = 0
     integer, parameter :: AI_HEALTH_OK      = 1
@@ -101,6 +101,28 @@ contains
         res = h == '127.0.0.1' .or. h == 'localhost' .or. h == '::1' .or. &
               h == '' .or. index(h, '127.') == 1
     end function ai_host_is_loopback
+
+    ! Always-visible state of the feature. Without this the only signal that
+    ! completion is on is a suggestion appearing -- and if it is misconfigured
+    ! no suggestion ever appears, so "off" and "broken" look identical.
+    function ai_indicator(ai) result(text)
+        type(ai_state_t), intent(in) :: ai
+        character(len=:), allocatable :: text
+
+        text = ''
+        if (.not. ai%enabled) return
+
+        select case(ai%health)
+        case(AI_HEALTH_OK)
+            text = '[AI]'
+        case(AI_HEALTH_DOWN)
+            text = '[AI:down]'
+        case(AI_HEALTH_NO_FIM)
+            text = '[AI:no-fim]'
+        case default
+            text = '[AI?]'
+        end select
+    end function ai_indicator
 
     ! A persistent marker shown whenever code can leave this machine. Lives
     ! here rather than in the engine so the renderer can read it without

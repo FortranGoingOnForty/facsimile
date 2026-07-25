@@ -30,7 +30,13 @@ clears any suggestion on screen. The setting persists, so it stays off until
 you turn it back on.
 
 The status bar reports what happened — `ready: <model> on <host>`, or exactly
-why not.
+why not. The message stays up until you move the caret, so there is time to
+read it.
+
+Once enabled, a small **`[AI]`** marker sits in the status bar for as long as
+it is on — `[AI:down]` or `[AI:no-fim]` if the backend is not usable. Without
+it, "off" and "misconfigured" look identical, since neither produces
+suggestions.
 
 > The ollama **service** runs as user `ollama` with
 > `OLLAMA_MODELS=/var/lib/ollama`, not your `~/.ollama/models`. Pull models
@@ -47,13 +53,20 @@ why not.
 | `Ctrl+Right` | Accept one word, keeping the rest offered |
 | `Alt+Right` | Accept one line of a multi-line suggestion |
 | `Alt+\` | Deep completion here — a bigger model, a longer budget |
-| `Alt+I` | Turn completion on or off |
+| `Alt+I` | Turn completion on or off (`Alt+Shift+I` works too) |
 | any other key | Dismiss |
 
 Nothing is ever inserted without one of those explicit accepts.
 
 `Ctrl+Right` and `Alt+Right` shadow word-move-right while a suggestion is
 showing, as Copilot does. `Alt+F` still moves by word in both cases.
+
+### When suggestions appear
+
+After a word character, `(`, `,`, `{`, `:`, `.`, `=`, space, backspace — and
+**after Enter**, which is the most valuable moment of all: finish a comment
+describing what you want, press Enter, and the completion arrives on the
+fresh line.
 
 ### Typing into a suggestion is free
 
