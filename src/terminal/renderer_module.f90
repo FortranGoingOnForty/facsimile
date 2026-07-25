@@ -5,6 +5,7 @@ module renderer_module
     use utf8_module
     use editor_state_module, only: editor_state_t, cursor_t
     use bracket_matching_module
+    use clickable_region_module, only: regions_begin_frame, region_add, REGION_TAB
     use file_tree_module
     use file_tree_renderer_module
     use syntax_highlighter_module
@@ -164,6 +165,7 @@ contains
         end if
 
         call terminal_hide_cursor()
+        call regions_begin_frame()
 
         ! Render tab bar if there are any tabs
         call render_tab_bar(editor)
@@ -1278,6 +1280,7 @@ contains
         integer :: separator_col
 
         call terminal_hide_cursor()
+        call regions_begin_frame()
 
         ! Calculate split: 30% for tree, 70% for editor
         tree_width = editor%screen_cols * 30 / 100
@@ -2740,6 +2743,17 @@ contains
                 call terminal_write(char(27) // '[0m')  ! Reset
             end if
 
+            ! This is the only place the tab layout exists: the label width
+            ! varies with the filename and the modified marker, and in tree
+            ! mode the bar does not start at column 1. Record the span now so
+            ! a click can be resolved without redoing any of that.
+            !
+            ! len() is bytes, matching the column arithmetic below. A
+            ! multibyte filename therefore misplaces the region exactly as it
+            ! already misplaces the drawn layout, so clicks stay consistent
+            ! with what is on screen.
+            call region_add(REGION_TAB, 1, 1, col, col + len(tab_label) - 1, i)
+
             col = col + len(tab_label) + 1  ! +1 for space between tabs
         end do
     end subroutine render_tab_bar
@@ -2797,6 +2811,7 @@ contains
         integer :: row
 
         call terminal_hide_cursor()
+        call regions_begin_frame()
 
         ! Clear screen first to avoid artifacts
         do row = 1, editor%screen_rows

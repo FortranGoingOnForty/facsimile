@@ -6,6 +6,8 @@ module command_handler_module
                                    navigate_to_pane_left, navigate_to_pane_right, navigate_to_pane_up, navigate_to_pane_down, &
                                    sync_editor_to_pane, tab_t
     use text_buffer_module
+    use clickable_region_module, only: clickable_region_t, region_at, &
+                                       REGION_TAB, REGION_BLOCK
     use renderer_module, only: update_viewport, render_screen, render_screen_with_tree, tree_state, &
                                fuss_search_buffer, fuss_search_len, fuss_search_last_time, &
                                fuss_fuzzy_jump, fuss_reset_search, get_time_ms, &
@@ -324,6 +326,40 @@ contains
                         ! Click in the editor area: hand focus back
                         editor%terminal_panel%focused = .false.
                         editor%terminal_panel%sel_active = .false.
+                    end if
+                end if
+            end block
+        end if
+
+        ! Hand a click to whatever the renderer marked clickable at that cell.
+        ! Deliberately ahead of fuss mode and the fall-through panels below:
+        ! fuss mode swallows every unrecognised key, and the panels return
+        ! "unhandled" for mouse events, so a region registered by either
+        ! would never be reached from further down.
+        if (index(key_str, 'mouse-click:') == 1) then
+            block
+                character(len=16) :: ev
+                integer :: btn, mrow, mcol
+                logical :: ok
+                type(clickable_region_t) :: hit
+
+                call parse_mouse_event(key_str, ev, btn, mrow, mcol, ok)
+                if (ok) then
+                    if (btn == 0) then
+                        hit = region_at(mrow, mcol)
+                        select case (hit%kind)
+                        case (REGION_TAB)
+                            if (hit%payload >= 1 .and. &
+                                hit%payload <= size(editor%tabs)) then
+                                call switch_to_tab_with_buffer(editor, &
+                                                               hit%payload, buffer)
+                            end if
+                            return
+                        case (REGION_BLOCK)
+                            ! A panel owns this cell. Swallow the click rather
+                            ! than letting it move the caret underneath.
+                            return
+                        end select
                     end if
                 end if
             end block
