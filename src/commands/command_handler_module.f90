@@ -394,6 +394,31 @@ contains
                         end if
                         hit = region_at(mrow, mcol)
                         select case (hit%kind)
+                        case (REGION_NONE)
+                            ! With the tree open, a click in the document takes
+                            ! focus. Fuss mode is modal for the keyboard, so
+                            ! leaving it open with the caret in the document
+                            ! would send the next keystroke to the tree. The
+                            ! caret is placed before the toggle, while the
+                            ! pane rect still describes the tree-mode layout
+                            ! the click was aimed at.
+                            if (editor%fuss_mode_active) then
+                                if (cell_in_a_pane(editor, mrow, mcol)) then
+                                    if (allocated(editor%cursors)) then
+                                        if (size(editor%cursors) > 1) then
+                                            deallocate(editor%cursors)
+                                            allocate(editor%cursors(1))
+                                            call init_cursor(editor%cursors(1))
+                                            editor%active_cursor = 1
+                                        end if
+                                    end if
+                                    call position_cursor_at_screen(editor%active_cursor, &
+                                        editor, buffer, mrow, mcol)
+                                    editor%cursors(editor%active_cursor)%has_selection = .false.
+                                    call toggle_fuss_mode(editor)
+                                    return
+                                end if
+                            end if
                         case (REGION_CTX_ROW)
                             call activate_context_menu_row(hit%payload, editor, &
                                                            buffer, should_quit)
