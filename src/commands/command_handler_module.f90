@@ -4872,20 +4872,16 @@ contains
 
     function is_cursor_at_screen_pos(cursor, editor, buffer, screen_row, screen_col) result(at_pos)
         use renderer_module, only: show_line_numbers, LINE_NUMBER_WIDTH
+        use editor_state_module, only: get_active_pane_indices
         type(cursor_t), intent(in) :: cursor
         type(editor_state_t), intent(in) :: editor
         type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: screen_row, screen_col
         logical :: at_pos
         integer :: cursor_screen_row, cursor_screen_col, row_offset, col_offset
+        integer :: tab_idx, pane_idx
+        logical :: used_pane
         character(len=:), allocatable :: line
-
-        ! Account for tab bar - when tabs exist, content starts at row 2
-        if (size(editor%tabs) > 0) then
-            row_offset = 2
-        else
-            row_offset = 1
-        end if
 
         ! Mirror render_cursor's forward mapping: gutter offset plus the
         ! display-cell distance from the viewport start (tabs / wide chars)
@@ -4896,9 +4892,44 @@ contains
         end if
 
         line = buffer_get_line(buffer, cursor%line)
-        cursor_screen_row = cursor%line - editor%viewport_line + row_offset
-        cursor_screen_col = col_offset + 1 + &
-            display_offset_of(line, editor%viewport_column, cursor%column)
+        used_pane = .false.
+
+        ! Use the active pane's rect and viewport, the same way
+        ! position_cursor_at_screen inverts them. Assuming row 2 and the
+        ! editor-level viewport made this disagree with where the caret is
+        ! actually drawn in a split or with the tree open, so alt-click could
+        ! not recognise an existing cursor and stacked a duplicate instead of
+        ! removing it.
+        call get_active_pane_indices(editor, tab_idx, pane_idx)
+        if (tab_idx > 0 .and. pane_idx > 0) then
+            if (tab_idx <= size(editor%tabs)) then
+                if (allocated(editor%tabs(tab_idx)%panes)) then
+                    if (pane_idx <= size(editor%tabs(tab_idx)%panes)) then
+                        associate(pane => editor%tabs(tab_idx)%panes(pane_idx))
+                            cursor_screen_row = pane%screen_row + &
+                                (cursor%line - pane%viewport_line)
+                            cursor_screen_col = pane%screen_col + col_offset + &
+                                display_offset_of(line, pane%viewport_column, &
+                                                  cursor%column)
+                        end associate
+                        used_pane = .true.
+                    end if
+                end if
+            end if
+        end if
+
+        if (.not. used_pane) then
+            ! Account for tab bar - when tabs exist, content starts at row 2
+            if (size(editor%tabs) > 0) then
+                row_offset = 2
+            else
+                row_offset = 1
+            end if
+            cursor_screen_row = cursor%line - editor%viewport_line + row_offset
+            cursor_screen_col = col_offset + 1 + &
+                display_offset_of(line, editor%viewport_column, cursor%column)
+        end if
+
         at_pos = (cursor_screen_row == screen_row .and. cursor_screen_col == screen_col)
     end function is_cursor_at_screen_pos
 
