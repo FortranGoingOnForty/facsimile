@@ -28,6 +28,7 @@ module context_menu_module
 
     public :: context_menu_begin, context_menu_add_item, context_menu_add_separator
     public :: context_menu_show, context_menu_hide, is_context_menu_visible
+    public :: context_menu_take
     public :: render_context_menu, context_menu_handle_key
     public :: context_menu_selected, context_menu_kind
     public :: context_menu_row_action, context_menu_row_enabled
@@ -151,6 +152,28 @@ contains
         g_visible = .true.
         shown = .true.
     end function context_menu_show
+
+    !> Take a row: report its action and the menu's kind, and close the menu,
+    !> in one step. Atomic on purpose -- hiding clears the row list, so a
+    !> caller that hid first and read afterwards would silently get action 0
+    !> and do nothing.
+    !>
+    !> A disabled row reports enabled = .false. and leaves the menu open: the
+    !> greying already says why, and the status bar that an explanation would
+    !> use is underneath the box.
+    subroutine context_menu_take(idx, action, kind, enabled)
+        integer, intent(in) :: idx
+        integer, intent(out) :: action, kind
+        logical, intent(out) :: enabled
+
+        action = 0
+        kind = g_kind
+        enabled = context_menu_row_enabled(idx)
+        if (.not. enabled) return
+
+        action = g_rows(idx)%action
+        call context_menu_hide()
+    end subroutine context_menu_take
 
     subroutine context_menu_hide()
         g_visible = .false.

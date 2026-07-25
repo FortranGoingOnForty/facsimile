@@ -14,7 +14,7 @@ module command_handler_module
                                    context_menu_hide, is_context_menu_visible, &
                                    context_menu_handle_key, context_menu_selected, &
                                    context_menu_kind, context_menu_row_action, &
-                                   context_menu_row_enabled
+                                   context_menu_row_enabled, context_menu_take
     use renderer_module, only: update_viewport, render_screen, render_screen_with_tree, tree_state, &
                                fuss_search_buffer, fuss_search_len, fuss_search_last_time, &
                                fuss_fuzzy_jump, fuss_reset_search, get_time_ms, &
@@ -374,7 +374,7 @@ contains
                         if (hit%kind == REGION_TREE_ROW) then
                             call open_tree_context_menu(editor, hit%payload, mrow, mcol)
                         else if (hit%kind == REGION_NONE) then
-                            call open_document_context_menu(editor, mrow, mcol)
+                            call open_document_context_menu(editor, buffer, mrow, mcol)
                         end if
                         ! Tabs, the chevron and panel blocks get no menu, and
                         ! the click is swallowed rather than acted on.
@@ -394,8 +394,8 @@ contains
                         hit = region_at(mrow, mcol)
                         select case (hit%kind)
                         case (REGION_CTX_ROW)
-                            ! Activation lands in stage 3; for now the click is
-                            ! swallowed so it cannot reach the document.
+                            call activate_context_menu_row(hit%payload, editor, &
+                                                           buffer, should_quit)
                             return
                         case (REGION_TAB)
                             if (hit%payload >= 1 .and. &
@@ -440,6 +440,11 @@ contains
             ! cascade closes the menu instead.
             if (trim(key_str) /= 'ctrl-q') then
                 if (context_menu_handle_key(trim(key_str))) return
+                if (trim(key_str) == 'enter') then
+                    call activate_context_menu_row(context_menu_selected(), &
+                                                   editor, buffer, should_quit)
+                    return
+                end if
                 ! A release or a drag is swallowed without dismissing. The
                 ! right-press that opens the menu is followed by its own
                 ! release in the same coalesced burst, with no render in
@@ -2108,20 +2113,7 @@ contains
         case('ctrl-p')
             ! Command palette (Ctrl+P - VSCode standard)
             ! Note: ctrl-shift-p doesn't work - terminals can't distinguish ctrl-p from ctrl-shift-p
-            block
-                use command_palette_module, only: show_command_palette_interactive
-                character(len=:), allocatable :: cmd_id
-
-                cmd_id = show_command_palette_interactive(editor%command_palette, editor%screen_cols)
-
-                if (allocated(cmd_id) .and. len_trim(cmd_id) > 0) then
-                    ! Execute the command by re-processing as a key
-                    call execute_palette_command(editor, buffer, cmd_id, should_quit)
-                end if
-
-                ! Redraw screen after palette
-                call render_screen(buffer, editor)
-            end block
+            call open_command_palette(editor, buffer, should_quit)
 
         case('f6', 'alt-p')
             ! Workspace symbols (F6 or Alt+P for project) - offcanvas panel with fzf-like filtering
@@ -5044,6 +5036,29 @@ contains
         end do
     end subroutine scroll_pane_at
 
+    !> The command palette, as its own routine so the context menu can open it
+    !> without going through handle_key_command('ctrl-p'). That would nest
+    !> dispatcher → palette → dispatcher three deep; this keeps it at two, the
+    !> depth already reached in production.
+    subroutine open_command_palette(editor, buffer, should_quit)
+        use command_palette_module, only: show_command_palette_interactive
+        type(editor_state_t), intent(inout), target :: editor
+        type(buffer_t), intent(inout), target :: buffer
+        logical, intent(inout) :: should_quit
+        character(len=:), allocatable :: cmd_id
+
+        cmd_id = show_command_palette_interactive(editor%command_palette, &
+                                                  editor%screen_cols)
+        if (allocated(cmd_id)) then
+            if (len_trim(cmd_id) > 0) then
+                call execute_palette_command(editor, buffer, cmd_id, should_quit)
+            end if
+        end if
+
+        ! Redraw screen after palette
+        call render_screen(buffer, editor)
+    end subroutine open_command_palette
+
     !> Would a synthetic key sent from a menu row actually reach the main
     !> dispatcher? Every one of these routes input away before the select
     !> case, so a menu offered here would have inert rows. Refusing to open
@@ -5117,26 +5132,118 @@ contains
         end do
     end function cell_in_a_pane
 
-    !> Right-click in the document. Rows are wired up in a later stage.
-    subroutine open_document_context_menu(editor, mrow, mcol)
-        type(editor_state_t), intent(inout) :: editor
+    !> Is (pl, pc) inside the normalised range? Half-open at the end, matching
+    !> what render_line_with_selections actually highlights: `ec` is the
+    !> character after the last selected one, so clicking the cell just past a
+    !> selection must read as outside. Nested ifs because .and. does not
+    !> short-circuit.
+    pure function point_in_range(pl, pc, sl, sc, el, ec) result(inside)
+        integer, intent(in) :: pl, pc, sl, sc, el, ec
+        logical :: inside
+
+        inside = .false.
+        if (pl < sl) return
+        if (pl > el) return
+        if (pl == sl) then
+            if (pc < sc) return
+        end if
+        if (pl == el) then
+            if (pc >= ec) return
+        end if
+        inside = .true.
+    end function point_in_range
+
+    !> Right-click in the document.
+    !>
+    !> The caret moves to the click, except when the click lands inside an
+    !> existing selection, which is preserved so Cut and Copy act on it.
+    !> Implemented by doing exactly what a left click does and undoing it if
+    !> the point turns out to be inside: reusing position_cursor_at_screen
+    !> rather than re-deriving the screen-to-document mapping means the two
+    !> can never disagree about where a click lands.
+    subroutine open_document_context_menu(editor, buffer, mrow, mcol)
+        use editor_state_module, only: get_active_pane_indices
+        type(editor_state_t), intent(inout), target :: editor
+        type(buffer_t), intent(inout), target :: buffer
         integer, intent(in) :: mrow, mcol
         integer :: top_row, bottom_row, left_col, right_col
-        logical :: shown
+        integer :: t0, p0, t1, p1, sl, sc, el, ec, i
+        integer :: hit_line, hit_col
+        logical :: shown, inside
+        type(cursor_t), allocatable :: saved(:)
+        integer :: saved_active
 
         if (.not. document_menu_available(editor)) return
         if (.not. cell_in_a_pane(editor, mrow, mcol)) return
 
+        saved = editor%cursors
+        saved_active = editor%active_cursor
+        call get_active_pane_indices(editor, t0, p0)
+
+        ! What a left click does, verbatim
+        if (size(editor%cursors) > 1) then
+            deallocate(editor%cursors)
+            allocate(editor%cursors(1))
+            call init_cursor(editor%cursors(1))
+            editor%active_cursor = 1
+        end if
+        call position_cursor_at_screen(editor%active_cursor, editor, buffer, mrow, mcol)
+
+        hit_line = editor%cursors(editor%active_cursor)%line
+        hit_col = editor%cursors(editor%active_cursor)%column
+
+        ! A click in another pane always counts as outside: restoring the old
+        ! pane's cursors into the newly focused one would be nonsense.
+        inside = .false.
+        call get_active_pane_indices(editor, t1, p1)
+        if (t1 == t0) then
+            if (p1 == p0) then
+                do i = 1, size(saved)
+                    if (saved(i)%has_selection) then
+                        call normalize_selection(saved(i), sl, sc, el, ec)
+                        if (point_in_range(hit_line, hit_col, sl, sc, el, ec)) then
+                            inside = .true.
+                            exit
+                        end if
+                    end if
+                end do
+            end if
+        end if
+
+        if (inside) then
+            ! Every cursor and every selection survives, so Cut on a
+            ! multi-cursor selection still cuts all of it.
+            deallocate(editor%cursors)
+            editor%cursors = saved
+            editor%active_cursor = saved_active
+            call sync_editor_to_pane(editor)
+        else
+            editor%cursors(editor%active_cursor)%has_selection = .false.
+        end if
+
         call context_menu_begin(CTX_KIND_DOC)
-        call context_menu_add_item('Cut', 'Ctrl+X', ACT_CUT)
-        call context_menu_add_item('Copy', 'Ctrl+C', ACT_COPY)
+        ! Cut and Copy fall back to the whole line when nothing is selected,
+        ! so they are never disabled -- the label says which it will be.
+        if (editor%cursors(editor%active_cursor)%has_selection) then
+            call context_menu_add_item('Cut', 'Ctrl+X', ACT_CUT)
+            call context_menu_add_item('Copy', 'Ctrl+C', ACT_COPY)
+        else
+            call context_menu_add_item('Cut Line', 'Ctrl+X', ACT_CUT)
+            call context_menu_add_item('Copy Line', 'Ctrl+C', ACT_COPY)
+        end if
+        ! Paste is never probed: reading the system clipboard shells out to
+        ! xsel/xclip/pbpaste and would stall the menu, and the honest answer
+        ! without probing is "there may well be something there".
         call context_menu_add_item('Paste', 'Ctrl+V', ACT_PASTE)
         call context_menu_add_separator()
-        call context_menu_add_item('Toggle Comment', 'Ctrl+/', ACT_COMMENT)
+        call context_menu_add_item('Toggle Comment', 'Ctrl+/', ACT_COMMENT, &
+                                   enabled=comment_available_here(editor))
         call context_menu_add_item('Select All', 'Alt+A', ACT_SELECT_ALL)
         call context_menu_add_separator()
-        call context_menu_add_item('Go to Definition', 'F12', ACT_GOTO_DEF)
-        call context_menu_add_item('Find References', 'Shift+F12', ACT_FIND_REFS)
+        call context_menu_add_item('Go to Definition', 'F12', ACT_GOTO_DEF, &
+                                   enabled=(get_lsp_server_for_cap(editor, CAP_DEFINITION) > 0))
+        call context_menu_add_item('Find References', 'Shift+F12', ACT_FIND_REFS, &
+                                   enabled=(get_lsp_server_for_cap(editor, CAP_REFERENCES) > 0))
         call context_menu_add_separator()
         call context_menu_add_item('Command Palette', 'Ctrl+P', ACT_PALETTE)
 
@@ -5144,6 +5251,91 @@ contains
         shown = context_menu_show(mrow, mcol, top_row, bottom_row, left_col, right_col)
         if (shown) g_lsp_ui_changed = .true.
     end subroutine open_document_context_menu
+
+    function comment_available_here(editor) result(ok)
+        type(editor_state_t), intent(in) :: editor
+        logical :: ok
+
+        if (allocated(editor%filename)) then
+            ok = comment_syntax_available(editor%filename)
+        else
+            ok = .false.
+        end if
+    end function comment_available_here
+
+    !> Repaint before handing control to anything that owns the terminal.
+    subroutine repaint_now(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+
+        if (editor%fuss_mode_active) then
+            call render_screen_with_tree(buffer, editor)
+        else
+            call render_screen(buffer, editor)
+        end if
+    end subroutine repaint_now
+
+    !> Run a menu row.
+    !>
+    !> The menu is closed and the screen repainted before anything is
+    !> dispatched. Three reasons: the keyboard gate above would swallow the
+    !> synthetic key while the menu is still visible; Find References and the
+    !> command palette take over the terminal with their own input loops and
+    !> must own a clean screen; and a palette "Quit" would otherwise be
+    !> absorbed by the Ctrl-Q cascade closing the menu instead of quitting.
+    subroutine activate_context_menu_row(idx, editor, buffer, should_quit)
+        integer, intent(in) :: idx
+        type(editor_state_t), intent(inout), target :: editor
+        type(buffer_t), intent(inout), target :: buffer
+        logical, intent(inout) :: should_quit
+        integer :: act, kind
+        logical :: enabled, inner_quit
+
+        call context_menu_take(idx, act, kind, enabled)
+        if (.not. enabled) return        ! a disabled row leaves the menu up
+
+        call repaint_now(editor, buffer)
+
+        inner_quit = .false.
+        if (kind == CTX_KIND_DOC) then
+            select case (act)
+            case (ACT_CUT)
+                call handle_key_command('ctrl-x', editor, buffer, inner_quit)
+            case (ACT_COPY)
+                call handle_key_command('ctrl-c', editor, buffer, inner_quit)
+            case (ACT_PASTE)
+                call handle_key_command('ctrl-v', editor, buffer, inner_quit)
+            case (ACT_COMMENT)
+                call handle_key_command('ctrl-/', editor, buffer, inner_quit)
+            case (ACT_SELECT_ALL)
+                call handle_key_command('alt-a', editor, buffer, inner_quit)
+            case (ACT_GOTO_DEF)
+                call handle_key_command('f12', editor, buffer, inner_quit)
+            case (ACT_FIND_REFS)
+                call handle_key_command('shift-f12', editor, buffer, inner_quit)
+            case (ACT_PALETTE)
+                call open_command_palette(editor, buffer, inner_quit)
+            end select
+        else if (kind == CTX_KIND_TREE) then
+            select case (act)
+            case (ACT_TREE_ACTIVATE)
+                if (tree_state%selected_index >= 1 .and. &
+                    tree_state%selected_index <= tree_state%n_selectable) then
+                    if (tree_state%selectable_files(tree_state%selected_index)%is_directory) then
+                        call handle_fuss_input('space', editor, buffer)
+                    else
+                        call handle_fuss_input('enter', editor, buffer)
+                    end if
+                end if
+            case (ACT_TREE_VSPLIT)
+                call handle_fuss_input('alt-v', editor, buffer)
+            case (ACT_TREE_HSPLIT)
+                call handle_fuss_input('alt-s', editor, buffer)
+            end select
+        end if
+
+        if (inner_quit) should_quit = .true.
+    end subroutine activate_context_menu_row
 
     !> Right-click on a file-tree row. Rows are wired up in a later stage.
     subroutine open_tree_context_menu(editor, item_idx, mrow, mcol)
