@@ -502,6 +502,27 @@ def main():
           f"{top} -> {s.gutter_top()}")
     s.close()
 
+    # Only the left button drags out a selection. Mouse mode 1002 reports
+    # motion whichever button is held, so a right- or middle-drag used to
+    # arrive at the same handler as button 34/33 and silently start selecting.
+    def drag_selects(button):
+        s = Session(binary, "".join(f"line{i:02d} alpha beta gamma\n"
+                                    for i in range(1, 15)))
+        s.child.send(f"\x1b[<{button};10;5M")
+        for c in (14, 18, 22):
+            s.child.send(f"\x1b[<{button + 32};{c};5M")
+        s.drain(0.6)
+        cells = sum(1 for y in range(1, ROWS - 1) for x in range(COLS)
+                    if s.screen.buffer[y][x].reverse)
+        s.child.send(f"\x1b[<{button};22;5m")
+        s.drain(0.3)
+        s.close()
+        return cells
+
+    check(drag_selects(0) > 0, "left-drag still selects")
+    check(drag_selects(2) == 0, "right-drag does not select")
+    check(drag_selects(1) == 0, "middle-drag does not select")
+
     if failures:
         print(f"integration_mouse: FAILED ({len(failures)}: {', '.join(failures)})")
         sys.exit(1)
