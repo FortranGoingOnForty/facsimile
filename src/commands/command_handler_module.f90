@@ -8620,7 +8620,8 @@ contains
         case('undo')
             call handle_key_command('ctrl-z', editor, buffer, should_quit)
         case('redo')
-            call handle_key_command('ctrl-y', editor, buffer, should_quit)
+            ! ctrl-y is yank from the yank stack, not redo
+            call handle_key_command('ctrl-shift-z', editor, buffer, should_quit)
         case('toggle-comment')
             call handle_key_command('ctrl-/', editor, buffer, should_quit)
 

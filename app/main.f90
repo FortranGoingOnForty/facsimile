@@ -1289,7 +1289,7 @@ contains
         call register_command('Paste', 'paste', 'Ctrl+V', 'Edit')
         call register_command('Cut', 'cut', 'Ctrl+X', 'Edit')
         call register_command('Undo', 'undo', 'Ctrl+Z', 'Edit')
-        call register_command('Redo', 'redo', 'Ctrl+Y', 'Edit')
+        call register_command('Redo', 'redo', 'Ctrl+Shift+Z', 'Edit')
         call register_command('Toggle Line Comment', 'toggle-comment', 'Ctrl+/', 'Edit')
 
         ! AI
