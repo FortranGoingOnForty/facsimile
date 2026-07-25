@@ -123,6 +123,35 @@ class Session:
                 return y + 1
         return None
 
+    def menu_box(self):
+        """(r0, r1, c0, c1) of the menu box, or None."""
+        rs = [y + 1 for y in range(ROWS)
+              if "┌" in self.screen.display[y] or "└" in self.screen.display[y]]
+        if len(rs) < 2:
+            return None
+        r0, r1 = min(rs), max(rs)
+        line = self.screen.display[r0 - 1]
+        return r0, r1, line.index("┌") + 1, line.index("┐") + 1
+
+    def highlighted(self):
+        """Label of the reverse-video menu row. Scoped to the box's columns:
+        the document is drawn on the same screen rows, to the left."""
+        b = self.menu_box()
+        if not b:
+            return None
+        r0, r1, c0, c1 = b
+        for y in range(r0, r1 + 1):
+            if any(self.screen.buffer[y - 1][x].reverse for x in range(c0, c1 - 1)):
+                return "".join(self.screen.buffer[y - 1][x].data
+                               for x in range(c0, c1 - 1)).strip()
+        return None
+
+    def hover(self, row, col):
+        """Bare pointer motion: mode 1003 reports it as button 3 plus the
+        motion bit."""
+        self.child.send(f"\x1b[<35;{col};{row}M")
+        self.drain(0.4)
+
     def menu_row_enabled(self, label):
         """False when the row is drawn dim. None when the row is absent."""
         row = self.menu_row(label)
@@ -883,6 +912,75 @@ def main():
     s.drain(0.5)
     boxes = sum(1 for y in range(ROWS) if "┌" in s.screen.display[y])
     check(boxes <= 1, "a ctrl-drag does not stack menus", f"{boxes} boxes")
+    s.close()
+
+    # Hover. The mouse and the arrow keys drive the same highlight, which
+    # needs the terminal to report bare pointer motion (mode 1003) -- fac runs
+    # in 1002 otherwise, where motion is only reported while a button is held.
+    s = Session(binary, "".join(f"line{i:02d} alpha beta\n" for i in range(1, 20)))
+    s.click(4, 20, button=2)
+    check(s.highlighted() is not None and s.highlighted().startswith("Cut"),
+          "the first row starts highlighted", str(s.highlighted()))
+
+    # Always-enabled rows, so this does not depend on a language server
+    for label in ("Paste", "Command Palette", "Copy Line"):
+        row = s.menu_row(label)
+        if row:
+            s.hover(row, 25)
+            got = s.highlighted()
+            check(got is not None and got.startswith(label),
+                  f"hovering {label} highlights it", str(got))
+
+    # A disabled row, a separator, and the space outside must all leave it be
+    disabled = next((lbl for lbl in ("Go to Definition", "Find References",
+                                     "Toggle Comment")
+                     if s.menu_row_enabled(lbl) is False), None)
+    if disabled:
+        before = s.highlighted()
+        s.hover(s.menu_row(disabled), 25)
+        check(s.highlighted() == before, "hovering a disabled row moves nothing",
+              f"{before} -> {s.highlighted()}")
+    else:
+        print("  ..  skip disabled-row hover: every row is live here")
+
+    before = s.highlighted()
+    sep = next((y + 1 for y in range(ROWS) if "├" in s.screen.display[y]), None)
+    if sep:
+        s.hover(sep, 25)
+        check(s.highlighted() == before, "hovering a separator moves nothing",
+              f"{before} -> {s.highlighted()}")
+    s.hover(2, 90)
+    check(s.highlighted() == before, "hovering off the menu moves nothing",
+          f"{before} -> {s.highlighted()}")
+
+    # Keyboard still drives the same highlight
+    before = s.highlighted()
+    s.send("\x1b[B", 0.5)
+    check(s.highlighted() != before, "arrow keys still move the highlight",
+          f"{before} -> {s.highlighted()}")
+    s.send("\x1b", 0.5)
+    s.close()
+
+    # Clicking a row acts on THAT row, whatever was highlighted beforehand
+    s = Session(binary, "".join(f"line{i:02d} alpha beta\n" for i in range(1, 20)))
+    s.click(4, 20)
+    before_text = s.save_and_read()
+    s.click(6, 30, button=2)
+    s.hover(s.menu_row("Paste"), 32)           # highlight is on Paste
+    row = s.menu_row("Cut Line")
+    if row:
+        s.click(row, 32)                        # but Cut Line is clicked
+        after = s.save_and_read()
+        check(len(after.splitlines()) == len(before_text.splitlines()) - 1,
+              "clicking a row runs that row, not the highlighted one",
+              f"{len(before_text.splitlines())} -> {len(after.splitlines())}")
+
+    # Motion tracking must be turned off with the menu: drag-select still works
+    s.drag(3, 7, 22)
+    cells = sum(1 for y in range(1, ROWS - 1) for x in range(COLS)
+                if s.screen.buffer[y][x].reverse)
+    check(cells > 0, "drag-select still works after a menu has been open",
+          f"{cells} highlighted cells")
     s.close()
 
     if failures:
