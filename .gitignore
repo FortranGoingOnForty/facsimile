@@ -12,12 +12,10 @@ fac_debug.txt
 /tmp/
 .fac
 
-# Scratch/notes
+# Local-only notes and planning
 old/
 CLAUDE.md
-CLAUDE.md
+.docs/
 
 # Python
 __pycache__/
-CLAUDE.md
-.fac/
