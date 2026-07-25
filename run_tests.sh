@@ -25,6 +25,13 @@ else
     exit 1
 fi
 
+# HTTP transport needs live sockets, so it runs through its own harness
+# (starts the fixture servers, passes their ports, tears them down).
+echo ""
+echo "Running HTTP transport test..."
+echo "----------------------------------------"
+sh test/run_ai_http_test.sh
+
 # Check if Python and pexpect are available for integration tests
 if command -v python3 &> /dev/null; then
     if python3 -c "import pexpect" 2>/dev/null; then

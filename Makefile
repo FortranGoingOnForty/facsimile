@@ -99,6 +99,7 @@ SOURCES = src/version_module.f90 \
           src/utils/regex_module.f90 \
           src/utils/dir_scan_module.f90 \
           src/syntax/comment_syntax_module.f90 \
+          src/ai/ai_http_module.f90 \
           src/buffer/text_buffer_module.f90 \
           src/clipboard/yank_stack_module.f90 \
           src/clipboard/clipboard_module.f90 \
@@ -133,6 +134,7 @@ SOURCES = src/version_module.f90 \
           src/workspace/git_ops_module.f90 \
           src/workspace/file_tree_renderer_module.f90 \
           src/workspace/config_module.f90 \
+          src/workspace/settings_module.f90 \
           src/workspace/app_state_module.f90 \
           src/workspace/favorites_module.f90 \
           src/workspace/recents_module.f90 \
@@ -164,7 +166,8 @@ C_SOURCES = src/terminal/termios_wrapper.c \
             src/utils/regex_wrapper.c \
             src/utils/platform_wrapper.c \
             src/utils/dir_scan_wrapper.c \
-            src/lsp/lsp_process_wrapper.c
+            src/lsp/lsp_process_wrapper.c \
+            src/ai/ai_http.c
 C_OBJECTS = $(C_SOURCES:.c=.o)
 
 all: $(TARGET)
