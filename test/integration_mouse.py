@@ -512,8 +512,13 @@ def main():
         for c in (14, 18, 22):
             s.child.send(f"\x1b[<{button + 32};{c};5M")
         s.drain(0.6)
+        # A right-press opens the context menu, whose selected row is drawn in
+        # reverse video. Skip any row carrying box glyphs so the menu's own
+        # highlight is not counted as a document selection.
+        boxy = {y for y in range(ROWS)
+                if any(g in s.screen.display[y] for g in ("┌", "│", "└", "├"))}
         cells = sum(1 for y in range(1, ROWS - 1) for x in range(COLS)
-                    if s.screen.buffer[y][x].reverse)
+                    if y not in boxy and s.screen.buffer[y][x].reverse)
         s.child.send(f"\x1b[<{button};22;5m")
         s.drain(0.3)
         s.close()
@@ -522,6 +527,70 @@ def main():
     check(drag_selects(0) > 0, "left-drag still selects")
     check(drag_selects(2) == 0, "right-drag does not select")
     check(drag_selects(1) == 0, "middle-drag does not select")
+
+    # Right-click context menu. The document is filled with a character that
+    # appears nowhere in the menu, so anything of it seen inside the box is a
+    # hole: the existing boxes place their right border with a separate cursor
+    # move and leave the gap unpainted, which this must not do.
+    filler = "@" * 45
+    s = Session(binary, "".join(f"{filler} line{i:02d}\n" for i in range(1, 25)))
+
+    def box_rows():
+        return [y + 1 for y in range(ROWS)
+                if any(g in s.screen.display[y] for g in ("┌", "│", "└", "├"))]
+
+    s.click(6, 20, button=2)
+    rows = box_rows()
+    check(len(rows) >= 8, "right-click opens the menu", str(rows))
+
+    # It must survive the frame it was opened on. The right-button release
+    # arrives in the same coalesced burst and used to dismiss it instantly.
+    s.drain(1.0)
+    check(box_rows() == rows, "the menu is still there on the next frame",
+          f"{rows} -> {box_rows()}")
+
+    if rows:
+        r0, r1 = min(rows), max(rows)
+        c0 = s.screen.display[r0 - 1].index("┌") + 1
+        wid = len(s.screen.display[r0 - 1][c0 - 1:].split("┐")[0]) + 1
+        leaked = [r for r in range(r0, r1 + 1)
+                  if "@" in "".join(s.screen.buffer[r - 1][x].data
+                                    for x in range(c0 - 1, c0 - 1 + wid))]
+        check(not leaked, "the box fully occludes the document", str(leaked))
+        check(c0 == 20 and r0 == 6, "the pointer cell is the top-left corner",
+              f"row {r0} col {c0}")
+
+    s.send("\x1b", 0.6)
+    check(not box_rows(), "escape dismisses the menu")
+
+    # A left click away from the menu dismisses it and does NOT also move the
+    # caret to wherever the user aimed to close it.
+    s.click(8, 30, button=0)
+    before = s.status_ln_col()
+    s.click(6, 20, button=2)
+    check(len(box_rows()) >= 8, "menu reopens")
+    s.click(20, 70, button=0)
+    check(not box_rows(), "a click away dismisses the menu")
+    check(s.status_ln_col() == before,
+          "and does not move the caret", f"{before} -> {s.status_ln_col()}")
+
+    # Right-clicking the tab bar or status bar opens nothing
+    s.click(1, 5, button=2)
+    check(not box_rows(), "no menu on the tab bar")
+    s.click(ROWS, 5, button=2)
+    check(not box_rows(), "no menu on the status bar")
+    s.close()
+
+    # Ctrl-Q closes the menu before it quits, and cannot be trapped by it
+    s = Session(binary, "hello\n")
+    s.click(6, 20, button=2)
+    check(len(box_rows()) >= 8, "menu open before ctrl-q")
+    s.send("\x11", 1.0)
+    check(s.child.isalive() and not box_rows(),
+          "ctrl-q closes the menu rather than quitting")
+    s.send("\x11", 1.5)
+    check(not s.child.isalive(), "the next ctrl-q quits")
+    s.close()
 
     if failures:
         print(f"integration_mouse: FAILED ({len(failures)}: {', '.join(failures)})")
