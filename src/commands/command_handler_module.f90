@@ -7,7 +7,8 @@ module command_handler_module
                                    sync_editor_to_pane, tab_t
     use text_buffer_module
     use clickable_region_module, only: clickable_region_t, region_at, &
-                                       REGION_TAB, REGION_BLOCK, REGION_FUSS_TOGGLE
+                                       REGION_TAB, REGION_BLOCK, REGION_FUSS_TOGGLE, &
+                                       REGION_TREE_ROW
     use renderer_module, only: update_viewport, render_screen, render_screen_with_tree, tree_state, &
                                fuss_search_buffer, fuss_search_len, fuss_search_last_time, &
                                fuss_fuzzy_jump, fuss_reset_search, get_time_ms, &
@@ -357,6 +358,21 @@ contains
                             return
                         case (REGION_FUSS_TOGGLE)
                             call toggle_fuss_mode(editor)
+                            return
+                        case (REGION_TREE_ROW)
+                            ! Select the clicked entry, then let the existing
+                            ! keyboard handler act on it: space expands a
+                            ! directory, enter opens a file. Delegating keeps
+                            ! one definition of what activating a row means.
+                            if (hit%payload >= 1 .and. &
+                                hit%payload <= tree_state%n_selectable) then
+                                tree_state%selected_index = hit%payload
+                                if (tree_state%selectable_files(hit%payload)%is_directory) then
+                                    call handle_fuss_input('space', editor, buffer)
+                                else
+                                    call handle_fuss_input('enter', editor, buffer)
+                                end if
+                            end if
                             return
                         case (REGION_BLOCK)
                             ! A panel owns this cell. Swallow the click rather

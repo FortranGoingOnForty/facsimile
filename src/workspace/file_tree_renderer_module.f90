@@ -2,6 +2,7 @@ module file_tree_renderer_module
     use iso_fortran_env, only: int32
     use file_tree_module
     use terminal_io_module
+    use clickable_region_module, only: region_add, REGION_TREE_ROW
     implicit none
     private
 
@@ -228,6 +229,12 @@ contains
                         call terminal_write(line)
                     end if
                 end if
+
+                ! Claim the row for this item. item_idx is the same index
+                ! selected_index and selectable_files use, so a click resolves
+                ! to a tree entry directly rather than by counting rows again.
+                call region_add(REGION_TREE_ROW, current_row, current_row, &
+                                start_col, start_col + width - 1, item_idx)
 
                 current_row = current_row + 1
             end if
