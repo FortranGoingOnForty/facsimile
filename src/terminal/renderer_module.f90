@@ -5,7 +5,8 @@ module renderer_module
     use utf8_module
     use editor_state_module, only: editor_state_t, cursor_t
     use bracket_matching_module
-    use clickable_region_module, only: regions_begin_frame, region_add, REGION_TAB
+    use clickable_region_module, only: regions_begin_frame, region_add, REGION_TAB, &
+                                       REGION_FUSS_TOGGLE
     use file_tree_module
     use file_tree_renderer_module
     use syntax_highlighter_module
@@ -703,6 +704,8 @@ contains
         integer :: padding_len, left_pad, right_pad, fname_len
         type(cursor_t) :: cursor
         logical :: show_match_hint
+        character(len=:), allocatable :: chevron
+        logical :: chevron_shown
 
         cursor = editor%cursors(editor%active_cursor)
         show_match_hint = .false.
@@ -802,6 +805,19 @@ contains
             write(status_right, '(a,i0,a,i0,a)') 'Ln ', cursor%line, ', Col ', cursor%column, ' '
         end if
 
+        ! Clickable fuss-mode handle, pinned to the far right of the bar. It
+        ! points the way the tree will move: right to open it, left to close.
+        ! A reserved slot rather than borrowed padding, because the padding
+        ! collapses to nothing whenever a message or a diagnostic takes the
+        ! whole bar.
+        if (editor%fuss_mode_active) then
+            chevron = '«'
+        else
+            chevron = '»'
+        end if
+        status_right = trim(status_right) // '| ' // chevron
+        chevron_shown = .false.
+
         ! A pending message replaces the left section; the caret position on
         ! the right is still worth keeping visible.
         if (has_status_message()) then
@@ -809,14 +825,25 @@ contains
             status_center = ''
         end if
 
-        ! Create full status bar with center text
-        padding_len = editor%screen_cols - len_trim(status_left) - len_trim(status_center) - len_trim(status_right)
+        ! Create full status bar with center text.
+        !
+        ! Measured in display cells, not bytes: status_right now ends with the
+        ! chevron, which is two bytes wide and one cell wide. Padding by bytes
+        ! would leave the bar a cell short and put the chevron one column left
+        ! of the edge -- and two columns left if the filename also held a
+        ! multibyte character, which would move it out of the clickable region
+        ! claimed below. The narrow fallbacks further down stay byte-based, as
+        ! they were, since they do not place the chevron at all.
+        padding_len = editor%screen_cols - utf8_char_count(trim(status_left)) &
+                      - utf8_char_count(trim(status_center)) &
+                      - utf8_char_count(trim(status_right))
         if (padding_len > 0) then
             ! Distribute padding around center text
             left_pad = padding_len / 2
             right_pad = padding_len - left_pad
             status_bar = trim(status_left) // repeat(' ', left_pad) // &
                         trim(status_center) // repeat(' ', right_pad) // trim(status_right)
+            chevron_shown = .true.
         else
             ! Not enough space for all three sections
             ! If in match mode, prioritize showing the hint by reducing right side info
@@ -858,6 +885,18 @@ contains
             end if
         end if
 
+        ! Only the full three-section layout above puts the bar's sections
+        ! where the byte arithmetic says. The narrow fallbacks drop or
+        ! ellipsize the right-hand section, so the chevron's column is not
+        ! known and no region is claimed: it stops being clickable rather
+        ! than being clickable in the wrong place.
+        if (chevron_shown) then
+            ! The chevron is the last cell; include the space before it so the
+            ! target is two cells rather than one.
+            call region_add(REGION_FUSS_TOGGLE, editor%screen_rows, editor%screen_rows, &
+                            editor%screen_cols - 1, editor%screen_cols)
+        end if
+
         ! Render with inverse video, clamped to the terminal width
         call write_status_message(editor%screen_cols, trim(status_bar))
     end subroutine render_status_bar
@@ -870,7 +909,7 @@ contains
         integer, intent(in) :: width
         character(len=*), intent(in) :: text
         character(len=:), allocatable :: line
-        integer :: i, cut
+        integer :: i, cut, budget
 
         if (width < 1) return
 
@@ -879,20 +918,33 @@ contains
             if (iachar(line(i:i)) < 32 .or. iachar(line(i:i)) == 127) line(i:i) = ' '
         end do
 
-        if (len(line) > width) then
-            if (width > 3) then
-                cut = width - 3
+        ! `width` is display columns but the comparisons below are on bytes,
+        ! so convert: the byte budget is `width` plus whatever extra bytes the
+        ! text's multibyte characters occupy. Without this a bar carrying one
+        ! two-byte character (the fuss chevron, or an accented filename) is
+        ! padded one column short and everything right of that character sits
+        ! one cell left of where byte arithmetic puts it. Pure ASCII gives
+        ! budget == width, exactly as before.
+        budget = width + (len(line) - utf8_char_count(line))
+
+        if (len(line) > budget) then
+            if (budget > 3) then
+                cut = budget - 3
                 ! Don't split a UTF-8 sequence at the cut point
                 do while (cut > 1 .and. iachar(line(cut+1:cut+1)) >= 128 .and. &
                           iachar(line(cut+1:cut+1)) < 192)
                     cut = cut - 1
                 end do
-                line = line(1:cut) // '...' // repeat(' ', width - cut - 3)
+                line = line(1:cut) // '...'
+                ! Re-measure: the cut may have dropped multibyte characters
+                if (utf8_char_count(line) < width) then
+                    line = line // repeat(' ', width - utf8_char_count(line))
+                end if
             else
-                line = line(1:width)
+                line = line(1:budget)
             end if
-        else if (len(line) < width) then
-            line = line // repeat(' ', width - len(line))
+        else if (len(line) < budget) then
+            line = line // repeat(' ', budget - len(line))
         end if
 
         call terminal_write(char(27) // '[7m')  ! Inverse video

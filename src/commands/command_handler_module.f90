@@ -7,7 +7,7 @@ module command_handler_module
                                    sync_editor_to_pane, tab_t
     use text_buffer_module
     use clickable_region_module, only: clickable_region_t, region_at, &
-                                       REGION_TAB, REGION_BLOCK
+                                       REGION_TAB, REGION_BLOCK, REGION_FUSS_TOGGLE
     use renderer_module, only: update_viewport, render_screen, render_screen_with_tree, tree_state, &
                                fuss_search_buffer, fuss_search_len, fuss_search_last_time, &
                                fuss_fuzzy_jump, fuss_reset_search, get_time_ms, &
@@ -354,6 +354,9 @@ contains
                                 call switch_to_tab_with_buffer(editor, &
                                                                hit%payload, buffer)
                             end if
+                            return
+                        case (REGION_FUSS_TOGGLE)
+                            call toggle_fuss_mode(editor)
                             return
                         case (REGION_BLOCK)
                             ! A panel owns this cell. Swallow the click rather
