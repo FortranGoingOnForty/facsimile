@@ -102,9 +102,19 @@ class Session:
         self.child.send(f"\x1b[<{button};{col};{row}m")
         self.drain(0.35)
 
-    def wheel(self, row, col, up=True):
-        self.child.send(f"\x1b[<{64 if up else 65};{col};{row}M")
-        self.drain(0.35)
+    def wheel(self, row, col, up=True, times=1, button=None):
+        b = button if button is not None else (64 if up else 65)
+        for _ in range(times):
+            self.child.send(f"\x1b[<{b};{col};{row}M")
+        self.drain(0.5)
+
+    def gutter_top(self):
+        """First buffer line number visible in the leftmost gutter."""
+        for y in range(2, ROWS):
+            m = re.match(r"\s*(\d+)\s", self.screen.display[y - 1][:6])
+            if m:
+                return int(m.group(1))
+        return None
 
     def row_text(self, row):
         return self.screen.display[row - 1].rstrip()
@@ -453,6 +463,43 @@ def main():
     check(before and s.tree_selected_rows() != before,
           "arrow keys still move the tree selection",
           f"{before} -> {s.tree_selected_rows()}")
+    s.close()
+
+    # The wheel must move what the pointer is over. Its coordinates used to be
+    # discarded at decode time, so a tick could only ever move the active
+    # pane -- scrolling over the tab bar, the status bar or an inactive pane
+    # moved a document the pointer was not on.
+    long_file = "".join(f"line{i:03d} alpha beta gamma\n" for i in range(1, 200))
+    s = Session(binary, long_file)
+
+    top = s.gutter_top()
+    s.wheel(10, 30, up=False, times=2)
+    check(top is not None and s.gutter_top() > top,
+          "wheel over the document scrolls it", f"{top} -> {s.gutter_top()}")
+
+    for row, where in ((1, "tab bar"), (ROWS, "status bar")):
+        top = s.gutter_top()
+        s.wheel(row, 30, up=False, times=2)
+        check(s.gutter_top() == top, f"wheel over the {where} scrolls nothing",
+              f"{top} -> {s.gutter_top()}")
+
+    # A modified wheel used to fall into the shift/alt/ctrl click branches,
+    # which have no handler, so it did nothing at all
+    top = s.gutter_top()
+    s.wheel(10, 30, times=2, button=81)      # ctrl + wheel down
+    check(s.gutter_top() != top, "ctrl+wheel still scrolls",
+          f"{top} -> {s.gutter_top()}")
+    s.close()
+
+    # In a vertical split the right pane is active, so the left one is the
+    # inactive pane: wheeling over it must move it and not the active one.
+    s = Session(binary, long_file)
+    s.send("\x1bv", 1.3)
+    top = s.gutter_top()
+    s.wheel(6, 20, up=False, times=3)
+    check(top is not None and s.gutter_top() is not None and s.gutter_top() > top,
+          "wheel over the inactive pane scrolls that pane",
+          f"{top} -> {s.gutter_top()}")
     s.close()
 
     if failures:
