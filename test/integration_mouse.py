@@ -118,6 +118,11 @@ class Session:
         m = re.search(r"Ln (\d+)", self.screen.display[ROWS - 1])
         return int(m.group(1)) if m else None
 
+    def status_ln_col(self):
+        """Both coordinates: a click-through can move the column alone."""
+        m = re.search(r"Ln (\d+), Col (\d+)", self.screen.display[ROWS - 1])
+        return (int(m.group(1)), int(m.group(2))) if m else None
+
     def cursor_row(self):
         return self.screen.cursor.y + 1
 
@@ -331,6 +336,37 @@ def main():
         check("AAA first" in s.row_text(2),
               "the document follows the clicked tab", s.row_text(2))
     s.close()
+
+    # Panels must swallow clicks instead of letting them move the caret in the
+    # document behind. The document-symbols panel did not: a click on a symbol
+    # row moved the caret, and typing afterwards edited the file while the
+    # user was looking at a symbol list. Needs a language server, so each
+    # panel self-skips if it will not open.
+    csrc = ("#include <stdio.h>\n"
+            "int alpha_one(int a) { return a; }\n"
+            "int beta_two(int b) { return b; }\n"
+            "int gamma_three(int c) { return c; }\n"
+            "int delta_four(int d) { return d; }\n"
+            "int main(void) { return 0; }\n")
+    for open_key, marker, label in (("\x1bo", "Symbols", "document symbols"),
+                                    ("\x1be", "Diagnostics", "diagnostics")):
+        s = Session(binary, csrc, name="main.c")
+        with open(os.path.join(s.home, "compile_flags.txt"), "w") as f:
+            f.write("-std=c11\n")
+        s.drain(3.5)                      # let the language server attach
+        s.click(5, 10)
+        before = s.status_ln_col()
+        s.send(open_key, 2.5)
+        if s.find_row(marker) is None:
+            print(f"  ..  skip {label}: panel did not open (no language server?)")
+            s.close()
+            continue
+        s.click(5, 80)                    # inside the panel's column strip
+        s.send("\x1b", 1.0)               # close it and re-read the caret
+        check(before is not None and s.status_ln_col() == before,
+              f"{label} panel: a click does not move the document caret",
+              f"{before} -> {s.status_ln_col()}")
+        s.close()
 
     if failures:
         print(f"integration_mouse: FAILED ({len(failures)}: {', '.join(failures)})")
