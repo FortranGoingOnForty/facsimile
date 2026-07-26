@@ -18,6 +18,7 @@ module command_handler_module
                                    context_menu_hover, context_menu_select
     use platform_module, only: platform_sleep_ms
     use renderer_module, only: update_viewport, render_screen, render_screen_with_tree, tree_state, &
+                               text_area_height, &
                                fuss_search_buffer, fuss_search_len, fuss_search_last_time, &
                                fuss_fuzzy_jump, fuss_reset_search, get_time_ms, &
                                fuss_git_prefix_active, &
@@ -2704,7 +2705,8 @@ contains
         integer :: page_size
 
         cursor%has_selection = .false.  ! Clear selection
-        page_size = editor%screen_rows - 2  ! Leave room for status bar
+        ! A page is what you can see: the terminal panel's rows are not ours.
+        page_size = text_area_height(editor)
         cursor%line = max(1, cursor%line - page_size)
         cursor%column = cursor%desired_column
     end subroutine move_cursor_page_up
@@ -2716,7 +2718,8 @@ contains
         integer :: page_size
 
         cursor%has_selection = .false.  ! Clear selection
-        page_size = editor%screen_rows - 2  ! Leave room for status bar
+        ! A page is what you can see: the terminal panel's rows are not ours.
+        page_size = text_area_height(editor)
         cursor%line = min(line_count, cursor%line + page_size)
         cursor%column = cursor%desired_column
     end subroutine move_cursor_page_down
@@ -6381,7 +6384,8 @@ contains
             cursor%selection_start_col = cursor%column
         end if
 
-        page_size = editor%screen_rows - 2  ! Leave room for status bar
+        ! A page is what you can see: the terminal panel's rows are not ours.
+        page_size = text_area_height(editor)
         cursor%line = max(1, cursor%line - page_size)
         cursor%column = cursor%desired_column
     end subroutine extend_selection_page_up
@@ -6399,7 +6403,8 @@ contains
             cursor%selection_start_col = cursor%column
         end if
 
-        page_size = editor%screen_rows - 2  ! Leave room for status bar
+        ! A page is what you can see: the terminal panel's rows are not ours.
+        page_size = text_area_height(editor)
         cursor%line = min(line_count, cursor%line + page_size)
         cursor%column = cursor%desired_column
     end subroutine extend_selection_page_down

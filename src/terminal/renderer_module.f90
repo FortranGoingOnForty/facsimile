@@ -48,6 +48,7 @@ module renderer_module
     public :: fuss_fuzzy_jump, fuss_reset_search, get_time_ms
     public :: fuss_git_prefix_active
     public :: display_offset_of, char_col_at_offset
+    public :: text_area_height  ! rows the document gets; page size must match
 
     ! Configuration
     logical :: show_line_numbers = .true.
@@ -1329,7 +1330,7 @@ contains
                         else
                             screen_width = editor%screen_cols
                         end if
-                        screen_height = editor%screen_rows - 2
+                        screen_height = text_area_height(editor)
                         pane_height = int((editor%tabs(tab_idx)%panes(pane_idx)%y_end - &
                                           editor%tabs(tab_idx)%panes(pane_idx)%y_start) * real(screen_height))
                         pane_width = int((editor%tabs(tab_idx)%panes(pane_idx)%x_end - &
@@ -1393,15 +1394,14 @@ contains
         cursor = editor%cursors(editor%active_cursor)
 
         ! Adaptive margins, as in the pane path above
-        screen_height = editor%screen_rows - 2
+        screen_height = text_area_height(editor)
         v_margin = min(margin, max(0, (screen_height - 1) / 2))
 
         ! Vertical scrolling
         if (cursor%line < editor%viewport_line + v_margin) then
             editor%viewport_line = max(1, cursor%line - v_margin)
-        else if (cursor%line > editor%viewport_line + editor%screen_rows - v_margin - 2) then
-            ! -2 for status bar and margin
-            editor%viewport_line = cursor%line - editor%screen_rows + v_margin + 2
+        else if (cursor%line > editor%viewport_line + screen_height - v_margin) then
+            editor%viewport_line = cursor%line - screen_height + v_margin
         end if
 
         ! Never scroll past the last buffer line (see pane path above)
@@ -1585,7 +1585,7 @@ contains
         n_panes = size(editor%tabs(tab_idx)%panes)
         if (n_panes == 0) return
 
-        screen_height = editor%screen_rows - 2  ! Account for tab bar and status bar
+        screen_height = text_area_height(editor)
 
         ! If only one pane, use simple rendering
         if (n_panes == 1) then
@@ -1777,14 +1777,7 @@ contains
 
         ! Get screen dimensions
         screen_width = editor%screen_cols
-        screen_height = editor%screen_rows - 2  ! Account for tab bar and status bar
-
-        ! Reduce height if terminal panel is visible
-        block
-            integer :: tp_h
-            tp_h = get_terminal_panel_height(editor%terminal_panel)
-            if (tp_h > 0) screen_height = screen_height - tp_h
-        end block
+        screen_height = text_area_height(editor)
 
         ! Reduce width if diagnostics panel is visible
         if (editor%diagnostics_panel%visible) then
@@ -2297,7 +2290,7 @@ contains
 
         ! Calculate pane screen coordinates
         screen_width = editor%screen_cols
-        screen_height = editor%screen_rows - 2  ! Account for tab bar (row 1) and status bar (last row)
+        screen_height = text_area_height(editor)
 
         ! Reduce width if diagnostics panel is visible
         if (editor%diagnostics_panel%visible) then
@@ -2473,7 +2466,7 @@ contains
             line = buffer_get_line(pane%buffer, cursor%line)
 
             ! Pane geometry (same formulas as render_cursor_for_panes)
-            screen_height = editor%screen_rows - 2
+            screen_height = text_area_height(editor)
             pane_col = 1 + int(pane%x_start * real(screen_width))
             pane_width = int((pane%x_end - pane%x_start) * real(screen_width))
             if (pane_idx < size(editor%tabs(tab_idx)%panes)) then
@@ -2654,6 +2647,23 @@ contains
         end if
     end function last_content_row
 
+    ! Rows the document actually gets: the screen less the tab bar, the status
+    ! bar, and the terminal panel while it is up. Every consumer must agree --
+    ! viewport scrolling, caret placement and page size alike. When one of them
+    ! counts the panel's rows as its own, the caret walks below the last drawn
+    ! line and parks behind the panel, and paging overshoots by the panel
+    ! height each press.
+    function text_area_height(editor) result(h)
+        type(editor_state_t), intent(in) :: editor
+        integer :: h
+
+        h = editor%screen_rows - 2
+        if (is_terminal_panel_visible(editor%terminal_panel)) then
+            h = h - get_terminal_panel_height(editor%terminal_panel)
+        end if
+        h = max(1, h)
+    end function text_area_height
+
     ! Cut text to at most `cells` display columns, only ever on a character
     ! boundary, and report the width actually used. Wide characters that would
     ! straddle the limit are dropped rather than half-drawn.
@@ -2775,7 +2785,7 @@ contains
         end if
 
         ! Calculate pane coordinates (adjusted for tree)
-        screen_height = editor%screen_rows - 2
+        screen_height = text_area_height(editor)
         pane_col = tree_offset + int(pane%x_start * real(editor_width))
         pane_width = int((pane%x_end - pane%x_start) * real(editor_width))
         if (pane_idx < size(editor%tabs(tab_idx)%panes)) then
@@ -3071,7 +3081,7 @@ contains
         n_panes = size(editor%tabs(tab_idx)%panes)
         if (n_panes == 0) return
 
-        screen_height = editor%screen_rows - 2  ! Account for tab bar and status bar
+        screen_height = text_area_height(editor)
 
         ! If only one pane, use simple rendering
         if (n_panes == 1) then
