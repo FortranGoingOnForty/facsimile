@@ -91,6 +91,7 @@ program facsimile
     character(len=:), allocatable :: selected_path
     integer :: status, argc, rows, cols, i
     integer :: prev_active_tab, prev_active_pane
+    character(len=4096) :: prev_active_name
     ! Snapshot for the caret-move fast path
     integer :: prev_cursor_line, prev_viewport_line, prev_viewport_col
     logical :: prev_ghost_visible, batch_caret_only
@@ -703,11 +704,25 @@ program facsimile
             ! command switched panes/tabs. `buffer` holds the pre-command
             ! active pane's content; writing it back after a switch would
             ! clobber the newly focused pane with the old one's text.
+            ! The indices alone are not enough: closing a pane renumbers the
+            ! array, so closing the first of two leaves active_pane_index at 1
+            ! while pane 1 is now a different pane -- and panes in one tab can
+            ! hold different files (open-in-split from the tree). The active
+            ! pane's filename is what actually identifies the view.
             prev_active_tab = editor%active_tab_index
             prev_active_pane = 0
+            prev_active_name = ''
             if (prev_active_tab > 0 .and. prev_active_tab <= size(editor%tabs)) then
                 if (allocated(editor%tabs(prev_active_tab)%panes)) then
                     prev_active_pane = editor%tabs(prev_active_tab)%active_pane_index
+                    if (prev_active_pane >= 1 .and. &
+                        prev_active_pane <= size(editor%tabs(prev_active_tab)%panes)) then
+                        if (allocated(editor%tabs(prev_active_tab)% &
+                                      panes(prev_active_pane)%filename)) then
+                            prev_active_name = editor%tabs(prev_active_tab)% &
+                                               panes(prev_active_pane)%filename
+                        end if
+                    end if
                 end if
             end if
 
@@ -724,8 +739,19 @@ program facsimile
             if (.not. active_view_changed .and. editor%active_tab_index > 0 .and. &
                 editor%active_tab_index <= size(editor%tabs)) then
                 if (allocated(editor%tabs(editor%active_tab_index)%panes)) then
-                    active_view_changed = &
-                        (editor%tabs(editor%active_tab_index)%active_pane_index /= prev_active_pane)
+                    status = editor%tabs(editor%active_tab_index)%active_pane_index
+                    active_view_changed = (status /= prev_active_pane)
+                    if (.not. active_view_changed .and. status >= 1 .and. &
+                        status <= size(editor%tabs(editor%active_tab_index)%panes)) then
+                        if (allocated(editor%tabs(editor%active_tab_index)% &
+                                      panes(status)%filename)) then
+                            active_view_changed = &
+                                (editor%tabs(editor%active_tab_index)%panes(status)%filename &
+                                 /= prev_active_name)
+                        else
+                            active_view_changed = (len_trim(prev_active_name) > 0)
+                        end if
+                    end if
                 end if
             end if
 

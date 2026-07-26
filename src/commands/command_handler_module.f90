@@ -1477,11 +1477,7 @@ contains
 
                 ! Always copy the buffer (either new tab or UNTITLED.txt)
                 if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
-                    call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
-                    editor%modified = editor%tabs(editor%active_tab_index)%modified
-                    if (allocated(editor%filename)) deallocate(editor%filename)
-                    allocate(character(len=len(editor%tabs(editor%active_tab_index)%filename)) :: editor%filename)
-                    editor%filename = editor%tabs(editor%active_tab_index)%filename
+                    call load_active_pane_into_buffer(editor, buffer)
                 ! Should not happen with new logic
                 else
                     editor%fuss_mode_active = .true.
@@ -7901,6 +7897,60 @@ contains
     end subroutine prompt_save_before_close_tab
 
     !> Close tab without prompting
+    ! Load the active pane's own text and identity into the working buffer.
+    !
+    ! A tab's panes need not hold the same file -- opening from the tree with
+    ! alt-v/alt-s splits a *different* file into the current tab -- so the
+    ! tab-level buffer and filename describe only whichever pane was last
+    ! active. Reloading from those after closing a pane handed the survivor
+    ! the closed pane's text while it kept its own name, and the next Ctrl-S
+    ! wrote that text over the survivor's file on disk.
+    subroutine load_active_pane_into_buffer(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer :: tab_idx, pane_idx
+        logical :: from_pane
+
+        tab_idx = editor%active_tab_index
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+
+        from_pane = .false.
+        pane_idx = editor%tabs(tab_idx)%active_pane_index
+        if (allocated(editor%tabs(tab_idx)%panes)) then
+            if (pane_idx >= 1 .and. pane_idx <= size(editor%tabs(tab_idx)%panes)) then
+                from_pane = allocated(editor%tabs(tab_idx)%panes(pane_idx)%filename)
+            end if
+        end if
+
+        if (from_pane) then
+            call copy_buffer(buffer, editor%tabs(tab_idx)%panes(pane_idx)%buffer)
+            editor%modified = buffer%modified
+
+            if (allocated(editor%filename)) deallocate(editor%filename)
+            allocate(character(len=len(editor%tabs(tab_idx)%panes(pane_idx)%filename)) :: &
+                     editor%filename)
+            editor%filename = editor%tabs(tab_idx)%panes(pane_idx)%filename
+
+            ! Keep the tab's own copies in step, or the tab bar keeps naming
+            ! the file that is gone and the next tab-level write saves this
+            ! text under that name.
+            if (size(editor%tabs(tab_idx)%panes) == 1) then
+                if (allocated(editor%tabs(tab_idx)%filename)) &
+                    deallocate(editor%tabs(tab_idx)%filename)
+                allocate(character(len=len(editor%filename)) :: editor%tabs(tab_idx)%filename)
+                editor%tabs(tab_idx)%filename = editor%filename
+            end if
+            call copy_buffer(editor%tabs(tab_idx)%buffer, buffer)
+            editor%tabs(tab_idx)%modified = buffer%modified
+        else
+            call copy_buffer(buffer, editor%tabs(tab_idx)%buffer)
+            editor%modified = editor%tabs(tab_idx)%modified
+            if (allocated(editor%filename)) deallocate(editor%filename)
+            allocate(character(len=len(editor%tabs(tab_idx)%filename)) :: editor%filename)
+            editor%filename = editor%tabs(tab_idx)%filename
+        end if
+    end subroutine load_active_pane_into_buffer
+
     subroutine close_tab_without_prompt(editor, buffer)
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
