@@ -99,7 +99,9 @@ def main():
         p = pexpect.spawn(binary, ["opened.txt"], cwd=fixture, timeout=15,
                           encoding=None, dimensions=(ROWS, COLS))
 
-        ok = scr.wait_for(p, lambda t: "ctrl-b:fuss" in t, 10, "first frame")
+        # The status bar leads with the fuss chevron, which replaced the
+        # literal "ctrl-b:fuss" text that used to serve as this sentinel.
+        ok = scr.wait_for(p, lambda t: "»" in t or "«" in t, 10, "first frame")
         failures += 0 if ok else 1
 
         # activate fuss (Ctrl-B)

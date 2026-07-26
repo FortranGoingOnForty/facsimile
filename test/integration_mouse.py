@@ -448,18 +448,17 @@ def main():
               f"{before} -> {s.status_ln_col()}")
         s.close()
 
-    # The fuss-mode chevron: last cell of the status bar, pointing the way the
-    # tree will move, and clickable. Its column must not depend on how many
-    # bytes the rest of the bar happens to occupy, so a multibyte filename is
-    # part of the check -- padding the bar by bytes rather than display cells
-    # would slide the chevron out from under its own clickable region.
+    # The fuss-mode chevron leads the status bar, in the bottom-left corner
+    # next to what it toggles. A multibyte filename is part of the check: the
+    # bar is padded by display cells, and getting that wrong used to move the
+    # chevron out from under its own clickable region.
     for fname, label in (("a.txt", "ascii filename"),
                          ("café_résumé.txt", "multibyte filename")):
         s = Session(binary, "hello world\nsecond line\n", name=fname)
 
         def chevron_col():
             row = s.screen.buffer[ROWS - 1]
-            for c in range(COLS, 0, -1):
+            for c in range(1, COLS + 1):
                 if row[c - 1].data in ("»", "«"):
                     return c
             return None
@@ -468,15 +467,15 @@ def main():
             c = chevron_col()
             return s.screen.buffer[ROWS - 1][c - 1].data if c else None
 
-        check(chevron_col() == COLS, f"{label}: chevron sits in the last column",
+        check(chevron_col() == 1, f"{label}: chevron sits in the first column",
               f"col {chevron_col()}")
         check(chevron_glyph() == "»", f"{label}: points right while the tree is closed",
               str(chevron_glyph()))
 
-        s.click(ROWS, COLS)
+        s.click(ROWS, 1)
         check(chevron_glyph() == "«", f"{label}: clicking it opens the tree and flips it",
               str(chevron_glyph()))
-        s.click(ROWS, COLS)
+        s.click(ROWS, 1)
         check(chevron_glyph() == "»", f"{label}: clicking again closes the tree",
               str(chevron_glyph()))
         s.close()
@@ -484,9 +483,17 @@ def main():
     # Clicking it must really move the tree, not just redraw the glyph
     s = Session(binary, "hello world\n", name="a.txt")
     plain = s.row_text(3)
-    s.click(ROWS, COLS)
+    s.click(ROWS, 1)
     check(s.row_text(3) != plain, "the chevron click actually opens the file tree",
           f"row 3 unchanged: {plain!r}")
+    s.close()
+
+    # It is a control, not a status: a timed message must not displace it
+    s = Session(binary, "hello world\n", name="a.txt")
+    s.send("\x1bOQ", 1.2)                  # F2 rename with no language server
+    bar = s.row_text(ROWS)
+    check(s.screen.buffer[ROWS - 1][0].data in ("»", "«"),
+          "the chevron survives a status message", bar[:50])
     s.close()
 
     # File tree rows. render_tree_node already carried the row next to the

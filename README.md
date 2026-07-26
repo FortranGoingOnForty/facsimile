@@ -50,8 +50,8 @@ fpm run -- [filename]
 - click a file tree row to open it, a directory row to expand it; right-click a
   row for open-in-split and the git actions (stage, unstage, diff) that
   otherwise hide behind the `ctrl-g` prefix
-- click the `»`/`«` chevron at the far right of the status bar to toggle the
-  file tree; it points the way the tree will move
+- click the `»`/`«` chevron in the bottom-left corner to toggle the file tree;
+  it points the way the tree will move (`ctrl-b` still does the same)
 
 ### Selection
 - `shift-arrows` - character selection

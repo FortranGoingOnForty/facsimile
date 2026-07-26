@@ -52,7 +52,11 @@ class FacsimileTest:
         while time.time() < deadline:
             try:
                 seen += self.process.read_nonblocking(65536, 0.1)
-                if "ctrl-b:fuss" in seen:
+                # The bar leads with the fuss chevron, which replaced the
+                # literal "ctrl-b:fuss" text this used to wait for. Matching
+                # nothing here is not a failure, just a silent 5s stall per
+                # test while the deadline runs out.
+                if "»" in seen or "«" in seen:
                     break
             except pexpect.TIMEOUT:
                 continue

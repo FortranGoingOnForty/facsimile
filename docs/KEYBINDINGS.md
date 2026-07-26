@@ -302,7 +302,7 @@ Some vim-style keybindings work:
 | Click a tab | Switch to it |
 | Click a tree row | Open a file, or expand a directory |
 | Right-click a tree row | Open in a split, or stage / unstage / diff |
-| Click the `»` / `«` chevron | Toggle the file tree. It points the way the tree will move |
+| Click the `»` / `«` chevron | Toggle the file tree. Bottom-left corner; it points the way the tree will move |
 
 Right-clicking **inside a selection** keeps that selection, so Cut and Copy act
 on it. Right-clicking anywhere else moves the caret there first, as most

@@ -144,7 +144,7 @@ contains
         lines(i) = "  click a tab         switch to it"; i = i + 1
         lines(i) = "  click a tree row    open a file / expand a folder"; i = i + 1
         lines(i) = "  right-click a row   splits and git actions"; i = i + 1
-        lines(i) = "  click the chevron   toggle the file tree"; i = i + 1
+        lines(i) = "  click the chevron   toggle the file tree (bottom left)"; i = i + 1
         lines(i) = ""; i = i + 1
 
         ! SELECTION
