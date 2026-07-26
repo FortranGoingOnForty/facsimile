@@ -872,12 +872,21 @@ contains
             else
                 fname_disp = editor%filename
             end if
-            write(status_left, '(a,a,a,a)') ' ctrl-b:fuss | ', trim(fname_disp), &
+            write(status_left, '(a,a,a)') trim(fname_disp), &
                    merge(' [modified]', '           ', buffer%modified), ' '
         else
-            write(status_left, '(a,a,a)') ' ctrl-b:fuss | [No Name]', &
+            write(status_left, '(a,a,a)') '[No Name]', &
                    merge(' [modified]', '           ', buffer%modified), ' '
         end if
+
+        ! The chevron is needed before the whole-bar messages below, which
+        ! return early and must still carry it.
+        if (editor%fuss_mode_active) then
+            chevron = '«'
+        else
+            chevron = '»'
+        end if
+        chevron_shown = .false.
 
         ! Timed messages and LSP diagnostics take over the whole bar:
         ! always exactly one line, ellipsized to the terminal width.
@@ -890,7 +899,7 @@ contains
             now_ms = get_time_ms()
             if (len_trim(editor%timed_message) > 0 .and. &
                 (now_ms - editor%timed_message_ms) < 2000) then
-                call write_status_message(editor%screen_cols, ' ' // trim(editor%timed_message))
+                call write_bar_with_chevron(editor, chevron, trim(editor%timed_message))
                 return
             else if (len_trim(editor%timed_message) > 0) then
                 editor%timed_message = ''  ! Expired, clear it
@@ -907,14 +916,14 @@ contains
             ! completion: ready" to a squiggle the user can already see makes
             ! commands look like they did nothing.
             if (has_status_message()) then
-                call write_status_message(editor%screen_cols, ' ' // g_status_message)
+                call write_bar_with_chevron(editor, chevron, g_status_message)
                 return
             end if
 
             if (allocated(line_diagnostics) .and. size(line_diagnostics) > 0) then
                 ! Show first diagnostic message (highest severity)
-                call write_status_message(editor%screen_cols, &
-                    ' ' // trim(line_diagnostics(1)%message))
+                call write_bar_with_chevron(editor, chevron, &
+                    trim(line_diagnostics(1)%message))
                 deallocate(line_diagnostics)
                 return
             end if
@@ -956,20 +965,14 @@ contains
         ! A reserved slot rather than borrowed padding, because the padding
         ! collapses to nothing whenever a message or a diagnostic takes the
         ! whole bar.
-        if (editor%fuss_mode_active) then
-            chevron = '«'
-        else
-            chevron = '»'
-        end if
-        status_right = trim(status_right) // '| ' // chevron
-        chevron_shown = .false.
 
-        ! A pending message replaces the left section; the caret position on
-        ! the right is still worth keeping visible.
-        if (has_status_message()) then
-            status_left = ' ' // g_status_message
-            status_center = ''
-        end if
+        ! The chevron leads the bar, in the corner, next to what it toggles.
+        ! Prepended after the message override so it survives one -- it is a
+        ! control, not a status, and a control that disappears when a message
+        ! arrives is a control you cannot rely on. It stands in for the old
+        ! 'ctrl-b:fuss' text: same meaning, and it also shows which way the
+        ! tree will move and can be clicked.
+        status_left = chevron // ' | ' // trim(status_left)
 
         ! Create full status bar with center text.
         !
@@ -989,7 +992,6 @@ contains
             right_pad = padding_len - left_pad
             status_bar = trim(status_left) // repeat(' ', left_pad) // &
                         trim(status_center) // repeat(' ', right_pad) // trim(status_right)
-            chevron_shown = .true.
         else
             ! Not enough space for all three sections
             ! If in match mode, prioritize showing the hint by reducing right side info
@@ -1031,21 +1033,38 @@ contains
             end if
         end if
 
-        ! Only the full three-section layout above puts the bar's sections
-        ! where the byte arithmetic says. The narrow fallbacks drop or
-        ! ellipsize the right-hand section, so the chevron's column is not
-        ! known and no region is claimed: it stops being clickable rather
-        ! than being clickable in the wrong place.
+        ! Claim the chevron only if it really is the first thing on the bar.
+        ! Several narrow fallbacks above drop the left section entirely, and
+        ! asking the finished string is more reliable than tracking a flag
+        ! down each of those branches -- it cannot fall out of step when
+        ! someone adds another one.
+        chevron_shown = .false.
+        if (len(status_bar) >= len(chevron)) then
+            if (status_bar(1:len(chevron)) == chevron) chevron_shown = .true.
+        end if
         if (chevron_shown) then
-            ! The chevron is the last cell; include the space before it so the
+            ! Column 1 is the chevron; include the space after it so the
             ! target is two cells rather than one.
             call region_add(REGION_FUSS_TOGGLE, editor%screen_rows, editor%screen_rows, &
-                            editor%screen_cols - 1, editor%screen_cols)
+                            1, 2)
         end if
 
         ! Render with inverse video, clamped to the terminal width
         call write_status_message(editor%screen_cols, trim(status_bar))
     end subroutine render_status_bar
+
+    ! A whole-bar message that still carries the fuss chevron, and claims it.
+    ! The messages take over the entire status bar, so without this the one
+    ! control living there would blink out of existence every time something
+    ! had anything to say.
+    subroutine write_bar_with_chevron(editor, chevron, text)
+        type(editor_state_t), intent(in) :: editor
+        character(len=*), intent(in) :: chevron, text
+
+        call region_add(REGION_FUSS_TOGGLE, editor%screen_rows, editor%screen_rows, &
+                        1, 2)
+        call write_status_message(editor%screen_cols, chevron // ' | ' // text)
+    end subroutine write_bar_with_chevron
 
     ! Write one status-bar line in inverse video. The text is forced to
     ! exactly `width` columns: control characters are blanked (LSP
