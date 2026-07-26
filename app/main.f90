@@ -93,7 +93,7 @@ program facsimile
     integer :: prev_active_tab, prev_active_pane
     ! Snapshot for the caret-move fast path
     integer :: prev_cursor_line, prev_viewport_line, prev_viewport_col
-    logical :: prev_ghost_visible
+    logical :: prev_ghost_visible, batch_caret_only
     integer :: coalesced_keys
     logical :: active_view_changed
     logical :: opened_existing_tab
@@ -664,6 +664,25 @@ program facsimile
             ! emitting one per key floods slow terminals, which then display
             ! stale/torn frames with the caret detached from the text.
             coalesced_keys = 0
+
+            ! Snapshot for the caret-move fast path, taken once for the whole
+            ! burst. Taking it per key compared only the last keystroke, so a
+            ! held arrow key whose earlier repeats scrolled the viewport ended
+            ! up repainting two lines over a screen still showing the old
+            ! scroll position -- lines appearing to move with the caret while
+            ! the file stayed put.
+            batch_caret_only = .true.
+            prev_cursor_line = 0
+            prev_viewport_line = editor%viewport_line
+            prev_viewport_col = editor%viewport_column
+            prev_ghost_visible = ghost_is_active(editor%ghost)
+            if (allocated(editor%cursors)) then
+                if (editor%active_cursor >= 1 .and. &
+                    editor%active_cursor <= size(editor%cursors)) then
+                    prev_cursor_line = editor%cursors(editor%active_cursor)%line
+                end if
+            end if
+
             do
             ! Sync buffer before and after input when using panes
             ! Before: copy active pane's buffer -> global buffer
@@ -692,20 +711,13 @@ program facsimile
                 end if
             end if
 
-            ! Snapshot what the fast-path guard needs to compare against
-            prev_cursor_line = 0
-            prev_viewport_line = editor%viewport_line
-            prev_viewport_col = editor%viewport_column
-            prev_ghost_visible = ghost_is_active(editor%ghost)
-            if (allocated(editor%cursors)) then
-                if (editor%active_cursor >= 1 .and. &
-                    editor%active_cursor <= size(editor%cursors)) then
-                    prev_cursor_line = editor%cursors(editor%active_cursor)%line
-                end if
-            end if
-
             ! Process input
             call handle_key_command(key_input, editor, buffer, should_quit)
+
+            ! The whole burst has to be caret-only, not just its last key.
+            ! One edit anywhere in the batch means the text changed and only
+            ! a full frame can show it.
+            batch_caret_only = batch_caret_only .and. g_cursor_only_move
 
             ! Did the command move focus to a different tab or pane?
             active_view_changed = (editor%active_tab_index /= prev_active_tab)
@@ -787,7 +799,8 @@ program facsimile
                 ! something else on screen falls back to the full path, so
                 ! the fast path never has to be right about more than the
                 ! caret.
-                if (caret_move_only(editor, prev_cursor_line, prev_viewport_line, &
+                if (batch_caret_only .and. &
+                    caret_move_only(editor, prev_cursor_line, prev_viewport_line, &
                                     prev_viewport_col, prev_ghost_visible)) then
                     call render_caret_move(buffer, editor, prev_cursor_line, &
                                            allocated(search_pattern), match_case_sensitive)
