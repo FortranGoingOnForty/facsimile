@@ -153,6 +153,24 @@ def main():
         check(fast_caret == full_caret, f"{name}: the caret lands identically",
               f"{fast_caret} vs {full_caret}")
 
+    # Bursts, not single keys. The main loop coalesces up to 64 keystrokes and
+    # renders once, so a held arrow key delivers many keys per frame. The
+    # guard has to hold for the whole burst: checking only its last key let a
+    # batch that scrolled on its earlier repeats and stopped scrolling on its
+    # last one (which is what happens on reaching end of file) repaint two
+    # lines over a screen still showing the pre-scroll viewport.
+    for name, key, count in (("burst down past end of file", b"\x1b[B", 300),
+                             ("burst up back to the top", b"\x1b[A", 300)):
+        fast_text, fast_attrs, fast_caret = snapshot(binary, [key * count],
+                                                     force_full=False)
+        full_text, full_attrs, full_caret = snapshot(binary, [key * count],
+                                                     force_full=True)
+        rows = [i + 1 for i, (a, b) in enumerate(zip(fast_text, full_text)) if a != b]
+        check(not rows, f"{name}: no stale rows after the burst",
+              f"{len(rows)} rows wrong, first: {rows[:5]}")
+        check(fast_caret == full_caret, f"{name}: caret lands identically",
+              f"{fast_caret} vs {full_caret}")
+
     if failures:
         print(f"integration_fastpath: FAILED ({len(failures)}: {', '.join(failures)})")
         sys.exit(1)
