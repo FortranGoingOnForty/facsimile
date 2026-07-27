@@ -98,6 +98,7 @@ program facsimile
     integer :: coalesced_keys
     logical :: active_view_changed
     logical :: opened_existing_tab
+    logical :: tab_created
 
 
     ! Get command line arguments
@@ -413,7 +414,7 @@ program facsimile
 
         if (.not. opened_existing_tab) then
         ! Create a tab for the initial file
-        call create_tab(editor, trim(filename))
+        call create_tab(editor, trim(filename), tab_created)
 
         ! Load file into tab's buffer and first pane's buffer
         if (editor%active_tab_index > 0) then
@@ -1187,8 +1188,8 @@ contains
 
         ! If not found, create a new tab with this file
         if (.not. found) then
-            call create_tab(editor, restored_file)
-            if (allocated(editor%tabs) .and. editor%active_tab_index > 0) then
+            call create_tab(editor, restored_file, tab_created)
+            if (tab_created .and. allocated(editor%tabs) .and. editor%active_tab_index > 0) then
                 ! Load the restored file into the buffer
                 call buffer_load_file(buffer, restored_file, status)
                 if (status == 0) then

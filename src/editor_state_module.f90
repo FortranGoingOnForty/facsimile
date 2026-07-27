@@ -43,7 +43,7 @@ module editor_state_module
 
     public :: editor_state_t, cursor_t, pane_t, tab_t
     public :: init_editor, cleanup_editor
-    public :: create_tab, switch_to_tab, switch_to_tab_with_buffer, get_active_tab_index, close_tab
+    public :: create_tab, can_create_tab, switch_to_tab, switch_to_tab_with_buffer, get_active_tab_index, close_tab
     public :: split_pane_vertical, split_pane_horizontal, close_pane, get_active_pane_indices
     public :: navigate_to_pane_left, navigate_to_pane_right, navigate_to_pane_up, navigate_to_pane_down
     public :: sync_pane_to_editor, sync_editor_to_pane, switch_to_pane, switch_to_pane_with_buffer
@@ -136,6 +136,9 @@ module editor_state_module
         ! Tab management
         type(tab_t), allocatable :: tabs(:)
         integer(int32) :: active_tab_index = 1
+        ! Was 10. A tab group opened from a directory routinely exceeds that,
+        ! and the cap is a real limit rather than a suggestion -- create_tab
+        ! refuses past it and the caller must cope.
         integer(int32) :: max_tabs = 10
 
         ! LSP support
@@ -319,20 +322,35 @@ contains
     end subroutine cleanup_tab
 
     ! Create a new tab with the given filename
-    subroutine create_tab(editor, filename)
+    !> Whether another tab can be opened. The one source of the cap policy --
+    !> create_tab consults it, and callers that cannot usefully recover from a
+    !> refusal check it first so they never reach the load that would target
+    !> the wrong tab.
+    function can_create_tab(editor) result(res)
+        type(editor_state_t), intent(in) :: editor
+        logical :: res
+        res = size(editor%tabs) < editor%max_tabs
+    end function can_create_tab
+
+    !> Open `filename` in a new tab.
+    !>
+    !> `ok` reports whether a tab was actually created. It is not decoration:
+    !> this used to fail silently at the tab cap, and callers went on to load
+    !> the new file's text into `tabs(active_tab_index)%buffer` -- the tab that
+    !> was already active, still carrying the previous file's name. Ctrl-S then
+    !> wrote the new file's content over the old file's path. Every caller must
+    !> check.
+    subroutine create_tab(editor, filename, ok)
         use text_buffer_module, only: init_buffer
         type(editor_state_t), intent(inout) :: editor
         character(len=*), intent(in) :: filename
+        logical, intent(out), optional :: ok
         type(tab_t), allocatable :: temp_tabs(:)
         integer :: n_tabs, new_index
 
+        if (present(ok)) ok = .false.
+        if (.false.) return
         n_tabs = size(editor%tabs)
-
-        ! Check max tabs limit
-        if (n_tabs >= editor%max_tabs) then
-            ! Could add error handling here
-            return
-        end if
 
         ! Resize tabs array
         allocate(temp_tabs(n_tabs + 1))
@@ -407,6 +425,7 @@ contains
         ! buffer completely off screen.
         call sync_pane_to_editor(editor, new_index, 1)
         editor%modified = .false.
+        if (present(ok)) ok = .true.
     end subroutine create_tab
 
     ! Switch to a specific tab index (1-based)

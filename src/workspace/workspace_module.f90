@@ -463,6 +463,7 @@ contains
         real :: x_start, y_start, x_end, y_end
         logical :: in_tabs_array, is_orphan, reading_tab, in_panes_array, reading_pane
         logical :: file_exists
+        logical :: tab_ok
         integer :: load_status, tab_idx, pane_count, file_unit
         character(len=20) :: value_str
 
@@ -581,7 +582,8 @@ contains
                     ! Check if this is an untitled tab (in-memory only)
                     if (index(pane_filename, '[Untitled') == 1) then
                         ! Untitled tab - create without loading from file
-                        call create_tab(editor, trim(pane_filename))
+                        call create_tab(editor, trim(pane_filename), tab_ok)
+                        if (.not. tab_ok) cycle
                         tab_idx = editor%active_tab_index
 
                         ! Set orphan flag and initialize empty buffers
@@ -640,7 +642,8 @@ contains
                         end if
 
                         ! Create tab
-                        call create_tab(editor, trim(full_path))
+                        call create_tab(editor, trim(full_path), tab_ok)
+                        if (.not. tab_ok) cycle
                         tab_idx = editor%active_tab_index
 
                         ! Set orphan flag and load file

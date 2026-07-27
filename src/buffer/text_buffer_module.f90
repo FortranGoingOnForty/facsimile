@@ -322,6 +322,20 @@ contains
         character :: ch
 
         status = -1
+
+        ! A buffer whose data was never allocated holds no text -- it is not an
+        ! empty document, it is a document that was never loaded. Writing it
+        ! would open the file with status='replace' and then write nothing,
+        ! truncating a real file to zero bytes and reporting success, because
+        ! both write loops below iterate zero times and leave ios at 0.
+        !
+        ! Refuse before the open, not after: by the time the file is open the
+        ! damage is already done.
+        if (.not. allocated(buffer%data)) then
+            status = -3
+            return
+        end if
+
         open(newunit=unit, file=filename, status='replace', action='write', &
              form='unformatted', access='stream', iostat=ios)
 

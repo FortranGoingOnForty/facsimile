@@ -2,7 +2,7 @@ module command_handler_module
     use iso_fortran_env, only: int32, int64, error_unit
     use iso_c_binding, only: c_int
     use editor_state_module, only: editor_state_t, cursor_t, switch_to_tab_with_buffer, &
-                                   close_tab, create_tab, close_pane, split_pane_vertical, split_pane_horizontal, &
+                                   close_tab, create_tab, can_create_tab, close_pane, split_pane_vertical, split_pane_horizontal, &
                                    navigate_to_pane_left, navigate_to_pane_right, navigate_to_pane_up, navigate_to_pane_down, &
                                    sync_editor_to_pane, tab_t
     use text_buffer_module
@@ -7174,6 +7174,7 @@ contains
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: full_path
         integer :: status
+        logical :: tab_created
 
         ! Build full path (skip workspace prefix if already absolute)
         if (len_trim(file_path) > 0 .and. file_path(1:1) == '/') then
@@ -7184,8 +7185,18 @@ contains
             full_path = trim(file_path)
         end if
 
-        ! Create a new tab for this file
-        call create_tab(editor, full_path)
+        ! Create a new tab for this file.
+        !
+        ! The guard is the whole point: create_tab refuses at the tab cap, and
+        ! the load below targets tabs(active_tab_index) -- which, if no tab was
+        ! created, is the tab that was already active, still named after a
+        ! different file. Loading into it puts this file's text under that
+        ! file's name, and the next Ctrl-S writes it to that file's path.
+        call create_tab(editor, full_path, tab_created)
+        if (.not. tab_created) then
+            call set_status_message('Too many tabs open: close one first')
+            return
+        end if
 
         ! Load file into the new tab's buffer
         if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
@@ -7695,7 +7706,13 @@ contains
             tab_name = 'diff:' // trim(selected_path)
         end if
 
-        ! Create new tab
+        ! Refuse before creating, not after: the load below targets
+        ! tabs(active_tab_index), which without a new tab is the tab already
+        ! active under a different name.
+        if (.not. can_create_tab(editor)) then
+            call set_status_message('Too many tabs open: close one first')
+            return
+        end if
         call create_tab(editor, tab_name)
 
         ! Load diff content into the tab's buffer
@@ -7753,6 +7770,10 @@ contains
                     end if
 
                     ! Create new tab
+                    if (.not. can_create_tab(editor)) then
+                        call set_status_message('Too many tabs open: close one first')
+                        return
+                    end if
                     call create_tab(editor, trim(selected_path))
                     tab_idx = editor%active_tab_index
 
@@ -9561,6 +9582,12 @@ contains
                 call copy_buffer(editor%tabs(old_tab_idx)%buffer, buffer)
             end if
 
+            ! Without this, a refusal leaves new_tab_idx pointing at the last
+            ! EXISTING tab and the load below overwrites its buffer.
+            if (.not. can_create_tab(editor)) then
+                call set_status_message('Too many tabs open: close one first')
+                return
+            end if
             call create_tab(editor, filepath)
 
             new_tab_idx = size(editor%tabs)  ! The tab we just created
@@ -9782,6 +9809,10 @@ contains
 
         ! If file not found in tabs, create a new tab and load it
         if (.not. found_file) then
+            if (.not. can_create_tab(editor)) then
+                call set_status_message('Too many tabs open: close one first')
+                return
+            end if
             call create_tab(editor, filepath)
 
             ! Load file content into the new tab's buffer
