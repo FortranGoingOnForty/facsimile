@@ -425,7 +425,11 @@ contains
         integer :: dirty(6), n_dirty, i, j, tab_idx, pane_idx
         integer :: old_bracket, old_match, line_count, screen_row
         integer :: line_num_width, adjusted_width, start_row
-        logical :: seen
+        integer :: next_dirty, scan_line, scratch
+        logical :: seen, saved_mc, saved_ms
+        character(len=4) :: saved_delim
+        character(len=:), allocatable :: scan_text
+        type(token_t), allocatable :: scan_tokens(:)
 
         tab_idx = editor%active_tab_index
         if (tab_idx < 1) return
@@ -459,18 +463,76 @@ contains
         if (size(editor%tabs) == 0) start_row = 1
 
         line_count = buffer_get_line_count(buffer)
+
+        ! Sort the dirty lines so the scan below can walk the viewport once.
+        do i = 1, n_dirty - 1
+            do j = i + 1, n_dirty
+                if (dirty(j) < dirty(i)) then
+                    scratch = dirty(i); dirty(i) = dirty(j); dirty(j) = scratch
+                end if
+            end do
+        end do
+
+        ! Tokenizing is a sequential state machine: in_multiline_comment carries
+        ! from one line to the next, which is how a /* */ block colours the lines
+        ! between its delimiters. Rendering isolated lines therefore cannot just
+        ! call the row renderer -- a continuation line would tokenize with the
+        ! flag clear and come out as plain code, and a line that opens a comment
+        ! would leave the flag set and colour every later line as comment.
+        !
+        ! So walk the viewport exactly as a full frame does, from the same
+        ! starting state, and let the state advance line by line. Only the dirty
+        ! rows are actually written, which is where the saving is: the tokenize
+        ! cost matches a full frame, the terminal traffic does not.
+        saved_mc = syntax_highlighter%in_multiline_comment
+        saved_ms = syntax_highlighter%in_multiline_string
+        saved_delim = syntax_highlighter%string_delimiter
+
         associate(pane => editor%tabs(tab_idx)%panes(pane_idx))
             adjusted_width = pane%screen_width - line_num_width
-            do i = 1, n_dirty
-                if (dirty(i) < 1) cycle
-                if (dirty(i) > line_count) cycle
-                screen_row = start_row + (dirty(i) - editor%viewport_line)
-                if (screen_row < start_row) cycle
-                if (screen_row > editor%screen_rows - 1) cycle
-                call render_editor_row(pane%buffer, editor, dirty(i), screen_row, &
-                                       1, adjusted_width, line_num_width, line_count)
+            next_dirty = 1
+            scan_line = editor%viewport_line
+            do while (next_dirty <= n_dirty)
+                if (dirty(next_dirty) < 1 .or. dirty(next_dirty) > line_count) then
+                    next_dirty = next_dirty + 1
+                    cycle
+                end if
+
+                ! Advance the tokenizer over the lines between here and the next
+                ! dirty one, discarding their output. This is what puts the
+                ! comment state where a full frame would have it.
+                do while (scan_line < dirty(next_dirty))
+                    if (scan_line > line_count) exit
+                    if (syntax_highlighter%enabled) then
+                        scan_text = buffer_get_line(pane%buffer, scan_line)
+                        call tokenize_line(syntax_highlighter, scan_text, scan_tokens)
+                        if (allocated(scan_tokens)) deallocate(scan_tokens)
+                    end if
+                    scan_line = scan_line + 1
+                end do
+
+                screen_row = start_row + (dirty(next_dirty) - editor%viewport_line)
+                if (screen_row >= start_row .and. &
+                    screen_row <= editor%screen_rows - 1) then
+                    call render_editor_row(pane%buffer, editor, dirty(next_dirty), &
+                                           screen_row, 1, adjusted_width, &
+                                           line_num_width, line_count)
+                else if (syntax_highlighter%enabled) then
+                    ! Off-screen but still on the scan path: advance past it.
+                    scan_text = buffer_get_line(pane%buffer, dirty(next_dirty))
+                    call tokenize_line(syntax_highlighter, scan_text, scan_tokens)
+                    if (allocated(scan_tokens)) deallocate(scan_tokens)
+                end if
+                scan_line = dirty(next_dirty) + 1
+                next_dirty = next_dirty + 1
             end do
         end associate
+
+        ! Leave the state exactly as it was found, so the next full frame
+        ! behaves as though the fast path had never run.
+        syntax_highlighter%in_multiline_comment = saved_mc
+        syntax_highlighter%in_multiline_string = saved_ms
+        syntax_highlighter%string_delimiter = saved_delim
 
         call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
         call render_cursor_for_panes(editor)

@@ -49,6 +49,33 @@ SRC = """program demo
 end program demo
 """ + "".join(f"    ! filler line {i:03d}\n" for i in range(1, 60))
 
+# Block comments spanning lines. Tokenizing carries in_multiline_comment from
+# one line to the next, so repainting a line in isolation gets it wrong: a
+# continuation line comes out as plain code, and a line that opens a comment
+# leaves the flag set and colours everything after it as comment. The Fortran
+# fixture above cannot catch that -- it has only `!` line comments.
+SRC_C = """/* A block comment that runs
+   across several lines, which is
+   the whole point of this fixture. */
+#include <stdio.h>
+
+int add(int a, int b) {
+    return a + b;
+}
+
+/* A second block comment,
+   also spanning lines. */
+int mul(int a, int b) {
+    return a * b;
+}
+
+int main(void) {
+    printf("%d\\n", add(1, 2));
+    printf("%d\\n", mul(3, 4));
+    return 0;
+}
+""" + "".join(f"// filler line {i:03d}\n" for i in range(1, 40))
+
 failures = []
 
 
@@ -69,7 +96,7 @@ def find_binary():
     sys.exit(0)
 
 
-def snapshot(binary, keys, force_full):
+def snapshot(binary, keys, force_full, src=None, name="d.f90"):
     """Drive the keys and return (text, attributes, caret).
 
     The filename shows in the status bar, so both runs must use the same
@@ -82,9 +109,9 @@ def snapshot(binary, keys, force_full):
     with open(os.path.join(home, ".config", "fac", "state.json"), "w") as f:
         f.write('{"first_run_completed": true, "lsp_installer_seen": true,'
                 ' "version": "1.0"}\n')
-    target = os.path.join(home, "d.f90")
+    target = os.path.join(home, name)
     with open(target, "w") as f:
-        f.write(SRC)
+        f.write(SRC if src is None else src)
     env = {**os.environ, "TERM": "xterm-256color", "HOME": home}
     env.pop("XDG_CONFIG_HOME", None)
     screen = pyte.Screen(COLS, ROWS)
@@ -149,6 +176,35 @@ def main():
         rows = [i + 1 for i, (a, b) in enumerate(zip(fast_text, full_text)) if a != b]
         check(not rows, f"{name}: text matches a full repaint", str(rows))
         check(fast_attrs == full_attrs, f"{name}: every cell attribute matches",
+              str(sorted(set(fast_attrs) ^ set(full_attrs))[:4]))
+        check(fast_caret == full_caret, f"{name}: the caret lands identically",
+              f"{fast_caret} vs {full_caret}")
+
+    # The same equivalence, in a language with block comments. Tokenizing is a
+    # sequential state machine, so a partial repaint has to arrive at each line
+    # with the comment state a full frame would have had.
+    #
+    # Deliberately no plain letters here: typing one can raise a word-scan
+    # completion, and ctrl-l drops the ghost, so the two runs would differ for
+    # a reason that has nothing to do with the fast path.
+    c_cases = {
+        "C: down inside a block comment": [b"\x1b[B"] * 2,
+        "C: down across its close": [b"\x1b[B"] * 4,
+        "C: down into the second comment": [b"\x1b[B"] * 10,
+        "C: down past both comments": [b"\x1b[B"] * 16,
+        "C: up and down repeatedly": [b"\x1b[B", b"\x1b[A"] * 6,
+        "C: right along a comment line": [b"\x1b[B"] + [b"\x1b[C"] * 8,
+        "C: edit inside a comment": [b"\x1b[B"] * 2 + [b"%"],
+    }
+    for name, keys in c_cases.items():
+        fast_text, fast_attrs, fast_caret = snapshot(binary, keys, False,
+                                                     src=SRC_C, name="d.c")
+        full_text, full_attrs, full_caret = snapshot(binary, keys, True,
+                                                     src=SRC_C, name="d.c")
+        rows = [i + 1 for i, (a, b) in enumerate(zip(fast_text, full_text)) if a != b]
+        check(not rows, f"{name}: text matches a full repaint", str(rows))
+        check(fast_attrs == full_attrs,
+              f"{name}: comment colouring matches a full repaint",
               str(sorted(set(fast_attrs) ^ set(full_attrs))[:4]))
         check(fast_caret == full_caret, f"{name}: the caret lands identically",
               f"{fast_caret} vs {full_caret}")
