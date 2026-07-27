@@ -43,7 +43,7 @@ module editor_state_module
 
     public :: editor_state_t, cursor_t, pane_t, tab_t
     public :: init_editor, cleanup_editor
-    public :: create_tab, can_create_tab, switch_to_tab, switch_to_tab_with_buffer, get_active_tab_index, close_tab
+    public :: create_tab, can_create_tab, find_tab_by_id, switch_to_tab, switch_to_tab_with_buffer, get_active_tab_index, close_tab
     public :: split_pane_vertical, split_pane_horizontal, close_pane, get_active_pane_indices
     public :: navigate_to_pane_left, navigate_to_pane_right, navigate_to_pane_up, navigate_to_pane_down
     public :: sync_pane_to_editor, sync_editor_to_pane, switch_to_pane, switch_to_pane_with_buffer
@@ -104,6 +104,14 @@ module editor_state_module
         logical :: modified = .false.
         logical :: is_orphan = .false.  ! True if file is outside workspace (uses absolute path)
 
+        ! Identity that survives the array being rebuilt. Closing a tab
+        ! compacts `tabs`, so every index above the removed one shifts down and
+        ! a saved index silently comes to mean a different tab -- the same
+        ! failure that let a closed pane's text be written over its sibling's
+        ! file. Anything that needs to refer to "this tab" across a close must
+        ! hold the id, not the position.
+        integer(int32) :: tab_id = 0
+
         ! Bumped on every edit to this tab. An async request (LSP completion,
         ! and later a model completion) captures this when it is sent; if the
         ! value has moved by the time the reply lands, the reply was computed
@@ -136,10 +144,13 @@ module editor_state_module
         ! Tab management
         type(tab_t), allocatable :: tabs(:)
         integer(int32) :: active_tab_index = 1
+        ! Monotonic, never reused, so a stale id refers to nothing rather than
+        ! to whatever later took that slot.
+        integer(int32) :: next_tab_id = 1
         ! Was 10. A tab group opened from a directory routinely exceeds that,
         ! and the cap is a real limit rather than a suggestion -- create_tab
         ! refuses past it and the caller must cope.
-        integer(int32) :: max_tabs = 10
+        integer(int32) :: max_tabs = 512
 
         ! LSP support
         type(lsp_manager_t) :: lsp_manager
@@ -322,6 +333,75 @@ contains
     end subroutine cleanup_tab
 
     ! Create a new tab with the given filename
+    !> Move a tab from `src` to `dst`, transferring ownership of everything
+    !> allocatable rather than copying it.
+    !>
+    !> The array grows and shrinks by building a new array and assigning each
+    !> element across, and intrinsic derived-type assignment deep-copies every
+    !> allocatable component -- for a tab that means its whole text, every
+    !> pane's text, and the pending LSP payload. Inserting into an N-tab array
+    !> therefore copied N documents, making open-a-directory quadratic in the
+    !> number of files. move_alloc hands over the pointers instead.
+    !>
+    !> `src` is left deallocated, which is what makes it a move: the two must
+    !> never both own the same buffer.
+    subroutine move_tab(dst, src)
+        type(tab_t), intent(inout) :: dst, src
+        integer :: i
+
+        if (allocated(src%filename)) call move_alloc(src%filename, dst%filename)
+        if (allocated(src%buffer%data)) call move_alloc(src%buffer%data, dst%buffer%data)
+        dst%buffer%gap_start = src%buffer%gap_start
+        dst%buffer%gap_end   = src%buffer%gap_end
+        dst%buffer%size      = src%buffer%size
+        dst%buffer%modified  = src%buffer%modified
+
+        if (allocated(src%panes)) then
+            ! Moving the array moves each pane's buffer, filename and cursors
+            ! with it: they are components of the elements being transferred.
+            call move_alloc(src%panes, dst%panes)
+        end if
+        dst%active_pane_index = src%active_pane_index
+
+        if (allocated(src%lsp_server_indices)) &
+            call move_alloc(src%lsp_server_indices, dst%lsp_server_indices)
+        dst%num_lsp_servers = src%num_lsp_servers
+
+        if (allocated(src%document_sync%uri)) &
+            call move_alloc(src%document_sync%uri, dst%document_sync%uri)
+        if (allocated(src%document_sync%pending_content)) &
+            call move_alloc(src%document_sync%pending_content, &
+                            dst%document_sync%pending_content)
+        dst%document_sync%version             = src%document_sync%version
+        dst%document_sync%last_change_time    = src%document_sync%last_change_time
+        dst%document_sync%sync_delay          = src%document_sync%sync_delay
+        dst%document_sync%has_pending_changes = src%document_sync%has_pending_changes
+        dst%document_sync%server_index        = src%document_sync%server_index
+
+        dst%modified     = src%modified
+        dst%is_orphan    = src%is_orphan
+        dst%doc_revision = src%doc_revision
+        dst%tab_id       = src%tab_id
+
+        i = 0   ! silence unused-variable warnings on compilers that want it
+    end subroutine move_tab
+
+    !> Index of the tab carrying `id`, or 0 if it is gone.
+    function find_tab_by_id(editor, id) result(idx)
+        type(editor_state_t), intent(in) :: editor
+        integer(int32), intent(in) :: id
+        integer :: idx, i
+
+        idx = 0
+        if (id <= 0) return
+        do i = 1, size(editor%tabs)
+            if (editor%tabs(i)%tab_id == id) then
+                idx = i
+                return
+            end if
+        end do
+    end function find_tab_by_id
+
     !> Whether another tab can be opened. The one source of the cap policy --
     !> create_tab consults it, and callers that cannot usefully recover from a
     !> refusal check it first so they never reach the load that would target
@@ -346,16 +426,20 @@ contains
         character(len=*), intent(in) :: filename
         logical, intent(out), optional :: ok
         type(tab_t), allocatable :: temp_tabs(:)
-        integer :: n_tabs, new_index
+        integer :: n_tabs, new_index, i
 
         if (present(ok)) ok = .false.
-        if (.false.) return
+        if (.not. can_create_tab(editor)) return
         n_tabs = size(editor%tabs)
 
         ! Resize tabs array
         allocate(temp_tabs(n_tabs + 1))
         if (n_tabs > 0) then
-            temp_tabs(1:n_tabs) = editor%tabs(1:n_tabs)
+            ! move, not copy: intrinsic assignment here would duplicate every
+            ! open document on every new tab
+            do i = 1, n_tabs
+                call move_tab(temp_tabs(i), editor%tabs(i))
+            end do
         end if
 
         ! Initialize new tab
@@ -423,6 +507,9 @@ contains
         ! into the new tab: the next sync_editor_to_pane stamps the old
         ! cursor into the new pane and the viewport scrolls a short
         ! buffer completely off screen.
+        editor%tabs(new_index)%tab_id = editor%next_tab_id
+        editor%next_tab_id = editor%next_tab_id + 1
+
         call sync_pane_to_editor(editor, new_index, 1)
         editor%modified = .false.
         if (present(ok)) ok = .true.
@@ -537,6 +624,7 @@ contains
         integer(int32), intent(in) :: tab_index
         type(tab_t), allocatable :: temp_tabs(:)
         integer :: n_tabs, i, j
+        integer(int32) :: survivor_id
 
         n_tabs = size(editor%tabs)
         if (tab_index < 1 .or. tab_index > n_tabs) return
@@ -552,12 +640,29 @@ contains
             return
         end if
 
+        ! Decide WHICH TAB should end up active before the array is rebuilt,
+        ! and remember it by id. Compaction shifts every index above the
+        ! removed one down, so an index chosen now would name a different tab
+        ! afterwards -- the failure that let a closed pane's text be saved over
+        ! its sibling's file.
+        survivor_id = 0
+        if (editor%active_tab_index /= tab_index) then
+            ! Not closing the active tab: it simply stays active.
+            if (editor%active_tab_index >= 1 .and. &
+                editor%active_tab_index <= n_tabs) &
+                survivor_id = editor%tabs(editor%active_tab_index)%tab_id
+        else if (tab_index < n_tabs) then
+            survivor_id = editor%tabs(tab_index + 1)%tab_id   ! the one to its right
+        else if (tab_index > 1) then
+            survivor_id = editor%tabs(tab_index - 1)%tab_id   ! closing the last: go left
+        end if
+
         ! Create new array without this tab
         allocate(temp_tabs(n_tabs - 1))
         j = 1
         do i = 1, n_tabs
             if (i /= tab_index) then
-                temp_tabs(j) = editor%tabs(i)
+                call move_tab(temp_tabs(j), editor%tabs(i))
                 j = j + 1
             end if
         end do
@@ -565,12 +670,9 @@ contains
         ! Replace tabs array
         call move_alloc(temp_tabs, editor%tabs)
 
-        ! Adjust active tab index
-        if (editor%active_tab_index > n_tabs - 1) then
-            editor%active_tab_index = n_tabs - 1
-        else if (editor%active_tab_index >= tab_index) then
-            editor%active_tab_index = max(1, editor%active_tab_index - 1)
-        end if
+        editor%active_tab_index = find_tab_by_id(editor, survivor_id)
+        if (editor%active_tab_index < 1) &
+            editor%active_tab_index = min(max(1, tab_index), size(editor%tabs))
 
         ! Switch to the new active tab
         if (editor%active_tab_index > 0) then
