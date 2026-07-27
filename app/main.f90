@@ -1440,35 +1440,36 @@ contains
 
         ! Search operations
         call register_command('Find', 'find', 'Ctrl+F', 'Search')
-        call register_command('Replace', 'replace', 'Ctrl+H', 'Search')
-        call register_command('Find Next', 'find-next', 'Ctrl+G', 'Search')
-        call register_command('Find Previous', 'find-prev', 'Shift+Ctrl+G', 'Search')
+        call register_command('Replace', 'replace', 'Ctrl+R', 'Search')
+        call register_command('Find Next', 'find-next', 'n (in search)', 'Search')
+        call register_command('Find Previous', 'find-prev', 'N (in search)', 'Search')
 
         ! Navigation
         call register_command('Go to Line', 'goto-line', 'Ctrl+G', 'Navigation')
         call register_command('Go to Definition', 'goto-def', 'F12', 'Navigation')
         call register_command('Find References', 'find-refs', 'Shift+F12', 'Navigation')
         call register_command('Jump Back', 'jump-back', 'Alt+,', 'Navigation')
-        call register_command('Go to Symbol', 'goto-symbol', 'Ctrl+Shift+O', 'Navigation')
+        call register_command('Go to Symbol', 'goto-symbol', 'F4 / Alt+O', 'Navigation')
 
         ! LSP features
-        call register_command('Code Actions', 'code-actions', 'Ctrl+.', 'LSP')
+        call register_command('Code Actions', 'code-actions', 'F10 / Alt+.', 'LSP')
         call register_command('Rename Symbol', 'rename', 'F2 / Alt+N', 'LSP')
-        call register_command('Show Diagnostics', 'diagnostics', 'Ctrl+Shift+D', 'LSP')
-        call register_command('Show Hover Info', 'hover', 'Ctrl+K Ctrl+I', 'LSP')
+        call register_command('Show Diagnostics', 'diagnostics', 'F8 / Alt+E', 'LSP')
+        call register_command('Show Hover Info', 'hover', 'Ctrl+H', 'LSP')
 
         ! View
-        call register_command('Split Vertical', 'split-v', 'Ctrl+\\', 'View')
-        call register_command('Split Horizontal', 'split-h', 'Ctrl+Shift+\\', 'View')
-        call register_command('Close Pane', 'close-pane', 'Ctrl+W', 'View')
-        call register_command('Navigate Pane Left', 'pane-left', 'Ctrl+H', 'View')
-        call register_command('Navigate Pane Right', 'pane-right', 'Ctrl+L', 'View')
-        call register_command('Navigate Pane Up', 'pane-up', 'Ctrl+K', 'View')
-        call register_command('Navigate Pane Down', 'pane-down', 'Ctrl+J', 'View')
+        call register_command('Split Vertical', 'split-v', 'Alt+V', 'View')
+        call register_command('Split Horizontal', 'split-h', 'Alt+S', 'View')
+        call register_command('Close Tab', 'close-tab', 'Ctrl+W', 'View')
+        call register_command('Close Pane', 'close-pane', 'Alt+Q', 'View')
+        call register_command('Navigate Pane Left', 'pane-left', 'Alt+H', 'View')
+        call register_command('Navigate Pane Right', 'pane-right', 'Alt+L', 'View')
+        call register_command('Navigate Pane Up', 'pane-up', 'Alt+K', 'View')
+        call register_command('Navigate Pane Down', 'pane-down', 'Alt+J', 'View')
 
         ! Help
         call register_command('Show Help', 'help', 'Ctrl+?', 'Help')
-        call register_command('Command Palette', 'palette', 'Ctrl+Shift+P', 'Help')
+        call register_command('Command Palette', 'palette', 'Ctrl+P', 'Help')
     end subroutine register_all_commands
 
 end program facsimile

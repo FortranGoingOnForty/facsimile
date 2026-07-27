@@ -40,7 +40,7 @@ module command_handler_module
         terminal_panel_paste, terminal_panel_scroll, &
         get_terminal_panel_height, &
         terminal_panel_is_alive, terminal_panel_restart
-    use input_handler_module, only: get_paste_text
+    use input_handler_module, only: get_paste_text, parse_mouse_event
     use bracket_matching_module, only: find_matching_bracket
     use comment_command_module, only: toggle_comment_lines, comment_syntax_available
     use utf8_module, only: utf8_char_to_byte_index, &
@@ -4800,32 +4800,6 @@ contains
 
     ! Parse "mouse-type:button:row:col" into parts. ok=.false. for
     ! events without the colon form (e.g. mouse-scroll-up).
-    subroutine parse_mouse_event(key_str, event_type, button, &
-        row, col, ok)
-        character(len=*), intent(in) :: key_str
-        character(len=*), intent(out) :: event_type
-        integer, intent(out) :: button, row, col
-        logical, intent(out) :: ok
-        integer :: c1, c2, c3, ios
-
-        ok = .false.
-        button = 0; row = 0; col = 0; event_type = ''
-        c1 = index(key_str, ':')
-        if (c1 == 0) return
-        c2 = index(key_str(c1+1:), ':') + c1
-        if (c2 == c1) return
-        c3 = index(key_str(c2+1:), ':') + c2
-        if (c3 == c2) return
-
-        event_type = key_str(1:c1-1)
-        read(key_str(c1+1:c2-1), '(i10)', iostat=ios) button
-        if (ios /= 0) return
-        read(key_str(c2+1:c3-1), '(i10)', iostat=ios) row
-        if (ios /= 0) return
-        read(key_str(c3+1:), '(i10)', iostat=ios) col
-        if (ios /= 0) return
-        ok = .true.
-    end subroutine parse_mouse_event
 
     subroutine handle_mouse_event_action(key_str, editor, buffer)
         use editor_state_module, only: get_active_pane_indices
@@ -9304,6 +9278,75 @@ contains
             call handle_key_command('alt-\', editor, buffer, should_quit)
         case('ai-status')
             call set_status_message(ai_status_line(editor%ai))
+
+        ! Panes and tabs. ctrl-w closes the TAB and alt-q closes the PANE;
+        ! the single "Close Pane / Ctrl+W" entry that used to be here named
+        ! one and did the other, and did neither because it had no case.
+        case('close-tab')
+            call handle_key_command('ctrl-w', editor, buffer, should_quit)
+        case('close-pane')
+            call handle_key_command('alt-q', editor, buffer, should_quit)
+        case('split-v')
+            call handle_key_command('alt-v', editor, buffer, should_quit)
+        case('split-h')
+            call handle_key_command('alt-s', editor, buffer, should_quit)
+        case('pane-left')
+            call handle_key_command('alt-h', editor, buffer, should_quit)
+        case('pane-right')
+            call handle_key_command('alt-l', editor, buffer, should_quit)
+        case('pane-up')
+            call handle_key_command('alt-k', editor, buffer, should_quit)
+        case('pane-down')
+            call handle_key_command('alt-j', editor, buffer, should_quit)
+
+        ! Search and navigation
+        case('find')
+            call handle_key_command('ctrl-f', editor, buffer, should_quit)
+        case('replace')
+            call handle_key_command('ctrl-r', editor, buffer, should_quit)
+        case('goto-line')
+            call handle_key_command('ctrl-g', editor, buffer, should_quit)
+        case('jump-back')
+            call handle_key_command('alt-comma', editor, buffer, should_quit)
+        ! 'n' and 'N' navigate matches only while a search is live; without
+        ! one they are ordinary letters and would be typed into the file.
+        case('find-next')
+            if (allocated(search_pattern)) then
+                call handle_key_command('n', editor, buffer, should_quit)
+            else
+                call set_status_message('Find Next: no active search (Ctrl+F first)')
+            end if
+        case('find-prev')
+            if (allocated(search_pattern)) then
+                call handle_key_command('N', editor, buffer, should_quit)
+            else
+                call set_status_message('Find Previous: no active search (Ctrl+F first)')
+            end if
+
+        ! Language server
+        case('goto-def')
+            call handle_key_command('f12', editor, buffer, should_quit)
+        case('find-refs')
+            call handle_key_command('shift-f12', editor, buffer, should_quit)
+        case('rename')
+            call handle_key_command('f2', editor, buffer, should_quit)
+        case('hover')
+            call handle_key_command('ctrl-h', editor, buffer, should_quit)
+        case('code-actions')
+            call handle_key_command('f10', editor, buffer, should_quit)
+        case('diagnostics')
+            call handle_key_command('f8', editor, buffer, should_quit)
+        case('goto-symbol')
+            call handle_key_command('f4', editor, buffer, should_quit)
+
+        ! Misc
+        case('delete-line')
+            call handle_key_command('ctrl-shift-k', editor, buffer, should_quit)
+        case('help')
+            call handle_key_command('ctrl-?', editor, buffer, should_quit)
+        case('palette')
+            ! Already in the palette; re-opening from inside it would nest.
+            call set_status_message('Command Palette: already open (Ctrl+P)')
 
         case default
             ! Unknown command - show message

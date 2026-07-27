@@ -7,6 +7,11 @@ module input_handler_module
     public :: get_key_input, key_type, mouse_event_t
     public :: get_paste_text
     public :: decode_csi_u  ! exposed for unit tests
+    ! Splits the "event:button:row:col" strings this module emits. It
+    ! lives here, with the code that formats them, so any module above
+    ! can read a mouse event -- the command palette runs its own input
+    ! loop and could not reach the copy that was in command_handler.
+    public :: parse_mouse_event
 
     ! Holds the most recent bracketed-paste payload; retrieved by
     ! the command handler when a 'paste' key event is delivered.
@@ -1272,5 +1277,32 @@ contains
 
         key_str = ''
     end subroutine handle_mouse_event
+
+    subroutine parse_mouse_event(key_str, event_type, button, &
+        row, col, ok)
+        character(len=*), intent(in) :: key_str
+        character(len=*), intent(out) :: event_type
+        integer, intent(out) :: button, row, col
+        logical, intent(out) :: ok
+        integer :: c1, c2, c3, ios
+
+        ok = .false.
+        button = 0; row = 0; col = 0; event_type = ''
+        c1 = index(key_str, ':')
+        if (c1 == 0) return
+        c2 = index(key_str(c1+1:), ':') + c1
+        if (c2 == c1) return
+        c3 = index(key_str(c2+1:), ':') + c2
+        if (c3 == c2) return
+
+        event_type = key_str(1:c1-1)
+        read(key_str(c1+1:c2-1), '(i10)', iostat=ios) button
+        if (ios /= 0) return
+        read(key_str(c2+1:c3-1), '(i10)', iostat=ios) row
+        if (ios /= 0) return
+        read(key_str(c3+1:), '(i10)', iostat=ios) col
+        if (ios /= 0) return
+        ok = .true.
+    end subroutine parse_mouse_event
 
 end module input_handler_module

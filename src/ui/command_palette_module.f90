@@ -10,6 +10,7 @@ module command_palette_module
     public :: is_command_palette_visible, command_palette_handle_key
     public :: register_command, get_selected_command
     public :: filter_commands, render_command_palette
+    public :: command_palette_row_at
 
     integer, parameter :: MAX_COMMANDS = 100
     integer, parameter :: MAX_VISIBLE = 10
@@ -334,8 +335,12 @@ contains
         call terminal_move_cursor(row, start_col)
         call terminal_write('│')
         call terminal_write(YELLOW // ' > ' // RESET)
-        call terminal_write(trim(palette%search_query))
-        display_width = 3 + len_trim(palette%search_query)  ! " > " + query length
+        ! Not trim(): a trailing space is part of what the user typed, and
+        ! hiding it makes the space bar look broken.
+        if (palette%search_pos > 0) then
+            call terminal_write(palette%search_query(1:palette%search_pos))
+        end if
+        display_width = 3 + palette%search_pos  ! " > " + query length
         call terminal_write(repeat(' ', max(0, content_width - 2 - display_width)))
         call terminal_write('│')
 
@@ -411,14 +416,45 @@ contains
         call terminal_move_cursor(start_row + 2, start_col + 4 + palette%search_pos)
     end subroutine render_command_palette
 
+
+    !> Which filtered command is drawn at screen (row, col), or 0.
+    !>
+    !> The row arithmetic mirrors render_command_palette exactly: start_row is
+    !> 2, then border, header, query and separator occupy the next three, so
+    !> the first command sits on row 6. Kept beside the renderer so the two
+    !> cannot drift apart.
+    function command_palette_row_at(palette, screen_cols, row, col) result(idx)
+        type(command_palette_t), intent(in) :: palette
+        integer, intent(in) :: screen_cols, row, col
+        integer :: idx
+        integer :: content_width, start_col, first_row, visible_end, offset
+
+        idx = 0
+        if (.not. palette%visible) return
+
+        content_width = min(PALETTE_WIDTH, screen_cols - 4)
+        start_col = max(1, (screen_cols - content_width) / 2)
+        if (col < start_col .or. col > start_col + content_width - 1) return
+
+        first_row = 2 + 4          ! top border, header, query, separator
+        if (row < first_row) return
+
+        offset = row - first_row   ! 0-based position within the visible list
+        if (offset > MAX_VISIBLE - 1) return
+
+        visible_end = min(palette%scroll_offset + MAX_VISIBLE, palette%num_filtered)
+        idx = palette%scroll_offset + 1 + offset
+        if (idx > visible_end) idx = 0
+    end function command_palette_row_at
+
     function show_command_palette_interactive(palette, screen_cols) result(selected_cmd_id)
-        use input_handler_module, only: get_key_input
+        use input_handler_module, only: get_key_input, parse_mouse_event
         type(command_palette_t), intent(inout) :: palette
         integer, intent(in) :: screen_cols
         character(len=:), allocatable :: selected_cmd_id
         character(len=32) :: key_input
         integer :: ch, status
-        logical :: handled
+        logical :: handled, is_text
         type(command_t) :: cmd
 
         call show_command_palette(palette)
@@ -428,6 +464,45 @@ contains
         do
             call get_key_input(key_input, status)
             if (status /= 0) cycle
+
+            ! The palette runs its own input loop, so the renderer's clickable
+            ! region table -- consulted only by the main key router -- never
+            ! sees these events. Resolve them here against the same geometry.
+            if (index(key_input, 'mouse-') == 1) then
+                block
+                    character(len=16) :: ev
+                    integer :: btn, mrow, mcol, hit
+                    logical :: mok
+                    call parse_mouse_event(trim(key_input), ev, btn, mrow, mcol, mok)
+                    if (mok) then
+                        hit = command_palette_row_at(palette, screen_cols, mrow, mcol)
+                        if (trim(ev) == 'mouse-click' .and. hit > 0) then
+                            ! Run the row under the pointer, not whatever the
+                            ! keyboard had highlighted.
+                            palette%selected_index = hit
+                            cmd = get_selected_command(palette)
+                            if (allocated(cmd%command_id)) then
+                                if (len_trim(cmd%command_id) > 0) then
+                                    selected_cmd_id = cmd%command_id
+                                    call hide_command_palette(palette)
+                                    return
+                                end if
+                            end if
+                        else if (trim(ev) == 'mouse-click') then
+                            ! A click outside the box dismisses, as clicking off
+                            ! any other menu does.
+                            selected_cmd_id = ''
+                            call hide_command_palette(palette)
+                            return
+                        else if (trim(ev) == 'mouse-drag' .or. trim(ev) == 'mouse-release') then
+                            if (hit > 0) palette%selected_index = hit
+                        end if
+                    end if
+                end block
+                call render_command_palette(palette, screen_cols)
+                call terminal_flush()
+                cycle
+            end if
 
             ! Handle special keys
             if (key_input == 'enter') then
@@ -445,18 +520,23 @@ contains
                 if (palette%search_pos > 0) then
                     palette%search_query(palette%search_pos:palette%search_pos) = ' '
                     palette%search_pos = palette%search_pos - 1
-                    call filter_commands(palette, trim(palette%search_query(1:palette%search_pos)))
+                    call filter_commands(palette, palette%search_query(1:palette%search_pos))
                 end if
             else
                 ! Try navigation keys
                 call command_palette_handle_key(palette, key_input, handled)
-                if (.not. handled .and. len_trim(key_input) == 1) then
+                ! A space arrives as a blank key_input, so len_trim() is 0 and
+                ! the old `== 1` guard dropped it -- which made every
+                ! multi-word query ("close pane") impossible to type.
+                is_text = (len_trim(key_input) == 1) .or. &
+                          (len_trim(key_input) == 0 .and. key_input(1:1) == ' ')
+                if (.not. handled .and. is_text) then
                     ! Regular character - add to search
                     ch = iachar(key_input(1:1))
                     if (ch >= 32 .and. ch < 127 .and. palette%search_pos < 255) then
                         palette%search_pos = palette%search_pos + 1
                         palette%search_query(palette%search_pos:palette%search_pos) = key_input(1:1)
-                        call filter_commands(palette, trim(palette%search_query(1:palette%search_pos)))
+                        call filter_commands(palette, palette%search_query(1:palette%search_pos))
                     end if
                 end if
             end if
