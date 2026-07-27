@@ -348,6 +348,57 @@ def test_wheel_scrolls_and_typing_still_works(binary):
         s.close()
 
 
+# --- Non-ASCII output ---------------------------------------------------------
+#
+# The grid stored one byte per cell, and the parser put a space in place of any
+# UTF-8 lead byte and dropped the continuations. Every non-ASCII character the
+# shell printed therefore came out blank: Nerd Font icons from an ls alias, box
+# drawing, accented filenames, CJK. Cells now hold codepoints.
+
+UNICODE_CMD = ("printf '\\uE5FF ICON \\u2502 caf\\u00e9 \\u4f60\\u597d END\\n'\r")
+
+
+def test_non_ascii_renders(binary):
+    s = Session(binary)
+    try:
+        s.send(ALT_T, 2.0)
+        s.send(UNICODE_CMD, 1.5)
+        row = ""
+        for r in s.screen.display:
+            if "ICON" in r and "printf" not in r:
+                row = r.rstrip()
+                break
+        check("\ue5ff" in row, "a Nerd Font glyph renders instead of a blank", repr(row))
+        check("\u2502" in row, "box drawing renders", repr(row))
+        check("caf\u00e9" in row, "accented latin renders", repr(row))
+        check("\u4f60\u597d" in row, "double-width CJK renders", repr(row))
+        check("END" in row, "text after the wide characters is not lost", repr(row))
+    finally:
+        s.close()
+
+
+def test_non_ascii_copies_as_bytes(binary):
+    """A three-byte glyph must come out of the clipboard as three bytes, and
+    the trailing half of a double-width one as nothing."""
+    s = Session(binary)
+    try:
+        s.send(ALT_T, 2.0)
+        s.send(UNICODE_CMD, 1.5)
+        r = s.output_row("\ue5ff")
+        if r == 0:
+            check(False, "found the unicode output row", s.display())
+            return
+        s.drag(r, 1, 30)
+        s.send(ALT_T, 0.8)
+        s.send("\x16", 1.0)
+        s.send("\x13", 1.0)
+        got = s.saved_file()
+        check("\ue5ff" in got, "the icon survives a copy", repr(got))
+        check("\u4f60\u597d" in got, "and so does the CJK pair", repr(got))
+    finally:
+        s.close()
+
+
 def main():
     binary = find_binary()
     for fn in (test_escape_closes_on_bare_prompt,
@@ -363,7 +414,9 @@ def main():
                test_selection_copies_when_the_drag_ends_outside,
                test_ctrl_shift_c_copies_from_the_keyboard,
                test_ctrl_shift_c_with_no_selection_reports_it,
-               test_wheel_scrolls_and_typing_still_works):
+               test_wheel_scrolls_and_typing_still_works,
+               test_non_ascii_renders,
+               test_non_ascii_copies_as_bytes):
         try:
             fn(binary)
         except Exception as exc:            # noqa: BLE001 - report and keep going

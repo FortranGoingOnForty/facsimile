@@ -104,14 +104,16 @@ module terminal_panel_module
             integer(c_int), intent(in) :: rows, cols
         end subroutine
 
+        ! buf receives up to 4 UTF-8 bytes; nbytes is 0 for the second cell
+        ! of a double-width glyph, which must produce no output.
         subroutine c_grid_get_cell(handle, row, col, &
-                                    ch, fg, bg, attr) &
+                                    buf, nbytes, fg, bg, attr) &
             bind(C, name='vt100_grid_get_cell_f')
             import :: c_ptr, c_char, c_int
             type(c_ptr), intent(inout) :: handle
             integer(c_int), intent(in) :: row, col
-            character(kind=c_char), intent(out) :: ch
-            integer(c_int), intent(out) :: fg, bg, attr
+            character(kind=c_char), intent(out) :: buf(4)
+            integer(c_int), intent(out) :: nbytes, fg, bg, attr
         end subroutine
 
         subroutine c_grid_get_cursor(handle, row, col) &
@@ -165,13 +167,13 @@ module terminal_panel_module
         end function
 
         subroutine c_grid_get_view_cell(handle, row, col, &
-                                         ch, fg, bg, attr) &
+                                         buf, nbytes, fg, bg, attr) &
             bind(C, name='vt100_grid_get_view_cell_f')
             import :: c_ptr, c_char, c_int
             type(c_ptr), intent(inout) :: handle
             integer(c_int), intent(in) :: row, col
-            character(kind=c_char), intent(out) :: ch
-            integer(c_int), intent(out) :: fg, bg, attr
+            character(kind=c_char), intent(out) :: buf(4)
+            integer(c_int), intent(out) :: nbytes, fg, bg, attr
         end subroutine
 
         function c_grid_cpr_pending(handle) &
@@ -434,7 +436,10 @@ contains
         integer, intent(in) :: start_row, cols
         integer :: r, c, grid_rows, grid_cols
         integer(c_int) :: c_row, c_col, c_fg, c_bg, c_attr
-        character(len=1) :: ch
+        character(kind=c_char) :: cell_buf(4)
+        character(len=4) :: ch_utf8
+        integer(c_int) :: c_nbytes
+        integer :: nb, bi
         integer :: last_fg, last_bg, last_attr
         integer :: cursor_r, cursor_c
         integer(c_int) :: cc_row, cc_col
@@ -513,7 +518,15 @@ contains
                 c_row = int(r, c_int)
                 c_col = int(c, c_int)
                 call c_grid_get_view_cell(panel%grid_handle, &
-                    c_row, c_col, ch, c_fg, c_bg, c_attr)
+                    c_row, c_col, cell_buf, c_nbytes, c_fg, c_bg, c_attr)
+                ! A cell may hold a multi-byte glyph now, or nothing at all
+                ! when it is the trailing half of a double-width one.
+                nb = int(c_nbytes)
+                if (nb > 0) then
+                    do bi = 1, nb
+                        ch_utf8(bi:bi) = cell_buf(bi)
+                    end do
+                end if
 
                 ! Emit ANSI codes only when style changes
                 if (int(c_fg) /= last_fg .or. &
@@ -574,14 +587,16 @@ contains
                 end if
 
                 ! Reverse-video for a selected cell or the cursor
-                if (cell_selected(panel, r, c) .or. &
-                    (at_bottom .and. panel%focused .and. &
-                     r == cursor_r .and. c == cursor_c)) then
-                    call terminal_write(ESC_CH // '[7m')
-                    call terminal_write(ch)
-                    call terminal_write(ESC_CH // '[27m')
-                else
-                    call terminal_write(ch)
+                if (nb > 0) then
+                    if (cell_selected(panel, r, c) .or. &
+                        (at_bottom .and. panel%focused .and. &
+                         r == cursor_r .and. c == cursor_c)) then
+                        call terminal_write(ESC_CH // '[7m')
+                        call terminal_write(ch_utf8(1:nb))
+                        call terminal_write(ESC_CH // '[27m')
+                    else
+                        call terminal_write(ch_utf8(1:nb))
+                    end if
                 end if
             end do
 
@@ -1064,9 +1079,9 @@ contains
     subroutine extract_selection(panel, text)
         type(terminal_panel_t), intent(inout) :: panel
         character(len=:), allocatable, intent(out) :: text
-        integer :: sr, sc, er, ec, r, c0, c1, c
-        integer(c_int) :: c_row, c_col, c_fg, c_bg, c_attr
-        character(len=1) :: ch
+        integer :: sr, sc, er, ec, r, c0, c1, c, bi
+        integer(c_int) :: c_row, c_col, c_fg, c_bg, c_attr, c_nbytes
+        character(kind=c_char) :: cell_buf(4)
         character(len=:), allocatable :: line
 
         text = ''
@@ -1086,13 +1101,17 @@ contains
                 c1 = panel%pty_cols - 1
             end if
 
-            allocate(character(len=c1 - c0 + 1) :: line)
+            line = ''
             do c = c0, c1
                 c_row = int(r, c_int)
                 c_col = int(c, c_int)
                 call c_grid_get_view_cell(panel%grid_handle, &
-                    c_row, c_col, ch, c_fg, c_bg, c_attr)
-                line(c - c0 + 1:c - c0 + 1) = ch
+                    c_row, c_col, cell_buf, c_nbytes, c_fg, c_bg, c_attr)
+                ! Copied text is bytes, not cells: a three-byte icon must come
+                ! out as three bytes, and a double-width continuation as none.
+                do bi = 1, int(c_nbytes)
+                    line = line // cell_buf(bi)
+                end do
             end do
 
             ! Trim trailing spaces from this row's slice
@@ -1101,7 +1120,6 @@ contains
             else
                 text = text // trim_trailing(line)
             end if
-            deallocate(line)
         end do
     end subroutine extract_selection
 

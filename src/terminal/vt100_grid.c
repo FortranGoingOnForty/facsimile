@@ -25,7 +25,12 @@
 #define SCROLLBACK_MAX 2000
 
 typedef struct {
-    char ch;
+    // A Unicode codepoint, not a byte. It was a byte, and grid_feed put a
+    // space in place of any UTF-8 lead byte and dropped the continuations --
+    // so every non-ASCII character the shell printed came out blank: Nerd
+    // Font icons from an ls alias, box drawing, accented filenames, CJK.
+    // 0 marks the second cell of a double-width character.
+    unsigned int cp;
     // unsigned short, not char: the "+1 so 0=default" encoding needs
     // 1..256, and 256 would wrap an 8-bit field back to default
     unsigned short fg;  // 0 = default
@@ -58,6 +63,10 @@ typedef struct {
     int param_len;
     int cursor_visible;
     int cpr_pending;
+    // Partially decoded UTF-8 sequence. A read() can split one anywhere, so
+    // the state has to survive across feeds.
+    unsigned int utf8_acc;
+    int utf8_need;
     int pty_fd;         // PTY fd for inline query responses
     int app_cursor_keys; // DECCKM: 1=application mode (ESC O), 0=normal (ESC [)
     int bracketed_paste; // mode 2004: 1=child wants pastes wrapped in ESC[200~/201~
@@ -78,7 +87,7 @@ static vt100_cell_t *cell_at(vt100_grid_t *g, int row, int col) {
 }
 
 static void clear_cell(vt100_cell_t *c) {
-    c->ch = ' ';
+    c->cp = ' ';
     c->fg = 0;
     c->bg = 0;
     c->attr = 0;
@@ -497,9 +506,58 @@ static void handle_csi(vt100_grid_t *g, char final) {
 }
 
 // Put a printable character at cursor and advance
-static void put_char(vt100_grid_t *g, char ch) {
-    if (g->cursor_col >= g->cols) {
-        // Line wrap
+
+// Display cells a codepoint occupies. Mirrors utf8_char_width in
+// utf8_module.f90 -- if these disagree the panel's columns drift from the
+// editor's.
+static int cp_width(unsigned int cp) {
+    if (cp == 0) return 0;
+    if ((cp >= 0x0300 && cp <= 0x036F) || (cp >= 0x1AB0 && cp <= 0x1AFF) ||
+        (cp >= 0x1DC0 && cp <= 0x1DFF) || (cp >= 0x20D0 && cp <= 0x20FF) ||
+        (cp >= 0xFE20 && cp <= 0xFE2F))
+        return 0;                       // combining marks
+    if ((cp >= 0x1100 && cp <= 0x115F) || (cp >= 0x2E80 && cp <= 0xA4CF) ||
+        (cp >= 0xAC00 && cp <= 0xD7A3) || (cp >= 0xF900 && cp <= 0xFAFF) ||
+        (cp >= 0xFE10 && cp <= 0xFE19) || (cp >= 0xFE30 && cp <= 0xFE6F) ||
+        (cp >= 0xFF00 && cp <= 0xFF60) || (cp >= 0xFFE0 && cp <= 0xFFE6) ||
+        (cp >= 0x1F300 && cp <= 0x1F64F) || (cp >= 0x1F680 && cp <= 0x1F6FF) ||
+        (cp >= 0x1F900 && cp <= 0x1F9FF) || (cp >= 0x1FA70 && cp <= 0x1FAFF) ||
+        (cp >= 0x20000 && cp <= 0x2FFFD) || (cp >= 0x30000 && cp <= 0x3FFFD))
+        return 2;
+    // Nerd Font glyphs live in the private use areas and are single width.
+    return 1;
+}
+
+// Encode a codepoint as UTF-8. Returns the byte count (0 for a continuation
+// cell, which must produce no output at all).
+static int cp_to_utf8(unsigned int cp, char *out) {
+    if (cp == 0) return 0;
+    if (cp < 0x80) { out[0] = (char)cp; return 1; }
+    if (cp < 0x800) {
+        out[0] = (char)(0xC0 | (cp >> 6));
+        out[1] = (char)(0x80 | (cp & 0x3F));
+        return 2;
+    }
+    if (cp < 0x10000) {
+        out[0] = (char)(0xE0 | (cp >> 12));
+        out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (cp & 0x3F));
+        return 3;
+    }
+    out[0] = (char)(0xF0 | (cp >> 18));
+    out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[3] = (char)(0x80 | (cp & 0x3F));
+    return 4;
+}
+
+static void put_char(vt100_grid_t *g, unsigned int cp) {
+    int w = cp_width(cp);
+    if (w == 0) return;                 // combining mark: nothing to place
+
+    // A double-width glyph needs two cells, so wrap early rather than split
+    // it across the right edge.
+    if (g->cursor_col + w > g->cols) {
         g->cursor_col = 0;
         g->cursor_row++;
         if (g->cursor_row > g->scroll_bottom) {
@@ -510,12 +568,25 @@ static void put_char(vt100_grid_t *g, char ch) {
 
     vt100_cell_t *c = cell_at(g, g->cursor_row, g->cursor_col);
     if (c) {
-        c->ch = ch;
+        c->cp = cp;
         c->fg = g->cur_fg;
         c->bg = g->cur_bg;
         c->attr = g->cur_attr;
     }
     g->cursor_col++;
+
+    if (w == 2) {
+        // Continuation cell: the glyph already covers this column, so it must
+        // emit nothing -- not a second copy, not a stray space.
+        vt100_cell_t *c2 = cell_at(g, g->cursor_row, g->cursor_col);
+        if (c2) {
+            c2->cp = 0;
+            c2->fg = g->cur_fg;
+            c2->bg = g->cur_bg;
+            c2->attr = g->cur_attr;
+        }
+        g->cursor_col++;
+    }
 }
 
 // Feed data through the parser
@@ -545,13 +616,21 @@ static void grid_feed(vt100_grid_t *g, const char *data, int len) {
             } else if (ch == 0x07) {
                 // BEL — ignore
             } else if (ch >= 0x80 && ch <= 0xBF) {
-                // UTF-8 continuation byte — skip (don't advance cursor)
-            } else if (ch >= 0xC0 && ch <= 0xFD) {
-                // UTF-8 lead byte — put a space placeholder
-                // (real terminals render multi-byte chars as 1-2 columns)
-                put_char(g, ' ');
+                // UTF-8 continuation byte
+                if (g->utf8_need > 0) {
+                    g->utf8_acc = (g->utf8_acc << 6) | (ch & 0x3F);
+                    if (--g->utf8_need == 0) put_char(g, g->utf8_acc);
+                }
+                // else: stray continuation, ignore rather than emit garbage
+            } else if (ch >= 0xC2 && ch <= 0xDF) {
+                g->utf8_acc = ch & 0x1F; g->utf8_need = 1;
+            } else if (ch >= 0xE0 && ch <= 0xEF) {
+                g->utf8_acc = ch & 0x0F; g->utf8_need = 2;
+            } else if (ch >= 0xF0 && ch <= 0xF4) {
+                g->utf8_acc = ch & 0x07; g->utf8_need = 3;
             } else if (ch >= 32 && ch != 127) {
-                put_char(g, (char)ch);
+                g->utf8_need = 0;
+                put_char(g, (unsigned int)ch);
             }
             break;
 
@@ -657,11 +736,12 @@ static void debug_log_grid(vt100_grid_t *g, const char *label) {
     for (int r = 0; r < g->rows; r++) {
         int has = 0;
         for (int c = 0; c < g->cols; c++)
-            if (g->cells[r*g->cols+c].ch != ' ') { has=1; break; }
+            if (g->cells[r*g->cols+c].cp != ' ') { has=1; break; }
         if (has) {
             fprintf(f, "  r%02d:[", r);
             for (int c = 0; c < g->cols && c < 70; c++) {
-                char ch = g->cells[r*g->cols+c].ch;
+                unsigned int cpv = g->cells[r*g->cols+c].cp;
+                char ch = (cpv >= 32 && cpv < 127) ? (char)cpv : '.';
                 fputc((ch>=32 && ch<127) ? ch : '.', f);
             }
             fprintf(f, "]\n");
@@ -693,7 +773,7 @@ void vt100_grid_create_f(void **handle, int *rows, int *cols) {
 
     // Initialize all cells to spaces
     for (int i = 0; i < *rows * *cols; i++) {
-        g->cells[i].ch = ' ';
+        g->cells[i].cp = ' ';
     }
 
     *handle = g;
@@ -729,7 +809,7 @@ void vt100_grid_resize_f(void **handle, int *rows, int *cols) {
 
     // Initialize to spaces
     for (int i = 0; i < new_size; i++) {
-        new_cells[i].ch = ' ';
+        new_cells[i].cp = ' ';
     }
 
     // Copy existing content (as much as fits)
@@ -751,21 +831,20 @@ void vt100_grid_resize_f(void **handle, int *rows, int *cols) {
     if (g->cursor_col >= *cols) g->cursor_col = *cols - 1;
 }
 
+// buf must hold at least 4 bytes. nbytes is 0 for the continuation cell of a
+// double-width glyph, which must emit nothing at all.
 void vt100_grid_get_cell_f(void **handle, int *row, int *col,
-                            char *ch, int *fg, int *bg, int *attr) {
+                            char *buf, int *nbytes,
+                            int *fg, int *bg, int *attr) {
     vt100_grid_t *g = (vt100_grid_t *)*handle;
-    if (!g) {
-        *ch = ' '; *fg = 0; *bg = 0; *attr = 0;
-        return;
-    }
+    buf[0] = ' '; *nbytes = 1; *fg = 0; *bg = 0; *attr = 0;
+    if (!g) return;
     vt100_cell_t *c = cell_at(g, *row, *col);
     if (c) {
-        *ch = c->ch;
+        *nbytes = cp_to_utf8(c->cp, buf);
         *fg = c->fg;
         *bg = c->bg;
         *attr = c->attr;
-    } else {
-        *ch = ' '; *fg = 0; *bg = 0; *attr = 0;
     }
 }
 
@@ -818,9 +897,10 @@ int vt100_grid_view_offset_f(void **handle) {
 // Get a cell for display row drow (0..rows-1), honoring view_offset.
 // When scrolled up, the upper rows come from scrollback history.
 void vt100_grid_get_view_cell_f(void **handle, int *drow, int *col,
-                                 char *ch, int *fg, int *bg, int *attr) {
+                                 char *buf, int *nbytes,
+                                 int *fg, int *bg, int *attr) {
     vt100_grid_t *g = (vt100_grid_t *)*handle;
-    *ch = ' '; *fg = 0; *bg = 0; *attr = 0;
+    buf[0] = ' '; *nbytes = 1; *fg = 0; *bg = 0; *attr = 0;
     if (!g) return;
 
     // Logical index into [scrollback... | live grid]
@@ -830,7 +910,7 @@ void vt100_grid_get_view_cell_f(void **handle, int *drow, int *col,
         int idx = (g->sb_head + li) % SCROLLBACK_MAX;
         sb_line_t *line = &g->scrollback[idx];
         if (line->cells && *col < line->width) {
-            *ch = line->cells[*col].ch;
+            *nbytes = cp_to_utf8(line->cells[*col].cp, buf);
             *fg = line->cells[*col].fg;
             *bg = line->cells[*col].bg;
             *attr = line->cells[*col].attr;
@@ -839,7 +919,10 @@ void vt100_grid_get_view_cell_f(void **handle, int *drow, int *col,
         // Live grid row
         int gr = li - g->sb_count;
         vt100_cell_t *c = cell_at(g, gr, *col);
-        if (c) { *ch = c->ch; *fg = c->fg; *bg = c->bg; *attr = c->attr; }
+        if (c) {
+            *nbytes = cp_to_utf8(c->cp, buf);
+            *fg = c->fg; *bg = c->bg; *attr = c->attr;
+        }
     }
 }
 
