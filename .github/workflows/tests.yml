@@ -1,0 +1,118 @@
+name: Tests
+
+# Runs on ordinary development, which the release workflow deliberately does
+# not: build-windows.yml fires only on `v*` tags, so until this existed a green
+# check meant "it compiled on three platforms" and no test had ever run in CI.
+on:
+  push:
+    branches: [trunk]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same branch makes the previous run's answer irrelevant.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Build and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install gfortran
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran
+
+      # The Makefile is the release path, so break here before anything else:
+      # a compile error should fail in two minutes, not after the pty suites.
+      - name: Build (make)
+        run: |
+          make clean || true
+          make
+
+      - name: Version reports
+        run: ./fac --version
+
+      - uses: fortran-lang/setup-fpm@v7
+        with:
+          fpm-version: 'v0.12.0'
+
+      - name: Unit tests (fpm)
+        run: fpm test
+
+      # Live sockets against a local fixture server, so it needs its own
+      # harness rather than fpm's runner.
+      - name: HTTP transport test
+        run: sh test/run_ai_http_test.sh
+
+  integration:
+    name: Integration (pty)
+    runs-on: ubuntu-latest
+    # Only worth the runner minutes once the build and unit tests are green.
+    needs: unit
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install gfortran
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran
+
+      - name: Build (make)
+        run: |
+          make clean || true
+          make
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      # Without both of these every suite exits 0 without running, so install
+      # them rather than letting the run go quietly green.
+      - name: Install pty test dependencies
+        run: pip install pexpect pyte
+
+      # The suites are discovered by glob, so a new one is covered the moment
+      # it is written. They drive a real pty and are slower than the unit
+      # tests; the timeout is a backstop against one hanging on a prompt.
+      #
+      # A suite that self-skips exits 0, which is indistinguishable from one
+      # that passed -- that is how the missing dependency went unnoticed
+      # locally. Here the dependencies are installed above, so a dependency
+      # skip means the setup is broken and the job must fail rather than go
+      # quietly green.
+      - name: Integration suites
+        timeout-minutes: 25
+        run: |
+          # Without this the pipeline below reports tee's status, not the
+          # suite's, and every failure would read as a pass.
+          set -o pipefail
+          fail=""
+          skip=""
+          for suite in test/integration_*.py; do
+            name=$(basename "$suite")
+            echo ""
+            echo "--- $name ---"
+            if python3 "$suite" 2>&1 | tee /tmp/suite.out; then
+              :
+            else
+              fail="$fail $name"
+            fi
+            if grep -q "SKIP: missing dependency" /tmp/suite.out; then
+              skip="$skip $name"
+            fi
+          done
+          if [ -n "$fail" ]; then
+            echo ""
+            echo "Failed suites:$fail"
+          fi
+          if [ -n "$skip" ]; then
+            echo ""
+            echo "Suites that skipped instead of running:$skip"
+          fi
+          if [ -n "$fail" ] || [ -n "$skip" ]; then
+            exit 1
+          fi

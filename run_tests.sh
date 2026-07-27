@@ -32,32 +32,48 @@ echo "Running HTTP transport test..."
 echo "----------------------------------------"
 sh test/run_ai_http_test.sh
 
-# Check if Python and pexpect are available for integration tests
-if command -v python3 &> /dev/null; then
-    if python3 -c "import pexpect" 2>/dev/null; then
-        echo ""
-        echo "Running Integration Tests..."
-        echo "----------------------------------------"
-        python3 test/integration_test.py
-        # These self-skip when pyte is not installed
-        python3 test/integration_lazy_tree.py
-        python3 test/integration_caret.py
-        python3 test/integration_ghost.py
-        python3 test/integration_multicursor.py
-        python3 test/integration_mouse.py
-        python3 test/integration_ctrlq.py
-        python3 test/integration_fastpath.py
-        python3 test/integration_comment.py
-        python3 test/integration_terminal_panel.py
-        python3 test/integration_ai_ghost.py
-    else
-        echo ""
-        echo "⚠ Skipping integration tests (pexpect not installed)"
-        echo "  Install with: pip3 install pexpect"
-    fi
-else
+# Integration tests. Discovered by glob rather than listed, the way fpm
+# discovers test/*.f90 -- a suite that is written but never added to a list
+# is a test that does not run, and that is exactly what happened to the
+# 0.21.0 regression suites.
+#
+# Both imports are checked. The suites self-skip with exit 0 when either is
+# missing, so testing only for pexpect meant a machine without pyte printed
+# "Running Integration Tests" and then quietly ran almost none of them.
+if ! command -v python3 &> /dev/null; then
     echo ""
     echo "⚠ Skipping integration tests (Python 3 not found)"
+elif ! python3 -c "import pexpect, pyte" 2>/dev/null; then
+    echo ""
+    echo "⚠ Skipping integration tests (pexpect and/or pyte not installed)"
+    echo "  Install with: pip3 install pexpect pyte"
+    echo "  Without them every suite exits 0 without running."
+else
+    echo ""
+    echo "Running Integration Tests..."
+    echo "----------------------------------------"
+
+    # Run every suite even if one fails, then report. Stopping at the first
+    # failure hides how much else broke.
+    integration_failures=""
+    set +e
+    for suite in test/integration_*.py; do
+        echo ""
+        echo "--- $(basename "$suite") ---"
+        python3 "$suite"
+        if [ $? -ne 0 ]; then
+            integration_failures="$integration_failures $(basename "$suite")"
+        fi
+    done
+    set -e
+
+    if [ -n "$integration_failures" ]; then
+        echo ""
+        echo "✗ Integration suites failed:$integration_failures"
+        exit 1
+    fi
+    echo ""
+    echo "✓ Integration tests passed"
 fi
 
 echo ""
