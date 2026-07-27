@@ -99,9 +99,13 @@ program test_multi_cursor
     call check_text("(foo) bar (foo)", "wrap two selections")
 
     ! --- Tab at a same-line pair ---
+    ! Tab advances to the next tab stop, so each caret inserts however much
+    ! it needs rather than a fixed four: the caret after "a" sits at display
+    ! column 1 and lands on 4, then the second caret -- shifted to column 5 by
+    ! that insert -- lands on 8. Both end up on a stop, which is the point.
     call setup("abcd", [2, 3])
     call key("tab")
-    call check_text("a    b    cd", "tab at same-line pair")
+    call check_text("a   b   cd", "tab at same-line pair")
 
     ! --- Escape collapses to a single cursor ---
     call setup("abcd", [2, 3])

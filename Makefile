@@ -166,6 +166,7 @@ SOURCES = src/version_module.f90 \
           src/fortress/fortress_navigator_module.f90 \
           src/ai/ai_engine_module.f90 \
           src/commands/comment_command_module.f90 \
+          src/commands/indent_policy_module.f90 \
           src/commands/command_handler_module.f90 \
           app/main.f90
 

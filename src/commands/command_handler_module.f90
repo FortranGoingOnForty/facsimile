@@ -214,6 +214,31 @@ contains
         if (.not. allocated(prefix)) prefix = ''
     end function ai_prefix_at
 
+    ! The file being typed into, which since 0.21.0 is a property of the
+    ! active PANE -- two panes in one tab can hold different files, and
+    ! editor%filename tracks the tab. Indent policy is per-file, so asking the
+    ! tab would use a Makefile's rules in the pane beside it, or miss them.
+    function active_pane_filename(editor) result(name)
+        type(editor_state_t), intent(in) :: editor
+        character(len=:), allocatable :: name
+        integer :: t, p
+
+        name = ''
+        t = editor%active_tab_index
+        if (t >= 1 .and. t <= size(editor%tabs)) then
+            p = editor%tabs(t)%active_pane_index
+            if (allocated(editor%tabs(t)%panes)) then
+                if (p >= 1 .and. p <= size(editor%tabs(t)%panes)) then
+                    if (allocated(editor%tabs(t)%panes(p)%filename)) then
+                        name = editor%tabs(t)%panes(p)%filename
+                        if (len_trim(name) > 0) return
+                    end if
+                end if
+            end if
+        end if
+        if (allocated(editor%filename)) name = editor%filename
+    end function active_pane_filename
+
     function ai_active_filename(editor) result(name)
         type(editor_state_t), intent(in) :: editor
         character(len=:), allocatable :: name
@@ -1354,9 +1379,11 @@ contains
                 call tab_multiple_cursors(editor, buffer)
             else
                 if (editor%cursors(editor%active_cursor)%has_selection) then
-                    call indent_selection(editor%cursors(editor%active_cursor), buffer)
+                    call indent_selection(editor%cursors(editor%active_cursor), buffer, &
+                                          active_pane_filename(editor))
                 else
-                    call handle_tab(editor%cursors(editor%active_cursor), buffer)
+                    call handle_tab(editor%cursors(editor%active_cursor), buffer, &
+                                    active_pane_filename(editor))
                 end if
             end if
             call sync_editor_to_pane(editor)
@@ -1366,9 +1393,11 @@ contains
         case('shift-tab')
             if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
             if (editor%cursors(editor%active_cursor)%has_selection) then
-                call dedent_selection(editor%cursors(editor%active_cursor), buffer)
+                call dedent_selection(editor%cursors(editor%active_cursor), buffer, &
+                                      active_pane_filename(editor))
             else
-                call dedent_current_line(editor%cursors(editor%active_cursor), buffer)
+                call dedent_current_line(editor%cursors(editor%active_cursor), buffer, &
+                                         active_pane_filename(editor))
             end if
             ! Sync so the caret moves on screen this frame; the renderer draws
             ! the pane's cursors, not the editor-level ones (on a whitespace-only
@@ -3051,24 +3080,36 @@ contains
         if (width > 0) call buffer_insert_text_at(buffer, line_num, 1, repeat(' ', width))
     end subroutine set_line_indent
 
-    subroutine handle_tab(cursor, buffer)
+    subroutine handle_tab(cursor, buffer, filename)
+        use renderer_module, only: display_offset_of
+        use indent_policy_module, only: indent_text_for
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
-        integer :: i
+        character(len=*), intent(in) :: filename
+        character(len=:), allocatable :: line, pad
+        integer :: i, display_col
 
-        ! Insert 4 spaces
-        do i = 1, 4
-            call buffer_insert_char(buffer, cursor, ' ')
+        ! The tab stop is a DISPLAY column, and cursor%column is a character
+        ! index -- equal only on a line of plain ASCII with no tabs. Convert,
+        ! or Tab lands somewhere other than where the text appears.
+        line = buffer_get_line(buffer, cursor%line)
+        display_col = display_offset_of(line, 1, cursor%column)
+
+        pad = indent_text_for(filename, display_col)
+        do i = 1, len(pad)
+            call buffer_insert_char(buffer, cursor, pad(i:i))
             cursor%column = cursor%column + 1
         end do
         cursor%desired_column = cursor%column
     end subroutine handle_tab
 
-    subroutine indent_selection(cursor, buffer)
+    subroutine indent_selection(cursor, buffer, filename)
+        use indent_policy_module, only: indent_text_for
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
+        character(len=*), intent(in) :: filename
         integer :: start_line, end_line, i
-        character(len=:), allocatable :: line
+        character(len=:), allocatable :: unit
 
         if (.not. cursor%has_selection) return
 
@@ -3076,26 +3117,28 @@ contains
         start_line = min(cursor%selection_start_line, cursor%line)
         end_line = max(cursor%selection_start_line, cursor%line)
 
-        ! Indent each line in the selection
+        ! Every line gets one whole indent level at column 1, so the caret's
+        ! own column plays no part -- ask for the unit as though at column 0.
+        unit = indent_text_for(filename, 0)
+
         do i = start_line, end_line
-            line = buffer_get_line(buffer, i)
-            ! Insert 4 spaces at the beginning of the line
-            call buffer_insert_text_at(buffer, i, 1, "    ")
-            if (allocated(line)) deallocate(line)
+            call buffer_insert_text_at(buffer, i, 1, unit)
         end do
 
         ! Adjust cursor position if needed
         if (cursor%column > 1) then
-            cursor%column = cursor%column + 4
+            cursor%column = cursor%column + len(unit)
         end if
         if (cursor%selection_start_col > 1) then
-            cursor%selection_start_col = cursor%selection_start_col + 4
+            cursor%selection_start_col = cursor%selection_start_col + len(unit)
         end if
     end subroutine indent_selection
 
-    subroutine dedent_selection(cursor, buffer)
+    subroutine dedent_selection(cursor, buffer, filename)
+        use indent_policy_module, only: dedent_width_at
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
+        character(len=*), intent(in) :: filename
         integer :: start_line, end_line, i, spaces_to_remove
         character(len=:), allocatable :: line
 
@@ -3108,16 +3151,8 @@ contains
         ! Dedent each line in the selection
         do i = start_line, end_line
             line = buffer_get_line(buffer, i)
-            spaces_to_remove = 0
-
-            ! Count how many spaces we can remove (max 4)
-            do while (spaces_to_remove < 4 .and. spaces_to_remove < len(line))
-                if (line(spaces_to_remove + 1:spaces_to_remove + 1) == ' ') then
-                    spaces_to_remove = spaces_to_remove + 1
-                else
-                    exit
-                end if
-            end do
+            ! Mirror of indent_selection, hard tabs included
+            spaces_to_remove = dedent_width_at(filename, line)
 
             ! Remove the spaces
             if (spaces_to_remove > 0) then
@@ -3141,23 +3176,20 @@ contains
         end do
     end subroutine dedent_selection
 
-    subroutine dedent_current_line(cursor, buffer)
+    subroutine dedent_current_line(cursor, buffer, filename)
+        use indent_policy_module, only: dedent_width_at
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
+        character(len=*), intent(in) :: filename
         character(len=:), allocatable :: line
         integer :: spaces_to_remove
 
         line = buffer_get_line(buffer, cursor%line)
-        spaces_to_remove = 0
 
-        ! Count how many spaces we can remove (max 4)
-        do while (spaces_to_remove < 4 .and. spaces_to_remove < len(line))
-            if (line(spaces_to_remove + 1:spaces_to_remove + 1) == ' ') then
-                spaces_to_remove = spaces_to_remove + 1
-            else
-                exit
-            end if
-        end do
+        ! Remove exactly what one Tab would have added here, so indent and
+        ! dedent are inverses -- including a hard tab in a makefile, which the
+        ! old space-only scan stepped straight over and left in place.
+        spaces_to_remove = dedent_width_at(filename, line)
 
         ! Remove the spaces
         if (spaces_to_remove > 0) then
@@ -3723,26 +3755,36 @@ contains
     end subroutine paste_text_multiple_cursors
 
     subroutine tab_multiple_cursors(editor, buffer)
+        use indent_policy_module, only: indent_text_for
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
-        integer :: i, ln, sl, sc, el, ec, l0, c0
+        integer :: i, ln, sl, sc, el, ec, l0, c0, w
+        character(len=:), allocatable :: fname
 
+        fname = active_pane_filename(editor)
         call sort_cursors_by_position(editor)
         do i = 1, size(editor%cursors)
             if (editor%cursors(i)%has_selection) then
                 call normalize_selection(editor%cursors(i), sl, sc, el, ec)
-                call indent_selection(editor%cursors(i), buffer)
-                ! Four spaces went in at the start of each selected line.
+                call indent_selection(editor%cursors(i), buffer, fname)
+                ! One indent unit went in at the start of each selected line.
+                ! Its width is no longer always four -- a makefile inserts a
+                ! single tab -- so ask rather than assume, or every other
+                ! cursor on those lines is shifted by the wrong amount.
+                w = len(indent_text_for(fname, 0))
                 ! Insert point col 2 matches indent_selection's own
                 ! convention: a cursor parked at column 1 stays put.
                 do ln = sl, el
-                    call mc_others_inserted(editor, i, ln, 2, ln, 6)
+                    call mc_others_inserted(editor, i, ln, 2, ln, 2 + w)
                 end do
             else
                 l0 = editor%cursors(i)%line
                 c0 = editor%cursors(i)%column
-                call handle_tab(editor%cursors(i), buffer)
-                call mc_others_inserted(editor, i, l0, c0, l0, c0 + 4)
+                call handle_tab(editor%cursors(i), buffer, fname)
+                ! Tab stops mean the width depends on where this cursor was,
+                ! so each cursor can insert a different amount. Measure it.
+                w = editor%cursors(i)%column - c0
+                call mc_others_inserted(editor, i, l0, c0, l0, c0 + w)
             end if
         end do
         call deduplicate_cursors(editor)
