@@ -39,7 +39,9 @@ module command_handler_module
         terminal_panel_handle_mouse, terminal_panel_in_region, &
         terminal_panel_paste, terminal_panel_scroll, &
         get_terminal_panel_height, &
-        terminal_panel_is_alive, terminal_panel_restart
+        terminal_panel_is_alive, terminal_panel_restart, &
+        terminal_panel_is_dragging, terminal_panel_has_selection, &
+        terminal_panel_copy_selection
     use input_handler_module, only: get_paste_text, parse_mouse_event
     use bracket_matching_module, only: find_matching_bracket
     use comment_command_module, only: toggle_comment_lines, comment_syntax_available
@@ -369,11 +371,18 @@ contains
                 ! them here would silently disable panel scrolling.
                 if (index(key_str, 'mouse-scroll-') == 1) ok = .false.
                 if (ok) then
+                    ! A drag that began in the panel keeps its events even
+                    ! once the pointer leaves -- dragging up past the top is
+                    ! how you select the last few lines, and without this the
+                    ! release never arrived and the copy never fired.
                     if (terminal_panel_in_region( &
-                        editor%terminal_panel, mrow)) then
+                        editor%terminal_panel, mrow) .or. &
+                        terminal_panel_is_dragging(editor%terminal_panel)) then
                         call terminal_panel_handle_mouse( &
                             editor%terminal_panel, trim(ev), &
                             btn, mrow, mcol, copied)
+                        if (copied) call set_status_message( &
+                            'Copied terminal selection')
                         return
                     else if (trim(ev) == 'mouse-click') then
                         ! Click in the editor area: hand focus back
@@ -577,6 +586,31 @@ contains
                 ! Send pasted text to the shell as one chunk
                 call terminal_panel_paste(editor%terminal_panel, &
                     get_paste_text())
+                return
+            end if
+            ! Ctrl-C is SIGINT to the shell and must stay that way, so the
+            ! terminal convention of ctrl-shift-c/v is used for the clipboard.
+            ! Without these there was no keyboard route to the terminal's text
+            ! at all -- copy happened only as a side effect of a mouse release.
+            if (trim(key_str) == 'ctrl-shift-c') then
+                block
+                    integer :: n_copied
+                    character(len=16) :: count_buf
+                    call terminal_panel_copy_selection(editor%terminal_panel, &
+                                                       n_copied)
+                    if (n_copied > 0) then
+                        write(count_buf, '(i0)') n_copied
+                        call set_status_message('Copied ' // trim(count_buf) // &
+                                                ' characters from the terminal')
+                    else
+                        call set_status_message('Nothing selected in the terminal')
+                    end if
+                end block
+                return
+            end if
+            if (trim(key_str) == 'ctrl-shift-v') then
+                call terminal_panel_paste(editor%terminal_panel, &
+                                          paste_from_clipboard())
                 return
             end if
             if (index(key_str, 'mouse-scroll-up') == 1) then

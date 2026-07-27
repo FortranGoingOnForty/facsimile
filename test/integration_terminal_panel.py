@@ -89,6 +89,24 @@ class Session:
         self.child.send(data)
         self.drain(w)
 
+    def drag(self, row, col_from, col_to, release_row=None):
+        """SGR press, motion, release. release_row defaults to the drag row;
+        pass a different one to end the drag outside the panel."""
+        self.child.send(f"\x1b[<0;{col_from};{row}M")
+        self.drain(0.3)
+        for c in range(col_from + 1, col_to + 1):
+            self.child.send(f"\x1b[<32;{c};{row}M")
+        self.drain(0.4)
+        rr = row if release_row is None else release_row
+        self.child.send(f"\x1b[<0;{col_to};{rr}m")
+        self.drain(0.9)
+
+    def output_row(self, text):
+        for i, r in enumerate(self.screen.display):
+            if r.strip().startswith(text):
+                return i + 1
+        return 0
+
     def panel_open(self):
         # The panel draws a separator bar labelled TERMINAL whenever visible
         return any("TERMINAL" in r for r in self.screen.display)
@@ -234,6 +252,102 @@ def test_unmapped_chord_does_not_reach_the_editor(binary):
         s.close()
 
 
+# --- Copying text out of the terminal ---------------------------------------
+#
+# The copy fires on mouse release. The router only forwarded mouse events whose
+# row fell inside the panel, so a drag that ended above it -- which is what
+# selecting the last few lines looks like -- never delivered its release. The
+# selection stayed drawn, so it read as "copy is broken" rather than "the
+# release went somewhere else".
+
+def _select_and_paste_back(binary, release_row_delta):
+    """Select terminal text, then paste into the document and return the file."""
+    s = Session(binary)
+    try:
+        s.send(ALT_T, 2.0)
+        s.send("echo SELECTMEPLEASE\r", 1.2)
+        r = s.output_row("SELECTMEPLEASE")
+        if r == 0:
+            return None
+        s.drag(r, 1, 16, release_row=r + release_row_delta)
+        s.send(ALT_T, 0.8)          # close the panel
+        s.send("\x16", 1.0)         # ctrl-v into the document
+        s.send("\x13", 1.0)         # ctrl-s
+        return s.saved_file()
+    finally:
+        s.close()
+
+
+def test_selection_copies_on_release(binary):
+    got = _select_and_paste_back(binary, 0)
+    check(got is not None and "SELECTMEPLEASE" in got,
+          "a terminal selection reaches the clipboard", repr(got))
+
+
+def test_selection_copies_when_the_drag_ends_outside(binary):
+    got = _select_and_paste_back(binary, -12)
+    check(got is not None and "SELECTMEPLEASE" in got,
+          "and still copies when the drag ends above the panel", repr(got))
+
+
+def test_ctrl_shift_c_copies_from_the_keyboard(binary):
+    """Ctrl-C is SIGINT to the shell, so the clipboard uses ctrl-shift-c.
+    Before this there was no keyboard route to the terminal's text at all."""
+    s = Session(binary)
+    try:
+        s.send(ALT_T, 2.0)
+        s.send("echo KEYBOARDCOPY\r", 1.2)
+        r = s.output_row("KEYBOARDCOPY")
+        if r == 0:
+            check(False, "terminal produced output to select")
+            return
+        # press and drag, but do not release: the keyboard does the copying
+        s.child.send(f"\x1b[<0;1;{r}M")
+        s.drain(0.3)
+        for c in range(2, 14):
+            s.child.send(f"\x1b[<32;{c};{r}M")
+        s.drain(0.4)
+        s.send("\x1b[99;6u", 0.9)          # ctrl-shift-c
+        check("Copied" in s.display(),
+              "ctrl-shift-c copies the selection and says how much", s.display())
+    finally:
+        s.close()
+
+
+def test_ctrl_shift_c_with_no_selection_reports_it(binary):
+    s = Session(binary)
+    try:
+        s.send(ALT_T, 2.0)
+        s.send("\x1b[99;6u", 0.9)
+        check("Nothing selected" in s.display(),
+              "ctrl-shift-c with nothing selected says so rather than staying silent",
+              s.display())
+    finally:
+        s.close()
+
+
+def test_wheel_scrolls_and_typing_still_works(binary):
+    s = Session(binary)
+    try:
+        s.send(ALT_T, 2.0)
+        s.send("for i in 1 2 3 4 5 6 7 8 9; do echo LINE$i; done\r", 1.6)
+        prow = 0
+        for i, r in enumerate(s.screen.display):
+            if "TERMINAL" in r or "terminal" in r:
+                prow = i + 1
+                break
+        s.child.send(f"\x1b[<64;10;{prow + 3}M")
+        s.drain(0.7)
+        d = s.display()
+        check("SCROLLBACK" in d or "LINE1" in d,
+              "the wheel over the panel scrolls its scrollback", d)
+        s.send("echo AFTERSCROLL\r", 1.2)
+        check("AFTERSCROLL" in s.display(),
+              "and typing after a scroll still reaches the shell", s.display())
+    finally:
+        s.close()
+
+
 def main():
     binary = find_binary()
     for fn in (test_escape_closes_on_bare_prompt,
@@ -244,7 +358,12 @@ def main():
                test_dead_shell_does_not_leak_keys_into_the_document,
                test_enter_respawns_a_dead_shell,
                test_escape_closes_a_dead_panel,
-               test_unmapped_chord_does_not_reach_the_editor):
+               test_unmapped_chord_does_not_reach_the_editor,
+               test_selection_copies_on_release,
+               test_selection_copies_when_the_drag_ends_outside,
+               test_ctrl_shift_c_copies_from_the_keyboard,
+               test_ctrl_shift_c_with_no_selection_reports_it,
+               test_wheel_scrolls_and_typing_still_works):
         try:
             fn(binary)
         except Exception as exc:            # noqa: BLE001 - report and keep going

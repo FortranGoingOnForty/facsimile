@@ -245,6 +245,9 @@ Most terminal emulators don't pass Ctrl+Shift combinations reliably. That's why 
 - `Alt+O` instead of Ctrl+Shift+O for document symbols
 - `Alt+P` instead of Ctrl+Shift+T for workspace symbols
 - `Alt+R` instead of Ctrl+Shift+R for references
+| `Ctrl+Shift+C` | Copy the terminal selection (Ctrl+C is SIGINT to the shell) |
+| `Ctrl+Shift+V` | Paste the clipboard into the terminal |
+
 
 ### Discovering Commands
 - Use `Ctrl+P` (Command Palette) to see all available commands

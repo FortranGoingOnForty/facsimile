@@ -10,6 +10,8 @@ module terminal_panel_module
     public :: init_terminal_panel, cleanup_terminal_panel
     public :: toggle_terminal_panel, is_terminal_panel_visible
     public :: terminal_panel_is_alive, terminal_panel_restart
+    public :: terminal_panel_is_dragging, terminal_panel_has_selection
+    public :: terminal_panel_copy_selection
     public :: terminal_panel_poll, terminal_panel_render
     public :: terminal_panel_handle_key
     public :: terminal_panel_paste
@@ -223,6 +225,9 @@ module terminal_panel_module
         integer :: prompt_col = -1
         ! Mouse text selection (grid coordinates, 0-based).
         logical :: sel_active = .false.
+        ! A drag that began inside the panel keeps receiving events
+        ! even once the pointer leaves it -- see the router.
+        logical :: sel_dragging = .false.
         integer :: sel_anchor_row = 0
         integer :: sel_anchor_col = 0
         integer :: sel_end_row = 0
@@ -1115,6 +1120,43 @@ contains
 
     ! Handle a mouse event over the terminal panel. srow/scol are
     ! 1-based screen coordinates. Sets focus, tracks selection, and
+
+    !> True while the left button is down on a drag that started in the panel.
+    !>
+    !> The router only forwards mouse events whose row falls inside the panel,
+    !> so a drag that ended above it -- which is what selecting the last few
+    !> lines looks like -- never delivered its release, and the copy that fires
+    !> on release simply never happened. The selection stayed on screen, so it
+    !> looked like copy was broken rather than unreached.
+    function terminal_panel_is_dragging(panel) result(res)
+        type(terminal_panel_t), intent(in) :: panel
+        logical :: res
+        res = panel%visible .and. panel%sel_dragging
+    end function terminal_panel_is_dragging
+
+    function terminal_panel_has_selection(panel) result(res)
+        type(terminal_panel_t), intent(in) :: panel
+        logical :: res
+        res = panel%visible .and. panel%sel_active
+    end function terminal_panel_has_selection
+
+    !> Copy the current selection. Returns how many characters were taken, so
+    !> the caller can say so -- a silent copy is indistinguishable from one
+    !> that did not happen.
+    subroutine terminal_panel_copy_selection(panel, n_copied)
+        use clipboard_module, only: copy_to_clipboard
+        type(terminal_panel_t), intent(inout) :: panel
+        integer, intent(out) :: n_copied
+        character(len=:), allocatable :: sel_text
+
+        n_copied = 0
+        if (.not. panel%sel_active) return
+        call extract_selection(panel, sel_text)
+        if (len(sel_text) == 0) return
+        call copy_to_clipboard(sel_text)
+        n_copied = len(sel_text)
+    end subroutine terminal_panel_copy_selection
+
     ! copies to the clipboard on release. Returns copied=.true. if
     ! text was placed on the clipboard.
     subroutine terminal_panel_handle_mouse(panel, event_type, &
@@ -1145,6 +1187,7 @@ contains
             if (iand(button, 3) == 0) then
                 ! Focus terminal and start a fresh selection anchor
                 panel%focused = .true.
+                panel%sel_dragging = .true.
                 panel%sel_active = .false.
                 panel%sel_anchor_row = gr
                 panel%sel_anchor_col = gc
@@ -1161,6 +1204,7 @@ contains
                 end if
             end if
         case('mouse-release')
+            panel%sel_dragging = .false.
             if (panel%sel_active) then
                 call extract_selection(panel, sel_text)
                 if (len(sel_text) > 0) then
