@@ -36,9 +36,24 @@ jobs:
       - name: Version reports
         run: ./fac --version
 
+      # make writes .mod files into the repo root, and gfortran searches the
+      # working directory before any -I path -- so fpm reads make's modules
+      # instead of its own and dies with "Reading module ... Expected left
+      # parenthesis" when the two disagree. Clear them before fpm runs; the
+      # build above has already served its purpose as the fast-fail check.
+      - name: Remove make's module files before fpm builds
+        run: |
+          make clean
+          test -z "$(ls *.mod 2>/dev/null)" || { echo "stale .mod remain"; exit 1; }
+
       - uses: fortran-lang/setup-fpm@v7
         with:
           fpm-version: 'v0.12.0'
+
+      - name: Compiler versions
+        run: |
+          gfortran --version | head -1
+          fpm --version | head -2
 
       - name: Unit tests (fpm)
         run: fpm test

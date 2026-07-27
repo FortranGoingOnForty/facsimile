@@ -9,7 +9,13 @@ echo "========================================"
 echo "FACSIMILE Test Suite"
 echo "========================================"
 
-# Build the project
+# Build the project.
+#
+# Note: `make` writes .mod files into the repo root and gfortran searches the
+# working directory before any -I path, so fpm reads make's modules rather than
+# its own. That is fine while both use the same compiler and breaks loudly
+# ("Reading module ... Expected left parenthesis") when they do not. If fpm
+# fails that way after a make build, `make clean` first.
 echo "Building FACSIMILE..."
 fpm build --profile debug
 
