@@ -21,13 +21,33 @@ except ImportError:
 class FacsimileTest:
     """Test harness for FACSIMILE editor."""
 
-    def __init__(self, binary_path: str = "./build/gfortran_*/app/fac"):
-        """Initialize test harness."""
-        # Find the actual binary path
+    def __init__(self, binary_path: str = None):
+        """Initialize test harness.
+
+        This suite used to look only under build/gfortran_*/app/, which exists
+        only after an fpm build -- so it failed outright on a tree built with
+        make, the primary/release path, while its twelve sibling suites (which
+        use ./fac) all passed. Accept either, preferring an explicit path.
+        """
         import glob
-        paths = glob.glob(binary_path)
+        here = os.path.dirname(os.path.abspath(__file__))
+        candidates = [binary_path] if binary_path else [
+            os.environ.get("FAC_BINARY"),
+            os.path.join(os.path.dirname(here), "fac"),   # make
+            "./build/gfortran_*/app/fac",                 # fpm
+        ]
+        paths = []
+        for cand in candidates:
+            if not cand:
+                continue
+            paths = glob.glob(cand)
+            if paths:
+                break
         if not paths:
-            raise FileNotFoundError(f"Could not find fac binary at {binary_path}")
+            raise FileNotFoundError(
+                "Could not find a fac binary. Build with `make`, or set "
+                "FAC_BINARY. Looked for: " +
+                ", ".join(c for c in candidates if c))
         self.binary_path = paths[0]
         self.process = None
         self.test_file = None
