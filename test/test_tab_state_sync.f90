@@ -17,7 +17,7 @@ program test_tab_state_sync
 
     ! Tab 1 with a 100-line buffer, cursor parked deep in the file
     call create_tab(editor, 'first.txt')
-    call fill_lines(editor%tabs(1)%buffer, 100)
+    ! The pane owns the text; the tab no longer keeps a shadow copy.
     call fill_lines(editor%tabs(1)%panes(1)%buffer, 100)
     editor%cursors(1)%line = 85
     editor%cursors(1)%column = 8
