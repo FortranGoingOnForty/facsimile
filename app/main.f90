@@ -467,7 +467,8 @@ program facsimile
 
                     ! Copy hex buffer to tab and pane buffers
                     if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, editor%active_tab_index))%buffer, buffer)
+                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, &
+                            editor%active_tab_index))%buffer, buffer)
                         if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
                             size(editor%tabs(editor%active_tab_index)%panes) > 0) then
                             call copy_buffer(editor%tabs(editor%active_tab_index)%panes(1)%buffer, buffer)
@@ -779,7 +780,8 @@ program facsimile
                         end if
 
                         ! Also update tab buffer for backwards compatibility
-                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, editor%active_tab_index))%buffer, buffer)
+                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, &
+                            editor%active_tab_index))%buffer, buffer)
 
                         ! Sync modified flag from buffer to tab
                         editor%tabs(editor%active_tab_index)%modified = buffer%modified

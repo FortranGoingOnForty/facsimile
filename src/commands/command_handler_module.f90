@@ -2,7 +2,8 @@ module command_handler_module
     use iso_fortran_env, only: int32, int64, error_unit
     use iso_c_binding, only: c_int
     use editor_state_module, only: editor_state_t, cursor_t, switch_to_tab_with_buffer, &
-                                   close_tab, create_tab, can_create_tab, save_tab_pane, active_pane_of, close_pane, split_pane_vertical, split_pane_horizontal, &
+                                   close_tab, create_tab, can_create_tab, save_tab_pane, active_pane_of, close_pane, &
+                                       split_pane_vertical, split_pane_horizontal, &
                                    navigate_to_pane_left, navigate_to_pane_right, navigate_to_pane_up, navigate_to_pane_down, &
                                    sync_editor_to_pane, tab_t
     use text_buffer_module
@@ -1684,7 +1685,8 @@ contains
                     if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
                         size(editor%tabs(editor%active_tab_index)%panes) > 0) then
                         call copy_buffer(editor%tabs(editor%active_tab_index)%panes(1)%buffer, buffer)
-                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, editor%active_tab_index))%buffer, buffer)
+                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, &
+                            editor%active_tab_index))%buffer, buffer)
                     end if
 
                     ! Update editor state with the new tab
@@ -2142,7 +2144,13 @@ contains
                                                         call copy_buffer(buffer, &
                                                             editor%tabs(editor%active_tab_index)%panes(pane_idx)%buffer)
                                                         ! Also sync to tab buffer (to keep them consistent)
-                                                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, editor%active_tab_index))%buffer, buffer)
+                                                        block
+                                                            integer :: ap
+                                                            ap = active_pane_of(editor, editor%active_tab_index)
+                                                            call copy_buffer( &
+                                                                editor%tabs(editor%active_tab_index)%panes(ap)%buffer, &
+                                                                buffer)
+                                                        end block
                                                     end if
                                                 end if
 
@@ -2548,7 +2556,8 @@ contains
                 if (key_str(1:1) == '(' .or. key_str(1:1) == ',') then
                     block
                         integer :: sig_server
-                        sig_server = get_lsp_server_for_cap(editor, CAP_COMPLETION)  ! Signature help typically comes from completion provider
+                        sig_server = get_lsp_server_for_cap(editor, &
+                            CAP_COMPLETION)  ! Signature help typically comes from completion provider
                         if (sig_server > 0) then
                             block
                                 integer :: request_id, lsp_line, lsp_char
@@ -7201,14 +7210,16 @@ contains
 
         ! Load file into the new tab's buffer
         if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-            call buffer_load_file(editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, editor%active_tab_index))%buffer, full_path, status)
+            call buffer_load_file(editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, &
+                editor%active_tab_index))%buffer, full_path, status)
 
             ! Handle binary files
             if (status == -2) then
                 ! Binary file detected - prompt user
                 if (binary_file_prompt(full_path)) then
                     ! User wants to view in hex mode
-                    call buffer_load_file_as_hex(editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, editor%active_tab_index))%buffer, full_path, status)
+                    call buffer_load_file_as_hex(editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, &
+                        editor%active_tab_index))%buffer, full_path, status)
                     if (status /= 0) then
                         ! Failed to load hex view - close the tab and return
                         call close_tab(editor, editor%active_tab_index)
@@ -7233,7 +7244,8 @@ contains
                 end if
 
                 ! Copy tab's buffer to main buffer so it's displayed
-                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, editor%active_tab_index))%buffer)
+                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, &
+                    editor%active_tab_index))%buffer)
 
                 ! Update editor state with the new tab's info
                 if (allocated(editor%filename)) deallocate(editor%filename)
@@ -7247,7 +7259,8 @@ contains
                         do srv_i = 1, editor%tabs(editor%active_tab_index)%num_lsp_servers
                             call notify_file_opened(editor%lsp_manager, &
                                 editor%tabs(editor%active_tab_index)%lsp_server_indices(srv_i), &
-                                full_path, buffer_to_string(editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, editor%active_tab_index))%buffer))
+                                full_path, buffer_to_string(editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, &
+                                    editor%active_tab_index))%buffer))
                         end do
                     end block
                 end if
@@ -7719,10 +7732,12 @@ contains
         ! Load diff content into the tab's buffer
         if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
             ! Insert diff content at the beginning of the buffer
-            call buffer_insert(editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, editor%active_tab_index))%buffer, 1, diff_content)
+            call buffer_insert(editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, &
+                editor%active_tab_index))%buffer, 1, diff_content)
 
             ! Copy tab's buffer to main buffer so it's displayed
-            call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, editor%active_tab_index))%buffer)
+            call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, &
+                editor%active_tab_index))%buffer)
 
             ! Update editor state with the new tab's info
             if (allocated(editor%filename)) deallocate(editor%filename)
@@ -7836,7 +7851,8 @@ contains
                                         editor%tabs(editor%active_tab_index)%panes(1)%buffer)
                                 else
                                     call copy_buffer(buffer, &
-                                        editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, editor%active_tab_index))%buffer)
+                                        editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, &
+                                            editor%active_tab_index))%buffer)
                                 end if
                                 if (allocated(editor%tabs(editor%active_tab_index)%filename)) then
                                     if (allocated(editor%filename)) deallocate(editor%filename)
@@ -8087,7 +8103,8 @@ contains
 
             ! Copy new active tab's buffer
             if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
-                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, editor%active_tab_index))%buffer)
+                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, &
+                    editor%active_tab_index))%buffer)
                 editor%modified = editor%tabs(editor%active_tab_index)%modified
                 if (allocated(editor%filename)) deallocate(editor%filename)
                 allocate(character(len=len(editor%tabs(editor%active_tab_index)%filename)) :: editor%filename)
@@ -8924,7 +8941,7 @@ contains
         character(len=:), allocatable :: new_text
         integer :: num_edits, i, tab_idx
         integer :: start_line, start_char, end_line, end_char
-        integer :: changes_applied
+        integer :: changes_applied, cb_pane
 
         if (.false.) print *, unused_request_id  ! Silence unused warning
 
@@ -8944,6 +8961,7 @@ contains
         end if
 
         changes_applied = 0
+        cb_pane = active_pane_of(saved_editor_for_callback, tab_idx)
 
         ! Apply edits in reverse order (to preserve positions)
         do i = num_edits - 1, 0, -1
@@ -8959,16 +8977,16 @@ contains
                 ! LSP range characters are UTF-16 units; apply_single_edit
                 ! takes char columns
                 start_line = int(json_get_number(start_obj, 'line', 0.0d0)) + 1
-                start_char = char_col_from_lsp(saved_editor_for_callback%tabs(tab_idx)%panes(active_pane_of(saved_editor_for_callback, tab_idx))%buffer, &
+                start_char = char_col_from_lsp(saved_editor_for_callback%tabs(tab_idx)%panes(cb_pane)%buffer, &
                     start_line, int(json_get_number(start_obj, 'character', 0.0d0)))
                 end_line = int(json_get_number(end_obj, 'line', 0.0d0)) + 1
-                end_char = char_col_from_lsp(saved_editor_for_callback%tabs(tab_idx)%panes(active_pane_of(saved_editor_for_callback, tab_idx))%buffer, &
+                end_char = char_col_from_lsp(saved_editor_for_callback%tabs(tab_idx)%panes(cb_pane)%buffer, &
                     end_line, int(json_get_number(end_obj, 'character', 0.0d0)))
 
                 new_text = json_get_string(edit_obj, 'newText')
 
                 if (allocated(new_text)) then
-                    call apply_single_edit(saved_editor_for_callback%tabs(tab_idx)%panes(active_pane_of(saved_editor_for_callback, tab_idx))%buffer, &
+                    call apply_single_edit(saved_editor_for_callback%tabs(tab_idx)%panes(cb_pane)%buffer, &
                         start_line, start_char, end_line, end_char, new_text)
                     changes_applied = changes_applied + 1
                     deallocate(new_text)
@@ -9014,7 +9032,8 @@ contains
                     ! Sync modified tab buffer back to the buffer parameter
                     if (editor%active_tab_index > 0 .and. &
                         editor%active_tab_index <= size(editor%tabs)) then
-                        call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, editor%active_tab_index))%buffer)
+                        call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, &
+                            editor%active_tab_index))%buffer)
                     end if
                     ! Re-render screen to show the applied changes
                     call render_screen(buffer, editor)
@@ -9875,7 +9894,8 @@ contains
                             do srv_i = 1, editor%tabs(new_tab_idx)%num_lsp_servers
                                 call notify_file_opened(editor%lsp_manager, &
                                     editor%tabs(new_tab_idx)%lsp_server_indices(srv_i), &
-                                    filepath, buffer_to_string(editor%tabs(new_tab_idx)%panes(active_pane_of(editor, new_tab_idx))%buffer))
+                                    filepath, buffer_to_string(editor%tabs(new_tab_idx)%panes(active_pane_of(editor, &
+                                        new_tab_idx))%buffer))
                             end do
                         end block
                     end if

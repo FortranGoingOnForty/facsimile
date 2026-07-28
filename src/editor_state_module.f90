@@ -44,7 +44,8 @@ module editor_state_module
 
     public :: editor_state_t, cursor_t, pane_t, tab_t
     public :: init_editor, cleanup_editor
-    public :: create_tab, can_create_tab, find_tab_by_id, save_tab_pane, active_pane_of, switch_to_tab, switch_to_tab_with_buffer, get_active_tab_index, close_tab
+    public :: create_tab, can_create_tab, find_tab_by_id, save_tab_pane, active_pane_of, switch_to_tab, &
+        switch_to_tab_with_buffer, get_active_tab_index, close_tab
     public :: split_pane_vertical, split_pane_horizontal, close_pane, get_active_pane_indices
     public :: navigate_to_pane_left, navigate_to_pane_right, navigate_to_pane_up, navigate_to_pane_down
     public :: sync_pane_to_editor, sync_editor_to_pane, switch_to_pane, switch_to_pane_with_buffer

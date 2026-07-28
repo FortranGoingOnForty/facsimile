@@ -650,7 +650,8 @@ contains
                         ! Set orphan flag and load file
                         if (allocated(editor%tabs) .and. tab_idx > 0) then
                             editor%tabs(tab_idx)%is_orphan = is_orphan
-                            call buffer_load_file(editor%tabs(tab_idx)%panes(active_pane_of(editor, tab_idx))%buffer, trim(full_path), load_status)
+                            call buffer_load_file(editor%tabs(tab_idx)%panes(active_pane_of(editor, tab_idx))%buffer, &
+                                trim(full_path), load_status)
 
                             ! Send LSP didOpen notification for restored tabs
                             if (load_status == 0 .and. editor%tabs(tab_idx)%num_lsp_servers > 0) then
@@ -659,7 +660,9 @@ contains
                                     do srv_i = 1, editor%tabs(tab_idx)%num_lsp_servers
                                         call notify_file_opened(editor%lsp_manager, &
                                             editor%tabs(tab_idx)%lsp_server_indices(srv_i), &
-                                            trim(full_path), buffer_to_string(editor%tabs(tab_idx)%panes(active_pane_of(editor, tab_idx))%buffer))
+                                            trim(full_path), &
+                                                buffer_to_string(editor%tabs(tab_idx)%panes(active_pane_of(editor, &
+                                                tab_idx))%buffer))
                                     end do
                                 end block
                             end if
