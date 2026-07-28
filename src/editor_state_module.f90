@@ -44,7 +44,12 @@ module editor_state_module
 
     public :: editor_state_t, cursor_t, pane_t, tab_t
     public :: init_editor, cleanup_editor
-    public :: create_tab, can_create_tab, find_tab_by_id, save_tab_pane, active_pane_of, switch_to_tab, &
+    public :: create_tab, can_create_tab, find_tab_by_id, save_tab_pane, active_pane_of
+    public :: tab_group_t, group_create, group_dissolve, group_find
+    public :: group_member_count, group_members, group_label
+    public :: group_add_member, group_remove_member, active_group_id
+    public :: prune_empty_groups
+    public :: switch_to_tab, &
         switch_to_tab_with_buffer, get_active_tab_index, close_tab
     public :: split_pane_vertical, split_pane_horizontal, close_pane, get_active_pane_indices
     public :: navigate_to_pane_left, navigate_to_pane_right, navigate_to_pane_up, navigate_to_pane_down
@@ -95,6 +100,26 @@ module editor_state_module
     end type pane_t
 
     ! Tab - represents a single file buffer with one or more panes
+    !> A tab group: a sub-workspace holding some of the open tabs.
+    !>
+    !> Deliberately holds NO member list. Closing a tab compacts the tabs
+    !> array and renumbers every index above it, so any stored membership
+    !> would be stale one close later. Membership lives on the tab, and the
+    !> member count is computed on demand -- a cached count is a label that
+    !> can lie about what is in the group.
+    type :: tab_group_t
+        integer(int32) :: id = 0
+        !> Where the group came from. An origin label, not a constraint: a
+        !> file opened from anywhere joins the active group, so a group named
+        !> src/ may legitimately hold docs/readme.md.
+        character(len=:), allocatable :: dir_path
+        character(len=:), allocatable :: label
+        !> Which member to return to when the group is re-entered. A filename
+        !> rather than an index, because indices renumber; non-authoritative,
+        !> and falls back to the lowest ordinal if it dangles.
+        character(len=:), allocatable :: last_active_member
+    end type tab_group_t
+
     type :: tab_t
         character(len=:), allocatable :: filename
         ! No buffer here. A tab used to carry a shadow copy of whichever pane
@@ -116,6 +141,11 @@ module editor_state_module
         ! file. Anything that needs to refer to "this tab" across a close must
         ! hold the id, not the position.
         integer(int32) :: tab_id = 0
+
+        !> 0 means ungrouped. Authoritative: the group does not keep a list.
+        integer(int32) :: group_id = 0
+        !> Position within the group, 1-based, compacted when a member leaves.
+        integer(int32) :: group_ordinal = 0
 
         ! Bumped on every edit to this tab. An async request (LSP completion,
         ! and later a model completion) captures this when it is sent; if the
@@ -152,6 +182,11 @@ module editor_state_module
         ! Monotonic, never reused, so a stale id refers to nothing rather than
         ! to whatever later took that slot.
         integer(int32) :: next_tab_id = 1
+
+        ! Tab groups. init_editor must allocate this to size 0, exactly as it
+        ! does tabs, because every consumer calls size() on it unguarded.
+        type(tab_group_t), allocatable :: groups(:)
+        integer(int32) :: next_group_id = 1
         ! Was 10. A tab group opened from a directory routinely exceeds that,
         ! and the cap is a real limit rather than a suggestion -- create_tab
         ! refuses past it and the caller must cope.
@@ -208,6 +243,8 @@ contains
         ! Initialize tabs array (empty initially)
         allocate(editor%tabs(0))
         editor%active_tab_index = 0
+        ! Same treatment for groups: everything calls size() on it unguarded.
+        allocate(editor%groups(0))
 
         ! Initialize LSP manager
         call init_lsp_manager(editor%lsp_manager)
@@ -388,6 +425,253 @@ contains
         end associate
     end subroutine save_tab_pane
 
+
+    ! ---- tab groups ------------------------------------------------------
+
+    !> Index into groups(:) for `gid`, or 0 if there is no such group.
+    function group_find(editor, gid) result(gidx)
+        type(editor_state_t), intent(in) :: editor
+        integer(int32), intent(in) :: gid
+        integer :: gidx, i
+
+        gidx = 0
+        if (gid <= 0) return
+        do i = 1, size(editor%groups)
+            if (editor%groups(i)%id == gid) then
+                gidx = i
+                return
+            end if
+        end do
+    end function group_find
+
+    !> How many tabs belong to `gid`. Computed, never stored: a cached count
+    !> is a label that can disagree with the tabs actually open.
+    function group_member_count(editor, gid) result(n)
+        type(editor_state_t), intent(in) :: editor
+        integer(int32), intent(in) :: gid
+        integer :: n, i
+
+        n = 0
+        if (gid <= 0) return
+        do i = 1, size(editor%tabs)
+            if (editor%tabs(i)%group_id == gid) n = n + 1
+        end do
+    end function group_member_count
+
+    !> Tab indices belonging to `gid`, in ordinal order.
+    subroutine group_members(editor, gid, idx)
+        type(editor_state_t), intent(in) :: editor
+        integer(int32), intent(in) :: gid
+        integer, allocatable, intent(out) :: idx(:)
+        integer :: i, j, n, best, best_ord
+
+        n = group_member_count(editor, gid)
+        allocate(idx(n))
+        if (n == 0) return
+
+        ! Selection sort by ordinal: n is small and this avoids assuming the
+        ! ordinals are contiguous, which they are not mid-removal.
+        do j = 1, n
+            best = 0
+            best_ord = huge(1)
+            do i = 1, size(editor%tabs)
+                if (editor%tabs(i)%group_id /= gid) cycle
+                if (any(idx(1:j-1) == i)) cycle
+                if (editor%tabs(i)%group_ordinal < best_ord) then
+                    best_ord = editor%tabs(i)%group_ordinal
+                    best = i
+                end if
+            end do
+            if (best == 0) exit
+            idx(j) = best
+        end do
+    end subroutine group_members
+
+    !> The bar label: "src/ (4)". The count comes from the tabs, so it cannot
+    !> drift from what is open.
+    function group_label(editor, gid) result(text)
+        type(editor_state_t), intent(in) :: editor
+        integer(int32), intent(in) :: gid
+        character(len=:), allocatable :: text
+        character(len=16) :: cnt
+        integer :: gidx
+
+        text = ''
+        gidx = group_find(editor, gid)
+        if (gidx == 0) return
+        write(cnt, '(i0)') group_member_count(editor, gid)
+        if (allocated(editor%groups(gidx)%label)) then
+            text = editor%groups(gidx)%label // ' (' // trim(cnt) // ')'
+        else
+            text = '(' // trim(cnt) // ')'
+        end if
+    end function group_label
+
+    !> Create an empty group named after `dir_path`. Returns its id.
+    subroutine group_create(editor, dir_path, name, gid)
+        type(editor_state_t), intent(inout) :: editor
+        character(len=*), intent(in) :: dir_path
+        character(len=*), intent(in) :: name
+        integer(int32), intent(out) :: gid
+        type(tab_group_t), allocatable :: tmp(:)
+        integer :: n, i
+
+        n = size(editor%groups)
+        allocate(tmp(n + 1))
+        do i = 1, n
+            if (allocated(editor%groups(i)%dir_path)) &
+                call move_alloc(editor%groups(i)%dir_path, tmp(i)%dir_path)
+            if (allocated(editor%groups(i)%label)) &
+                call move_alloc(editor%groups(i)%label, tmp(i)%label)
+            if (allocated(editor%groups(i)%last_active_member)) &
+                call move_alloc(editor%groups(i)%last_active_member, &
+                                tmp(i)%last_active_member)
+            tmp(i)%id = editor%groups(i)%id
+        end do
+
+        gid = editor%next_group_id
+        editor%next_group_id = editor%next_group_id + 1
+        tmp(n + 1)%id = gid
+        tmp(n + 1)%dir_path = canonical_path(dir_path)
+        if (len_trim(name) > 0) then
+            tmp(n + 1)%label = trim(name)
+        else
+            tmp(n + 1)%label = basename_of_path(canonical_path(dir_path)) // '/'
+        end if
+        call move_alloc(tmp, editor%groups)
+    end subroutine group_create
+
+    !> Remove a group from the array. Members are expected to be gone already.
+    subroutine group_dissolve(editor, gid)
+        type(editor_state_t), intent(inout) :: editor
+        integer(int32), intent(in) :: gid
+        type(tab_group_t), allocatable :: tmp(:)
+        integer :: n, i, j, gidx
+
+        gidx = group_find(editor, gid)
+        if (gidx == 0) return
+
+        ! Any tab still pointing here becomes ungrouped rather than orphaned
+        ! against an id that no longer resolves.
+        do i = 1, size(editor%tabs)
+            if (editor%tabs(i)%group_id == gid) then
+                editor%tabs(i)%group_id = 0
+                editor%tabs(i)%group_ordinal = 0
+            end if
+        end do
+
+        n = size(editor%groups)
+        allocate(tmp(n - 1))
+        j = 0
+        do i = 1, n
+            if (i == gidx) cycle
+            j = j + 1
+            if (allocated(editor%groups(i)%dir_path)) &
+                call move_alloc(editor%groups(i)%dir_path, tmp(j)%dir_path)
+            if (allocated(editor%groups(i)%label)) &
+                call move_alloc(editor%groups(i)%label, tmp(j)%label)
+            if (allocated(editor%groups(i)%last_active_member)) &
+                call move_alloc(editor%groups(i)%last_active_member, &
+                                tmp(j)%last_active_member)
+            tmp(j)%id = editor%groups(i)%id
+        end do
+        call move_alloc(tmp, editor%groups)
+    end subroutine group_dissolve
+
+    !> Put a tab in a group, at the end of its order.
+    subroutine group_add_member(editor, gid, tab_idx)
+        type(editor_state_t), intent(inout) :: editor
+        integer(int32), intent(in) :: gid
+        integer, intent(in) :: tab_idx
+        integer :: i, max_ord
+
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (group_find(editor, gid) == 0) return
+
+        ! A tab belongs to exactly one group; leaving the old one first keeps
+        ! the ordinals of both consistent.
+        if (editor%tabs(tab_idx)%group_id /= 0) call group_remove_member(editor, tab_idx)
+
+        max_ord = 0
+        do i = 1, size(editor%tabs)
+            if (editor%tabs(i)%group_id == gid) &
+                max_ord = max(max_ord, editor%tabs(i)%group_ordinal)
+        end do
+        editor%tabs(tab_idx)%group_id = gid
+        editor%tabs(tab_idx)%group_ordinal = max_ord + 1
+    end subroutine group_add_member
+
+    !> Take a tab out of its group, compacting the remaining ordinals and
+    !> dissolving the group if that was the last member.
+    subroutine group_remove_member(editor, tab_idx)
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: tab_idx
+        integer(int32) :: gid
+        integer :: i, gone_ord
+
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        gid = editor%tabs(tab_idx)%group_id
+        if (gid == 0) return
+
+        gone_ord = editor%tabs(tab_idx)%group_ordinal
+        editor%tabs(tab_idx)%group_id = 0
+        editor%tabs(tab_idx)%group_ordinal = 0
+
+        do i = 1, size(editor%tabs)
+            if (editor%tabs(i)%group_id == gid .and. &
+                editor%tabs(i)%group_ordinal > gone_ord) then
+                editor%tabs(i)%group_ordinal = editor%tabs(i)%group_ordinal - 1
+            end if
+        end do
+
+        if (group_member_count(editor, gid) == 0) call group_dissolve(editor, gid)
+    end subroutine group_remove_member
+
+    !> The group the active tab belongs to, or 0.
+    !>
+    !> Derived, never stored: active_tab_index is assigned raw in the main loop
+    !> and the workspace restore, so a cached value would drift out of step.
+    function active_group_id(editor) result(gid)
+        type(editor_state_t), intent(in) :: editor
+        integer(int32) :: gid
+
+        gid = 0
+        if (editor%active_tab_index < 1) return
+        if (editor%active_tab_index > size(editor%tabs)) return
+        gid = editor%tabs(editor%active_tab_index)%group_id
+    end function active_group_id
+
+    !> Drop groups that have no members. Restore skips tabs whose file is
+    !> gone, so a group can come back empty.
+    subroutine prune_empty_groups(editor)
+        type(editor_state_t), intent(inout) :: editor
+        integer :: i
+        integer(int32) :: gid
+
+        i = 1
+        do while (i <= size(editor%groups))
+            gid = editor%groups(i)%id
+            if (group_member_count(editor, gid) == 0) then
+                call group_dissolve(editor, gid)
+            else
+                i = i + 1
+            end if
+        end do
+    end subroutine prune_empty_groups
+
+    function basename_of_path(path) result(base)
+        character(len=*), intent(in) :: path
+        character(len=:), allocatable :: base
+        integer :: p
+
+        p = index(path, '/', back=.true.)
+        if (p > 0 .and. p < len(path)) then
+            base = path(p+1:)
+        else
+            base = path
+        end if
+    end function basename_of_path
+
     !> Move a tab from `src` to `dst`, transferring ownership of everything
     !> allocatable rather than copying it.
     !>
@@ -427,10 +711,14 @@ contains
         dst%document_sync%has_pending_changes = src%document_sync%has_pending_changes
         dst%document_sync%server_index        = src%document_sync%server_index
 
-        dst%modified     = src%modified
-        dst%is_orphan    = src%is_orphan
-        dst%doc_revision = src%doc_revision
-        dst%tab_id       = src%tab_id
+        dst%modified      = src%modified
+        dst%is_orphan     = src%is_orphan
+        dst%doc_revision  = src%doc_revision
+        dst%tab_id        = src%tab_id
+        ! Group membership travels with the tab. Omitting these silently
+        ! emptied every group the first time any tab was closed.
+        dst%group_id      = src%group_id
+        dst%group_ordinal = src%group_ordinal
 
         i = 0   ! silence unused-variable warnings on compilers that want it
     end subroutine move_tab
@@ -691,6 +979,11 @@ contains
 
         n_tabs = size(editor%tabs)
         if (tab_index < 1 .or. tab_index > n_tabs) return
+
+        ! Leave the group before the array is rebuilt, so the remaining
+        ! ordinals are compacted against the right membership. A group whose
+        ! last member goes is dissolved here.
+        call group_remove_member(editor, tab_index)
 
         ! Cleanup the tab being closed
         call cleanup_tab(editor%tabs(tab_index))
