@@ -49,6 +49,7 @@ module editor_state_module
     public :: group_member_count, group_members, group_label
     public :: group_add_member, group_remove_member, active_group_id
     public :: prune_empty_groups, find_tab_by_path_public
+    public :: tab_is_resident, hydrate_tab, defer_tab
     public :: switch_to_tab, &
         switch_to_tab_with_buffer, get_active_tab_index, close_tab
     public :: split_pane_vertical, split_pane_horizontal, close_pane, get_active_pane_indices
@@ -415,6 +416,14 @@ contains
         if (.not. allocated(editor%tabs(tab_idx)%panes)) return
         if (pane_idx < 1 .or. pane_idx > size(editor%tabs(tab_idx)%panes)) return
 
+        ! Never write a tab whose file was never read: buffer_save_file
+        ! refuses an unallocated buffer, but refusing here as well means the
+        ! caller gets a distinguishable status rather than an I/O error.
+        if (.not. tab_is_resident(editor, tab_idx)) then
+            status = 1
+            return
+        end if
+
         associate(pane => editor%tabs(tab_idx)%panes(pane_idx))
             ! A pane with no name of its own has never been given a file --
             ! writing it to the tab's name is exactly the confusion this
@@ -427,6 +436,79 @@ contains
 
 
     ! ---- tab groups ------------------------------------------------------
+
+    !> Is this tab's text actually in memory?
+    !>
+    !> Derived from the allocation, never from a flag. A flag can drift; the
+    !> allocation is the thing every save path ultimately asks about, and
+    !> buffer_save_file refuses an unallocated buffer outright. Making the
+    !> question structural means a stale answer cannot exist.
+    function tab_is_resident(editor, tab_idx) result(res)
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(in) :: tab_idx
+        logical :: res
+        integer :: p
+
+        res = .false.
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+        do p = 1, size(editor%tabs(tab_idx)%panes)
+            if (.not. allocated(editor%tabs(tab_idx)%panes(p)%buffer%data)) return
+        end do
+        res = .true.
+    end function tab_is_resident
+
+    !> Read a deferred tab's file in, and tell the language server about it.
+    subroutine hydrate_tab(editor, tab_idx, status)
+        use text_buffer_module, only: buffer_load_file, buffer_to_string, init_buffer
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: tab_idx
+        integer, intent(out) :: status
+        integer :: p, srv
+
+        status = 0
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (tab_is_resident(editor, tab_idx)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+
+        do p = 1, size(editor%tabs(tab_idx)%panes)
+            if (allocated(editor%tabs(tab_idx)%panes(p)%buffer%data)) cycle
+            call init_buffer(editor%tabs(tab_idx)%panes(p)%buffer)
+            if (allocated(editor%tabs(tab_idx)%panes(p)%filename)) then
+                call buffer_load_file(editor%tabs(tab_idx)%panes(p)%buffer, &
+                                      editor%tabs(tab_idx)%panes(p)%filename, status)
+            end if
+        end do
+
+        ! The server was never told about this file, because it was never
+        ! opened. Do it now, with the text we just read.
+        if (status == 0 .and. editor%tabs(tab_idx)%num_lsp_servers > 0) then
+            do srv = 1, editor%tabs(tab_idx)%num_lsp_servers
+                call notify_file_opened(editor%lsp_manager, &
+                    editor%tabs(tab_idx)%lsp_server_indices(srv), &
+                    editor%tabs(tab_idx)%filename, &
+                    buffer_to_string(editor%tabs(tab_idx)%panes(1)%buffer))
+            end do
+        end if
+    end subroutine hydrate_tab
+
+    !> Create a tab whose file is not read until it is first looked at.
+    subroutine defer_tab(editor, tab_idx)
+        use text_buffer_module, only: cleanup_buffer
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: tab_idx
+        integer :: p
+
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+        do p = 1, size(editor%tabs(tab_idx)%panes)
+            call cleanup_buffer(editor%tabs(tab_idx)%panes(p)%buffer)
+        end do
+        ! No cached flag: tab_is_resident asks the allocation, so there is
+        ! nothing here that could disagree with reality.
+        ! A deferred tab has been read from nowhere, so it cannot be modified.
+        editor%tabs(tab_idx)%modified = .false.
+    end subroutine defer_tab
 
     !> Index of the tab holding `path`, or 0. Paths are canonicalised where
     !> they are stored, so this is a plain comparison.
@@ -928,8 +1010,15 @@ contains
 
         if (tab_index < 1 .or. tab_index > size(editor%tabs)) return
 
-        ! Save current buffer to current tab's active pane (if any)
-        if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
+        ! Save current buffer to current tab's active pane (if any).
+        !
+        ! Never into a tab whose file was never read: the working buffer does
+        ! not belong to it, and copying anything in would ALLOCATE its buffer
+        ! and so make it look resident -- after which the real file is never
+        ! read and the fabricated content is what gets saved.
+        if (editor%active_tab_index > 0 .and. &
+            editor%active_tab_index <= size(editor%tabs) .and. &
+            tab_is_resident(editor, int(editor%active_tab_index))) then
             ! Save to active pane of current tab
             pane_idx = editor%tabs(editor%active_tab_index)%active_pane_index
             if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
@@ -956,6 +1045,13 @@ contains
         editor%active_tab_index = tab_index
 
         ! Load new tab's active pane buffer
+        ! Read the file now if it was deferred. Everything below this point
+        ! assumes the pane holds text.
+        block
+            integer :: hydrate_status
+            call hydrate_tab(editor, tab_index, hydrate_status)
+        end block
+
         pane_idx = editor%tabs(tab_index)%active_pane_index
         if (allocated(editor%tabs(tab_index)%panes) .and. &
             pane_idx > 0 .and. pane_idx <= size(editor%tabs(tab_index)%panes)) then
@@ -1745,6 +1841,10 @@ contains
 
         ! Loop through all tabs
         do tab_idx = 1, size(editor%tabs)
+            ! A deferred tab holds no text to update, and marking it modified
+            ! would make a save path believe it had unsaved changes -- which,
+            ! for a buffer that was never read, means writing an empty file.
+            if (.not. tab_is_resident(editor, tab_idx)) cycle
             ! Update tab's buffer if it matches
             if (allocated(editor%tabs(tab_idx)%filename)) then
                 if (trim(editor%tabs(tab_idx)%filename) == normalized_filename) then

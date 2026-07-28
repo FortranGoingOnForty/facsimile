@@ -7972,7 +7972,7 @@ contains
     !> rather than being duplicated.
     subroutine finish_group_creation(editor, buffer)
         use editor_state_module, only: group_create, group_add_member, &
-                                       find_tab_by_path_public
+                                       find_tab_by_path_public, defer_tab
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         integer(int32) :: gid
@@ -8001,6 +8001,21 @@ contains
                 call group_add_member(editor, gid, tab_idx)
                 if (first_tab == 0) first_tab = tab_idx
             end if
+        end do
+
+        ! Defer every member except the one we are about to land on. A group
+        ! of forty files then costs one file read rather than forty; the rest
+        ! are read the first time they are looked at.
+        !
+        ! Safe because residency is structural: save_tab_pane refuses a tab
+        ! whose buffer was never allocated, sync_buffer_to_all_instances skips
+        ! it so it can never be marked modified, and switch_to_tab_with_buffer
+        ! hydrates before anything reads the text.
+        do i = 1, size(editor%tabs)
+            if (editor%tabs(i)%group_id /= gid) cycle
+            if (i == first_tab) cycle
+            if (editor%tabs(i)%modified) cycle       ! never discard real edits
+            call defer_tab(editor, i)
         end do
 
         call group_picker_hide()
