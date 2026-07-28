@@ -34,14 +34,26 @@ BACKSPACE = "\x7f"
 failures = []
 
 
-def check(ok, name, screen=None):
+def check(ok, name, detail=None):
+    """Report a check. `detail` may be a pyte Screen or any printable value.
+
+    It used to require a Screen and call .display on it, so passing a string
+    raised AttributeError -- but only when the check FAILED, since the detail
+    is untouched on success. That turned a legible assertion failure into an
+    exception, and it hid in CI while every local run was green."""
     print(f"{'ok  ' if ok else 'FAIL'} {name}")
     if not ok:
         failures.append(name)
-        if screen is not None:
-            for r in screen.display[-12:]:
-                if r.strip():
-                    print("        " + r.rstrip()[:90])
+        if detail is None:
+            return
+        lines = getattr(detail, "display", None)
+        if lines is None:
+            lines = str(detail).split("\n")
+        else:
+            lines = list(lines)[-12:]
+        for r in lines[:12]:
+            if r.strip():
+                print("        " + r.rstrip()[:90])
 
 
 def find_binary():
@@ -355,24 +367,35 @@ def test_wheel_scrolls_and_typing_still_works(binary):
 # shell printed therefore came out blank: Nerd Font icons from an ls alias, box
 # drawing, accented filenames, CJK. Cells now hold codepoints.
 
-UNICODE_CMD = ("printf '\\uE5FF ICON \\u2502 caf\\u00e9 \\u4f60\\u597d END\\n'\r")
+# The text under test, as real characters. Written to a file from Python and
+# cat'd, rather than built with `printf '\uXXXX'` -- Ubuntu's /bin/sh is dash
+# and the escape is not portable, which made this pass locally and fail in CI.
+UNICODE_TEXT = "\ue5ff ICON \u2502 caf\u00e9 \u4f60\u597d END"
+
+
+def write_unicode_file(s):
+    path = os.path.join(s.home, "uni.txt")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(UNICODE_TEXT + "\n")
+    return path
 
 
 def test_non_ascii_renders(binary):
     s = Session(binary)
     try:
+        path = write_unicode_file(s)
         s.send(ALT_T, 2.0)
-        s.send(UNICODE_CMD, 1.5)
+        s.send(f"cat {path}\r", 1.5)
         row = ""
         for r in s.screen.display:
             if "ICON" in r and "printf" not in r:
                 row = r.rstrip()
                 break
-        check("\ue5ff" in row, "a Nerd Font glyph renders instead of a blank", repr(row))
-        check("\u2502" in row, "box drawing renders", repr(row))
-        check("caf\u00e9" in row, "accented latin renders", repr(row))
-        check("\u4f60\u597d" in row, "double-width CJK renders", repr(row))
-        check("END" in row, "text after the wide characters is not lost", repr(row))
+        check("\ue5ff" in row, "a Nerd Font glyph renders instead of a blank", s.screen)
+        check("\u2502" in row, "box drawing renders", s.screen)
+        check("caf\u00e9" in row, "accented latin renders", s.screen)
+        check("\u4f60\u597d" in row, "double-width CJK renders", s.screen)
+        check("END" in row, "text after the wide characters is not lost", s.screen)
     finally:
         s.close()
 
@@ -382,19 +405,20 @@ def test_non_ascii_copies_as_bytes(binary):
     the trailing half of a double-width one as nothing."""
     s = Session(binary)
     try:
+        path = write_unicode_file(s)
         s.send(ALT_T, 2.0)
-        s.send(UNICODE_CMD, 1.5)
+        s.send(f"cat {path}\r", 1.5)
         r = s.output_row("\ue5ff")
         if r == 0:
-            check(False, "found the unicode output row", s.display())
+            check(False, "found the unicode output row", s.screen)
             return
         s.drag(r, 1, 30)
         s.send(ALT_T, 0.8)
         s.send("\x16", 1.0)
         s.send("\x13", 1.0)
         got = s.saved_file()
-        check("\ue5ff" in got, "the icon survives a copy", repr(got))
-        check("\u4f60\u597d" in got, "and so does the CJK pair", repr(got))
+        check("\ue5ff" in got, "the icon survives a copy", s.screen)
+        check("\u4f60\u597d" in got, "and so does the CJK pair", s.screen)
     finally:
         s.close()
 
