@@ -41,6 +41,8 @@ program facsimile
     use input_handler_module, only: get_key_input
     use editor_state_module
     use editor_state_module, only: save_tab_pane
+    use renderer_module, only: tab_group_preview_visible, set_group_preview_enabled
+    use settings_module, only: settings_get_logical
     use text_buffer_module
     use renderer_module
     use ai_engine_module, only: ai_tick, ai_configure
@@ -311,6 +313,12 @@ program facsimile
     ! Read AI settings once at startup. Opt-in: with ai.enabled false (the
     ! default) this resolves nothing, connects to nothing, and the tick above
     ! returns immediately.
+    ! Motion tracking for the tab-group preview is a standing cost once any
+    ! group exists -- an event per pixel of pointer travel for the session --
+    ! so it is switchable for slow links. Turning it off loses only the
+    ! preview; the pinned member row still works.
+    call set_group_preview_enabled( &
+        settings_get_logical('tabs.group_hover_preview', .true.))
     call ai_configure(editor%ai)
     running = .true.
 
@@ -1415,6 +1423,11 @@ contains
         ! Anything drawn over the document
         if (is_completion_visible(editor%completion_popup)) return
         if (is_context_menu_visible()) return
+        ! The preview covers a document row and its click regions are
+        ! re-registered per frame. The fast path repaints neither, so it would
+        ! punch a hole through the overlay and leave the region table
+        ! describing something no longer drawn.
+        if (tab_group_preview_visible()) return
         if (is_hover_visible(editor%hover_tooltip)) return
         if (is_terminal_panel_visible(editor%terminal_panel)) return
         if (is_diagnostics_panel_visible(editor%diagnostics_panel)) return

@@ -226,13 +226,112 @@ def test_the_count_follows_a_close(binary):
         s.close()
 
 
+def group_some_and_leave(s):
+    """Group the first four files and leave file05 outside, then sit on it.
+
+    A preview only makes sense for a group you are NOT in -- inside one, the
+    member row is pinned instead.
+    """
+    for n in s.names[1:4]:
+        if not s.in_tree():
+            s.send("\x02", 0.8)
+        if not s.in_tree():
+            return False
+        for _ in range(2 * N_FILES + 8):
+            sel = s.tree_selection()
+            if sel and sel.split()[0] == n:
+                break
+            s.send("\x1b[B", 0.12)
+        s.send("\r", 0.7)
+    if s.in_tree():
+        s.send("\x02", 0.7)
+    s.palette("Group All Tabs")
+    # open the last file: it lands outside the group
+    if not s.in_tree():
+        s.send("\x02", 0.8)
+    for _ in range(2 * N_FILES + 8):
+        sel = s.tree_selection()
+        if sel and sel.split()[0] == s.names[-1]:
+            break
+        s.send("\x1b[B", 0.12)
+    s.send("\r", 0.8)
+    if s.in_tree():
+        s.send("\x02", 0.7)
+    return "(4)" in s.row(1)
+
+
+def motion(s, row, col, w=0.9):
+    """Bare pointer motion: mode 1003 reports it as button 35 (32 + no button)."""
+    s.child.send(f"\x1b[<35;{col};{row}M")
+    s.drain(w)
+
+
+def test_hover_previews_without_reflowing(binary):
+    """The whole point of an overlay: the document must not shift as the
+    pointer crosses the bar."""
+    s = Session(binary)
+    try:
+        if not group_some_and_leave(s):
+            print("SKIP: could not build a group with a tab outside it")
+            return
+        before_row3 = s.gutter_line(3)
+        check(s.gutter_line(2) is not None,
+              "outside the group, row 2 is document text", s.row(2))
+
+        motion(s, 1, 3)                       # over the group entry
+        check(s.names[0] in s.row(2),
+              "hovering a group previews its members on row 2", s.row(2))
+        check(s.gutter_line(3) == before_row3,
+              "and the document does NOT move",
+              f"row3 was line {before_row3}, now {s.gutter_line(3)}")
+    finally:
+        s.close()
+
+
+def test_the_preview_clears(binary):
+    s = Session(binary)
+    try:
+        if not group_some_and_leave(s):
+            print("SKIP: could not build a group with a tab outside it")
+            return
+        original = s.row(2)
+        motion(s, 1, 3)
+        check(s.row(2) != original, "the preview appeared", s.row(2))
+
+        motion(s, 12, 40)                     # pointer off the bar
+        check(s.gutter_line(2) is not None,
+              "moving off the bar restores the document row", s.row(2))
+    finally:
+        s.close()
+
+
+def test_a_keystroke_dismisses_the_preview(binary):
+    """The pointer can leave the terminal without a final motion event, which
+    would otherwise strand the overlay."""
+    s = Session(binary)
+    try:
+        if not group_some_and_leave(s):
+            print("SKIP: could not build a group with a tab outside it")
+            return
+        motion(s, 1, 3)
+        check(s.names[0] in s.row(2), "the preview is up", s.row(2))
+        s.send("\x1b[B", 0.8)                 # any key
+        check(s.gutter_line(2) is not None,
+              "a keystroke clears it", s.row(2))
+    finally:
+        s.close()
+
+
 def main():
     binary = find_binary()
     for fn in (test_row_one_collapses_the_group,
                test_row_two_lists_the_members,
                test_the_document_reflows_down,
                test_the_caret_stays_on_a_drawn_line,
-               test_the_count_follows_a_close):
+               test_the_count_follows_a_close,
+               test_hover_previews_without_reflowing,
+               test_the_preview_clears,
+               test_a_keystroke_dismisses_the_preview):
         try:
             fn(binary)
         except Exception as exc:            # noqa: BLE001

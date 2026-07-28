@@ -4,9 +4,11 @@ module renderer_module
     use text_buffer_module
     use utf8_module
     use editor_state_module, only: editor_state_t, cursor_t
-    use editor_state_module, only: active_pane_of, active_group_id, group_label, group_members, group_member_count
+    use editor_state_module, only: active_pane_of, active_group_id, group_label, &
+                                   group_members, group_member_count, group_find
     use bracket_matching_module
     use clickable_region_module, only: regions_begin_frame, region_add, REGION_TAB, &
+                                       region_at, clickable_region_t, &
                                        REGION_TAB_SCROLL, &
                                        REGION_FUSS_TOGGLE
     use context_menu_module, only: render_context_menu, is_context_menu_visible
@@ -52,7 +54,8 @@ module renderer_module
     public :: display_offset_of, char_col_at_offset
     public :: text_area_height, tab_bar_height, first_content_row
     public :: strip_entry_t, strip_span_t, strip_layout, STRIP_MAX_ENTRIES
-    public :: nudge_tab_scroll  ! rows the document gets; page size must match
+    public :: nudge_tab_scroll, tab_group_hover, tab_group_clear_hover
+    public :: tab_group_preview_visible, set_group_preview_enabled  ! rows the document gets; page size must match
 
     ! Configuration
     logical :: show_line_numbers = .true.
@@ -128,6 +131,14 @@ module renderer_module
     ! Kept across frames so a click on a chevron persists.
     integer :: g_tab_scroll = 1
     integer :: g_group_scroll = 1
+    ! The group under the pointer, 0 for none, and the column window the tab
+    ! bar was last drawn in -- with the tree open the bar does not start at
+    ! column 1, and the preview must inherit that rather than draw over the
+    ! tree.
+    integer(int32) :: g_hover_group = 0
+    integer :: g_tabbar_col0 = 1
+    integer :: g_tabbar_width = 80
+    logical :: g_group_preview_enabled = .true.
 
     type :: strip_entry_t
         character(len=192) :: label = ''
@@ -315,7 +326,7 @@ contains
                     call render_completion_popup(editor%completion_popup)
                     call render_cursor_for_panes(editor)
                 end if
-                call render_menu_overlay()
+                call render_menu_overlay(editor)
                 return  ! Exit after rendering panes
             end if
         end if
@@ -424,7 +435,7 @@ contains
                 call render_cursor(editor, buffer)
             end if
         end if
-        call render_menu_overlay()
+        call render_menu_overlay(editor)
     end subroutine render_screen
 
     ! Draw the context menu, if any, as the last thing in a frame.
@@ -567,7 +578,10 @@ contains
         if (allocated(line_content)) deallocate(line_content)
     end subroutine update_bracket_match
 
-    subroutine render_menu_overlay()
+    subroutine render_menu_overlay(editor)
+        type(editor_state_t), intent(in) :: editor
+        logical :: want_motion
+
         ! Any-motion reporting is switched here rather than in the menu
         ! module, for two reasons. The frame loop converges on the right state
         ! whatever route opened or closed the menu, so there is one place
@@ -576,21 +590,112 @@ contains
         ! they are run from -- an earlier version left mode 1003 on after
         ! `fpm test`, which makes a shell spew escape bytes on every mouse
         ! movement.
-        if (.not. is_context_menu_visible()) then
-            if (g_motion_tracking) then
-                call terminal_set_motion_tracking(.false.)
-                g_motion_tracking = .false.
-            end if
-            return
+        !
+        ! Two surfaces want motion now. They are combined into ONE demand here
+        ! rather than each toggling the mode, so there is still exactly one
+        ! owner and one flag; two owners would let whichever closed last turn
+        ! the mode off underneath the other.
+        !
+        ! The group preview cannot ask for motion only while hovering -- you
+        ! need the events to discover the pointer is over the bar. So the
+        ! demand is standing: any group existing is enough. That is a real
+        ! cost over a slow link, which is why it is behind a setting.
+        want_motion = is_context_menu_visible() .or. tab_group_wants_motion(editor)
+
+        if (want_motion .neqv. g_motion_tracking) then
+            call terminal_set_motion_tracking(want_motion)
+            g_motion_tracking = want_motion
         end if
 
-        if (.not. g_motion_tracking) then
-            call terminal_set_motion_tracking(.true.)
-            g_motion_tracking = .true.
+        ! Drawn before the context menu so a menu still sits on top.
+        call render_group_preview(editor)
+
+        if (is_context_menu_visible()) then
+            call render_context_menu()
+            call terminal_hide_cursor()
         end if
-        call render_context_menu()
-        call terminal_hide_cursor()
+
+        ! This runs last in every frame, and render_screen's panes branch
+        ! returns straight after it without flushing -- so anything drawn
+        ! above would sit in the write buffer until some later frame happened
+        ! to flush it. Which, for a preview that appears and disappears with
+        ! the pointer, means never.
+        call terminal_flush()
     end subroutine render_menu_overlay
+
+    integer function group_find_public(editor, gid)
+        type(editor_state_t), intent(in) :: editor
+        integer(int32), intent(in) :: gid
+        group_find_public = group_find(editor, gid)
+    end function group_find_public
+
+    subroutine set_group_preview_enabled(on)
+        logical, intent(in) :: on
+        g_group_preview_enabled = on
+    end subroutine set_group_preview_enabled
+
+    !> Does anything want any-motion reporting for the tab bar?
+    function tab_group_wants_motion(editor) result(want)
+        type(editor_state_t), intent(in) :: editor
+        logical :: want
+
+        want = g_group_preview_enabled .and. size(editor%groups) > 0
+    end function tab_group_wants_motion
+
+    !> Note the group under the pointer. True only when it CHANGED, which is
+    !> the caller's cue to repaint -- the same contract context_menu_hover
+    !> uses, and the reason moving the mouse does not cost a frame per pixel.
+    function tab_group_hover(editor, row, col) result(moved)
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(in) :: row, col
+        logical :: moved
+        type(clickable_region_t) :: hit
+        integer(int32) :: found
+
+        found = 0
+        if (row == 1) then
+            hit = region_at(row, col)
+            ! Row 1 stores a group as a negative payload.
+            if (hit%kind == REGION_TAB .and. hit%payload < 0) &
+                found = int(-hit%payload, int32)
+        end if
+
+        ! Resolving through the region table rather than re-deriving the
+        ! layout is the point of having the table: multibyte labels come out
+        ! right for free.
+        moved = (found /= g_hover_group)
+        if (moved) g_group_scroll = 1     ! a preview always starts at its head
+        g_hover_group = found
+    end function tab_group_hover
+
+    !> Forget the hovered group. True if that changed anything.
+    function tab_group_clear_hover() result(moved)
+        logical :: moved
+
+        moved = (g_hover_group /= 0)
+        g_hover_group = 0
+    end function tab_group_clear_hover
+
+    logical function tab_group_preview_visible()
+        tab_group_preview_visible = (g_hover_group /= 0)
+    end function tab_group_preview_visible
+
+    !> Draw the hovered group's members over the first document row.
+    !>
+    !> Over, not above: reflowing on hover would shift the text every time the
+    !> pointer crossed the bar. Once you are actually inside a group the row is
+    !> pinned instead and the document does move down, which is stable because
+    !> it only happens when you enter.
+    subroutine render_group_preview(editor)
+        type(editor_state_t), intent(in) :: editor
+
+        if (g_hover_group == 0) return
+        if (group_find_public(editor, g_hover_group) == 0) return
+        if (tab_bar_height(editor) >= 2) return
+
+        call render_group_row(editor, g_hover_group, 2, &
+                              g_tabbar_col0, g_tabbar_width)
+    end subroutine render_group_preview
 
 
     !> Put the tokenizer's comment state where it belongs for `line_num`.
@@ -1656,7 +1761,7 @@ contains
             end if
             call show_caret_unless_selecting(editor)
         end if
-        call render_menu_overlay()
+        call render_menu_overlay(editor)
     end subroutine render_screen_with_tree
 
     subroutine render_vertical_separator(col, start_row, end_row)
@@ -3166,6 +3271,12 @@ contains
         call strip_layout(entries, n_entries, max_width, active_entry, &
                           g_tab_scroll, spans, n_spans, more_left, more_right)
 
+        ! Remember where the bar was drawn: with the tree open it does not
+        ! start at column 1, and the hover preview must inherit that window
+        ! rather than paint over the tree.
+        g_tabbar_col0 = start_column
+        g_tabbar_width = max_width
+
         call terminal_move_cursor(1, start_column)
         call terminal_write(repeat(' ', max_width))
 
@@ -3438,7 +3549,7 @@ contains
         call render_cursor_for_lsp_panel(editor, buffer, 1, editor_width)
 
         call terminal_show_cursor()
-        call render_menu_overlay()
+        call render_menu_overlay(editor)
     end subroutine render_screen_with_lsp_panel
 
     ! Helper to render editor area when LSP panel is on right

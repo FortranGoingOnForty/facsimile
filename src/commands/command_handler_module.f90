@@ -21,7 +21,8 @@ module command_handler_module
                                    context_menu_hover, context_menu_select
     use platform_module, only: platform_sleep_ms
     use renderer_module, only: update_viewport, render_screen, render_screen_with_tree, tree_state, &
-                               first_content_row, nudge_tab_scroll, &
+                               first_content_row, nudge_tab_scroll, tab_group_hover, &
+                               tab_group_clear_hover, &
                                text_area_height, &
                                fuss_search_buffer, fuss_search_len, fuss_search_last_time, &
                                fuss_fuzzy_jump, fuss_reset_search, get_time_ms, &
@@ -584,6 +585,32 @@ contains
                 call context_menu_hide()
                 return
             end if
+        end if
+
+        ! Bare pointer motion over the tab bar: preview a group without
+        ! entering it. Placed after the context menu's own motion branch, so an
+        ! open menu keeps owning motion, and before the drag handler, which
+        ! drops non-left buttons.
+        if (index(key_str, 'mouse-drag:') == 1) then
+            block
+                character(len=16) :: mev
+                integer :: mb, mr, mc
+                logical :: mok
+                call parse_mouse_event(trim(key_str), mev, mb, mr, mc, mok)
+                if (mok) then
+                    if (iand(mb, 3) == 3) then      ! motion with no button held
+                        if (tab_group_hover(editor, mr, mc)) g_lsp_ui_changed = .true.
+                        return
+                    end if
+                end if
+            end block
+        end if
+
+        ! Any other key clears the preview. The pointer can leave the terminal
+        ! entirely without a final motion event, which would otherwise strand
+        ! the overlay on screen.
+        if (index(key_str, 'mouse-') /= 1) then
+            if (tab_group_clear_hover()) g_lsp_ui_changed = .true.
         end if
 
         ! Route keys to integrated terminal when focused (highest priority)
