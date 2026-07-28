@@ -2,8 +2,11 @@
 ! Handles workspace detection, creation, loading, and saving
 
 module workspace_module
+    use iso_fortran_env, only: int32
     use iso_c_binding, only: c_int
     use editor_state_module, only: editor_state_t, create_tab, sync_pane_to_editor
+    use editor_state_module, only: group_create, group_find, group_add_member, &
+                                   prune_empty_groups
     use editor_state_module, only: active_pane_of
     use text_buffer_module, only: buffer_t, init_buffer, buffer_to_string
     use lsp_server_manager_module, only: notify_file_opened
@@ -276,9 +279,43 @@ contains
 
         ! Write JSON header
         write(unit, '(A)') '{'
-        write(unit, '(A)') '  "version": "1.0",'
+        ! 1.1 adds tab groups. Purely additive: a 1.0 file has no
+        ! "tab_groups" key and no "group" on its tabs, so it restores as it
+        ! always did with no migration code.
+        write(unit, '(A)') '  "version": "1.1",'
         write(unit, '(A)') '  "workspace_path": "' // trim(dir_path) // '",'
         write(unit, '(A)') '  "last_opened": "' // trim(timestamp) // '",'
+
+        ! Groups come FIRST. The restore parser creates a tab when it reaches
+        ! the close of that tab's first pane, so a group referenced by a tab
+        ! has to already exist by then.
+        write(unit, '(A)') '  "tab_groups": ['
+        if (allocated(editor%groups)) then
+            do i = 1, size(editor%groups)
+                write(unit, '(A)') '    {'
+                write(unit, '(A,I0,A)') '      "id": ', editor%groups(i)%id, ','
+                write(unit, '(A)', advance='no') '      "label": "'
+                if (allocated(editor%groups(i)%label)) &
+                    write(unit, '(A)', advance='no') trim(editor%groups(i)%label)
+                write(unit, '(A)') '",'
+                write(unit, '(A)', advance='no') '      "dir_path": "'
+                if (allocated(editor%groups(i)%dir_path)) &
+                    write(unit, '(A)', advance='no') trim(editor%groups(i)%dir_path)
+                write(unit, '(A)') '",'
+                write(unit, '(A)', advance='no') '      "active_member": "'
+                if (allocated(editor%groups(i)%last_active_member)) &
+                    write(unit, '(A)', advance='no') &
+                        trim(editor%groups(i)%last_active_member)
+                write(unit, '(A)') '"'
+                if (i < size(editor%groups)) then
+                    write(unit, '(A)') '    },'
+                else
+                    write(unit, '(A)') '    }'
+                end if
+            end do
+        end if
+        write(unit, '(A)') '  ],'
+
         write(unit, '(A)') '  "tabs": ['
 
         ! Write tabs (deduplicate by filename)
@@ -346,6 +383,14 @@ contains
                 else
                     write(unit, '(A)') '      "modified": false, '
                 end if
+
+                ! Membership must be written BEFORE "panes": the parser
+                ! creates the tab at the close of its first pane, so anything
+                ! after that array arrives too late to apply.
+                write(unit, '(A,I0,A)') '      "group": ', &
+                    editor%tabs(i)%group_id, ','
+                write(unit, '(A,I0,A)') '      "group_ordinal": ', &
+                    editor%tabs(i)%group_ordinal, ','
 
                 ! Write panes array
                 write(unit, '(A)') '      "panes": ['
@@ -452,6 +497,62 @@ contains
     !> Restore editor state from workspace JSON file
     !> Note: For Phase 3, this is a simplified version that only restores the first pane
     !> Full multi-pane restoration will be added when needed
+
+    !> Put a restored tab back in its group.
+    !>
+    !> The file records the id the group had when it was saved; group_create
+    !> hands out fresh ids on restore, so the two are matched through the map
+    !> built while the groups array was parsed.
+    subroutine attach_group(editor, tab_idx, file_gid, from_file, now, n_map)
+        use editor_state_module, only: group_add_member
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: tab_idx, n_map
+        integer(int32), intent(in) :: file_gid, from_file(:), now(:)
+        integer :: k
+
+        if (file_gid <= 0) return
+        do k = 1, n_map
+            if (from_file(k) == file_gid) then
+                call group_add_member(editor, now(k), tab_idx)
+                return
+            end if
+        end do
+    end subroutine attach_group
+
+    !> The integer value of a "key": N line.
+    integer function json_int(line)
+        character(len=*), intent(in) :: line
+        integer :: c, e, ios
+
+        json_int = 0
+        c = index(line, ':')
+        if (c <= 0) return
+        e = index(line(c+1:), ',')
+        if (e > 0) then
+            read(line(c+1:c+e-1), *, iostat=ios) json_int
+        else
+            read(line(c+1:), *, iostat=ios) json_int
+        end if
+        if (ios /= 0) json_int = 0
+    end function json_int
+
+    !> The string value of a "key": "..." line.
+    function json_str(line) result(text)
+        character(len=*), intent(in) :: line
+        character(len=:), allocatable :: text
+        integer :: c, q1, q2
+
+        text = ''
+        c = index(line, ':')
+        if (c <= 0) return
+        q1 = index(line(c+1:), '"')
+        if (q1 <= 0) return
+        q1 = c + q1
+        q2 = index(line(q1+1:), '"')
+        if (q2 <= 0) return
+        text = line(q1+1:q1+q2-1)
+    end function json_str
+
     subroutine workspace_restore_state(editor, dir_path, success)
         use text_buffer_module, only: buffer_load_file
         use terminal_io_module, only: terminal_write
@@ -465,6 +566,11 @@ contains
         logical :: in_tabs_array, is_orphan, reading_tab, in_panes_array, reading_pane
         logical :: file_exists
         logical :: tab_ok
+        logical :: in_groups_array
+        integer(int32) :: g_id, new_gid, tab_group_file_id, tab_group_ord
+        character(len=256) :: g_label, g_dir, g_member
+        integer(int32) :: gid_from_file(128), gid_now(128)
+        integer :: n_gid_map
         integer :: load_status, tab_idx, pane_count, file_unit
         character(len=20) :: value_str
 
@@ -486,6 +592,11 @@ contains
 
         ! Parse JSON line by line (simple parser for our specific format)
         in_tabs_array = .false.
+        in_groups_array = .false.
+        g_id = 0
+        n_gid_map = 0
+        tab_group_file_id = 0
+        tab_group_ord = 0
         reading_tab = .false.
         in_panes_array = .false.
         reading_pane = .false.
@@ -501,6 +612,63 @@ contains
             if (ios /= 0) exit
 
             line = adjustl(line)
+
+            ! The groups array. Written before "tabs", so every group exists
+            ! by the time a member tab is created below.
+            !
+            ! index() on '"tabs":' does not match '"tab_groups":', so the two
+            ! branches cannot be confused for one another.
+            if (index(line, '"tab_groups":') > 0) then
+                in_groups_array = .true.
+                cycle
+            end if
+            if (in_groups_array) then
+                if (index(line, ']') > 0) then
+                    in_groups_array = .false.
+                    cycle
+                end if
+                if (index(line, '"id":') > 0) then
+                    g_id = int(json_int(line), int32)
+                    g_label = ''
+                    g_dir = ''
+                    g_member = ''
+                    cycle
+                end if
+                if (index(line, '"label":') > 0) then
+                    g_label = json_str(line)
+                    cycle
+                end if
+                if (index(line, '"dir_path":') > 0) then
+                    g_dir = json_str(line)
+                    cycle
+                end if
+                if (index(line, '"active_member":') > 0) then
+                    g_member = json_str(line)
+                    ! Last field of the object: the group is complete.
+                    if (g_id > 0) then
+                        call group_create(editor, trim(g_dir), trim(g_label), new_gid)
+                        ! Remember the id this group had in the file, so the
+                        ! tabs below -- which reference the OLD id -- can be
+                        ! matched to the group we just made.
+                        if (n_gid_map < size(gid_from_file)) then
+                            n_gid_map = n_gid_map + 1
+                            gid_from_file(n_gid_map) = g_id
+                            gid_now(n_gid_map) = new_gid
+                        end if
+                        if (len_trim(g_member) > 0) then
+                            block
+                                integer :: gx
+                                gx = group_find(editor, new_gid)
+                                if (gx > 0) editor%groups(gx)%last_active_member = &
+                                    trim(g_member)
+                            end block
+                        end if
+                    end if
+                    g_id = 0
+                    cycle
+                end if
+                cycle
+            end if
 
             ! Check if we're entering the tabs array
             if (index(line, '"tabs":') > 0) then
@@ -523,6 +691,19 @@ contains
                     if (editor%active_tab_index < 1) editor%active_tab_index = 1
                 end if
                 cycle
+            end if
+
+            ! A tab's membership, recorded before its panes array so it is
+            ! available when the tab is created below.
+            if (in_tabs_array .and. .not. in_panes_array) then
+                if (index(line, '"group":') > 0) then
+                    tab_group_file_id = int(json_int(line), int32)
+                    cycle
+                end if
+                if (index(line, '"group_ordinal":') > 0) then
+                    tab_group_ord = int(json_int(line), int32)
+                    cycle
+                end if
             end if
 
             ! Check if we're exiting the tabs array
@@ -586,6 +767,8 @@ contains
                         call create_tab(editor, trim(pane_filename), tab_ok)
                         if (.not. tab_ok) cycle
                         tab_idx = editor%active_tab_index
+                        call attach_group(editor, tab_idx, tab_group_file_id, &
+                                          gid_from_file, gid_now, n_gid_map)
 
                         ! Set orphan flag and initialize empty buffers
                         if (allocated(editor%tabs) .and. tab_idx > 0) then
@@ -646,6 +829,8 @@ contains
                         call create_tab(editor, trim(full_path), tab_ok)
                         if (.not. tab_ok) cycle
                         tab_idx = editor%active_tab_index
+                        call attach_group(editor, tab_idx, tab_group_file_id, &
+                                          gid_from_file, gid_now, n_gid_map)
 
                         ! Set orphan flag and load file
                         if (allocated(editor%tabs) .and. tab_idx > 0) then
@@ -848,6 +1033,10 @@ contains
         else
             editor%active_tab_index = 0  ! No tabs
         end if
+
+        ! Restore skips tabs whose file has gone, so a group can come back
+        ! with no members at all. Drop those rather than showing "name (0)".
+        call prune_empty_groups(editor)
 
         ! Sync the active pane to editor state so status bar shows correct filename
         if (allocated(editor%tabs) .and. editor%active_tab_index > 0) then

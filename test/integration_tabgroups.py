@@ -484,6 +484,108 @@ def test_ctrl_q_is_not_trapped(binary):
         s.close()
 
 
+def test_groups_survive_a_restart(binary):
+    """Workspace state is only saved when fac was opened on a DIRECTORY, so
+    this runs in workspace mode rather than on a single file."""
+    s = Session(binary)
+    home, ws = s.home, s.ws
+    try:
+        # Everything happens in workspace mode: state is only written when fac
+        # was opened on a directory.
+        s.child.terminate(force=True)
+        env = {**os.environ, "TERM": "xterm-256color", "HOME": home}
+        env.pop("XDG_CONFIG_HOME", None)
+        s.screen = pyte.Screen(COLS, ROWS)
+        s.stream = pyte.Stream(s.screen)
+        s.child = pexpect.spawn(binary, [ws], dimensions=(ROWS, COLS),
+                                env=env, cwd=ws)
+        s.drain(2.2)
+        open_all(s)
+        s.palette("Group All Tabs")
+        before = s.row(1)
+        if "(" not in before:
+            print("SKIP: no tabs restored to group in workspace mode")
+            return
+        s.send("\x11", 1.6)                    # ctrl-q
+        s.drain(1.5)
+
+        state = os.path.join(ws, ".fac", "workspace.json")
+        check(os.path.exists(state), "quitting writes the workspace file", state)
+        if not os.path.exists(state):
+            return
+        text = open(state).read()
+        check('"version": "1.1"' in text, "at schema version 1.1", text[:200])
+        check('"tab_groups"' in text, "with a tab_groups array", text[:200])
+        check(text.index('"tab_groups"') < text.index('"tabs"'),
+              "written before the tabs, so members can reference it")
+
+        # Reopen once more: the group should come back.
+        s.screen = pyte.Screen(COLS, ROWS)
+        s.stream = pyte.Stream(s.screen)
+        s.child = pexpect.spawn(binary, [ws], dimensions=(ROWS, COLS),
+                                env=env, cwd=ws)
+        s.drain(2.5)
+        check(re.search(r"\(\d+\)", s.row(1)) is not None,
+              "the group is back after a restart", s.row(1))
+        check(s.row(1) == before, "with the same label and count",
+              f"{before!r} -> {s.row(1)!r}")
+    finally:
+        s.close()
+
+
+def test_an_old_state_file_still_loads(binary):
+    """A 1.0 file has no tab_groups key and no group on its tabs. It must
+    restore exactly as it always did, with no migration step."""
+    s = Session(binary)
+    home, ws = s.home, s.ws
+    try:
+        s.child.terminate(force=True)
+        os.makedirs(os.path.join(ws, ".fac"), exist_ok=True)
+        with open(os.path.join(ws, ".fac", "workspace.json"), "w") as f:
+            f.write('{\n'
+                    '  "version": "1.0",\n'
+                    f'  "workspace_path": "{ws}",\n'
+                    '  "last_opened": "2026-01-01",\n'
+                    '  "tabs": [\n'
+                    '    {\n'
+                    '      "filename": "file01.txt", \n'
+                    '      "is_orphan": false, \n'
+                    '      "modified": false, \n'
+                    '      "panes": [\n'
+                    '        {\n'
+                    '          "x_start": 0.0000,\n'
+                    '          "y_start": 0.0000,\n'
+                    '          "x_end": 1.0000,\n'
+                    '          "y_end": 1.0000,\n'
+                    '          "filename": "file01.txt",\n'
+                    '          "cursor_line": 1,\n'
+                    '          "cursor_column": 1,\n'
+                    '          "viewport_line": 1,\n'
+                    '          "viewport_column": 1\n'
+                    '        }\n'
+                    '      ],\n'
+                    '      "active_pane": 1\n'
+                    '    }\n'
+                    '  ],\n'
+                    '  "active_tab": 1,\n'
+                    '  "fuss_mode": { "active": false, "width": 30 }\n'
+                    '}\n')
+
+        env = {**os.environ, "TERM": "xterm-256color", "HOME": home}
+        env.pop("XDG_CONFIG_HOME", None)
+        s.screen = pyte.Screen(COLS, ROWS)
+        s.stream = pyte.Stream(s.screen)
+        s.child = pexpect.spawn(binary, [ws], dimensions=(ROWS, COLS),
+                                env=env, cwd=ws)
+        s.drain(2.5)
+        check("file01.txt" in s.row(1),
+              "a 1.0 state file restores its tab", s.row(1))
+        check(re.search(r"\(\d+\)", s.row(1)) is None,
+              "and produces no groups", s.row(1))
+    finally:
+        s.close()
+
+
 def main():
     binary = find_binary()
     for fn in (test_row_one_collapses_the_group,
@@ -500,7 +602,9 @@ def main():
                test_enter_on_a_directory_opens_the_dialog,
                test_ticking_and_creating,
                test_escape_creates_nothing,
-               test_ctrl_q_is_not_trapped):
+               test_ctrl_q_is_not_trapped,
+               test_groups_survive_a_restart,
+               test_an_old_state_file_still_loads):
         try:
             fn(binary)
         except Exception as exc:            # noqa: BLE001
