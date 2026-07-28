@@ -39,6 +39,7 @@ program facsimile
     use terminal_io_module
     use input_handler_module, only: get_key_input
     use editor_state_module
+    use editor_state_module, only: save_tab_pane
     use text_buffer_module
     use renderer_module
     use ai_engine_module, only: ai_tick, ai_configure
@@ -99,6 +100,7 @@ program facsimile
     logical :: active_view_changed
     logical :: opened_existing_tab
     logical :: tab_created
+    integer :: save_pane, other_pane, other_status
 
 
     ! Get command line arguments
@@ -1098,8 +1100,32 @@ contains
                         call prompt_for_filename_and_save(editor, buffer, i, should_quit)
                         if (.not. should_quit) return  ! User cancelled
                     else
-                        ! Save the file (no backup - it's saved!)
-                        call buffer_save_file(buffer, editor%tabs(i)%filename, save_status)
+                        ! The working buffer holds the ACTIVE pane's text, so
+                        ! write it under that pane's name -- the tab's name may
+                        ! belong to a different file when a tab holds two.
+                        save_pane = editor%tabs(i)%active_pane_index
+                        if (allocated(editor%tabs(i)%panes) .and. &
+                            save_pane >= 1 .and. save_pane <= size(editor%tabs(i)%panes)) then
+                            if (allocated(editor%tabs(i)%panes(save_pane)%filename)) then
+                                call buffer_save_file(buffer, &
+                                    editor%tabs(i)%panes(save_pane)%filename, save_status)
+                            else
+                                call buffer_save_file(buffer, editor%tabs(i)%filename, save_status)
+                            end if
+                        else
+                            call buffer_save_file(buffer, editor%tabs(i)%filename, save_status)
+                        end if
+
+                        ! And the other panes, each to its own file. Quitting
+                        ! used to write only the active one, so a dirty split
+                        ! on a second file was silently discarded.
+                        if (allocated(editor%tabs(i)%panes)) then
+                            do other_pane = 1, size(editor%tabs(i)%panes)
+                                if (other_pane == save_pane) cycle
+                                call save_tab_pane(editor, i, other_pane, other_status)
+                            end do
+                        end if
+
                         if (save_status == 0) then
                             buffer%modified = .false.
                             editor%tabs(i)%modified = .false.

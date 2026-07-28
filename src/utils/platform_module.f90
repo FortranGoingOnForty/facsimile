@@ -5,6 +5,7 @@ module platform_module
 
     public :: get_temp_dir, get_home_dir, get_path_separator, is_windows
     public :: get_config_dir, get_cwd
+    public :: canonical_path
     public :: platform_copy_to_clipboard, platform_paste_from_clipboard
     public :: detect_system_pkg_mgr, detect_priv_prefix
     public :: platform_sleep_ms
@@ -70,6 +71,99 @@ module platform_module
     end interface
 
 contains
+
+    !> One spelling per file path.
+    !>
+    !> Two tabs on the same file are matched by comparing their stored
+    !> filenames as plain strings -- on every non-cursor keystroke, from
+    !> sync_buffer_to_all_instances. So `./a.c`, `a.c`, `dir//a.c` and
+    !> `dir/./a.c` are four different files to that comparison, and two tabs
+    !> holding the same document silently diverge until whichever saves last
+    !> wins. Normalising once, where the name is stored, keeps the hot path a
+    !> bare string compare.
+    !>
+    !> Lexical only: no getcwd, no readlink, no stat. A relative path and an
+    !> absolute one still compare unequal. Resolving that needs the working
+    !> directory, and the workspace file deliberately stores paths relative to
+    !> the workspace root -- rewriting them here would fight that. This handles
+    !> the spellings the editor actually generates for itself.
+    function canonical_path(path) result(out)
+        character(len=*), intent(in) :: path
+        character(len=:), allocatable :: out
+        character(len=:), allocatable :: work
+        integer :: i, n, seg_start, up
+        character(len=:), allocatable :: segs(:)
+        integer :: n_segs, seg_len
+        logical :: absolute
+
+        work = trim(adjustl(path))
+        if (len(work) == 0) then
+            out = ''
+            return
+        end if
+
+        absolute = (work(1:1) == '/')
+
+        ! Split on '/', dropping empty segments (which collapses '//') and
+        ! '.' segments, and cancelling a '..' against the segment before it.
+        seg_len = len(work)
+        n = 0
+        do i = 1, len(work)
+            if (work(i:i) == '/') n = n + 1
+        end do
+        allocate(character(len=seg_len) :: segs(n + 1))
+        n_segs = 0
+        up = 0
+        seg_start = 1
+        do i = 1, len(work) + 1
+            if (i > len(work)) then
+                call push(work(seg_start:len(work)))
+            else if (work(i:i) == '/') then
+                if (i > seg_start) call push(work(seg_start:i-1))
+                seg_start = i + 1
+            end if
+        end do
+
+        out = ''
+        do i = 1, n_segs
+            if (len(out) > 0) then
+                out = out // '/' // trim(segs(i))
+            else
+                out = trim(segs(i))
+            end if
+        end do
+
+        if (absolute) then
+            out = '/' // out
+        else if (len(out) == 0) then
+            ! Everything cancelled out: '.' is the honest answer, not ''.
+            out = '.'
+        end if
+
+    contains
+
+        subroutine push(seg)
+            character(len=*), intent(in) :: seg
+
+            if (len(seg) == 0) return
+            if (seg == '.') return
+            if (seg == '..') then
+                ! Cancel against a real segment, but never walk above an
+                ! absolute root, and keep leading '..' on a relative path
+                ! because there is nothing here to cancel them against.
+                if (n_segs > 0) then
+                    if (trim(segs(n_segs)) /= '..') then
+                        n_segs = n_segs - 1
+                        return
+                    end if
+                end if
+                if (absolute) return
+            end if
+            n_segs = n_segs + 1
+            segs(n_segs) = seg
+        end subroutine push
+
+    end function canonical_path
 
     !> Pause briefly. Only for UI feedback that would otherwise be replaced
     !> before it could be seen; never for polling.

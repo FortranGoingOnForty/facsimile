@@ -1,7 +1,8 @@
 module editor_state_module
     use iso_fortran_env, only: int32, int64
     use ai_state_module, only: ai_state_t
-    use text_buffer_module, only: buffer_t, copy_buffer, init_buffer
+    use text_buffer_module
+    use platform_module, only: canonical_path
     use lsp_server_manager_module, only: lsp_manager_t, init_lsp_manager, cleanup_lsp_manager, &
                                          get_or_start_server, process_server_messages, &
                                          start_lsp_for_file, start_all_lsp_servers_for_file, &
@@ -43,7 +44,7 @@ module editor_state_module
 
     public :: editor_state_t, cursor_t, pane_t, tab_t
     public :: init_editor, cleanup_editor
-    public :: create_tab, can_create_tab, find_tab_by_id, switch_to_tab, switch_to_tab_with_buffer, get_active_tab_index, close_tab
+    public :: create_tab, can_create_tab, find_tab_by_id, save_tab_pane, switch_to_tab, switch_to_tab_with_buffer, get_active_tab_index, close_tab
     public :: split_pane_vertical, split_pane_horizontal, close_pane, get_active_pane_indices
     public :: navigate_to_pane_left, navigate_to_pane_right, navigate_to_pane_up, navigate_to_pane_down
     public :: sync_pane_to_editor, sync_editor_to_pane, switch_to_pane, switch_to_pane_with_buffer
@@ -333,6 +334,38 @@ contains
     end subroutine cleanup_tab
 
     ! Create a new tab with the given filename
+    !> Write one pane's text to that pane's own file.
+    !>
+    !> The one place a non-active document gets written. Before this there were
+    !> three, and each picked its buffer and its filename from different
+    !> places: the workspace-switch prompt saved pane 1's text under the TAB's
+    !> name, the close-tab prompt saved the WORKING buffer under the tab's
+    !> name, and quit-time save-all did the same. Any of them wrote the wrong
+    !> bytes to a real file whenever a tab held panes on two different files,
+    !> which alt-v and alt-s on a tree row make routine.
+    !>
+    !> status: 0 written, -3 buffer never loaded (nothing written), -1 I/O
+    !> failure, 1 nothing to write to.
+    subroutine save_tab_pane(editor, tab_idx, pane_idx, status)
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: tab_idx, pane_idx
+        integer, intent(out) :: status
+
+        status = 1
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+        if (pane_idx < 1 .or. pane_idx > size(editor%tabs(tab_idx)%panes)) return
+
+        associate(pane => editor%tabs(tab_idx)%panes(pane_idx))
+            ! A pane with no name of its own has never been given a file --
+            ! writing it to the tab's name is exactly the confusion this
+            ! routine exists to end.
+            if (.not. allocated(pane%filename)) return
+            if (len_trim(pane%filename) == 0) return
+            call buffer_save_file(pane%buffer, pane%filename, status)
+        end associate
+    end subroutine save_tab_pane
+
     !> Move a tab from `src` to `dst`, transferring ownership of everything
     !> allocatable rather than copying it.
     !>
@@ -427,6 +460,7 @@ contains
         logical, intent(out), optional :: ok
         type(tab_t), allocatable :: temp_tabs(:)
         integer :: n_tabs, new_index, i
+        character(len=:), allocatable :: canon
 
         if (present(ok)) ok = .false.
         if (.not. can_create_tab(editor)) return
@@ -444,8 +478,12 @@ contains
 
         ! Initialize new tab
         new_index = n_tabs + 1
-        allocate(character(len=len_trim(filename)) :: temp_tabs(new_index)%filename)
-        temp_tabs(new_index)%filename = trim(filename)
+        ! Normalise here, at the one place a tab's name is established. Doing
+        ! it in the comparator instead would put it on the every-keystroke
+        ! path in sync_buffer_to_all_instances.
+        canon = canonical_path(filename)
+        allocate(character(len=len(canon)) :: temp_tabs(new_index)%filename)
+        temp_tabs(new_index)%filename = canon
         call init_buffer(temp_tabs(new_index)%buffer)
 
         ! Create default pane (full screen)
@@ -476,8 +514,8 @@ contains
         ! Initialize pane's buffer and filename (copy from tab)
         call init_buffer(temp_tabs(new_index)%panes(1)%buffer)
         call copy_buffer(temp_tabs(new_index)%panes(1)%buffer, temp_tabs(new_index)%buffer)
-        allocate(character(len=len_trim(filename)) :: temp_tabs(new_index)%panes(1)%filename)
-        temp_tabs(new_index)%panes(1)%filename = trim(filename)
+        allocate(character(len=len(canon)) :: temp_tabs(new_index)%panes(1)%filename)
+        temp_tabs(new_index)%panes(1)%filename = canon
 
         temp_tabs(new_index)%active_pane_index = 1
         temp_tabs(new_index)%modified = .false.
@@ -545,9 +583,17 @@ contains
         pane_idx = editor%tabs(tab_index)%active_pane_index
         call sync_pane_to_editor(editor, tab_index, pane_idx)
 
-        if (allocated(editor%filename)) deallocate(editor%filename)
-        allocate(character(len=len(editor%tabs(tab_index)%filename)) :: editor%filename)
-        editor%filename = editor%tabs(tab_index)%filename
+        ! sync_pane_to_editor has just set editor%filename from the ACTIVE
+        ! PANE, which is the file whose text is in the working buffer. This
+        ! used to overwrite it with the tab's name -- and since Ctrl-S writes
+        ! the working buffer to editor%filename, switching into a tab whose
+        ! active pane holds a different file (alt-v/alt-s split a second file
+        ! in) then saved that pane's text over the tab's file. Fall back to the
+        ! tab only when the pane has no name of its own.
+        if (.not. allocated(editor%filename)) then
+            if (allocated(editor%tabs(tab_index)%filename)) &
+                editor%filename = editor%tabs(tab_index)%filename
+        end if
         editor%modified = editor%tabs(tab_index)%modified
     end subroutine switch_to_tab
 
@@ -605,9 +651,17 @@ contains
         pane_idx = editor%tabs(tab_index)%active_pane_index
         call sync_pane_to_editor(editor, tab_index, pane_idx)
 
-        if (allocated(editor%filename)) deallocate(editor%filename)
-        allocate(character(len=len(editor%tabs(tab_index)%filename)) :: editor%filename)
-        editor%filename = editor%tabs(tab_index)%filename
+        ! sync_pane_to_editor has just set editor%filename from the ACTIVE
+        ! PANE, which is the file whose text is in the working buffer. This
+        ! used to overwrite it with the tab's name -- and since Ctrl-S writes
+        ! the working buffer to editor%filename, switching into a tab whose
+        ! active pane holds a different file (alt-v/alt-s split a second file
+        ! in) then saved that pane's text over the tab's file. Fall back to the
+        ! tab only when the pane has no name of its own.
+        if (.not. allocated(editor%filename)) then
+            if (allocated(editor%tabs(tab_index)%filename)) &
+                editor%filename = editor%tabs(tab_index)%filename
+        end if
         editor%modified = editor%tabs(tab_index)%modified
     end subroutine switch_to_tab_with_buffer
 

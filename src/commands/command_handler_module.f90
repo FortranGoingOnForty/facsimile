@@ -2,10 +2,11 @@ module command_handler_module
     use iso_fortran_env, only: int32, int64, error_unit
     use iso_c_binding, only: c_int
     use editor_state_module, only: editor_state_t, cursor_t, switch_to_tab_with_buffer, &
-                                   close_tab, create_tab, can_create_tab, close_pane, split_pane_vertical, split_pane_horizontal, &
+                                   close_tab, create_tab, can_create_tab, save_tab_pane, close_pane, split_pane_vertical, split_pane_horizontal, &
                                    navigate_to_pane_left, navigate_to_pane_right, navigate_to_pane_up, navigate_to_pane_down, &
                                    sync_editor_to_pane, tab_t
     use text_buffer_module
+    use platform_module, only: canonical_path
     use clickable_region_module, only: clickable_region_t, region_at, &
                                        REGION_TAB, REGION_BLOCK, REGION_FUSS_TOGGLE, &
                                        REGION_TREE_ROW, REGION_CTX_ROW, REGION_NONE
@@ -4555,7 +4556,7 @@ contains
                         deallocate(editor%tabs(tab_idx)%filename)
                     end if
                     allocate(character(len=len_trim(new_filename)) :: editor%tabs(tab_idx)%filename)
-                    editor%tabs(tab_idx)%filename = trim(new_filename)
+                    editor%tabs(tab_idx)%filename = canonical_path(new_filename)
 
                     ! Update pane filename
                     if (allocated(editor%tabs(tab_idx)%panes)) then
@@ -4565,7 +4566,7 @@ contains
                             end if
                             allocate(character(len=len_trim(new_filename)) :: &
                                     editor%tabs(tab_idx)%panes(1)%filename)
-                            editor%tabs(tab_idx)%panes(1)%filename = trim(new_filename)
+                            editor%tabs(tab_idx)%panes(1)%filename = canonical_path(new_filename)
                         end if
                     end if
                 end if
@@ -7343,7 +7344,7 @@ contains
                     if (allocated(editor%tabs(tab_idx)%panes(pane_idx)%filename)) &
                         deallocate(editor%tabs(tab_idx)%panes(pane_idx)%filename)
                     allocate(character(len=len_trim(full_path)) :: editor%tabs(tab_idx)%panes(pane_idx)%filename)
-                    editor%tabs(tab_idx)%panes(pane_idx)%filename = full_path
+                    editor%tabs(tab_idx)%panes(pane_idx)%filename = canonical_path(full_path)
 
                     ! Copy to main buffer
                     call copy_buffer(buffer, editor%tabs(tab_idx)%panes(pane_idx)%buffer)
@@ -7435,7 +7436,7 @@ contains
                     if (allocated(editor%tabs(tab_idx)%panes(pane_idx)%filename)) &
                         deallocate(editor%tabs(tab_idx)%panes(pane_idx)%filename)
                     allocate(character(len=len_trim(full_path)) :: editor%tabs(tab_idx)%panes(pane_idx)%filename)
-                    editor%tabs(tab_idx)%panes(pane_idx)%filename = full_path
+                    editor%tabs(tab_idx)%panes(pane_idx)%filename = canonical_path(full_path)
 
                     ! Copy to main buffer
                     call copy_buffer(buffer, editor%tabs(tab_idx)%panes(pane_idx)%buffer)
@@ -7868,13 +7869,46 @@ contains
     end subroutine handle_fortress_navigator
 
     !> Handle dirty buffers before workspace switch
+    !> Write the working buffer to the ACTIVE PANE's file.
+    !>
+    !> The working buffer holds the active pane's text and may be newer than
+    !> the pane's own copy, so it -- not the pane buffer -- is what must be
+    !> written. The only question is which name to write it under, and the
+    !> answer is the pane's, never the tab's.
+    subroutine save_active_pane_buffer(editor, buffer, tab_idx, status)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer, intent(in) :: tab_idx
+        integer, intent(out) :: status
+        integer :: pane_idx
+
+        status = 1
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+
+        if (allocated(editor%tabs(tab_idx)%panes)) then
+            pane_idx = editor%tabs(tab_idx)%active_pane_index
+            if (pane_idx >= 1 .and. pane_idx <= size(editor%tabs(tab_idx)%panes)) then
+                if (allocated(editor%tabs(tab_idx)%panes(pane_idx)%filename)) then
+                    call buffer_save_file(buffer, &
+                        editor%tabs(tab_idx)%panes(pane_idx)%filename, status)
+                    return
+                end if
+            end if
+        end if
+
+        ! No pane name to go on: fall back to the tab's, which is the old
+        ! behaviour and still correct when a tab holds a single file.
+        if (allocated(editor%tabs(tab_idx)%filename)) &
+            call buffer_save_file(buffer, editor%tabs(tab_idx)%filename, status)
+    end subroutine save_active_pane_buffer
+
     subroutine handle_dirty_buffers_before_switch(editor, should_continue)
         use save_prompt_module, only: save_prompt, save_prompt_result_t
         use text_buffer_module, only: buffer_save_file
         type(editor_state_t), intent(inout) :: editor
         logical, intent(inout) :: should_continue
         type(save_prompt_result_t) :: prompt_result
-        integer :: i, save_status
+        integer :: i, save_status, pane_i, pane_status
 
         should_continue = .true.
 
@@ -7887,12 +7921,17 @@ contains
                 select case (prompt_result%action)
                     case ('y')
                         ! Save the file
-                        if (allocated(editor%tabs(i)%panes) .and. size(editor%tabs(i)%panes) > 0) then
-                            call buffer_save_file(editor%tabs(i)%panes(1)%buffer, &
-                                                  editor%tabs(i)%filename, save_status)
-                        else
-                            call buffer_save_file(editor%tabs(i)%buffer, &
-                                                  editor%tabs(i)%filename, save_status)
+                        ! Every pane, each to its own file. Saving pane 1's
+                        ! text under the tab's name wrote the wrong bytes
+                        ! whenever a tab held two different files, and left a
+                        ! dirty second pane unsaved either way.
+                        save_status = 0
+                        if (allocated(editor%tabs(i)%panes)) then
+                            do pane_i = 1, size(editor%tabs(i)%panes)
+                                call save_tab_pane(editor, i, pane_i, pane_status)
+                                if (pane_status /= 0 .and. pane_status /= 1) &
+                                    save_status = pane_status
+                            end do
                         end if
 
                         if (save_status == 0) then
@@ -7949,7 +7988,10 @@ contains
                 end if
             else
                 ! Not untitled - just save
-                call buffer_save_file(buffer, editor%tabs(tab_idx)%filename, save_status)
+                ! The working buffer is the ACTIVE PANE's text, so it must go
+                ! to that pane's file -- not to the tab's, which may name a
+                ! different one.
+                call save_active_pane_buffer(editor, buffer, tab_idx, save_status)
                 if (save_status == 0) then
                     buffer%modified = .false.
                     editor%tabs(tab_idx)%modified = .false.
