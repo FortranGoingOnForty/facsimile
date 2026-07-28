@@ -111,7 +111,22 @@ fpm run -- [filename]
 
 ### Tab Management
 - `ctrl-t` - create new tab
-- `tab` / `shift-tab` - switch between tabs
+- `ctrl-pageup` / `ctrl-pagedown` - previous / next tab
+- `alt-1` .. `alt-9` - jump to a tab by number
+
+### Tab Groups
+Open a directory as a sub-workspace: press `enter` on a directory in the file
+tree and tick the files you want. The group appears in the tab bar as
+`src/ (4)`, and its members get their own row while you are inside it.
+
+- `super+ctrl+left` / `right` - move across the tab bar's top row, where a group counts as one entry
+- `super+ctrl+down` / `up` - enter / leave a group
+- `ctrl-pageup` / `ctrl-pagedown` or `alt-ctrl-left` / `right` - the same, for terminals that do not report Super
+
+Hovering a group previews its members without moving your text. Group members
+are read from disk the first time you look at them, so a forty-file group costs
+one file read, not forty. Groups are saved in `workspace.json` and come back on
+restart. See [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md#tab-groups) for detail.
 
 ### Pane Management
 Split your view into multiple panes for side-by-side editing of the same file.

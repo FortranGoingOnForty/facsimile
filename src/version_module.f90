@@ -1,4 +1,4 @@
 module version_module
     implicit none
-    character(len=*), parameter :: VERSION = '0.22.2'
+    character(len=*), parameter :: VERSION = '0.23.0'
 end module version_module

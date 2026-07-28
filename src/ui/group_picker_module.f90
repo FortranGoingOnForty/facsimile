@@ -477,8 +477,8 @@ contains
     ! ---- rendering --------------------------------------------------------
 
     subroutine render_group_picker()
-        integer :: r, i, idx, used
-        character(len=:), allocatable :: shown, line
+        integer :: r, i, idx
+        character(len=:), allocatable :: line
         character(len=64) :: foot
 
         if (.not. g_visible) return
