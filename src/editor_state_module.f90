@@ -48,7 +48,7 @@ module editor_state_module
     public :: tab_group_t, group_create, group_dissolve, group_find
     public :: group_member_count, group_members, group_label
     public :: group_add_member, group_remove_member, active_group_id
-    public :: prune_empty_groups
+    public :: prune_empty_groups, find_tab_by_path_public
     public :: switch_to_tab, &
         switch_to_tab_with_buffer, get_active_tab_index, close_tab
     public :: split_pane_vertical, split_pane_horizontal, close_pane, get_active_pane_indices
@@ -427,6 +427,25 @@ contains
 
 
     ! ---- tab groups ------------------------------------------------------
+
+    !> Index of the tab holding `path`, or 0. Paths are canonicalised where
+    !> they are stored, so this is a plain comparison.
+    function find_tab_by_path_public(editor, path) result(idx)
+        type(editor_state_t), intent(in) :: editor
+        character(len=*), intent(in) :: path
+        integer :: idx, i
+        character(len=:), allocatable :: canon
+
+        idx = 0
+        canon = canonical_path(path)
+        do i = 1, size(editor%tabs)
+            if (.not. allocated(editor%tabs(i)%filename)) cycle
+            if (editor%tabs(i)%filename == canon) then
+                idx = i
+                return
+            end if
+        end do
+    end function find_tab_by_path_public
 
     !> Index into groups(:) for `gid`, or 0 if there is no such group.
     function group_find(editor, gid) result(gidx)

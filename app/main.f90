@@ -42,6 +42,7 @@ program facsimile
     use editor_state_module
     use editor_state_module, only: save_tab_pane
     use renderer_module, only: tab_group_preview_visible, set_group_preview_enabled
+    use group_picker_module, only: is_group_picker_visible
     use settings_module, only: settings_get_logical
     use text_buffer_module
     use renderer_module
@@ -1428,6 +1429,7 @@ contains
         ! punch a hole through the overlay and leave the region table
         ! describing something no longer drawn.
         if (tab_group_preview_visible()) return
+        if (is_group_picker_visible()) return
         if (is_hover_visible(editor%hover_tooltip)) return
         if (is_terminal_panel_visible(editor%terminal_panel)) return
         if (is_diagnostics_panel_visible(editor%diagnostics_panel)) return

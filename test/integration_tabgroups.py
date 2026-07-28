@@ -385,6 +385,105 @@ def test_the_old_chords_still_do_what_they_did(binary):
         s.close()
 
 
+def with_subdir(s):
+    """Add a directory of files so the tree has a directory row to Enter on."""
+    d = os.path.join(s.ws, "lib")
+    os.makedirs(d, exist_ok=True)
+    for n in ("one.c", "two.c", "three.c"):
+        with open(os.path.join(d, n), "w") as f:
+            f.write("int x;\n")
+    return d
+
+
+def open_picker_on_lib(s):
+    """Enter on the lib/ row in the tree. False if it could not be reached."""
+    with_subdir(s)
+    s.send("\x02", 1.2)
+    for _ in range(20):
+        sel = s.tree_selection()
+        if sel and "lib" in sel:
+            break
+        s.send("\x1b[B", 0.15)
+    else:
+        return False
+    s.send("\r", 1.4)
+    return "New Tab Group" in "\n".join(s.screen.display)
+
+
+def test_enter_on_a_directory_opens_the_dialog(binary):
+    """It used to do nothing at all: the handler guarded on is_directory with
+    no else branch."""
+    s = Session(binary)
+    try:
+        check(open_picker_on_lib(s), "Enter on a directory opens the group dialog",
+              "\n".join(r for r in s.screen.display if r.strip())[:400])
+        body = "\n".join(s.screen.display)
+        check("Name  lib/" in body, "the name is pre-filled from the directory", body[:300])
+        check("[ ] one.c" in body, "its files are listed with checkboxes", body[:300])
+        check("0 selected" in body, "and nothing is ticked yet", body[:300])
+    finally:
+        s.close()
+
+
+def test_ticking_and_creating(binary):
+    s = Session(binary)
+    try:
+        if not open_picker_on_lib(s):
+            print("SKIP: could not open the dialog")
+            return
+        s.send("\t", 0.4)                     # focus the list
+        s.send("\x1b[B", 0.3)                 # past ../
+        s.send(" ", 0.4)                       # tick
+        s.send(" ", 0.4)                       # tick
+        check("2 selected" in "\n".join(s.screen.display),
+              "space ticks files", "\n".join(s.screen.display)[:300])
+
+        s.send("\r", 1.8)                     # create
+        check("New Tab Group" not in "\n".join(s.screen.display),
+              "the dialog closes on create", s.row(2))
+        check("(2)" in s.row(1), "row 1 shows the new group with its count", s.row(1))
+        check("one.c" in s.row(2), "row 2 lists the members it opened", s.row(2))
+    finally:
+        s.close()
+
+
+def test_escape_creates_nothing(binary):
+    s = Session(binary)
+    try:
+        if not open_picker_on_lib(s):
+            print("SKIP: could not open the dialog")
+            return
+        before = s.row(1)
+        s.send("\t", 0.4)
+        s.send("\x1b[B", 0.3)
+        s.send(" ", 0.4)
+        s.send("\x1b", 1.2)                   # esc
+        check("New Tab Group" not in "\n".join(s.screen.display),
+              "escape closes the dialog", s.row(2))
+        check("(" not in s.row(1) or s.row(1) == before,
+              "and creates no group", f"{before!r} -> {s.row(1)!r}")
+    finally:
+        s.close()
+
+
+def test_ctrl_q_is_not_trapped(binary):
+    """No modal may trap the user."""
+    s = Session(binary)
+    try:
+        if not open_picker_on_lib(s):
+            print("SKIP: could not open the dialog")
+            return
+        s.send("\x11", 1.5)                   # ctrl-q
+        alive = s.child.isalive()
+        # Either it quit, or it is showing a save prompt -- both mean ctrl-q
+        # reached the editor rather than being swallowed.
+        body = "\n".join(s.screen.display)
+        check(not alive or "New Tab Group" not in body,
+              "ctrl-q passes through the dialog", body[:200])
+    finally:
+        s.close()
+
+
 def main():
     binary = find_binary()
     for fn in (test_row_one_collapses_the_group,
@@ -397,7 +496,11 @@ def main():
                test_a_keystroke_dismisses_the_preview,
                test_super_ctrl_arrows_navigate_without_moving_the_caret,
                test_lock_states_do_not_break_the_chord,
-               test_the_old_chords_still_do_what_they_did):
+               test_the_old_chords_still_do_what_they_did,
+               test_enter_on_a_directory_opens_the_dialog,
+               test_ticking_and_creating,
+               test_escape_creates_nothing,
+               test_ctrl_q_is_not_trapped):
         try:
             fn(binary)
         except Exception as exc:            # noqa: BLE001

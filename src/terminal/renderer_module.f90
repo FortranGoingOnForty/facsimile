@@ -12,6 +12,7 @@ module renderer_module
                                        REGION_TAB_SCROLL, &
                                        REGION_FUSS_TOGGLE
     use context_menu_module, only: render_context_menu, is_context_menu_visible
+    use group_picker_module, only: render_group_picker, is_group_picker_visible
     use file_tree_module
     use file_tree_renderer_module
     use syntax_highlighter_module
@@ -614,6 +615,9 @@ contains
             call render_context_menu()
             call terminal_hide_cursor()
         end if
+
+        ! The dialog is topmost: it is what the user is looking at.
+        if (is_group_picker_visible()) call render_group_picker()
 
         ! This runs last in every frame, and render_screen's panes branch
         ! returns straight after it without flushing -- so anything drawn

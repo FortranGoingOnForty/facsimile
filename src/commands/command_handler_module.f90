@@ -12,6 +12,7 @@ module command_handler_module
     use clickable_region_module, only: clickable_region_t, region_at, REGION_TAB_SCROLL, &
                                        REGION_TAB, REGION_BLOCK, REGION_FUSS_TOGGLE, &
                                        REGION_TREE_ROW, REGION_CTX_ROW, REGION_NONE
+    use group_picker_module
     use context_menu_module, only: context_menu_begin, context_menu_add_item, &
                                    context_menu_add_separator, context_menu_show, &
                                    context_menu_hide, is_context_menu_visible, &
@@ -690,6 +691,25 @@ contains
             ! editor command against the document while the user is looking
             ! at a shell prompt. Ctrl-Q stays live as the way out.
             if (trim(key_str) /= 'ctrl-q') return
+        end if
+
+        ! The group dialog owns the keyboard while it is up. ctrl-q passes
+        ! through, so no modal can trap the user.
+        if (is_group_picker_visible()) then
+            if (trim(key_str) /= 'ctrl-q') then
+                ! NOT trim(): trim(' ') is empty, and space is the tick key.
+                ! Trimming here is what stopped the command palette being able
+                ! to type a space.
+                if (group_picker_handle_key(key_str)) then
+                    if (group_picker_result() == GP_CONFIRMED) then
+                        call finish_group_creation(editor, buffer)
+                    else if (group_picker_result() == GP_CANCELLED) then
+                        call group_picker_hide()
+                    end if
+                    g_lsp_ui_changed = .true.
+                    return
+                end if
+            end if
         end if
 
         ! Route input when in fuss mode (except keys that work in both modes)
@@ -7078,10 +7098,23 @@ contains
         case('enter')
             ! Open file in editor (only for files, not directories)
             if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
+                selected_path = get_selected_item_path(tree_state)
                 if (.not. tree_state%selectable_files(tree_state%selected_index)%is_directory) then
-                    selected_path = get_selected_item_path(tree_state)
                     if (len_trim(selected_path) > 0) then
                         call open_file_in_editor(selected_path, editor, buffer)
+                    end if
+                else if (len_trim(selected_path) > 0) then
+                    ! Enter on a directory used to do nothing at all -- the
+                    ! guard above had no else. It opens the group dialog now,
+                    ! pre-filled with that directory.
+                    !
+                    ! A single CLICK on a directory still just expands it (the
+                    ! region router sends 'space'). A click opening a modal
+                    ! would be hostile; Enter is a deliberate act.
+                    if (group_picker_show(selected_path, editor%screen_rows, &
+                                          editor%screen_cols)) then
+                        editor%fuss_mode_active = .false.
+                        g_lsp_ui_changed = .true.
                     end if
                 end if
             end if
@@ -7930,6 +7963,58 @@ contains
         t = trim(b)
     end function int_to_text
 
+
+
+    !> Turn a confirmed dialog into a real group.
+    !>
+    !> Opens each ticked file that is not already open, reuses the tab when it
+    !> is -- a tab belongs to exactly one group, so a file open elsewhere moves
+    !> rather than being duplicated.
+    subroutine finish_group_creation(editor, buffer)
+        use editor_state_module, only: group_create, group_add_member, &
+                                       find_tab_by_path_public
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer(int32) :: gid
+        integer :: i, n, tab_idx, first_tab
+        character(len=:), allocatable :: path
+
+        n = group_picker_count()
+        if (n == 0) then
+            call group_picker_hide()
+            return
+        end if
+
+        call group_create(editor, group_picker_dir(), group_picker_name(), gid)
+        first_tab = 0
+
+        do i = 1, n
+            path = group_picker_path(i)
+            if (len_trim(path) == 0) cycle
+
+            tab_idx = find_tab_by_path_public(editor, path)
+            if (tab_idx == 0) then
+                call open_file_in_editor(path, editor, buffer)
+                tab_idx = editor%active_tab_index
+            end if
+            if (tab_idx >= 1 .and. tab_idx <= size(editor%tabs)) then
+                call group_add_member(editor, gid, tab_idx)
+                if (first_tab == 0) first_tab = tab_idx
+            end if
+        end do
+
+        call group_picker_hide()
+        if (first_tab > 0) call switch_to_tab_with_buffer(editor, first_tab, buffer)
+        call set_status_message('Created ' // group_label_public(editor, gid))
+    end subroutine finish_group_creation
+
+    function group_label_public(editor, gid) result(t)
+        use editor_state_module, only: group_label
+        type(editor_state_t), intent(in) :: editor
+        integer(int32), intent(in) :: gid
+        character(len=:), allocatable :: t
+        t = group_label(editor, gid)
+    end function group_label_public
 
     !> Move to the previous or next entry on row 1.
     !>

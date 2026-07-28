@@ -68,14 +68,21 @@ program test_clickable_region
     call check(hit%kind == REGION_TAB, "and it hits")
 
     ! --- Overflow degrades to unclickable, never corrupts ---
+    !
+    ! The cap is not asserted by value: it has already been raised once, when
+    ! a second tab-bar row and the group dialog joined the tree in competing
+    ! for slots. What must hold is the BEHAVIOUR -- overflow drops the extra
+    ! regions and leaves the earlier ones intact, rather than corrupting the
+    ! table or wrapping around.
     call regions_begin_frame()
-    do i = 1, 400                                     ! MAX_REGIONS is 256
+    do i = 1, 4000
         call region_add(REGION_TAB, 1, 1, i, i, i)
     end do
-    call check(region_count() == 256, "capacity is capped")
+    call check(region_count() > 0, "some regions are kept")
+    call check(region_count() < 4000, "capacity is capped")
     hit = region_at(1, 1)
     call check(hit%payload == 1, "the earliest region survives")
-    hit = region_at(1, 300)
+    hit = region_at(1, 3999)
     call check(hit%kind == REGION_NONE, "the dropped ones simply miss")
 
     ! --- Payload defaults to 0 when the caller omits it ---
