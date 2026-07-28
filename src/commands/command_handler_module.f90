@@ -20,6 +20,7 @@ module command_handler_module
                                    context_menu_hover, context_menu_select
     use platform_module, only: platform_sleep_ms
     use renderer_module, only: update_viewport, render_screen, render_screen_with_tree, tree_state, &
+                               first_content_row, &
                                text_area_height, &
                                fuss_search_buffer, fuss_search_len, fuss_search_last_time, &
                                fuss_fuzzy_jump, fuss_reset_search, get_time_ms, &
@@ -5038,12 +5039,7 @@ contains
         line_count = buffer_get_line_count(buffer)
         in_pane = .false.
 
-        ! Account for tab bar offset - when tabs exist, row 1 is tab bar, content starts at row 2
-        if (size(editor%tabs) > 0) then
-            row_offset = 2  ! Tab bar takes row 1
-        else
-            row_offset = 1  ! No tab bar
-        end if
+        row_offset = first_content_row(editor)
 
         ! Ignore clicks on the tab bar
         if (size(editor%tabs) > 0 .and. screen_row < row_offset) then
@@ -5158,8 +5154,10 @@ contains
         if (.not. allocated(editor%tabs(tab_idx)%panes)) return
 
         line_count = buffer_get_line_count(buffer)
-        ! Same clamp the keyboard scroll uses: keep a couple of lines visible
-        last_top = max(1, line_count - editor%screen_rows + 2)
+        ! Same clamp the keyboard scroll uses. This was an open-coded
+        ! screen_rows - 2 that missed the terminal panel, so wheel scrolling
+        ! could run past the last drawn line while the panel was up.
+        last_top = max(1, line_count - text_area_height(editor) + 1)
 
         do i = 1, size(editor%tabs(tab_idx)%panes)
             associate(pane => editor%tabs(tab_idx)%panes(i))
@@ -5239,8 +5237,7 @@ contains
         type(editor_state_t), intent(in) :: editor
         integer, intent(out) :: top_row, bottom_row, left_col, right_col
 
-        top_row = 2
-        if (size(editor%tabs) == 0) top_row = 1
+        top_row = first_content_row(editor)
         bottom_row = editor%screen_rows - 1
         if (is_terminal_panel_visible(editor%terminal_panel)) then
             bottom_row = bottom_row - get_terminal_panel_height(editor%terminal_panel)
@@ -5715,12 +5712,7 @@ contains
         end if
 
         if (.not. used_pane) then
-            ! Account for tab bar - when tabs exist, content starts at row 2
-            if (size(editor%tabs) > 0) then
-                row_offset = 2
-            else
-                row_offset = 1
-            end if
+            row_offset = first_content_row(editor)
             screen_row = cursor%line - editor%viewport_line + row_offset
             screen_col = col_offset + 1 + &
                 display_offset_of(line, editor%viewport_column, cursor%column)

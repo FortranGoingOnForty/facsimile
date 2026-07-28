@@ -49,7 +49,7 @@ module renderer_module
     public :: fuss_fuzzy_jump, fuss_reset_search, get_time_ms
     public :: fuss_git_prefix_active
     public :: display_offset_of, char_col_at_offset
-    public :: text_area_height  ! rows the document gets; page size must match
+    public :: text_area_height, tab_bar_height, first_content_row  ! rows the document gets; page size must match
 
     ! Configuration
     logical :: show_line_numbers = .true.
@@ -211,14 +211,8 @@ contains
             content_width = editor%screen_cols
         end if
 
-        ! Determine starting row based on whether tabs exist
-        if (size(editor%tabs) > 0) then
-            start_row = 2  ! Tab bar at row 1
-            row_offset_val = 2
-        else
-            start_row = 1  ! No tab bar
-            row_offset_val = 1
-        end if
+        start_row = first_content_row(editor)
+        row_offset_val = start_row
 
         ! Render all panes for the active tab
         if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0 .and. &
@@ -478,8 +472,7 @@ contains
         else
             line_num_width = 0
         end if
-        start_row = 2
-        if (size(editor%tabs) == 0) start_row = 1
+        start_row = first_content_row(editor)
 
         line_count = buffer_get_line_count(buffer)
 
@@ -1313,14 +1306,8 @@ contains
             col_offset = 0
         end if
 
-        ! Account for tab bar offset - when tabs exist, row 1 is tab bar, content starts at row 2
-        if (size(editor%tabs) > 0) then
-            row_offset = 2  ! Tab bar takes row 1
-            min_row = 2     ! Cursor cannot be in row 1 (tab bar)
-        else
-            row_offset = 1  ! No tab bar
-            min_row = 1     ! Cursor can be in row 1
-        end if
+        row_offset = first_content_row(editor)
+        min_row = row_offset
 
         ! For multiple cursors, show them all with block cursor for inactive ones
         if (size(editor%cursors) > 1) then
@@ -1585,12 +1572,12 @@ contains
         call render_editor_area_with_tree(editor, editor_start_col, editor_width)
 
         ! Render file tree in left pane
-        call render_file_tree(tree_state, 2, content_bottom, 2, &
+        call render_file_tree(tree_state, first_content_row(editor), content_bottom, 2, &
             tree_width - 2, editor%fuss_hints_expanded, &
             fuss_git_prefix_active)
 
         ! Render vertical separator
-        call render_vertical_separator(separator_col, 2, &
+        call render_vertical_separator(separator_col, first_content_row(editor), &
             content_bottom)
 
         ! Render terminal panel if visible
@@ -1695,11 +1682,7 @@ contains
             block
                 integer :: content_row
 
-                if (size(editor%tabs) > 0) then
-                    content_row = 2      ! tab bar occupies row 1
-                else
-                    content_row = 1
-                end if
+                content_row = first_content_row(editor)
                 call store_pane_content_rect(editor, tab_idx, 1, start_col, &
                                              content_row, width, &
                                              editor%screen_rows - content_row)
@@ -1712,7 +1695,7 @@ contains
 
         ! Multiple panes: render each with adjusted coordinates for tree view
         ! Clear the editor area first
-        do i = 2, editor%screen_rows - 1
+        do i = first_content_row(editor), editor%screen_rows - 1
             call terminal_move_cursor(i, start_col)
             call terminal_write(repeat(' ', width))
         end do
@@ -1728,7 +1711,7 @@ contains
             else
                 pane_width = int((pane%x_end - pane%x_start) * real(width))
             end if
-            pane_row = 2 + int(pane%y_start * real(screen_height))
+            pane_row = first_content_row(editor) + int(pane%y_start * real(screen_height))
             pane_height = int((pane%y_end - pane%y_start) * real(screen_height))
 
             call store_pane_content_rect(editor, tab_idx, i, pane_col, pane_row, &
@@ -1763,12 +1746,7 @@ contains
             adjusted_width = width
         end if
 
-        ! Determine starting row (account for tab bar)
-        if (size(editor%tabs) > 0) then
-            start_row = 2  ! Tab bar at row 1
-        else
-            start_row = 1  ! No tab bar
-        end if
+        start_row = first_content_row(editor)
 
         ! Render each visible line in the editor pane
         do screen_row = start_row, editor%screen_rows - 1
@@ -1888,7 +1866,7 @@ contains
         if (n_panes == 1) then
             ! Set screen coordinates for the single pane
             editor%tabs(tab_idx)%panes(1)%screen_col = 1
-            editor%tabs(tab_idx)%panes(1)%screen_row = 2  ! After tab bar
+            editor%tabs(tab_idx)%panes(1)%screen_row = first_content_row(editor)
             editor%tabs(tab_idx)%panes(1)%screen_width = screen_width
             editor%tabs(tab_idx)%panes(1)%screen_height = screen_height
 
@@ -1898,7 +1876,7 @@ contains
         end if
 
         ! Clear the editor area first with background
-        do i = 2, editor%screen_rows - 1
+        do i = first_content_row(editor), editor%screen_rows - 1
             call terminal_move_cursor(i, 1)
             call terminal_write(repeat(' ', screen_width))
         end do
@@ -1917,7 +1895,7 @@ contains
                 ! Last pane uses full width
                 pane_width = int((pane%x_end - pane%x_start) * real(screen_width))
             end if
-            pane_row = 2 + int(pane%y_start * real(screen_height))
+            pane_row = first_content_row(editor) + int(pane%y_start * real(screen_height))
             pane_height = int((pane%y_end - pane%y_start) * real(screen_height))
 
             call store_pane_content_rect(editor, tab_idx, i, pane_col, pane_row, &
@@ -2402,7 +2380,7 @@ contains
         if (pane_idx < size(editor%tabs(tab_idx)%panes)) then
             pane_width = pane_width - 1  ! Reserve space for separator
         end if
-        pane_row = 2 + int(pane%y_start * real(screen_height))
+        pane_row = first_content_row(editor) + int(pane%y_start * real(screen_height))
         pane_height = int((pane%y_end - pane%y_start) * real(screen_height))
 
         ! Account for pane header when multiple panes exist
@@ -2567,7 +2545,7 @@ contains
             if (pane_idx < size(editor%tabs(tab_idx)%panes)) then
                 pane_width = pane_width - 1  ! Reserve space for separator
             end if
-            pane_row = 2 + int(pane%y_start * real(screen_height))
+            pane_row = first_content_row(editor) + int(pane%y_start * real(screen_height))
             pane_height = int((pane%y_end - pane%y_start) * real(screen_height))
             if (size(editor%tabs(tab_idx)%panes) > 1) then
                 pane_row = pane_row + 1
@@ -2589,13 +2567,8 @@ contains
                 cursor%column /= editor%ghost%anchor_col) return
             line = buffer_get_line(buffer, cursor%line)
 
-            if (size(editor%tabs) > 0) then
-                row_offset = 2
-                min_row = 2
-            else
-                row_offset = 1
-                min_row = 1
-            end if
+            row_offset = first_content_row(editor)
+            min_row = row_offset
             screen_row = cursor%line - editor%viewport_line + row_offset
             disp = display_offset_of(line, editor%viewport_column, cursor%column)
             screen_col = col_offset + 1 + disp
@@ -2752,12 +2725,42 @@ contains
         type(editor_state_t), intent(in) :: editor
         integer :: h
 
-        h = editor%screen_rows - 2
+        ! screen, less the status bar, less whatever the tab bar occupies.
+        h = editor%screen_rows - 1 - tab_bar_height(editor)
         if (is_terminal_panel_visible(editor%terminal_panel)) then
             h = h - get_terminal_panel_height(editor%terminal_panel)
         end if
         h = max(1, h)
     end function text_area_height
+
+    !> Rows the tab bar permanently occupies: 0 with no tabs, 1 normally.
+    !>
+    !> It was a literal 2 subtracted from the screen height in one place and a
+    !> literal `start_row = 2` in twenty-odd others, with the no-tabs case
+    !> handled in the coordinates but not in the height -- so with zero tabs
+    !> the document drew one more row than the height math believed, leaving
+    !> the last line permanently unreachable by paging.
+    !>
+    !> A second row for tab groups will report 2 here, which is why every
+    !> consumer has to ask rather than assume.
+    function tab_bar_height(editor) result(h)
+        type(editor_state_t), intent(in) :: editor
+        integer :: h
+
+        h = 1
+        if (size(editor%tabs) == 0) h = 0
+    end function tab_bar_height
+
+    !> First screen row the document may draw on. The inverse of
+    !> tab_bar_height, named separately because the ~25 sites that need it want
+    !> a coordinate, not a count, and doing the arithmetic at each one is how
+    !> the two drifted apart in the first place.
+    function first_content_row(editor) result(r)
+        type(editor_state_t), intent(in) :: editor
+        integer :: r
+
+        r = 1 + tab_bar_height(editor)
+    end function first_content_row
 
     ! Cut text to at most `cells` display columns, only ever on a character
     ! boundary, and report the width actually used. Wide characters that would
@@ -2886,7 +2889,7 @@ contains
         if (pane_idx < size(editor%tabs(tab_idx)%panes)) then
             pane_width = pane_width - 1
         end if
-        pane_row = 2 + int(pane%y_start * real(screen_height))
+        pane_row = first_content_row(editor) + int(pane%y_start * real(screen_height))
         pane_height = int((pane%y_end - pane%y_start) * real(screen_height))
 
         ! Account for pane header
@@ -2927,14 +2930,8 @@ contains
             col_offset = 0
         end if
 
-        ! Account for tab bar offset - when tabs exist, row 1 is tab bar, content starts at row 2
-        if (size(editor%tabs) > 0) then
-            row_offset = 2  ! Tab bar takes row 1
-            min_row = 2     ! Cursor cannot be in row 1 (tab bar)
-        else
-            row_offset = 1  ! No tab bar
-            min_row = 1     ! Cursor can be in row 1
-        end if
+        row_offset = first_content_row(editor)
+        min_row = row_offset
 
         cursor = editor%cursors(editor%active_cursor)
 
@@ -3127,7 +3124,8 @@ contains
         call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
 
         ! Render vertical separator (start at row 2 for tab bar)
-        call render_vertical_separator(separator_col, 2, editor%screen_rows - 1)
+        call render_vertical_separator(separator_col, first_content_row(editor), &
+                                       editor%screen_rows - 1)
 
         ! Render appropriate LSP panel on the right
         select case (panel_type)
@@ -3185,7 +3183,7 @@ contains
         end if
 
         ! Multiple panes: render each with adjusted coordinates
-        do i = 2, editor%screen_rows - 1
+        do i = first_content_row(editor), editor%screen_rows - 1
             call terminal_move_cursor(i, start_col)
             call terminal_write(repeat(' ', width))
         end do
@@ -3199,7 +3197,7 @@ contains
             else
                 pane_width = int((pane%x_end - pane%x_start) * real(width))
             end if
-            pane_row = 2 + int(pane%y_start * real(screen_height))
+            pane_row = first_content_row(editor) + int(pane%y_start * real(screen_height))
             pane_height = int((pane%y_end - pane%y_start) * real(screen_height))
 
             call store_pane_content_rect(editor, tab_idx, i, pane_col, pane_row, &
