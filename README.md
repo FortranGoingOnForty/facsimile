@@ -119,9 +119,12 @@ Open a directory as a sub-workspace: press `enter` on a directory in the file
 tree and tick the files you want. The group appears in the tab bar as
 `src/ (4)`, and its members get their own row while you are inside it.
 
-- `super+ctrl+left` / `right` - move across the tab bar's top row, where a group counts as one entry
-- `super+ctrl+down` / `up` - enter / leave a group
+- `super+ctrl+left` / `right` - previous / next file; steps through a group's members, and off the end of one leaves it
+- `super+ctrl+down` / `up` - enter a group / leave it from any member in one press
 - `ctrl-pageup` / `ctrl-pagedown` or `alt-ctrl-left` / `right` - the same, for terminals that do not report Super
+
+Left/right is one continuous line through every open file, so it always gets you
+out of a group even if your window manager eats the Super bindings.
 
 Hovering a group previews its members without moving your text. Group members
 are read from disk the first time you look at them, so a forty-file group costs

@@ -8036,13 +8036,39 @@ contains
     !> An entry is a group or an ungrouped tab, so with no groups this is
     !> exactly the previous/next tab it always was. Wraps at both ends.
     subroutine step_row1_entry(editor, buffer, delta)
+        use editor_state_module, only: active_group_id, group_members
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         integer, intent(in) :: delta
-        integer(int32) :: ids(512)
-        integer :: n, here, target
+        integer(int32) :: ids(512), gid
+        integer :: n, here, target, i, pos
+        integer, allocatable :: members(:)
 
         if (size(editor%tabs) == 0) return
+
+        ! Inside a group the walk is over its members, so left/right reads as
+        ! one continuous line through every open file rather than treating a
+        ! group as a single stop. Only stepping off the first or last member
+        ! leaves -- and it does leave, which is what makes this a way out that
+        ! survives a compositor eating super+ctrl+up.
+        gid = active_group_id(editor)
+        if (gid /= 0) then
+            call group_members(editor, gid, members)
+            pos = 0
+            do i = 1, size(members)
+                if (members(i) == editor%active_tab_index) pos = i
+            end do
+            if (pos > 0) then
+                target = pos + delta
+                if (target >= 1 .and. target <= size(members)) then
+                    call switch_to_tab_with_buffer(editor, members(target), buffer)
+                    return
+                end if
+            end if
+            ! Off the edge. Fall through: row1_entries reports `here` as this
+            ! group, so `here + delta` is the entry beside it.
+        end if
+
         call row1_entries(editor, ids, n, here)
         if (n == 0) return
 
@@ -8052,11 +8078,36 @@ contains
 
         call note_group_position(editor)
         if (ids(target) < 0) then
-            call enter_tab_group(editor, buffer, int(-ids(target), int32))
+            call enter_group_at_edge(editor, buffer, int(-ids(target), int32), delta)
         else
             call switch_to_tab_with_buffer(editor, int(ids(target)), buffer)
         end if
     end subroutine step_row1_entry
+
+    !> Enter `gid` from the side the walk arrived from: moving right lands on
+    !> the first member, moving left on the last.
+    !>
+    !> That is what makes the walk reversible -- retrace your steps and you
+    !> visit the same files in reverse order. Deliberately NOT enter_tab_group,
+    !> which resumes at the remembered member: right for an explicit
+    !> super+ctrl+down, wrong for a walk, which would then skip every member
+    !> between the edge and wherever you last happened to be.
+    subroutine enter_group_at_edge(editor, buffer, gid, delta)
+        use editor_state_module, only: group_members
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer(int32), intent(in) :: gid
+        integer, intent(in) :: delta
+        integer, allocatable :: members(:)
+
+        call group_members(editor, gid, members)
+        if (size(members) == 0) return
+        if (delta > 0) then
+            call switch_to_tab_with_buffer(editor, members(1), buffer)
+        else
+            call switch_to_tab_with_buffer(editor, members(size(members)), buffer)
+        end if
+    end subroutine enter_group_at_edge
 
     !> The row-1 entries, in order, and which one is current.
     !>

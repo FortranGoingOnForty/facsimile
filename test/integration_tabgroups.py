@@ -586,6 +586,133 @@ def test_an_old_state_file_still_loads(binary):
         s.close()
 
 
+def active_member(s):
+    """Which file is showing, from the status bar path."""
+    m = re.search(r"(file\d+\.txt)", s.status())
+    return m.group(1) if m else None
+
+
+def inside_group(s):
+    """A two-row tab bar means we are inside a group.
+
+    Row 3 carries buffer line 1 when the bar is two rows, line 2 when it is
+    one -- so the gutter reports containment without trusting a label.
+    """
+    return s.gutter_line(3) == 1
+
+
+def test_left_right_walks_the_members_then_exits(binary):
+    """Left/right is one continuous line through every open file.
+
+    A group is not a single stop: stepping into one lands on its edge member
+    and each further press advances within it, until stepping off the last
+    member leaves. That last part is what makes ctrl-pagedown a way out of a
+    group when the window manager has eaten super+ctrl+up.
+    """
+    s = Session(binary)
+    try:
+        if not group_some_and_leave(s):
+            check(False, "walk: could not form the group")
+            return
+        check(active_member(s) == "file05.txt",
+              "starts outside the group on file05", active_member(s))
+        check(not inside_group(s), "and the bar is one row")
+
+        # Right: into the group at its FIRST member, then along it.
+        seen = []
+        for _ in range(6):
+            s.send("\x1b[6;5~", 0.85)
+            seen.append((active_member(s), inside_group(s)))
+
+        check(seen[0] == ("file01.txt", True),
+              "stepping right enters the group at its first member", seen[0])
+        check([m for m, _ in seen[:4]] ==
+              ["file01.txt", "file02.txt", "file03.txt", "file04.txt"],
+              "and then walks the members in order", [m for m, _ in seen[:4]])
+        check(all(g for _, g in seen[:4]), "staying inside throughout", seen[:4])
+        check(seen[4] == ("file05.txt", False),
+              "stepping off the last member LEAVES the group", seen[4])
+        check(seen[5] == ("file01.txt", True),
+              "and the walk wraps back round", seen[5])
+    finally:
+        s.close()
+
+
+def test_the_walk_is_reversible(binary):
+    """Retrace the steps and you visit the same files in reverse.
+
+    Only true because entering from the right lands on the LAST member rather
+    than the remembered one -- otherwise walking left out of a group and back
+    in would skip every member between the edge and where you last were.
+    """
+    s = Session(binary)
+    try:
+        if not group_some_and_leave(s):
+            check(False, "reverse: could not form the group")
+            return
+
+        # Entering from the right must land on the LAST member. This is the
+        # assertion that actually discriminates: a group treated as a single
+        # stop is symmetric, so a bare there-and-back check passes even when
+        # left/right does nothing but toggle in and out.
+        s.send("\x1b[5;5~", 0.9)           # left, from file05 into the group
+        check(active_member(s) == "file04.txt",
+              "stepping LEFT into a group lands on its LAST member",
+              active_member(s))
+        check(inside_group(s), "and really is inside it")
+
+        s.send("\x1b[6;5~", 0.9)           # right, straight back out
+        check(active_member(s) == "file05.txt" and not inside_group(s),
+              "and stepping right returns whence it came", active_member(s))
+
+        forward = []
+        for _ in range(5):
+            s.send("\x1b[6;5~", 0.85)
+            forward.append(active_member(s))
+        check(forward == ["file01.txt", "file02.txt", "file03.txt",
+                          "file04.txt", "file05.txt"],
+              "the forward walk visits five distinct files", forward)
+
+        backward = []
+        for _ in range(5):
+            s.send("\x1b[5;5~", 0.85)
+            backward.append(active_member(s))
+
+        # Walking back re-treads the forward path: the last forward step is
+        # already where we stand, so the return trip is the rest, reversed,
+        # ending where the walk began.
+        check(backward == list(reversed(forward[:-1])) + ["file05.txt"],
+              "walking left retraces the walk right",
+              f"fwd={forward} back={backward}")
+        check(active_member(s) == "file05.txt",
+              "landing back where it started", active_member(s))
+    finally:
+        s.close()
+
+
+def test_leaving_from_the_middle_still_takes_one_press(binary):
+    """super+ctrl+up leaves from any member, not just an edge one.
+
+    The member walk must not have made the explicit exit worse: it is the
+    binding that gets you out of a forty-file group in one press.
+    """
+    s = Session(binary)
+    try:
+        if not group_some_and_leave(s):
+            check(False, "middle-exit: could not form the group")
+            return
+        s.send("\x1b[6;5~", 0.85)          # into the group, member 1
+        s.send("\x1b[6;5~", 0.85)          # member 2 -- the middle
+        check(inside_group(s) and active_member(s) == "file02.txt",
+              "sitting on a middle member", active_member(s))
+
+        s.send("\x1b[1;13A", 0.9)          # super+ctrl+up
+        check(not inside_group(s), "super+ctrl+up leaves from the middle",
+              f"still inside, on {active_member(s)}")
+    finally:
+        s.close()
+
+
 def main():
     binary = find_binary()
     for fn in (test_row_one_collapses_the_group,
@@ -597,6 +724,9 @@ def main():
                test_the_preview_clears,
                test_a_keystroke_dismisses_the_preview,
                test_super_ctrl_arrows_navigate_without_moving_the_caret,
+               test_left_right_walks_the_members_then_exits,
+               test_the_walk_is_reversible,
+               test_leaving_from_the_middle_still_takes_one_press,
                test_lock_states_do_not_break_the_chord,
                test_the_old_chords_still_do_what_they_did,
                test_enter_on_a_directory_opens_the_dialog,

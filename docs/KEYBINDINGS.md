@@ -329,11 +329,21 @@ For detailed feature explanations, see [LSP_GUIDE.md](LSP_GUIDE.md)
 
 | Key | Action |
 |---|---|
-| `Super+Ctrl+Left` / `Right` | Previous / next entry on the tab bar's top row — a group counts as one entry |
-| `Super+Ctrl+Down` | Enter a group |
-| `Super+Ctrl+Up` | Leave the current group |
+| `Super+Ctrl+Left` / `Right` | Previous / next file — steps *through* a group's members, and off the end of one leaves it |
+| `Super+Ctrl+Down` | Enter the group on the top row |
+| `Super+Ctrl+Up` | Leave the current group, from any member, in one press |
 | `Ctrl+PageUp` / `PageDown` | Same as Super+Ctrl+Left/Right |
 | `Alt+Ctrl+Left` / `Right` | Same again, for terminals that do not report Super |
+
+Left/right is one continuous line through every open file. Stepping into a
+group lands on the member nearest the side you came from — moving right enters
+at the first member, moving left at the last — so retracing your steps visits
+the same files in reverse. Stepping off the last member leaves the group.
+
+That means left/right alone will always get you out of a group, which matters
+because `Super+Ctrl+Up` is the binding a window manager is most likely to take.
+For a group with many members, `Super+Ctrl+Up` still leaves in a single press
+from wherever you are, and `Alt+1`–`Alt+9` jump by tab number.
 
 Super is reported by kitty, ghostty, foot and wezterm; elsewhere the window
 manager often takes `Super+Arrow` before the terminal sees it. The `Ctrl+PageUp`
