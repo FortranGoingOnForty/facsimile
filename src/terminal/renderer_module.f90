@@ -4,6 +4,7 @@ module renderer_module
     use text_buffer_module
     use utf8_module
     use editor_state_module, only: editor_state_t, cursor_t
+    use editor_state_module, only: active_pane_of
     use bracket_matching_module
     use clickable_region_module, only: regions_begin_frame, region_add, REGION_TAB, &
                                        REGION_FUSS_TOGGLE
@@ -1470,7 +1471,7 @@ contains
         if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0 .and. &
             editor%active_tab_index <= size(editor%tabs)) then
             editor%viewport_line = min(editor%viewport_line, &
-                max(1, buffer_get_line_count(editor%tabs(editor%active_tab_index)%buffer)))
+                max(1, buffer_get_line_count(editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, editor%active_tab_index))%buffer)))
         end if
 
         ! Horizontal scrolling (account for fuss mode and line numbers)

@@ -4,6 +4,7 @@
 module workspace_module
     use iso_c_binding, only: c_int
     use editor_state_module, only: editor_state_t, create_tab, sync_pane_to_editor
+    use editor_state_module, only: active_pane_of
     use text_buffer_module, only: buffer_t, init_buffer, buffer_to_string
     use lsp_server_manager_module, only: notify_file_opened
     use recents_module, only: recents_add_or_update
@@ -591,7 +592,7 @@ contains
                             editor%tabs(tab_idx)%is_orphan = .false.
 
                             ! Initialize empty buffer for tab
-                            call init_buffer(editor%tabs(tab_idx)%buffer)
+                            call init_buffer(editor%tabs(tab_idx)%panes(active_pane_of(editor, tab_idx))%buffer)
 
                             ! Set cursor and viewport in first pane
                             if (allocated(editor%tabs(tab_idx)%panes) .and. size(editor%tabs(tab_idx)%panes) > 0) then
@@ -649,7 +650,7 @@ contains
                         ! Set orphan flag and load file
                         if (allocated(editor%tabs) .and. tab_idx > 0) then
                             editor%tabs(tab_idx)%is_orphan = is_orphan
-                            call buffer_load_file(editor%tabs(tab_idx)%buffer, trim(full_path), load_status)
+                            call buffer_load_file(editor%tabs(tab_idx)%panes(active_pane_of(editor, tab_idx))%buffer, trim(full_path), load_status)
 
                             ! Send LSP didOpen notification for restored tabs
                             if (load_status == 0 .and. editor%tabs(tab_idx)%num_lsp_servers > 0) then
@@ -658,14 +659,14 @@ contains
                                     do srv_i = 1, editor%tabs(tab_idx)%num_lsp_servers
                                         call notify_file_opened(editor%lsp_manager, &
                                             editor%tabs(tab_idx)%lsp_server_indices(srv_i), &
-                                            trim(full_path), buffer_to_string(editor%tabs(tab_idx)%buffer))
+                                            trim(full_path), buffer_to_string(editor%tabs(tab_idx)%panes(active_pane_of(editor, tab_idx))%buffer))
                                     end do
                                 end block
                             end if
 
                             ! Set cursor and viewport in first pane
                             if (allocated(editor%tabs(tab_idx)%panes) .and. size(editor%tabs(tab_idx)%panes) > 0) then
-                                call buffer_load_file(editor%tabs(tab_idx)%panes(1)%buffer, trim(full_path), load_status)
+                                ! Already read above, into this same pane.
 
                                 ! Only the first pane is restored, so force it to
                                 ! fill the tab. Persisted bounds may belong to a

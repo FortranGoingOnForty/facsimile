@@ -144,7 +144,8 @@ contains
             write(name, '(a,i0,a)') 'f', i, '.txt'
             call create_tab(editor, trim(name))
             ! Give each tab text of its own so a shared buffer is detectable.
-            call buffer_insert(editor%tabs(i)%buffer, 1, 'body of ' // trim(name))
+            call buffer_insert(editor%tabs(i)%panes(1)%buffer, 1, &
+                               'body of ' // trim(name))
         end do
 
         call check(size(editor%tabs) == 40, 'forty tabs were created')
@@ -157,15 +158,15 @@ contains
         call check(distinct, 'every tab kept its own filename through the growth')
 
         ! Mutating one tab must not disturb its neighbour.
-        call buffer_insert(editor%tabs(1)%buffer, 1, 'XX')
-        call check(index(buffer_get_line(editor%tabs(2)%buffer, 1), 'XX') == 0, &
+        call buffer_insert(editor%tabs(1)%panes(1)%buffer, 1, 'XX')
+        call check(index(buffer_get_line(editor%tabs(2)%panes(1)%buffer, 1), 'XX') == 0, &
                    'editing one tab does not change another')
 
         ! And the same after a compaction.
         call close_tab(editor, 20)
         call check(size(editor%tabs) == 39, 'a tab was removed')
-        call buffer_insert(editor%tabs(1)%buffer, 1, 'YY')
-        call check(index(buffer_get_line(editor%tabs(2)%buffer, 1), 'YY') == 0, &
+        call buffer_insert(editor%tabs(1)%panes(1)%buffer, 1, 'YY')
+        call check(index(buffer_get_line(editor%tabs(2)%panes(1)%buffer, 1), 'YY') == 0, &
                    'and still does not after the array is compacted')
     end subroutine test_moved_tabs_do_not_alias
 

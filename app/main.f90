@@ -3,6 +3,7 @@
 ! which requires an executable stack (ld warns about it on -O0 builds).
 module main_lsp_callbacks
     use editor_state_module, only: editor_state_t
+    use editor_state_module, only: active_pane_of
     implicit none
     private
     public :: bind_diagnostics_editor, handle_diagnostics
@@ -418,20 +419,19 @@ program facsimile
         ! Create a tab for the initial file
         call create_tab(editor, trim(filename), tab_created)
 
-        ! Load file into tab's buffer and first pane's buffer
-        if (editor%active_tab_index > 0) then
-            call buffer_load_file(editor%tabs(editor%active_tab_index)%buffer, trim(filename), status)
-
-            ! Also load into first pane's buffer
-            if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
-                size(editor%tabs(editor%active_tab_index)%panes) > 0) then
-                call buffer_load_file(editor%tabs(editor%active_tab_index)%panes(1)%buffer, trim(filename), status)
-                ! Copy first pane's buffer to main buffer
-                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%panes(1)%buffer)
-            else
-                ! Copy tab's buffer to main buffer
-                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%buffer)
-            end if
+        ! Read the file once, into the pane that owns it. This used to load
+        ! from disk twice -- once into the tab's shadow buffer and once into
+        ! the pane's -- for every file, on every open path.
+        if (editor%active_tab_index > 0 .and. tab_created) then
+            block
+                integer :: p0
+                p0 = active_pane_of(editor, editor%active_tab_index)
+                call buffer_load_file( &
+                    editor%tabs(editor%active_tab_index)%panes(p0)%buffer, &
+                    trim(filename), status)
+                call copy_buffer(buffer, &
+                    editor%tabs(editor%active_tab_index)%panes(p0)%buffer)
+            end block
         else
             call buffer_load_file(buffer, trim(filename), status)
         end if
@@ -467,7 +467,7 @@ program facsimile
 
                     ! Copy hex buffer to tab and pane buffers
                     if (editor%active_tab_index > 0 .and. editor%active_tab_index <= size(editor%tabs)) then
-                        call copy_buffer(editor%tabs(editor%active_tab_index)%buffer, buffer)
+                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, editor%active_tab_index))%buffer, buffer)
                         if (allocated(editor%tabs(editor%active_tab_index)%panes) .and. &
                             size(editor%tabs(editor%active_tab_index)%panes) > 0) then
                             call copy_buffer(editor%tabs(editor%active_tab_index)%panes(1)%buffer, buffer)
@@ -624,7 +624,7 @@ program facsimile
 
                     ! Only sync buffers when LSP actually changed them
                     call copy_buffer(buffer, &
-                        editor%tabs(editor%active_tab_index)%buffer)
+                        editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, editor%active_tab_index))%buffer)
 
                     if (allocated(editor%tabs( &
                         editor%active_tab_index)%panes) .and. &
@@ -779,7 +779,7 @@ program facsimile
                         end if
 
                         ! Also update tab buffer for backwards compatibility
-                        call copy_buffer(editor%tabs(editor%active_tab_index)%buffer, buffer)
+                        call copy_buffer(editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, editor%active_tab_index))%buffer, buffer)
 
                         ! Sync modified flag from buffer to tab
                         editor%tabs(editor%active_tab_index)%modified = buffer%modified
@@ -1153,7 +1153,7 @@ contains
                                     %buffer)
                             else
                                 buf_str = buffer_to_string( &
-                                    editor%tabs(i)%buffer)
+                                    editor%tabs(i)%panes(active_pane_of(editor, i))%buffer)
                             end if
                             call backup_create( &
                                 editor%tabs(i)%filename, &
@@ -1197,7 +1197,7 @@ contains
                         call buffer_load_file(buffer, restored_file, status)
                         if (status == 0) then
                             ! Sync to tab and pane buffers
-                            call copy_buffer(editor%tabs(tab_idx)%buffer, buffer)
+                            call copy_buffer(editor%tabs(tab_idx)%panes(active_pane_of(editor, tab_idx))%buffer, buffer)
                             if (allocated(editor%tabs(tab_idx)%panes) .and. &
                                 size(editor%tabs(tab_idx)%panes) > 0) then
                                 call copy_buffer(editor%tabs(tab_idx)%panes(1)%buffer, buffer)

@@ -44,7 +44,7 @@ module editor_state_module
 
     public :: editor_state_t, cursor_t, pane_t, tab_t
     public :: init_editor, cleanup_editor
-    public :: create_tab, can_create_tab, find_tab_by_id, save_tab_pane, switch_to_tab, switch_to_tab_with_buffer, get_active_tab_index, close_tab
+    public :: create_tab, can_create_tab, find_tab_by_id, save_tab_pane, active_pane_of, switch_to_tab, switch_to_tab_with_buffer, get_active_tab_index, close_tab
     public :: split_pane_vertical, split_pane_horizontal, close_pane, get_active_pane_indices
     public :: navigate_to_pane_left, navigate_to_pane_right, navigate_to_pane_up, navigate_to_pane_down
     public :: sync_pane_to_editor, sync_editor_to_pane, switch_to_pane, switch_to_pane_with_buffer
@@ -96,7 +96,10 @@ module editor_state_module
     ! Tab - represents a single file buffer with one or more panes
     type :: tab_t
         character(len=:), allocatable :: filename
-        type(buffer_t) :: buffer
+        ! No buffer here. A tab used to carry a shadow copy of whichever pane
+        ! was last active, which meant every file was read from disk twice and
+        ! every save path had to guess which copy was current. The panes own
+        ! the text; ask active_pane_of which one holds it.
 
         ! Panes within this tab
         type(pane_t), allocatable :: panes(:)
@@ -323,7 +326,6 @@ contains
             deallocate(tab%panes)
         end if
 
-        call cleanup_buffer(tab%buffer)
 
         ! Cleanup LSP server indices
         if (allocated(tab%lsp_server_indices)) deallocate(tab%lsp_server_indices)
@@ -334,6 +336,25 @@ contains
     end subroutine cleanup_tab
 
     ! Create a new tab with the given filename
+    !> Index of the pane whose buffer is a tab's live text, or 0.
+    !>
+    !> A tab used to carry its own buffer as well, a shadow of whichever pane
+    !> was last active. Two copies of one document meant every open path loaded
+    !> the file twice, and every save path had to guess which copy was current
+    !> -- which is how a pane's text came to be written under the tab's name.
+    !> The panes own the text now; this says which one to ask.
+    function active_pane_of(editor, tab_idx) result(p)
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(in) :: tab_idx
+        integer :: p
+
+        p = 0
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+        p = editor%tabs(tab_idx)%active_pane_index
+        if (p < 1 .or. p > size(editor%tabs(tab_idx)%panes)) p = 1
+    end function active_pane_of
+
     !> Write one pane's text to that pane's own file.
     !>
     !> The one place a non-active document gets written. Before this there were
@@ -383,12 +404,6 @@ contains
         integer :: i
 
         if (allocated(src%filename)) call move_alloc(src%filename, dst%filename)
-        if (allocated(src%buffer%data)) call move_alloc(src%buffer%data, dst%buffer%data)
-        dst%buffer%gap_start = src%buffer%gap_start
-        dst%buffer%gap_end   = src%buffer%gap_end
-        dst%buffer%size      = src%buffer%size
-        dst%buffer%modified  = src%buffer%modified
-
         if (allocated(src%panes)) then
             ! Moving the array moves each pane's buffer, filename and cursors
             ! with it: they are components of the elements being transferred.
@@ -484,7 +499,6 @@ contains
         canon = canonical_path(filename)
         allocate(character(len=len(canon)) :: temp_tabs(new_index)%filename)
         temp_tabs(new_index)%filename = canon
-        call init_buffer(temp_tabs(new_index)%buffer)
 
         ! Create default pane (full screen)
         allocate(temp_tabs(new_index)%panes(1))
@@ -511,9 +525,8 @@ contains
         temp_tabs(new_index)%panes(1)%cursors(1)%has_selection = .false.
         temp_tabs(new_index)%panes(1)%active_cursor = 1
 
-        ! Initialize pane's buffer and filename (copy from tab)
+        ! The pane owns the text. There is no tab-level copy to seed it from.
         call init_buffer(temp_tabs(new_index)%panes(1)%buffer)
-        call copy_buffer(temp_tabs(new_index)%panes(1)%buffer, temp_tabs(new_index)%buffer)
         allocate(character(len=len(canon)) :: temp_tabs(new_index)%panes(1)%filename)
         temp_tabs(new_index)%panes(1)%filename = canon
 
@@ -628,8 +641,6 @@ contains
                 editor%tabs(editor%active_tab_index)%panes(pane_idx)%viewport_line = editor%viewport_line
                 editor%tabs(editor%active_tab_index)%panes(pane_idx)%viewport_column = editor%viewport_column
             end if
-            ! Also save to tab's buffer for backwards compatibility
-            call copy_buffer(editor%tabs(editor%active_tab_index)%buffer, buffer)
             editor%tabs(editor%active_tab_index)%modified = editor%modified
         end if
 
@@ -641,9 +652,6 @@ contains
         if (allocated(editor%tabs(tab_index)%panes) .and. &
             pane_idx > 0 .and. pane_idx <= size(editor%tabs(tab_index)%panes)) then
             call copy_buffer(buffer, editor%tabs(tab_index)%panes(pane_idx)%buffer)
-        else
-            ! Fallback to tab buffer if no pane
-            call copy_buffer(buffer, editor%tabs(tab_index)%buffer)
         end if
 
         ! Load from active pane of new tab (clamps cursors to the
@@ -822,12 +830,7 @@ contains
             ! Initialize and copy buffer from active pane
             call init_buffer(temp_panes(new_idx)%buffer)
             ! Copy from active pane's buffer - make sure it's initialized
-            if (active_pane%buffer%size > 0) then
-                call copy_buffer(temp_panes(new_idx)%buffer, active_pane%buffer)
-            else
-                ! Active pane buffer not initialized, copy from tab buffer
-                call copy_buffer(temp_panes(new_idx)%buffer, editor%tabs(tab_idx)%buffer)
-            end if
+            call copy_buffer(temp_panes(new_idx)%buffer, active_pane%buffer)
             if (allocated(active_pane%filename)) then
                 temp_panes(new_idx)%filename = active_pane%filename
             end if
@@ -942,12 +945,7 @@ contains
             ! Initialize and copy buffer from active pane
             call init_buffer(temp_panes(new_idx)%buffer)
             ! Copy from active pane's buffer - make sure it's initialized
-            if (active_pane%buffer%size > 0) then
-                call copy_buffer(temp_panes(new_idx)%buffer, active_pane%buffer)
-            else
-                ! Active pane buffer not initialized, copy from tab buffer
-                call copy_buffer(temp_panes(new_idx)%buffer, editor%tabs(tab_idx)%buffer)
-            end if
+            call copy_buffer(temp_panes(new_idx)%buffer, active_pane%buffer)
             if (allocated(active_pane%filename)) then
                 temp_panes(new_idx)%filename = active_pane%filename
             end if
@@ -1106,7 +1104,11 @@ contains
             end if
 
             ! Validate cursor positions are within buffer bounds
-            line_count = buffer_get_line_count(editor%tabs(tab_idx)%buffer)
+            ! Clamp against the pane being synced. Clamping against a
+            ! tab-level copy put every cursor of a pane holding a different
+            ! file at the wrong limit.
+            line_count = buffer_get_line_count( &
+                editor%tabs(tab_idx)%panes(pane_idx)%buffer)
             if (line_count > 0 .and. allocated(editor%cursors)) then
                 do i = 1, size(editor%cursors)
                     ! Clamp line to valid range
@@ -1118,7 +1120,8 @@ contains
                     end if
 
                     ! Clamp column to valid range for the line
-                    line = buffer_get_line(editor%tabs(tab_idx)%buffer, editor%cursors(i)%line)
+                    line = buffer_get_line( &
+                        editor%tabs(tab_idx)%panes(pane_idx)%buffer, editor%cursors(i)%line)
                     if (editor%cursors(i)%column > len(line) + 1) then
                         editor%cursors(i)%column = len(line) + 1
                     end if
@@ -1432,7 +1435,6 @@ contains
             ! Update tab's buffer if it matches
             if (allocated(editor%tabs(tab_idx)%filename)) then
                 if (trim(editor%tabs(tab_idx)%filename) == normalized_filename) then
-                    call copy_buffer(editor%tabs(tab_idx)%buffer, buffer)
                     editor%tabs(tab_idx)%modified = .true.
                 end if
             end if
@@ -1467,17 +1469,11 @@ contains
         tab_idx = editor%active_tab_index
         if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
 
-        ! Clean up the old tab's buffer
-        call cleanup_buffer(editor%tabs(tab_idx)%buffer)
-
         ! Reinitialize as untitled
         if (allocated(editor%tabs(tab_idx)%filename)) deallocate(editor%tabs(tab_idx)%filename)
         allocate(character(len=12) :: editor%tabs(tab_idx)%filename)
         editor%tabs(tab_idx)%filename = "UNTITLED.txt"
         editor%tabs(tab_idx)%modified = .false.
-
-        ! Initialize empty buffer
-        call init_buffer(editor%tabs(tab_idx)%buffer)
 
         ! Reset panes
         if (allocated(editor%tabs(tab_idx)%panes)) then
