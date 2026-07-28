@@ -324,3 +324,23 @@ actually delivers.
 ---
 
 For detailed feature explanations, see [LSP_GUIDE.md](LSP_GUIDE.md)
+
+## Tab groups
+
+| Key | Action |
+|---|---|
+| `Super+Ctrl+Left` / `Right` | Previous / next entry on the tab bar's top row — a group counts as one entry |
+| `Super+Ctrl+Down` | Enter a group |
+| `Super+Ctrl+Up` | Leave the current group |
+| `Ctrl+PageUp` / `PageDown` | Same as Super+Ctrl+Left/Right |
+| `Alt+Ctrl+Left` / `Right` | Same again, for terminals that do not report Super |
+
+Super is reported by kitty, ghostty, foot and wezterm; elsewhere the window
+manager often takes `Super+Arrow` before the terminal sees it. The `Ctrl+PageUp`
+and `Alt+Ctrl+Arrow` bindings are the ones that work everywhere — treat Super as
+the enhancement, not the headline.
+
+Hovering a group on the tab bar previews its members without moving your text.
+Set `"tabs.group_hover_preview": false` in `settings.json` to turn that off; the
+pinned member row still works, and it stops the editor asking the terminal to
+report every pointer movement.

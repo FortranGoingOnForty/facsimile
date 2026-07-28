@@ -7,6 +7,7 @@ module input_handler_module
     public :: get_key_input, key_type, mouse_event_t
     public :: get_paste_text
     public :: decode_csi_u  ! exposed for unit tests
+    public :: modifier_prefix  ! exposed for unit tests
     ! Splits the "event:button:row:col" strings this module emits. It
     ! lives here, with the code that formats them, so any module above
     ! can read a mouse event -- the command palette runs its own input
@@ -848,6 +849,33 @@ contains
 
     end subroutine handle_escape_sequence
 
+
+    !> Modifier prefix for a legacy CSI parameter, decoded from bits.
+    !>
+    !> The parameter is 1 plus a bitmask: shift 1, alt 2, ctrl 4, super 8, and
+    !> above that hyper, meta and the lock states. A case table over 2..9 could
+    !> not express the combinations above 9, and worse, it fell through to an
+    !> empty prefix -- so the caller went on to append the terminator and
+    !> produced a BARE arrow. super+ctrl+left simply moved the caret.
+    !>
+    !> Order matches decode_csi_u and every binding already in the codebase:
+    !> super, alt, ctrl, shift. Nothing here spells a chord 'ctrl-alt-'.
+    pure function modifier_prefix(modifier) result(prefix)
+        integer, intent(in) :: modifier
+        character(len=:), allocatable :: prefix
+        integer :: bits
+
+        bits = max(0, modifier - 1)
+        prefix = ''
+        if (iand(bits, 8) /= 0) prefix = prefix // 'super-'
+        if (iand(bits, 2) /= 0) prefix = prefix // 'alt-'
+        if (iand(bits, 4) /= 0) prefix = prefix // 'ctrl-'
+        if (iand(bits, 1) /= 0) prefix = prefix // 'shift-'
+        ! Bit 16 hyper, 32 meta, 64 caps lock, 128 num lock: reported by some
+        ! terminals and deliberately ignored, so that num lock does not make a
+        ! chord unrecognisable.
+    end function modifier_prefix
+
     subroutine handle_modified_key(key_str, caller_key_code)
         character(len=*), intent(out) :: key_str
         integer, intent(in), optional :: caller_key_code
@@ -902,26 +930,7 @@ contains
         end if
 
         if (ios == 0) then
-            select case(modifier)
-            case(2)  ! Shift
-                key_str = 'shift-'
-            case(3)  ! Alt
-                key_str = 'alt-'
-            case(4)  ! Alt+Shift
-                key_str = 'alt-shift-'
-            case(5)  ! Ctrl
-                key_str = 'ctrl-'
-            case(6)  ! Ctrl+Shift
-                key_str = 'ctrl-shift-'
-            case(7)  ! Alt+Ctrl
-                key_str = 'alt-ctrl-'
-            case(8)  ! Alt+Shift (or Option+Shift)
-                key_str = 'alt-shift-'
-            case(9)  ! Alt+Cmd (or Option+Cmd on macOS)
-                key_str = 'opt-meta-'
-            case default
-                key_str = ''
-            end select
+            key_str = modifier_prefix(modifier)
 
             ! Append the key type using the terminator character
             select case(terminator)
@@ -1073,20 +1082,7 @@ contains
         if (len_trim(modifier_seq) > 0) then
             read(modifier_seq, '(i10)', iostat=ios) modifier
             if (ios == 0) then
-                select case(modifier)
-                case(2)  ! Shift
-                    key_str = 'shift-'
-                case(3)  ! Alt
-                    key_str = 'alt-'
-                case(4)  ! Alt+Shift
-                    key_str = 'alt-shift-'
-                case(5)  ! Ctrl
-                    key_str = 'ctrl-'
-                case(6)  ! Ctrl+Shift
-                    key_str = 'ctrl-shift-'
-                case default
-                    key_str = ''
-                end select
+                key_str = modifier_prefix(modifier)
 
                 ! Append the key type based on key_code
                 select case(key_code)
@@ -1162,25 +1158,7 @@ contains
         ! Parse modifier: 2=Shift, 3=Alt, 4=Alt+Shift, 5=Ctrl, 6=Ctrl+Shift, 7=Alt+Ctrl, 8=Alt+Shift
         read(modifier_ch, '(i1)') modifier
 
-        select case(modifier)
-        case(2)  ! Shift
-            key_str = 'shift-' // trim(base_key)
-        case(3)  ! Alt
-            key_str = 'alt-' // trim(base_key)
-        case(4)  ! Alt+Shift
-            key_str = 'alt-shift-' // trim(base_key)
-        case(5)  ! Ctrl
-            key_str = 'ctrl-' // trim(base_key)
-        case(6)  ! Ctrl+Shift
-            key_str = 'ctrl-shift-' // trim(base_key)
-        case(7)  ! Alt+Ctrl
-            key_str = 'alt-ctrl-' // trim(base_key)
-        case(8)  ! Alt+Ctrl+Shift
-            key_str = 'alt-ctrl-shift-' // trim(base_key)
-        case default
-            ! Unknown modifier, return unmodified key
-            key_str = trim(base_key)
-        end select
+        key_str = modifier_prefix(modifier) // trim(base_key)
     end subroutine handle_modified_function_key
 
     subroutine handle_mouse_event(key_str)

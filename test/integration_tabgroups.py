@@ -322,6 +322,69 @@ def test_a_keystroke_dismisses_the_preview(binary):
         s.close()
 
 
+def test_super_ctrl_arrows_navigate_without_moving_the_caret(binary):
+    """Modifier 13 used to fall through to an empty prefix, so the terminator
+    was appended to nothing and super+ctrl+left arrived as a bare 'left'. It
+    moved the caret instead of doing nothing."""
+    s = Session(binary)
+    try:
+        open_all(s)
+        first = s.status()
+        cy, cx = s.screen.cursor.y, s.screen.cursor.x
+
+        s.child.send("\x1b[1;13D")            # super+ctrl+left
+        s.drain(0.9)
+        check(s.status() != first, "super+ctrl+left moves to another entry",
+              f"{first[:60]!r} -> {s.status()[:60]!r}")
+        check((s.screen.cursor.y, s.screen.cursor.x) == (cy, cx),
+              "and does NOT move the caret",
+              f"{(cy, cx)} -> {(s.screen.cursor.y, s.screen.cursor.x)}")
+
+        s.child.send("\x1b[1;13C")            # super+ctrl+right
+        s.drain(0.9)
+        check(s.status() == first, "super+ctrl+right comes back", s.status()[:60])
+    finally:
+        s.close()
+
+
+def test_lock_states_do_not_break_the_chord(binary):
+    """Num lock adds 128 to the modifier. A case table could not cover that;
+    the bitmask decode ignores the high bits."""
+    s = Session(binary)
+    try:
+        open_all(s)
+        first = s.status()
+        s.child.send("\x1b[1;141D")           # super+ctrl+left with num lock
+        s.drain(0.9)
+        check(s.status() != first,
+              "super+ctrl+left still navigates with num lock on",
+              f"{first[:60]!r} -> {s.status()[:60]!r}")
+    finally:
+        s.close()
+
+
+def test_the_old_chords_still_do_what_they_did(binary):
+    """Modifiers 2..7 are pinned byte-for-byte, so nothing that worked before
+    may change."""
+    s = Session(binary)
+    try:
+        open_all(s)
+        s.send("\x1b[C" * 6, 0.5)             # move into the line
+        before = s.screen.cursor.x
+        s.child.send("\x1b[1;5D")             # ctrl+left: word left
+        s.drain(0.6)
+        check(s.screen.cursor.x < before,
+              "ctrl+left still moves by word", f"{before} -> {s.screen.cursor.x}")
+
+        first = s.status()
+        s.child.send("\x1b[6;5~")             # ctrl+pagedown
+        s.drain(0.9)
+        check(s.status() != first, "ctrl+pagedown still changes entry",
+              s.status()[:60])
+    finally:
+        s.close()
+
+
 def main():
     binary = find_binary()
     for fn in (test_row_one_collapses_the_group,
@@ -331,7 +394,10 @@ def main():
                test_the_count_follows_a_close,
                test_hover_previews_without_reflowing,
                test_the_preview_clears,
-               test_a_keystroke_dismisses_the_preview):
+               test_a_keystroke_dismisses_the_preview,
+               test_super_ctrl_arrows_navigate_without_moving_the_caret,
+               test_lock_states_do_not_break_the_chord,
+               test_the_old_chords_still_do_what_they_did):
         try:
             fn(binary)
         except Exception as exc:            # noqa: BLE001

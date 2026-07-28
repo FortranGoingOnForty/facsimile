@@ -1337,25 +1337,19 @@ contains
             ! Switch to tab 10
             if (size(editor%tabs) >= 10) call switch_to_tab_with_buffer(editor, 10, buffer)
 
-        case('ctrl-alt-left', 'ctrl-pageup')
-            ! Previous tab (ctrl-alt-left or ctrl-pageup)
-            if (size(editor%tabs) > 0) then
-                if (editor%active_tab_index > 1) then
-                    call switch_to_tab_with_buffer(editor, editor%active_tab_index - 1, buffer)
-                else
-                    call switch_to_tab_with_buffer(editor, size(editor%tabs), buffer)  ! Wrap to last tab
-                end if
-            end if
+        case('ctrl-alt-left', 'alt-ctrl-left', 'super-ctrl-left', 'ctrl-pageup')
+            ! Previous entry on row 1. With no groups that is the previous
+            ! tab, exactly as before; with groups a whole group is one entry,
+            ! so this steps across groups.
+            !
+            ! 'ctrl-alt-left' never fired: the input layer emits 'alt-ctrl-'
+            ! for modifier 7 and this case listed only the other spelling. Both
+            ! are here now, plus super-ctrl for terminals that report super.
+            call step_row1_entry(editor, buffer, -1)
 
-        case('ctrl-alt-right', 'ctrl-pagedown')
-            ! Next tab (ctrl-alt-right or ctrl-pagedown)
-            if (size(editor%tabs) > 0) then
-                if (editor%active_tab_index < size(editor%tabs)) then
-                    call switch_to_tab_with_buffer(editor, editor%active_tab_index + 1, buffer)
-                else
-                    call switch_to_tab_with_buffer(editor, 1, buffer)  ! Wrap to first tab
-                end if
-            end if
+        case('ctrl-alt-right', 'alt-ctrl-right', 'super-ctrl-right', 'ctrl-pagedown')
+            ! Next entry on row 1. See above.
+            call step_row1_entry(editor, buffer, 1)
 
         ! Text modification
         case('backspace')
@@ -2478,18 +2472,25 @@ contains
             ! Jump to matching bracket
             call jump_to_matching_bracket(editor, buffer)
 
-        case('opt-meta-up', 'ctrl-alt-up', 'alt-ctrl-up')
-            ! Add cursor on line above
-            ! opt-meta-up: Doesn't work (terminals don't send Cmd)
-            ! ctrl-alt-up: Alternative binding that works
+        case('super-ctrl-down', 'alt-shift-pagedown')
+            ! Enter the group under the cursor on row 1, or the active one.
+            call enter_group_from_row1(editor, buffer)
+
+        case('super-ctrl-up', 'alt-shift-pageup')
+            ! Leave the current group for the nearest tab outside it.
+            call leave_current_group(editor, buffer)
+
+        case('super-up', 'ctrl-alt-up', 'alt-ctrl-up')
+            ! Add cursor on line above. The input layer emits alt-ctrl- for
+            ! modifier 7; ctrl-alt- is kept as a defensive alias. 'opt-meta-'
+            ! used to be here for modifier 9, which is super, so it is spelled
+            ! that way now.
             call add_cursor_above(editor)
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
-        case('opt-meta-down', 'ctrl-alt-down', 'alt-ctrl-down')
-            ! Add cursor on line below
-            ! opt-meta-down: Doesn't work (terminals don't send Cmd)
-            ! ctrl-alt-down: Alternative binding that works
+        case('super-down', 'ctrl-alt-down', 'alt-ctrl-down')
+            ! Add cursor on line below. See above.
             call add_cursor_below(editor, buffer)
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
@@ -7928,6 +7929,119 @@ contains
         write(b, '(i0)') v
         t = trim(b)
     end function int_to_text
+
+
+    !> Move to the previous or next entry on row 1.
+    !>
+    !> An entry is a group or an ungrouped tab, so with no groups this is
+    !> exactly the previous/next tab it always was. Wraps at both ends.
+    subroutine step_row1_entry(editor, buffer, delta)
+        use editor_state_module, only: active_group_id, group_members
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer, intent(in) :: delta
+        integer(int32) :: ids(512)
+        integer :: n, i, here, target
+        integer, allocatable :: members(:)
+
+        if (size(editor%tabs) == 0) return
+        call row1_entries(editor, ids, n, here)
+        if (n == 0) return
+
+        target = here + delta
+        if (target < 1) target = n
+        if (target > n) target = 1
+
+        call note_group_position(editor)
+        if (ids(target) < 0) then
+            call enter_tab_group(editor, buffer, int(-ids(target), int32))
+        else
+            call switch_to_tab_with_buffer(editor, int(ids(target)), buffer)
+        end if
+    end subroutine step_row1_entry
+
+    !> The row-1 entries, in order, and which one is current.
+    !>
+    !> Mirrors what render_tab_bar builds: a group appears once, where its
+    !> first member sits, encoded as -(group id); an ungrouped tab appears as
+    !> its own index.
+    subroutine row1_entries(editor, ids, n, here)
+        use editor_state_module, only: active_group_id
+        type(editor_state_t), intent(in) :: editor
+        integer(int32), intent(out) :: ids(:)
+        integer, intent(out) :: n, here
+        integer :: i, k
+        integer(int32) :: gid
+        logical :: seen
+
+        n = 0
+        here = 1
+        do i = 1, size(editor%tabs)
+            if (n >= size(ids)) exit
+            gid = editor%tabs(i)%group_id
+            if (gid /= 0) then
+                seen = .false.
+                do k = 1, n
+                    if (ids(k) == -gid) seen = .true.
+                end do
+                if (seen) cycle
+                n = n + 1
+                ids(n) = -gid
+                if (gid == active_group_id(editor)) here = n
+            else
+                n = n + 1
+                ids(n) = i
+                if (i == editor%active_tab_index) here = n
+            end if
+        end do
+    end subroutine row1_entries
+
+    !> Descend into a group: the one being previewed if the pointer is on it,
+    !> otherwise the first group on row 1.
+    subroutine enter_group_from_row1(editor, buffer)
+        use editor_state_module, only: active_group_id
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer(int32) :: ids(512)
+        integer :: n, here, i
+
+        if (active_group_id(editor) /= 0) return    ! already inside one
+        call row1_entries(editor, ids, n, here)
+        do i = 1, n
+            if (ids(i) < 0) then
+                call enter_tab_group(editor, buffer, int(-ids(i), int32))
+                return
+            end if
+        end do
+    end subroutine enter_group_from_row1
+
+    !> Step out of the current group to the nearest tab outside it.
+    subroutine leave_current_group(editor, buffer)
+        use editor_state_module, only: active_group_id
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer(int32) :: gid
+        integer :: i
+
+        gid = active_group_id(editor)
+        if (gid == 0) return
+        call note_group_position(editor)
+
+        ! Prefer a tab after the group, then one before it.
+        do i = editor%active_tab_index + 1, size(editor%tabs)
+            if (editor%tabs(i)%group_id /= gid) then
+                call switch_to_tab_with_buffer(editor, i, buffer)
+                return
+            end if
+        end do
+        do i = editor%active_tab_index - 1, 1, -1
+            if (editor%tabs(i)%group_id /= gid) then
+                call switch_to_tab_with_buffer(editor, i, buffer)
+                return
+            end if
+        end do
+        call set_status_message('Every open tab is in this group')
+    end subroutine leave_current_group
 
     !> Make `gid` the active group, landing on the member it was last on.
     !>
