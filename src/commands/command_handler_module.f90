@@ -600,7 +600,7 @@ contains
                 call parse_mouse_event(trim(key_str), mev, mb, mr, mc, mok)
                 if (mok) then
                     if (iand(mb, 3) == 3) then      ! motion with no button held
-                        if (tab_group_hover(editor, mr, mc)) g_lsp_ui_changed = .true.
+                        if (tab_group_hover(mr, mc)) g_lsp_ui_changed = .true.
                         return
                     end if
                 end if
@@ -8036,13 +8036,11 @@ contains
     !> An entry is a group or an ungrouped tab, so with no groups this is
     !> exactly the previous/next tab it always was. Wraps at both ends.
     subroutine step_row1_entry(editor, buffer, delta)
-        use editor_state_module, only: active_group_id, group_members
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         integer, intent(in) :: delta
         integer(int32) :: ids(512)
-        integer :: n, i, here, target
-        integer, allocatable :: members(:)
+        integer :: n, here, target
 
         if (size(editor%tabs) == 0) return
         call row1_entries(editor, ids, n, here)

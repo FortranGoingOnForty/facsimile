@@ -649,8 +649,10 @@ contains
     !> Note the group under the pointer. True only when it CHANGED, which is
     !> the caller's cue to repaint -- the same contract context_menu_hover
     !> uses, and the reason moving the mouse does not cost a frame per pixel.
-    function tab_group_hover(editor, row, col) result(moved)
-        type(editor_state_t), intent(in) :: editor
+    !> Takes no editor on purpose: the region table already knows where every
+    !> entry was drawn, so re-deriving the layout here would be a second
+    !> opinion that could disagree with the first.
+    function tab_group_hover(row, col) result(moved)
         integer, intent(in) :: row, col
         logical :: moved
         type(clickable_region_t) :: hit
