@@ -209,6 +209,39 @@ def main():
         check(fast_caret == full_caret, f"{name}: the caret lands identically",
               f"{fast_caret} vs {full_caret}")
 
+    # Scrolling the viewport past the start of a block comment.
+    #
+    # Whether a line is inside /* */ depends on every line above it, and the
+    # renderers walk the viewport rather than the file -- so the state arriving
+    # at the top row used to be whatever the previous frame left. Stepping one
+    # line at a time happened to be right; a page-down, a wheel tick or a jump
+    # to the end was not, and the rest of the comment rendered as code. A full
+    # repaint did not help, so this asserts the COLOUR directly rather than
+    # comparing the two paths.
+    long_c = ("/* opening line of a long block comment\n"
+              + "".join(f" * INSIDE body line {i:02d}\n" for i in range(1, 41))
+              + " */\n\nint after(void) {\n    return 7;\n}\n")
+    scroll_cases = {
+        "page down twice": [b"\x1b[6~", b"\x1b[6~"],
+        "ctrl-end then page up": [b"\x1b[1;5F", b"\x1b[5~"],
+        "wheel down": [b"\x1b[<65;40;10M"] * 10,
+        "arrows down": [b"\x1b[B"] * 25,
+    }
+    for name, keys in scroll_cases.items():
+        for forced, tag in ((False, ""), (True, " after ctrl-l")):
+            text, attrs, _ = snapshot(binary, keys, forced, src=long_c, name="long.c")
+            wrong = []
+            for y, row in enumerate(text):
+                if "INSIDE" not in row:
+                    continue
+                x = row.index("INSIDE")
+                if not any(a[0] == y + 1 and a[1] == x + 1 and a[2] == "brightblack"
+                           for a in attrs):
+                    wrong.append(y + 1)
+            check(not wrong,
+                  f"C scroll: {name}{tag}: comment stays a comment",
+                  f"rows drawn as code: {wrong[:6]}")
+
     # Bursts, not single keys. The main loop coalesces up to 64 keystrokes and
     # renders once, so a held arrow key delivers many keys per frame. The
     # guard has to hold for the whole burst: checking only its last key let a

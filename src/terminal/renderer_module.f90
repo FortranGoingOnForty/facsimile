@@ -93,6 +93,28 @@ module renderer_module
     ! menu's visibility every frame.
     logical, save :: g_motion_tracking = .false.
 
+    ! ---- multi-line comment seeding -------------------------------------
+    !
+    ! Whether a line sits inside a /* */ block depends on every line above it,
+    ! and tokenize_line carries that as state from one call to the next. The
+    ! renderers walk the VIEWPORT, not the file, so the state arriving at the
+    ! top row is whatever the previous frame happened to leave -- correct only
+    ! when the viewport moved down one line at a time. A page-down, a wheel
+    ! tick or a jump to the end left it wrong, and the rest of a comment
+    ! rendered as code. A full repaint did not help: it starts from the same
+    ! wrong state.
+    !
+    ! So the state is established rather than inherited. The anchor caches the
+    ! last position it was computed for, so scrolling forward costs one extra
+    ! tokenize per new line instead of a rescan.
+    integer :: g_hl_next_line = -1          ! line the state is currently correct for
+    integer :: g_hl_anchor_line = 1         ! line at whose start the anchor state holds
+    logical :: g_hl_anchor_mc = .false.
+    logical :: g_hl_anchor_ms = .false.
+    character(len=4) :: g_hl_anchor_delim = ''
+    integer(int64) :: g_hl_key_rev = -1     ! doc revision the anchor was built from
+    integer :: g_hl_key_tab = -1
+
 contains
 
     subroutine init_renderer(rows, cols, filename)
@@ -426,11 +448,7 @@ contains
         integer :: dirty(6), n_dirty, i, j, tab_idx, pane_idx
         integer :: old_bracket, old_match, line_count, screen_row
         integer :: line_num_width, adjusted_width, start_row
-        integer :: next_dirty, scan_line, scratch
-        logical :: seen, saved_mc, saved_ms
-        character(len=4) :: saved_delim
-        character(len=:), allocatable :: scan_text
-        type(token_t), allocatable :: scan_tokens(:)
+        logical :: seen
 
         tab_idx = editor%active_tab_index
         if (tab_idx < 1) return
@@ -465,75 +483,21 @@ contains
 
         line_count = buffer_get_line_count(buffer)
 
-        ! Sort the dirty lines so the scan below can walk the viewport once.
-        do i = 1, n_dirty - 1
-            do j = i + 1, n_dirty
-                if (dirty(j) < dirty(i)) then
-                    scratch = dirty(i); dirty(i) = dirty(j); dirty(j) = scratch
-                end if
-            end do
-        end do
-
-        ! Tokenizing is a sequential state machine: in_multiline_comment carries
-        ! from one line to the next, which is how a /* */ block colours the lines
-        ! between its delimiters. Rendering isolated lines therefore cannot just
-        ! call the row renderer -- a continuation line would tokenize with the
-        ! flag clear and come out as plain code, and a line that opens a comment
-        ! would leave the flag set and colour every later line as comment.
-        !
-        ! So walk the viewport exactly as a full frame does, from the same
-        ! starting state, and let the state advance line by line. Only the dirty
-        ! rows are actually written, which is where the saving is: the tokenize
-        ! cost matches a full frame, the terminal traffic does not.
-        saved_mc = syntax_highlighter%in_multiline_comment
-        saved_ms = syntax_highlighter%in_multiline_string
-        saved_delim = syntax_highlighter%string_delimiter
-
+        ! Render in ascending order. The tokenizer's comment state is
+        ! established per line by seed_comment_state, so isolated rows are
+        ! coloured correctly without walking the viewport here.
         associate(pane => editor%tabs(tab_idx)%panes(pane_idx))
             adjusted_width = pane%screen_width - line_num_width
-            next_dirty = 1
-            scan_line = editor%viewport_line
-            do while (next_dirty <= n_dirty)
-                if (dirty(next_dirty) < 1 .or. dirty(next_dirty) > line_count) then
-                    next_dirty = next_dirty + 1
-                    cycle
-                end if
-
-                ! Advance the tokenizer over the lines between here and the next
-                ! dirty one, discarding their output. This is what puts the
-                ! comment state where a full frame would have it.
-                do while (scan_line < dirty(next_dirty))
-                    if (scan_line > line_count) exit
-                    if (syntax_highlighter%enabled) then
-                        scan_text = buffer_get_line(pane%buffer, scan_line)
-                        call tokenize_line(syntax_highlighter, scan_text, scan_tokens)
-                        if (allocated(scan_tokens)) deallocate(scan_tokens)
-                    end if
-                    scan_line = scan_line + 1
-                end do
-
-                screen_row = start_row + (dirty(next_dirty) - editor%viewport_line)
-                if (screen_row >= start_row .and. &
-                    screen_row <= editor%screen_rows - 1) then
-                    call render_editor_row(pane%buffer, editor, dirty(next_dirty), &
-                                           screen_row, 1, adjusted_width, &
-                                           line_num_width, line_count)
-                else if (syntax_highlighter%enabled) then
-                    ! Off-screen but still on the scan path: advance past it.
-                    scan_text = buffer_get_line(pane%buffer, dirty(next_dirty))
-                    call tokenize_line(syntax_highlighter, scan_text, scan_tokens)
-                    if (allocated(scan_tokens)) deallocate(scan_tokens)
-                end if
-                scan_line = dirty(next_dirty) + 1
-                next_dirty = next_dirty + 1
+            do i = 1, n_dirty
+                if (dirty(i) < 1) cycle
+                if (dirty(i) > line_count) cycle
+                screen_row = start_row + (dirty(i) - editor%viewport_line)
+                if (screen_row < start_row) cycle
+                if (screen_row > editor%screen_rows - 1) cycle
+                call render_editor_row(pane%buffer, editor, dirty(i), screen_row, &
+                                       1, adjusted_width, line_num_width, line_count)
             end do
         end associate
-
-        ! Leave the state exactly as it was found, so the next full frame
-        ! behaves as though the fast path had never run.
-        syntax_highlighter%in_multiline_comment = saved_mc
-        syntax_highlighter%in_multiline_string = saved_ms
-        syntax_highlighter%string_delimiter = saved_delim
 
         call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
         call render_cursor_for_panes(editor)
@@ -609,6 +573,71 @@ contains
         call terminal_hide_cursor()
     end subroutine render_menu_overlay
 
+
+    !> Put the tokenizer's comment state where it belongs for `line_num`.
+    !>
+    !> Called from the one place every render path funnels through, and only
+    !> does work when the line being drawn is not the one that would follow
+    !> naturally -- so a normal top-to-bottom frame costs nothing extra.
+    subroutine seed_comment_state(buffer, editor, line_num)
+        type(buffer_t), intent(in) :: buffer
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(in) :: line_num
+        type(token_t), allocatable :: throwaway(:)
+        character(len=:), allocatable :: text
+        integer :: ln, from_line
+        integer(int64) :: rev
+        integer :: tab_idx
+
+        if (.not. syntax_highlighter%enabled) return
+
+        tab_idx = editor%active_tab_index
+        rev = -1
+        if (tab_idx >= 1 .and. tab_idx <= size(editor%tabs)) &
+            rev = editor%tabs(tab_idx)%doc_revision
+
+        ! Continuing the scan we were already on: nothing to do.
+        if (line_num == g_hl_next_line .and. rev == g_hl_key_rev .and. &
+            tab_idx == g_hl_key_tab) return
+
+        ! The anchor is only usable for the document it was built from, and
+        ! only for lines at or after it -- an edit anywhere above invalidates
+        ! everything below, which is what the revision check catches.
+        from_line = 1
+        if (rev == g_hl_key_rev .and. tab_idx == g_hl_key_tab .and. &
+            g_hl_anchor_line <= line_num) then
+            from_line = g_hl_anchor_line
+            syntax_highlighter%in_multiline_comment = g_hl_anchor_mc
+            syntax_highlighter%in_multiline_string = g_hl_anchor_ms
+            syntax_highlighter%string_delimiter = g_hl_anchor_delim
+        else
+            syntax_highlighter%in_multiline_comment = .false.
+            syntax_highlighter%in_multiline_string = .false.
+            syntax_highlighter%string_delimiter = ''
+            ! Remember where this scan starts, so a later line can resume.
+            g_hl_anchor_line = 1
+            g_hl_anchor_mc = .false.
+            g_hl_anchor_ms = .false.
+            g_hl_anchor_delim = ''
+            g_hl_key_rev = rev
+            g_hl_key_tab = tab_idx
+        end if
+
+        do ln = from_line, line_num - 1
+            text = buffer_get_line(buffer, ln)
+            call tokenize_line(syntax_highlighter, text, throwaway)
+            if (allocated(throwaway)) deallocate(throwaway)
+        end do
+
+        ! Cache what we just computed so scrolling on does not rescan.
+        g_hl_anchor_line = line_num
+        g_hl_anchor_mc = syntax_highlighter%in_multiline_comment
+        g_hl_anchor_ms = syntax_highlighter%in_multiline_string
+        g_hl_anchor_delim = syntax_highlighter%string_delimiter
+        g_hl_key_rev = rev
+        g_hl_key_tab = tab_idx
+    end subroutine seed_comment_state
+
     subroutine render_line_with_selections(buffer, editor, line_num, start_col, width)
         type(buffer_t), intent(in) :: buffer
         type(editor_state_t), intent(in) :: editor
@@ -637,7 +666,9 @@ contains
 
         ! Get syntax tokens for this line (tokens use byte indices)
         if (syntax_highlighter%enabled) then
+            call seed_comment_state(buffer, editor, line_num)
             call tokenize_line(syntax_highlighter, line, tokens)
+            g_hl_next_line = line_num + 1
         else
             allocate(tokens(1))
             tokens(1)%type = TOKEN_PLAIN
