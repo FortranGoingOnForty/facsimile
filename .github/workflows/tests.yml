@@ -36,6 +36,34 @@ jobs:
       - name: Version reports
         run: ./fac --version
 
+      # Free-form Fortran truncates at column 132. This failed only on Linux
+      # CI at release time, because the Makefile passes -ffree-line-length-none
+      # on macOS and Windows but not Linux, and a recent gfortran defaults to
+      # unlimited -- so neither a local build nor two of the three release
+      # builds enforced the documented limit. Check it directly, in seconds,
+      # rather than discovering it when a tag is already pushed.
+      - name: Source lines fit in 132 columns
+        run: |
+          bad=$(awk 'length($0) > 132 {print FILENAME":"FNR": "length($0)" chars"}' \
+                $(git ls-files '*.f90'))
+          if [ -n "$bad" ]; then
+            echo "$bad"
+            echo ""
+            echo "Free-form Fortran truncates at column 132; split with a & continuation."
+            exit 1
+          fi
+          echo "all source lines fit"
+
+      # And prove it the way the compiler sees it, not just by counting.
+      - name: Compile with the limit enforced
+        run: |
+          for f in $(git ls-files 'src/*.f90' 'src/**/*.f90' 'app/*.f90'); do
+            gfortran -fsyntax-only -ffree-line-length-132 -Werror=line-truncation \
+                     -I. "$f" 2>&1 | grep -i "truncat" && exit 1
+          done
+          echo "no truncation"
+
+
       # make writes .mod files into the repo root, and gfortran searches the
       # working directory before any -I path -- so fpm reads make's modules
       # instead of its own and dies with "Reading module ... Expected left
