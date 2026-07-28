@@ -4,7 +4,7 @@ module renderer_module
     use text_buffer_module
     use utf8_module
     use editor_state_module, only: editor_state_t, cursor_t
-    use editor_state_module, only: active_pane_of
+    use editor_state_module, only: active_pane_of, active_group_id, group_label, group_members, group_member_count
     use bracket_matching_module
     use clickable_region_module, only: regions_begin_frame, region_add, REGION_TAB, &
                                        REGION_TAB_SCROLL, &
@@ -51,7 +51,8 @@ module renderer_module
     public :: fuss_git_prefix_active
     public :: display_offset_of, char_col_at_offset
     public :: text_area_height, tab_bar_height, first_content_row
-    public :: strip_entry_t, strip_span_t, strip_layout, STRIP_MAX_ENTRIES  ! rows the document gets; page size must match
+    public :: strip_entry_t, strip_span_t, strip_layout, STRIP_MAX_ENTRIES
+    public :: nudge_tab_scroll  ! rows the document gets; page size must match
 
     ! Configuration
     logical :: show_line_numbers = .true.
@@ -126,6 +127,7 @@ module renderer_module
     integer, parameter :: MAX_ENTRY_CELLS = 24   ! per label, before ellipsis
     ! Kept across frames so a click on a chevron persists.
     integer :: g_tab_scroll = 1
+    integer :: g_group_scroll = 1
 
     type :: strip_entry_t
         character(len=192) :: label = ''
@@ -2772,7 +2774,15 @@ contains
         integer :: h
 
         h = 1
-        if (size(editor%tabs) == 0) h = 0
+        if (size(editor%tabs) == 0) then
+            h = 0
+        else if (active_group_id(editor) /= 0) then
+            ! Inside a group the member row is pinned, and the document
+            ! reflows down to make room for it. The hover preview does NOT
+            ! count here: it is drawn over the document precisely so that
+            ! moving the pointer across the bar does not shift the text.
+            h = 2
+        end if
     end function tab_bar_height
 
     !> First screen row the document may draw on. The inverse of
@@ -3095,14 +3105,18 @@ contains
         integer, intent(in), optional :: start_col, width
         type(strip_entry_t) :: entries(STRIP_MAX_ENTRIES)
         type(strip_span_t) :: spans(STRIP_MAX_ENTRIES)
-        integer :: i, n_entries, n_spans, tab_count
+        integer :: i, n_entries, n_spans, tab_count, active_entry
         integer :: start_column, max_width, col, used
+        integer(int32) :: gid
+        integer(int32) :: seen_gids(STRIP_MAX_ENTRIES)
+        integer :: n_seen
         logical :: more_left, more_right
         character(len=:), allocatable :: shown, base
         character(len=16) :: more_lbl
 
         tab_count = size(editor%tabs)
         if (tab_count == 0) return
+        n_seen = 0
 
         if (present(start_col)) then
             start_column = start_col
@@ -3116,17 +3130,40 @@ contains
         end if
         if (max_width < 1) return
 
-        ! Build the entries. Labels keep the familiar [N: name*] shape.
-        n_entries = min(tab_count, STRIP_MAX_ENTRIES)
-        do i = 1, n_entries
+        ! Build row 1. A group occupies ONE entry, placed where its first
+        ! member sits, and its members do not appear individually -- they get
+        ! row 2. Ungrouped tabs appear as themselves.
+        !
+        ! Payload convention: a positive payload is a tab index, a negative one
+        ! is -(group id), so the click router can tell them apart without a
+        ! second region kind for the ungrouped case.
+        n_entries = 0
+        active_entry = 0
+        do i = 1, tab_count
+            if (n_entries >= STRIP_MAX_ENTRIES) exit
+            gid = editor%tabs(i)%group_id
+            if (gid /= 0) then
+                if (.not. group_seen(gid, seen_gids, n_seen)) then
+                    n_seen = n_seen + 1
+                    seen_gids(n_seen) = gid
+                    n_entries = n_entries + 1
+                    entries(n_entries)%label = '[' // group_label(editor, gid) // ']'
+                    entries(n_entries)%payload = -gid
+                    entries(n_entries)%dim = .false.
+                    if (gid == active_group_id(editor)) active_entry = n_entries
+                end if
+                cycle
+            end if
             base = basename_of(editor%tabs(i)%filename)
-            write(entries(i)%label, '(a,i0,a,a,a,a)') '[', i, ': ', trim(base), &
+            n_entries = n_entries + 1
+            write(entries(n_entries)%label, '(a,i0,a,a,a,a)') '[', i, ': ', trim(base), &
                 merge('*', ' ', editor%tabs(i)%modified), ']'
-            entries(i)%payload = i
-            entries(i)%dim = editor%tabs(i)%is_orphan
+            entries(n_entries)%payload = i
+            entries(n_entries)%dim = editor%tabs(i)%is_orphan
+            if (i == editor%active_tab_index) active_entry = n_entries
         end do
 
-        call strip_layout(entries, n_entries, max_width, editor%active_tab_index, &
+        call strip_layout(entries, n_entries, max_width, active_entry, &
                           g_tab_scroll, spans, n_spans, more_left, more_right)
 
         call terminal_move_cursor(1, start_column)
@@ -3144,9 +3181,9 @@ contains
                                    shown, used)
                 call terminal_move_cursor(1, start_column + sp%col0 - 1)
                 if (entries(sp%idx)%dim) call terminal_write(char(27) // '[90m')
-                if (sp%idx == editor%active_tab_index) call terminal_write(char(27) // '[7m')
+                if (sp%idx == active_entry) call terminal_write(char(27) // '[7m')
                 call terminal_write(shown)
-                if (entries(sp%idx)%dim .or. sp%idx == editor%active_tab_index) &
+                if (entries(sp%idx)%dim .or. sp%idx == active_entry) &
                     call terminal_write(char(27) // '[0m')
 
                 ! The span is in CELLS, from the same layout that drew it, so a
@@ -3167,7 +3204,122 @@ contains
             call region_add(REGION_TAB_SCROLL, 1, 1, col, &
                             start_column + max_width - 1, 1)
         end if
+
+        ! Row 2: the active group's members, pinned while we are inside it.
+        ! tab_bar_height already reserved the row, so the document starts below.
+        if (active_group_id(editor) /= 0) then
+            call render_group_row(editor, active_group_id(editor), 2, &
+                                  start_column, max_width)
+        end if
     end subroutine render_tab_bar
+
+
+    !> Draw a group's members on row 2.
+    !>
+    !> Same layout engine as row 1, so the two rows cannot disagree about
+    !> where a click landed -- which is the whole reason placement was split
+    !> out of drawing. Members carry their global tab index as the payload, so
+    !> the existing REGION_TAB case in the click router handles them unchanged.
+    subroutine render_group_row(editor, gid, row, start_col, width)
+        type(editor_state_t), intent(in) :: editor
+        integer(int32), intent(in) :: gid
+        integer, intent(in) :: row, start_col, width
+        type(strip_entry_t) :: entries(STRIP_MAX_ENTRIES)
+        type(strip_span_t) :: spans(STRIP_MAX_ENTRIES)
+        integer, allocatable :: members(:)
+        integer :: i, n_entries, n_spans, active_entry, col, used
+        logical :: more_left, more_right
+        character(len=:), allocatable :: shown, base
+        character(len=16) :: more_lbl
+
+        if (gid == 0 .or. width < 1) return
+        call group_members(editor, gid, members)
+        if (size(members) == 0) return
+
+        n_entries = min(size(members), STRIP_MAX_ENTRIES)
+        active_entry = 0
+        do i = 1, n_entries
+            base = basename_of(editor%tabs(members(i))%filename)
+            write(entries(i)%label, '(a,a,a)') ' ', trim(base), &
+                merge('*', ' ', editor%tabs(members(i))%modified)
+            entries(i)%payload = members(i)
+            entries(i)%dim = editor%tabs(members(i))%is_orphan
+            if (members(i) == editor%active_tab_index) active_entry = i
+        end do
+
+        call strip_layout(entries, n_entries, width, active_entry, &
+                          g_group_scroll, spans, n_spans, more_left, more_right)
+
+        call terminal_move_cursor(row, start_col)
+        call terminal_write(repeat(' ', width))
+
+        if (more_left) then
+            call terminal_move_cursor(row, start_col)
+            call terminal_write(char(27) // '[90m' // '<' // char(27) // '[0m')
+            call region_add(REGION_TAB_SCROLL, row, row, start_col, start_col, -2)
+        end if
+
+        do i = 1, n_spans
+            associate(sp => spans(i))
+                call clip_to_cells(trim(entries(sp%idx)%label), MAX_ENTRY_CELLS, &
+                                   shown, used)
+                call terminal_move_cursor(row, start_col + sp%col0 - 1)
+                if (entries(sp%idx)%dim) call terminal_write(char(27) // '[90m')
+                if (sp%idx == active_entry) then
+                    call terminal_write(char(27) // '[7m')
+                else
+                    call terminal_write(char(27) // '[2m')   ! members read as secondary
+                end if
+                call terminal_write(shown)
+                call terminal_write(char(27) // '[0m')
+                call region_add(REGION_TAB, row, row, &
+                                start_col + sp%col0 - 1, &
+                                start_col + sp%col1 - 1, &
+                                entries(sp%idx)%payload)
+            end associate
+        end do
+
+        if (more_right) then
+            write(more_lbl, '(a,i0)') '>', n_entries - spans(max(1, n_spans))%idx
+            col = start_col + width - len_trim(more_lbl)
+            call terminal_move_cursor(row, col)
+            call terminal_write(char(27) // '[90m' // trim(more_lbl) // char(27) // '[0m')
+            call region_add(REGION_TAB_SCROLL, row, row, col, &
+                            start_col + width - 1, 2)
+        end if
+    end subroutine render_group_row
+
+    !> Move a strip's scroll by one entry. Payload sign gives the direction,
+    !> magnitude gives the row: 1 for the tab row, 2 for the member row.
+    subroutine nudge_tab_scroll(payload)
+        integer, intent(in) :: payload
+
+        select case (payload)
+        case (-1)
+            g_tab_scroll = max(1, g_tab_scroll - 1)
+        case (1)
+            g_tab_scroll = g_tab_scroll + 1
+        case (-2)
+            g_group_scroll = max(1, g_group_scroll - 1)
+        case (2)
+            g_group_scroll = g_group_scroll + 1
+        end select
+    end subroutine nudge_tab_scroll
+
+    !> Has this group already been placed on row 1?
+    logical function group_seen(gid, seen, n)
+        integer(int32), intent(in) :: gid, seen(:)
+        integer, intent(in) :: n
+        integer :: k
+
+        group_seen = .false.
+        do k = 1, n
+            if (seen(k) == gid) then
+                group_seen = .true.
+                return
+            end if
+        end do
+    end function group_seen
 
     !> Last path component, or the whole string when there is no separator.
     function basename_of(path) result(base)

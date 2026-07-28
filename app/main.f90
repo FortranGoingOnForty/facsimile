@@ -1464,6 +1464,8 @@ contains
         ! AI
         call register_command('AI: Toggle Inline Completion', 'ai-toggle', 'Alt+I', 'AI')
         call register_command('AI: Status', 'ai-status', '', 'AI')
+        call register_command('Group All Tabs', 'group-all', '', 'View')
+        call register_command('Leave Tab Group', 'group-leave', '', 'View')
         call register_command('AI: Deep Completion Here', 'ai-deep', 'Alt+\\', 'AI')
         call register_command('Delete Line', 'delete-line', 'Ctrl+Shift+K', 'Edit')
 

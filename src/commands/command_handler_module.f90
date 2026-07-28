@@ -3,12 +3,13 @@ module command_handler_module
     use iso_c_binding, only: c_int
     use editor_state_module, only: editor_state_t, cursor_t, switch_to_tab_with_buffer, &
                                    close_tab, create_tab, can_create_tab, save_tab_pane, active_pane_of, close_pane, &
+        group_create, group_add_member, group_member_count, active_group_id, &
                                        split_pane_vertical, split_pane_horizontal, &
                                    navigate_to_pane_left, navigate_to_pane_right, navigate_to_pane_up, navigate_to_pane_down, &
                                    sync_editor_to_pane, tab_t
     use text_buffer_module
     use platform_module, only: canonical_path
-    use clickable_region_module, only: clickable_region_t, region_at, &
+    use clickable_region_module, only: clickable_region_t, region_at, REGION_TAB_SCROLL, &
                                        REGION_TAB, REGION_BLOCK, REGION_FUSS_TOGGLE, &
                                        REGION_TREE_ROW, REGION_CTX_ROW, REGION_NONE
     use context_menu_module, only: context_menu_begin, context_menu_add_item, &
@@ -20,7 +21,7 @@ module command_handler_module
                                    context_menu_hover, context_menu_select
     use platform_module, only: platform_sleep_ms
     use renderer_module, only: update_viewport, render_screen, render_screen_with_tree, tree_state, &
-                               first_content_row, &
+                               first_content_row, nudge_tab_scroll, &
                                text_area_height, &
                                fuss_search_buffer, fuss_search_len, fuss_search_last_time, &
                                fuss_fuzzy_jump, fuss_reset_search, get_time_ms, &
@@ -489,11 +490,22 @@ contains
                                                            buffer, should_quit)
                             return
                         case (REGION_TAB)
-                            if (hit%payload >= 1 .and. &
-                                hit%payload <= size(editor%tabs)) then
+                            ! A positive payload is a tab index; a negative one
+                            ! is -(group id), which row 1 uses for a group
+                            ! entry. Clicking a group enters it, landing on the
+                            ! member it was last on.
+                            if (hit%payload < 0) then
+                                call enter_tab_group(editor, buffer, &
+                                                     int(-hit%payload, int32))
+                            else if (hit%payload >= 1 .and. &
+                                     hit%payload <= size(editor%tabs)) then
                                 call switch_to_tab_with_buffer(editor, &
                                                                hit%payload, buffer)
                             end if
+                            return
+                        case (REGION_TAB_SCROLL)
+                            call nudge_tab_scroll(hit%payload)
+                            g_lsp_ui_changed = .true.
                             return
                         case (REGION_FUSS_TOGGLE)
                             call toggle_fuss_mode(editor)
@@ -7880,6 +7892,66 @@ contains
     !> the pane's own copy, so it -- not the pane buffer -- is what must be
     !> written. The only question is which name to write it under, and the
     !> answer is the pane's, never the tab's.
+
+    function int_to_text(v) result(t)
+        integer, intent(in) :: v
+        character(len=:), allocatable :: t
+        character(len=16) :: b
+
+        write(b, '(i0)') v
+        t = trim(b)
+    end function int_to_text
+
+    !> Make `gid` the active group, landing on the member it was last on.
+    !>
+    !> last_active_member is a filename rather than an index because indices
+    !> renumber; if it no longer resolves, fall back to the first member.
+    subroutine enter_tab_group(editor, buffer, gid)
+        use editor_state_module, only: group_members, group_find
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer(int32), intent(in) :: gid
+        integer, allocatable :: members(:)
+        integer :: i, target, gidx
+
+        call group_members(editor, gid, members)
+        if (size(members) == 0) return
+
+        target = members(1)
+        gidx = group_find(editor, gid)
+        if (gidx > 0) then
+            if (allocated(editor%groups(gidx)%last_active_member)) then
+                do i = 1, size(members)
+                    if (allocated(editor%tabs(members(i))%filename)) then
+                        if (editor%tabs(members(i))%filename == &
+                            editor%groups(gidx)%last_active_member) then
+                            target = members(i)
+                            exit
+                        end if
+                    end if
+                end do
+            end if
+        end if
+
+        call switch_to_tab_with_buffer(editor, target, buffer)
+    end subroutine enter_tab_group
+
+    !> Remember where we were in a group before leaving it.
+    subroutine note_group_position(editor)
+        use editor_state_module, only: active_group_id, group_find
+        type(editor_state_t), intent(inout) :: editor
+        integer(int32) :: gid
+        integer :: gidx
+
+        gid = active_group_id(editor)
+        if (gid == 0) return
+        gidx = group_find(editor, gid)
+        if (gidx < 1) return
+        if (.not. allocated(editor%tabs(editor%active_tab_index)%filename)) return
+        editor%groups(gidx)%last_active_member = &
+            editor%tabs(editor%active_tab_index)%filename
+    end subroutine note_group_position
+
     subroutine save_active_pane_buffer(editor, buffer, tab_idx, status)
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
@@ -9383,6 +9455,36 @@ contains
             call handle_key_command('alt-\', editor, buffer, should_quit)
         case('ai-status')
             call set_status_message(ai_status_line(editor%ai))
+
+        ! Tab groups. Until the picker modal lands, this is how a group gets
+        ! made: it takes every open tab under the workspace and groups them.
+        case('group-all')
+            block
+                integer(int32) :: new_gid
+                integer :: t
+                character(len=:), allocatable :: root
+                root = 'group'
+                if (allocated(editor%workspace_path)) root = editor%workspace_path
+                call group_create(editor, root, '', new_gid)
+                do t = 1, size(editor%tabs)
+                    if (editor%tabs(t)%group_id == 0) &
+                        call group_add_member(editor, new_gid, t)
+                end do
+                call set_status_message('Grouped ' // &
+                    trim(int_to_text(group_member_count(editor, new_gid))) // ' tabs')
+            end block
+        case('group-leave')
+            block
+                integer :: t
+                if (active_group_id(editor) /= 0) then
+                    do t = 1, size(editor%tabs)
+                        if (editor%tabs(t)%group_id == 0) then
+                            call switch_to_tab_with_buffer(editor, t, buffer)
+                            exit
+                        end if
+                    end do
+                end if
+            end block
 
         ! Panes and tabs. ctrl-w closes the TAB and alt-q closes the PANE;
         ! the single "Close Pane / Ctrl+W" entry that used to be here named
