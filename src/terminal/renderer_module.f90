@@ -7,6 +7,7 @@ module renderer_module
     use editor_state_module, only: active_pane_of
     use bracket_matching_module
     use clickable_region_module, only: regions_begin_frame, region_add, REGION_TAB, &
+                                       REGION_TAB_SCROLL, &
                                        REGION_FUSS_TOGGLE
     use context_menu_module, only: render_context_menu, is_context_menu_visible
     use file_tree_module
@@ -49,7 +50,8 @@ module renderer_module
     public :: fuss_fuzzy_jump, fuss_reset_search, get_time_ms
     public :: fuss_git_prefix_active
     public :: display_offset_of, char_col_at_offset
-    public :: text_area_height, tab_bar_height, first_content_row  ! rows the document gets; page size must match
+    public :: text_area_height, tab_bar_height, first_content_row
+    public :: strip_entry_t, strip_span_t, strip_layout, STRIP_MAX_ENTRIES  ! rows the document gets; page size must match
 
     ! Configuration
     logical :: show_line_numbers = .true.
@@ -114,6 +116,28 @@ module renderer_module
     character(len=4) :: g_hl_anchor_delim = ''
     integer(int64) :: g_hl_key_rev = -1     ! doc revision the anchor was built from
     integer :: g_hl_key_tab = -1
+
+    ! ---- tab bar strip ---------------------------------------------------
+    !
+    ! One entry laid out on one row of the bar. Row 1 holds tabs (and, later,
+    ! tab groups); a second row will hold a group's members. Both go through
+    ! the same layout so the two cannot disagree about where a click landed.
+    integer, parameter :: STRIP_MAX_ENTRIES = 256
+    integer, parameter :: MAX_ENTRY_CELLS = 24   ! per label, before ellipsis
+    ! Kept across frames so a click on a chevron persists.
+    integer :: g_tab_scroll = 1
+
+    type :: strip_entry_t
+        character(len=192) :: label = ''
+        integer :: payload = 0
+        logical :: dim = .false.       ! drawn grey (an orphan tab)
+    end type strip_entry_t
+
+    type :: strip_span_t
+        integer :: idx = 0             ! index into the entry array
+        integer :: col0 = 0, col1 = 0  ! inclusive screen columns
+    end type strip_span_t
+
 
 contains
 
@@ -2951,100 +2975,214 @@ contains
 
     ! Render tab bar at top of screen
     ! Optional start_col and width parameters for positioning in split view
+
+    !> Decide where each entry goes, without drawing anything.
+    !>
+    !> Separate from the drawing so it can be tested without a terminal, and
+    !> so the click regions come from the same arithmetic as the pixels. The
+    !> old bar computed the layout inline, in bytes, and simply stopped at the
+    !> first label that did not fit -- so with a dozen tabs the active one
+    !> could be entirely absent from the screen and unclickable, and one CJK
+    !> filename shifted every click to its right.
+    !>
+    !> `scroll` is in/out: it is nudged until the active entry is visible, and
+    !> the caller keeps it so a click on a chevron persists.
+    subroutine strip_layout(entries, n_entries, width, active_idx, scroll, &
+                            spans, n_spans, more_left, more_right)
+        type(strip_entry_t), intent(in) :: entries(:)
+        integer, intent(in) :: n_entries, width, active_idx
+        integer, intent(inout) :: scroll
+        type(strip_span_t), intent(out) :: spans(:)
+        integer, intent(out) :: n_spans
+        logical, intent(out) :: more_left, more_right
+        integer :: i, col, avail, used, first, guard
+        character(len=:), allocatable :: shown
+
+        n_spans = 0
+        more_left = .false.
+        more_right = .false.
+        if (n_entries < 1 .or. width < 1) return
+
+        if (scroll < 1) scroll = 1
+        if (scroll > n_entries) scroll = n_entries
+
+        ! Bring the active entry into view. Scrolling left is immediate;
+        ! scrolling right advances one entry at a time until it fits, with a
+        ! guard so a width too small for any single entry cannot spin.
+        if (active_idx >= 1 .and. active_idx <= n_entries) then
+            if (active_idx < scroll) scroll = active_idx
+            guard = 0
+            do while (.not. fits(scroll, active_idx) .and. scroll < active_idx &
+                      .and. guard < n_entries)
+                scroll = scroll + 1
+                guard = guard + 1
+            end do
+        end if
+
+        first = scroll
+        more_left = (first > 1)
+
+        ! The chevrons occupy cells, so reserve them before placing anything.
+        avail = width
+        if (more_left) avail = avail - 2          ! "< "
+        if (avail < 1) return
+
+        col = 1
+        if (more_left) col = col + 2
+
+        do i = first, n_entries
+            call clip_to_cells(trim(entries(i)%label), MAX_ENTRY_CELLS, shown, used)
+            ! Leave room for the right chevron unless this is the last entry.
+            if (i < n_entries) then
+                if (col - 1 + used > width - 3) then
+                    more_right = .true.
+                    exit
+                end if
+            else
+                if (col - 1 + used > width) then
+                    more_right = .true.
+                    exit
+                end if
+            end if
+            n_spans = n_spans + 1
+            if (n_spans > size(spans)) then
+                n_spans = n_spans - 1
+                more_right = .true.
+                exit
+            end if
+            spans(n_spans)%idx = i
+            spans(n_spans)%col0 = col
+            spans(n_spans)%col1 = col + used - 1
+            col = col + used + 1                  ! one space between entries
+        end do
+
+        ! Nothing fitted at all: draw the first entry clipped rather than an
+        ! empty bar, so the user is never looking at a blank strip.
+        if (n_spans == 0 .and. first <= n_entries) then
+            call clip_to_cells(trim(entries(first)%label), max(1, width - 3), shown, used)
+            if (used > 0) then
+                n_spans = 1
+                spans(1)%idx = first
+                spans(1)%col0 = 1
+                spans(1)%col1 = used
+                more_right = (first < n_entries)
+            end if
+        end if
+
+    contains
+
+        !> Would entries first..target fit in the width, allowing for chevrons?
+        logical function fits(first_i, target)
+            integer, intent(in) :: first_i, target
+            integer :: k, c, u
+            character(len=:), allocatable :: sh
+
+            c = 1
+            if (first_i > 1) c = c + 2
+            fits = .false.
+            do k = first_i, target
+                call clip_to_cells(trim(entries(k)%label), MAX_ENTRY_CELLS, sh, u)
+                if (c - 1 + u > width - 3) return
+                c = c + u + 1
+            end do
+            fits = .true.
+        end function fits
+
+    end subroutine strip_layout
+
     subroutine render_tab_bar(editor, start_col, width)
         type(editor_state_t), intent(in) :: editor
         integer, intent(in), optional :: start_col, width
-        integer :: i, col, tab_count
-        character(len=:), allocatable :: tab_label, filename_only
-        character(len=256) :: temp_label
-        integer :: slash_pos, last_slash
-        character(len=1) :: modified_marker
-        integer :: start_column, max_width
+        type(strip_entry_t) :: entries(STRIP_MAX_ENTRIES)
+        type(strip_span_t) :: spans(STRIP_MAX_ENTRIES)
+        integer :: i, n_entries, n_spans, tab_count
+        integer :: start_column, max_width, col, used
+        logical :: more_left, more_right
+        character(len=:), allocatable :: shown, base
+        character(len=16) :: more_lbl
 
         tab_count = size(editor%tabs)
-        if (tab_count == 0) return  ! No tabs to display
+        if (tab_count == 0) return
 
-        ! Use provided start_col and width, or default to full screen
         if (present(start_col)) then
             start_column = start_col
         else
             start_column = 1
         end if
-
         if (present(width)) then
             max_width = width
         else
             max_width = editor%screen_cols
         end if
+        if (max_width < 1) return
 
-        ! Move to top row at starting column and clear the tab bar area
+        ! Build the entries. Labels keep the familiar [N: name*] shape.
+        n_entries = min(tab_count, STRIP_MAX_ENTRIES)
+        do i = 1, n_entries
+            base = basename_of(editor%tabs(i)%filename)
+            write(entries(i)%label, '(a,i0,a,a,a,a)') '[', i, ': ', trim(base), &
+                merge('*', ' ', editor%tabs(i)%modified), ']'
+            entries(i)%payload = i
+            entries(i)%dim = editor%tabs(i)%is_orphan
+        end do
+
+        call strip_layout(entries, n_entries, max_width, editor%active_tab_index, &
+                          g_tab_scroll, spans, n_spans, more_left, more_right)
+
         call terminal_move_cursor(1, start_column)
         call terminal_write(repeat(' ', max_width))
 
-        ! Render each tab
-        col = start_column
-        do i = 1, tab_count
-            ! Extract filename from full path
-            filename_only = editor%tabs(i)%filename
-            last_slash = 0
-            do slash_pos = len(editor%tabs(i)%filename), 1, -1
-                if (editor%tabs(i)%filename(slash_pos:slash_pos) == '/') then
-                    last_slash = slash_pos
-                    exit
-                end if
-            end do
-            if (last_slash > 0 .and. last_slash < len(editor%tabs(i)%filename)) then
-                filename_only = editor%tabs(i)%filename(last_slash+1:)
-            end if
+        if (more_left) then
+            call terminal_move_cursor(1, start_column)
+            call terminal_write(char(27) // '[90m' // '<' // char(27) // '[0m')
+            call region_add(REGION_TAB_SCROLL, 1, 1, start_column, start_column, -1)
+        end if
 
-            ! Add modified marker
-            if (editor%tabs(i)%modified) then
-                modified_marker = '*'
-            else
-                modified_marker = ' '
-            end if
+        do i = 1, n_spans
+            associate(sp => spans(i))
+                call clip_to_cells(trim(entries(sp%idx)%label), MAX_ENTRY_CELLS, &
+                                   shown, used)
+                call terminal_move_cursor(1, start_column + sp%col0 - 1)
+                if (entries(sp%idx)%dim) call terminal_write(char(27) // '[90m')
+                if (sp%idx == editor%active_tab_index) call terminal_write(char(27) // '[7m')
+                call terminal_write(shown)
+                if (entries(sp%idx)%dim .or. sp%idx == editor%active_tab_index) &
+                    call terminal_write(char(27) // '[0m')
 
-            ! Build tab label: [1: file.txt*]
-            write(temp_label, '(A,I0,A,A,A,A)') '[', i, ': ', trim(filename_only), modified_marker, ']'
-            tab_label = trim(temp_label)
-
-            ! Check if we have room for this tab
-            if (col + len(tab_label) > start_column + max_width) exit
-
-            ! Position cursor
-            call terminal_move_cursor(1, col)
-
-            ! Apply orphan tab styling (gray foreground)
-            if (editor%tabs(i)%is_orphan) then
-                call terminal_write(char(27) // '[90m')  ! Bright black/gray
-            end if
-
-            ! Highlight active tab
-            if (i == editor%active_tab_index) then
-                call terminal_write(char(27) // '[7m')  ! Reverse video
-            end if
-
-            call terminal_write(tab_label)
-
-            ! Reset if we applied any styling
-            if (i == editor%active_tab_index .or. editor%tabs(i)%is_orphan) then
-                call terminal_write(char(27) // '[0m')  ! Reset
-            end if
-
-            ! This is the only place the tab layout exists: the label width
-            ! varies with the filename and the modified marker, and in tree
-            ! mode the bar does not start at column 1. Record the span now so
-            ! a click can be resolved without redoing any of that.
-            !
-            ! len() is bytes, matching the column arithmetic below. A
-            ! multibyte filename therefore misplaces the region exactly as it
-            ! already misplaces the drawn layout, so clicks stay consistent
-            ! with what is on screen.
-            call region_add(REGION_TAB, 1, 1, col, col + len(tab_label) - 1, i)
-
-            col = col + len(tab_label) + 1  ! +1 for space between tabs
+                ! The span is in CELLS, from the same layout that drew it, so a
+                ! multibyte filename no longer shifts every click to its right.
+                call region_add(REGION_TAB, 1, 1, &
+                                start_column + sp%col0 - 1, &
+                                start_column + sp%col1 - 1, &
+                                entries(sp%idx)%payload)
+            end associate
         end do
+
+        ! Say how many are off the right edge rather than letting them vanish.
+        if (more_right) then
+            write(more_lbl, '(a,i0)') '>', n_entries - (spans(max(1, n_spans))%idx)
+            col = start_column + max_width - len_trim(more_lbl)
+            call terminal_move_cursor(1, col)
+            call terminal_write(char(27) // '[90m' // trim(more_lbl) // char(27) // '[0m')
+            call region_add(REGION_TAB_SCROLL, 1, 1, col, &
+                            start_column + max_width - 1, 1)
+        end if
     end subroutine render_tab_bar
+
+    !> Last path component, or the whole string when there is no separator.
+    function basename_of(path) result(base)
+        character(len=*), intent(in) :: path
+        character(len=:), allocatable :: base
+        integer :: p
+
+        p = index(path, '/', back=.true.)
+        if (p > 0 .and. p < len(path)) then
+            base = path(p+1:)
+        else
+            base = path
+        end if
+    end function basename_of
+
 
     ! UNUSED: Get diagnostic marker and color for a line
     ! Kept for potential future use

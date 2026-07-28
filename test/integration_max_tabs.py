@@ -234,6 +234,41 @@ def test_saving_does_not_overwrite_another_file(binary):
         s.close()
 
 
+def test_the_active_tab_is_always_drawn(binary):
+    """The bar used to stop at the first label that did not fit, so with a
+    dozen tabs the active one could be entirely off-screen -- and therefore
+    unclickable, since a click resolves against what was drawn."""
+    s = Session(binary)
+    try:
+        open_the_rest(s)
+        missing = []
+        for step in range(N_FILES + 2):
+            name = s.active_name()
+            if name and name not in s.tab_bar():
+                missing.append((step, name, s.tab_bar()[:80]))
+            s.send("\x1b[6;5~", 0.3)          # ctrl-pagedown
+        check(not missing,
+              "the active tab is drawn in the bar at every step",
+              "\n".join(f"step {a}: {b} absent from {c!r}" for a, b, c in missing[:4]))
+    finally:
+        s.close()
+
+
+def test_overflow_is_announced(binary):
+    """Tabs past the edge are indicated rather than silently dropped."""
+    s = Session(binary)
+    try:
+        open_the_rest(s)
+        # Walk back to the first tab; tabs to the right must then be flagged.
+        for _ in range(N_FILES + 2):
+            s.send("\x1b[5;5~", 0.25)         # ctrl-pageup
+        bar = s.tab_bar()
+        check(">" in bar or "<" in bar,
+              "an overflow marker is shown when tabs do not all fit", repr(bar))
+    finally:
+        s.close()
+
+
 def test_all_files_are_reachable(binary):
     """Every file opened should be reachable as its own tab."""
     s = Session(binary)
@@ -256,6 +291,8 @@ def test_all_files_are_reachable(binary):
 def main():
     binary = find_binary()
     for fn in (test_every_tab_shows_its_own_file,
+               test_the_active_tab_is_always_drawn,
+               test_overflow_is_announced,
                test_saving_does_not_overwrite_another_file,
                test_all_files_are_reachable):
         try:

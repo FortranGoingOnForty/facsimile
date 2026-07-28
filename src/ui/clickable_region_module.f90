@@ -22,7 +22,7 @@ module clickable_region_module
     public :: clickable_region_t
     public :: regions_begin_frame, region_add, region_at, region_count
     public :: REGION_NONE, REGION_TAB, REGION_FUSS_TOGGLE, REGION_TREE_ROW
-    public :: REGION_BLOCK, REGION_CTX_ROW
+    public :: REGION_BLOCK, REGION_CTX_ROW, REGION_TAB_SCROLL
 
     ! What a region means. REGION_BLOCK is deliberately inert: it marks a
     ! panel that owns its rectangle, so a click there is swallowed rather
@@ -33,6 +33,8 @@ module clickable_region_module
     integer, parameter :: REGION_TREE_ROW = 3     ! payload: tree item index
     integer, parameter :: REGION_BLOCK = 4        ! payload: unused
     integer, parameter :: REGION_CTX_ROW = 5      ! payload: context-menu row
+    ! payload -1 scroll left, +1 scroll right
+    integer, parameter :: REGION_TAB_SCROLL = 6
 
     ! Fixed capacity, so a frame costs no allocation. Overflow drops the
     ! extra regions: they simply stay unclickable, which degrades to the
