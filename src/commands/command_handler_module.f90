@@ -162,6 +162,11 @@ module command_handler_module
     !
     ! 0 means nothing pending, which is why tab numbering starting at 1 is
     ! convenient here.
+    ! The identifier a rename in flight is replacing, so every edit the server
+    ! sends back can be checked against what is actually in the buffer before
+    ! anything is written.
+    character(len=:), allocatable :: g_rename_expect
+
     integer :: g_jump_value = 0
     integer(int64) :: g_jump_deadline = 0
     ! Non-zero when the tab the first digit landed on belongs to a group, in
@@ -2203,6 +2208,22 @@ contains
                             call show_rename_prompt(editor%screen_rows, old_name, new_name, cancelled)
 
                             if (.not. cancelled .and. allocated(new_name)) then
+                                ! The server must be looking at the SAME text
+                                ! the ranges will be applied to. Document
+                                ! changes are debounced half a second, so
+                                ! renaming shortly after typing asked clangd
+                                ! about a document that no longer existed: it
+                                ! answered with ranges for the old text, and
+                                ! those were applied to the new text. That
+                                ! destroyed code -- 'char li' replaced by the
+                                ! new name, and the name inserted on an
+                                ! unrelated line -- rather than merely failing.
+                                !
+                                ! LSP orders notifications and requests on one
+                                ! connection, so a forced didChange here is
+                                ! guaranteed to be processed before the rename.
+                                call flush_document_now(editor)
+
                                 ! Send rename request
                                 lsp_line = editor%cursors(editor%active_cursor)%line - 1
                                 lsp_char = lsp_char_of(buffer, &
@@ -2211,6 +2232,12 @@ contains
 
                                 ! Save editor state for callback
                                 saved_editor_for_callback => editor
+                                ! What every edit must be replacing. The flush
+                                ! above closes the window that caused the
+                                ! corruption; this catches it happening for any
+                                ! other reason, because the cost of being wrong
+                                ! here is destroyed source.
+                                g_rename_expect = old_name
 
                                 request_id = request_rename(editor%lsp_manager, &
                                     rename_server, &
@@ -8206,6 +8233,52 @@ contains
     !>
     !> An entry is a group or an ungrouped tab, so with no groups this is
     !> exactly the previous/next tab it always was. Wraps at both ends.
+    !> The text a range currently covers, for checking an edit before writing.
+    !>
+    !> Returns '' for a multi-line or empty range. A zero-width range is worth
+    !> noticing in its own right: a rename edit that deletes nothing is not
+    !> replacing an identifier, it is inserting one somewhere, which is exactly
+    !> the shape of the bug this guards.
+    function text_in_range(buffer, sl, sc, el, ec) result(text)
+        type(buffer_t), intent(inout) :: buffer
+        integer, intent(in) :: sl, sc, el, ec
+        character(len=:), allocatable :: text
+        character(len=:), allocatable :: line
+        integer :: b1, b2
+
+        text = ''
+        if (sl /= el) return
+        if (ec <= sc) return
+
+        line = buffer_get_line(buffer, sl)
+        b1 = utf8_char_to_byte_index(line, sc)
+        b2 = utf8_char_to_byte_index(line, ec)
+        if (b1 < 1) return
+        if (b2 < 1) b2 = len(line) + 1
+        if (b2 - 1 > len(line)) b2 = len(line) + 1
+        if (b2 <= b1) return
+        text = line(b1:b2-1)
+    end function text_in_range
+
+    !> Push the active document to its language servers right now.
+    !>
+    !> The per-tab sync is debounced, which is right for keystrokes and wrong
+    !> before any request whose answer is a set of positions: the server would
+    !> be describing text the editor has already moved on from.
+    subroutine flush_document_now(editor)
+        use document_sync_module, only: flush_pending_changes
+        type(editor_state_t), intent(inout) :: editor
+        integer :: i
+
+        if (.not. allocated(editor%tabs)) return
+        do i = 1, size(editor%tabs)
+            if (editor%tabs(i)%num_lsp_servers > 0) then
+                call flush_pending_changes(editor%tabs(i)%document_sync, &
+                                           editor%lsp_manager, .true.)
+            end if
+        end do
+    end subroutine flush_document_now
+
     !> Jump to tab `n`, then wait briefly to see whether more digits follow.
     subroutine begin_tab_jump(editor, buffer, n)
         use platform_module, only: platform_now_ms
@@ -9695,13 +9768,21 @@ contains
         ! Apply workspace edit
         call apply_workspace_edit(saved_editor_for_callback, result_str, changes_applied)
 
+        ! Cleared however this turned out. A stale expectation would make the
+        ! NEXT workspace edit -- a code action, say -- check itself against an
+        ! identifier that has nothing to do with it and refuse to apply.
+        if (allocated(g_rename_expect)) deallocate(g_rename_expect)
+
         if (changes_applied > 0) then
             block
                 character(len=64) :: msg
                 write(msg, '(A,I0,A)') 'Renamed symbol (', changes_applied, ' changes applied)'
                 saved_editor_for_callback%timed_message = trim(msg)
             end block
-        else
+        else if (index(saved_editor_for_callback%timed_message, 'Rename aborted') /= 1) then
+            ! Leave a refusal's own explanation in place. Overwriting it with
+            ! 'No changes applied' would report the symptom and discard the
+            ! reason, which is the part worth knowing.
             saved_editor_for_callback%timed_message = 'No changes applied'
         end if
         saved_editor_for_callback%timed_message_ms = get_time_ms()
@@ -9971,26 +10052,43 @@ contains
             return
         end if
 
-        ! Debug: log tab_idx finding
-        open(newunit=server_idx, file='/tmp/fac_tab_debug.log', status='unknown', &
-             position='append', action='write')
-        write(server_idx, '(A,I3,A,I3)') 'Found tab_idx=', tab_idx, ' pane_idx=', pane_idx
-        write(server_idx, '(A,A)') 'Extracted filename: ', trim(filename)
-        write(server_idx, '(A,A)') 'Tab filename: ', trim(editor%tabs(tab_idx)%filename)
-        write(server_idx, '(A)') '---'
-        close(server_idx)
-
-        ! Apply edits in reverse order (to preserve line numbers)
         num_edits = json_array_size(edits_arr)
 
-        do i = num_edits - 1, 0, -1  ! 0-based index, reverse order
-            edit_obj = json_get_array_element(edits_arr, i)
+        ! Read every edit out FIRST, check them all, and only then write.
+        !
+        ! An edit set is one operation. Applying them as they are read means a
+        ! set that turns out to be inapplicable has already half-changed the
+        ! file, which is worse than either applying it or refusing it -- there
+        ! is no way back to a state the user recognises.
+        block
+            integer :: sl(num_edits), sc(num_edits), el(num_edits), ec(num_edits)
+            character(len=:), allocatable :: texts(:)
+            integer :: n, maxlen, k
+            logical :: ok
+            character(len=:), allocatable :: found
+            character(len=200) :: why
 
-            ! Get range
-            if (.not. json_has_key(edit_obj, 'range')) cycle
-            range_obj = json_get_object(edit_obj, 'range')
+            n = 0
+            maxlen = 1
+            do i = 0, num_edits - 1
+                edit_obj = json_get_array_element(edits_arr, i)
+                if (.not. json_has_key(edit_obj, 'range')) cycle
+                new_text = json_get_string(edit_obj, 'newText')
+                if (.not. allocated(new_text)) cycle
+                maxlen = max(maxlen, len(new_text))
+                deallocate(new_text)
+            end do
+            allocate(character(len=maxlen) :: texts(max(1, num_edits)))
 
-            if (json_has_key(range_obj, 'start') .and. json_has_key(range_obj, 'end')) then
+            do i = 0, num_edits - 1
+                edit_obj = json_get_array_element(edits_arr, i)
+                if (.not. json_has_key(edit_obj, 'range')) cycle
+                range_obj = json_get_object(edit_obj, 'range')
+                if (.not. (json_has_key(range_obj, 'start') .and. &
+                           json_has_key(range_obj, 'end'))) cycle
+                new_text = json_get_string(edit_obj, 'newText')
+                if (.not. allocated(new_text)) cycle
+
                 start_obj = json_get_object(range_obj, 'start')
                 end_obj = json_get_object(range_obj, 'end')
 
@@ -10003,45 +10101,55 @@ contains
                 end_char = char_col_from_lsp(editor%tabs(tab_idx)%panes(pane_idx)%buffer, &
                     end_line, int(json_get_number(end_obj, 'character', 0.0d0)))
 
-                ! Get new text
-                new_text = json_get_string(edit_obj, 'newText')
+                n = n + 1
+                sl(n) = start_line; sc(n) = start_char
+                el(n) = end_line;   ec(n) = end_char
+                texts(n) = new_text
+                deallocate(new_text)
+            end do
 
-                if (allocated(new_text)) then
-                    ! Apply the edit to the pane buffer (not tab buffer!)
-                    call apply_single_edit(editor%tabs(tab_idx)%panes(pane_idx)%buffer, &
-                        start_line, start_char, end_line, end_char, new_text)
-                    changes_applied = changes_applied + 1
-
-                    ! Debug: check buffer size after edit
-                    block
-                        character(len=:), allocatable :: check_content
-                        integer :: check_unit
-                        check_content = buffer_to_string(editor%tabs(tab_idx)%panes(pane_idx)%buffer)
-                        open(newunit=check_unit, file='/tmp/fac_after_edit.log', status='unknown', &
-                             position='append', action='write')
-                        write(check_unit, '(A,I8)') 'After edit, buffer len: ', len(check_content)
-                        close(check_unit)
-                        if (allocated(check_content)) deallocate(check_content)
-                    end block
-
-                    deallocate(new_text)
-                end if
+            ! A rename knows what it is replacing, so it can tell whether the
+            ! server is describing the same text the editor holds. When it is
+            ! not, the ranges point at whatever now occupies those coordinates
+            ! -- which is how 'char li' came to be replaced by a variable name.
+            ok = .true.
+            why = ''
+            if (allocated(g_rename_expect)) then
+                do k = 1, n
+                    found = text_in_range(editor%tabs(tab_idx)%panes(pane_idx)%buffer, &
+                                          sl(k), sc(k), el(k), ec(k))
+                    if (found /= g_rename_expect) then
+                        ok = .false.
+                        write(why, '(a,i0,a)') 'Rename aborted: line ', sl(k), &
+                            ' holds "' // trim(found) // '", not "' // &
+                            trim(g_rename_expect) // '"'
+                        exit
+                    end if
+                end do
             end if
-        end do
+
+            if (.not. ok) then
+                ! Nothing written. Saying which line disagreed matters: the
+                ! honest report is that the editor and the server were looking
+                ! at different text, not that rename is broken.
+                editor%timed_message = trim(why)
+                editor%timed_message_ms = get_time_ms()
+                if (allocated(filename)) deallocate(filename)
+                return
+            end if
+
+            ! Back to front, so an earlier edit never shifts a later one's range.
+            do k = n, 1, -1
+                call apply_single_edit(editor%tabs(tab_idx)%panes(pane_idx)%buffer, &
+                    sl(k), sc(k), el(k), ec(k), trim(texts(k)))
+                changes_applied = changes_applied + 1
+            end do
+        end block
 
         ! Sync the changed document back to all LSP servers
         if (changes_applied > 0) then
             buffer_content = buffer_to_string(editor%tabs(tab_idx)%panes(pane_idx)%buffer)
             if (allocated(buffer_content)) then
-                ! Debug: log what we're about to sync
-                open(newunit=server_idx, file='/tmp/fac_sync_debug.log', status='unknown', &
-                     position='append', action='write')
-                write(server_idx, '(A,I4)') 'Sync after changes_applied=', changes_applied
-                write(server_idx, '(A,I8)') 'Buffer content length: ', len(buffer_content)
-                write(server_idx, '(A,A)') 'First 100 chars: ', buffer_content(1:min(100,len(buffer_content)))
-                write(server_idx, '(A)') '---'
-                close(server_idx)
-
                 ! Notify all active LSP servers about the document change
                 ! Use the absolute path from the URI (filename variable) not the tab's relative path
                 do server_idx = 1, editor%lsp_manager%num_servers
@@ -10064,62 +10172,24 @@ contains
         character(len=*), intent(in) :: new_text
 
         integer :: start_pos, end_pos, delete_count
-        integer :: debug_unit
-        character(len=256) :: debug_msg
 
         ! Calculate buffer positions
         start_pos = get_buffer_position(buffer, start_line, start_char)
         end_pos = get_buffer_position(buffer, end_line, end_char)
-
-        ! Debug logging
-        open(newunit=debug_unit, file='/tmp/fac_edit_debug.log', status='unknown', &
-             position='append', action='write')
-        write(debug_msg, '(A,I4,A,I4,A,I4,A,I4)') 'Edit range: line ', start_line, &
-              ' char ', start_char, ' to line ', end_line, ' char ', end_char
-        write(debug_unit, '(A)') trim(debug_msg)
-        write(debug_msg, '(A,I6,A,I6,A,I4)') 'Buffer pos: start=', start_pos, &
-              ' end=', end_pos, ' delete_count=', end_pos - start_pos
-        write(debug_unit, '(A)') trim(debug_msg)
-        write(debug_msg, '(A,I4,A,A,A)') 'New text len=', len(new_text), ' text="', new_text, '"'
-        write(debug_unit, '(A)') trim(debug_msg)
-        write(debug_unit, '(A)') '---'
-        close(debug_unit)
 
         if (start_pos <= 0 .or. end_pos <= 0) return
 
         ! Delete the old text
         delete_count = end_pos - start_pos
 
-        ! Debug: log gap buffer state before operations
-        open(newunit=debug_unit, file='/tmp/fac_gap_debug.log', status='unknown', &
-             position='append', action='write')
-        write(debug_unit, '(A,I6,A,I6,A,I6)') 'BEFORE: gap_start=', buffer%gap_start, &
-              ' gap_end=', buffer%gap_end, ' size=', buffer%size
-        close(debug_unit)
-
         if (delete_count > 0) then
             call buffer_delete(buffer, start_pos, delete_count)
         end if
-
-        ! Debug: log gap buffer state after delete
-        open(newunit=debug_unit, file='/tmp/fac_gap_debug.log', status='unknown', &
-             position='append', action='write')
-        write(debug_unit, '(A,I6,A,I6,A,I6)') 'AFTER DELETE: gap_start=', buffer%gap_start, &
-              ' gap_end=', buffer%gap_end, ' size=', buffer%size
-        close(debug_unit)
 
         ! Insert the new text
         if (len(new_text) > 0) then
             call buffer_insert(buffer, start_pos, new_text)
         end if
-
-        ! Debug: log gap buffer state after insert
-        open(newunit=debug_unit, file='/tmp/fac_gap_debug.log', status='unknown', &
-             position='append', action='write')
-        write(debug_unit, '(A,I6,A,I6,A,I6)') 'AFTER INSERT: gap_start=', buffer%gap_start, &
-              ' gap_end=', buffer%gap_end, ' size=', buffer%size
-        write(debug_unit, '(A)') '---'
-        close(debug_unit)
     end subroutine apply_single_edit
 
     ! Execute a command from the command palette
