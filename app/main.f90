@@ -49,7 +49,8 @@ program facsimile
     use ai_engine_module, only: ai_tick, ai_configure
     use command_handler_module, only: handle_key_command, init_command_handler, cleanup_command_handler, &
                                       save_initial_state_for_undo, search_pattern, match_case_sensitive, &
-                                      g_lsp_modified_buffer, g_lsp_ui_changed, g_cursor_only_move
+                                      g_lsp_modified_buffer, g_lsp_ui_changed, g_cursor_only_move, &
+                                      tab_jump_tick
     use workspace_module
     use backup_module
     use save_prompt_module
@@ -603,6 +604,11 @@ program facsimile
         ! anything already in flight. One state per call, never blocking.
         ! Inert until ai.enabled is turned on.
         call ai_tick(editor%ai, editor, buffer, g_lsp_ui_changed)
+
+        ! Expire a pending multi-digit tab jump. The key read times out every
+        ! 50ms, so this runs while nothing is being typed -- which is the only
+        ! way the status hint gets cleared when the user simply stops.
+        call tab_jump_tick(g_lsp_ui_changed)
 
         ! Poll integrated terminal for new output
         if (is_terminal_panel_visible(editor%terminal_panel)) then

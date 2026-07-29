@@ -93,7 +93,8 @@ Complete keyboard shortcut reference for `fac` editor.
 | `Ctrl+W` | Close Tab/Pane | Close current pane (then tab if last pane) |
 | `Ctrl+PageDown` or `Ctrl+Alt+Right` | Next Tab | Switch to next tab |
 | `Ctrl+PageUp` or `Ctrl+Alt+Left` | Previous Tab | Switch to previous tab |
-| `Alt+1` to `Alt+9` (or `Ctrl+1` to `Ctrl+9`) | Jump to Tab | Switch to specific tab number |
+| `Alt+1` to `Alt+9` (or `Ctrl+1` to `Ctrl+9`) | Jump to Tab | Switch to that tab. `Alt+0` is tab 10 |
+| ...then another digit | Extend the Jump | Within half a second a further digit extends the number, so `Alt+1` `5` reaches tab 15. If the first digit landed on a tab inside a group, the digit picks that group's Nth member instead — the status bar says which of the two is on offer |
 | `Alt+V` | Split Vertical | Split current pane vertically |
 | `Alt+S` | Split Horizontal | Split current pane horizontally |
 | `Alt+Q` | Close Pane | Close current pane only |

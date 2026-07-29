@@ -114,7 +114,10 @@ fpm run -- [filename]
 ### Tab Management
 - `ctrl-t` - create new tab
 - `ctrl-pageup` / `ctrl-pagedown` - previous / next tab
-- `alt-1` .. `alt-9` - jump to a tab by number
+- `alt-1` .. `alt-9` - jump to a tab by number (`alt-0` is tab 10)
+  - a further digit within half a second extends it: `alt-1` then `5` goes to tab 15
+  - if the first digit lands on a tab inside a group, the next digit picks that
+    group's Nth member instead; the status bar says which it will be
 
 ### Integrated Terminal
 - `f5` / `alt-t` - toggle the terminal panel

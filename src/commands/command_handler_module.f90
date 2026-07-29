@@ -143,6 +143,7 @@ module command_handler_module
     public :: g_lsp_modified_buffer  ! Flag for immediate render after LSP edits
     public :: g_lsp_ui_changed       ! Flag for immediate render after LSP UI changes
     public :: g_cursor_only_move     ! Flag for cursor-only moves (skip full re-render)
+    public :: tab_jump_tick
 
     ! Flag to track if LSP modified the buffer (for immediate rendering)
     logical :: g_lsp_modified_buffer = .false.
@@ -150,6 +151,25 @@ module command_handler_module
     logical :: g_lsp_ui_changed = .false.
     ! Flag for cursor-only movements (can skip full re-render)
     logical :: g_cursor_only_move = .false.
+
+    ! A tab jump waiting to see whether another digit follows.
+    !
+    ! alt-N jumps at once and THEN arms this, rather than waiting to find out
+    ! whether the number has more digits. Waiting would put half a second of
+    ! lag on the overwhelmingly common single-digit case; superseding a jump
+    ! that already happened costs nothing, because switching tabs is cheap and
+    ! reversible.
+    !
+    ! 0 means nothing pending, which is why tab numbering starting at 1 is
+    ! convenient here.
+    integer :: g_jump_value = 0
+    integer(int64) :: g_jump_deadline = 0
+    ! Non-zero when the tab the first digit landed on belongs to a group, in
+    ! which case the NEXT digit picks a member of that group rather than
+    ! extending the number. A group entry carries no number on the tab bar, so
+    ! there is nothing for a digit to extend towards anyway.
+    integer(int32) :: g_jump_group = 0
+    integer, parameter :: JUMP_WINDOW_MS = 500
 
     type(yank_stack_t) :: yank_stack
     type(undo_stack_t) :: undo_stack
@@ -906,6 +926,14 @@ contains
         end if
         if (.not. ghost_extended) call ghost_clear(editor%ghost)
 
+        ! A bare digit right after alt-N continues that jump rather than being
+        ! typed. Checked here, after every panel and prompt has had its chance
+        ! to return, so a digit meant for the palette or the search box still
+        ! reaches it.
+        if (g_jump_value > 0) then
+            if (continue_tab_jump(editor, buffer, key_str)) return
+        end if
+
         select case(trim(key_str))
         ! File operations
         case('ctrl-q')
@@ -1353,36 +1381,26 @@ contains
 
         ! Tab navigation
         case('alt-1', 'ctrl-1')
-            ! Switch to tab 1 (alt-1 or ctrl-1)
-            if (size(editor%tabs) >= 1) call switch_to_tab_with_buffer(editor, 1, buffer)
+            call begin_tab_jump(editor, buffer, 1)
         case('alt-2', 'ctrl-2')
-            ! Switch to tab 2
-            if (size(editor%tabs) >= 2) call switch_to_tab_with_buffer(editor, 2, buffer)
+            call begin_tab_jump(editor, buffer, 2)
         case('alt-3', 'ctrl-3')
-            ! Switch to tab 3
-            if (size(editor%tabs) >= 3) call switch_to_tab_with_buffer(editor, 3, buffer)
+            call begin_tab_jump(editor, buffer, 3)
         case('alt-4', 'ctrl-4')
-            ! Switch to tab 4
-            if (size(editor%tabs) >= 4) call switch_to_tab_with_buffer(editor, 4, buffer)
+            call begin_tab_jump(editor, buffer, 4)
         case('alt-5', 'ctrl-5')
-            ! Switch to tab 5
-            if (size(editor%tabs) >= 5) call switch_to_tab_with_buffer(editor, 5, buffer)
+            call begin_tab_jump(editor, buffer, 5)
         case('alt-6', 'ctrl-6')
-            ! Switch to tab 6
-            if (size(editor%tabs) >= 6) call switch_to_tab_with_buffer(editor, 6, buffer)
+            call begin_tab_jump(editor, buffer, 6)
         case('alt-7', 'ctrl-7')
-            ! Switch to tab 7
-            if (size(editor%tabs) >= 7) call switch_to_tab_with_buffer(editor, 7, buffer)
+            call begin_tab_jump(editor, buffer, 7)
         case('alt-8', 'ctrl-8')
-            ! Switch to tab 8
-            if (size(editor%tabs) >= 8) call switch_to_tab_with_buffer(editor, 8, buffer)
+            call begin_tab_jump(editor, buffer, 8)
         case('alt-9', 'ctrl-9')
-            ! Switch to tab 9
-            if (size(editor%tabs) >= 9) call switch_to_tab_with_buffer(editor, 9, buffer)
+            call begin_tab_jump(editor, buffer, 9)
         case('alt-0', 'ctrl-0')
-            ! Switch to tab 10
-            if (size(editor%tabs) >= 10) call switch_to_tab_with_buffer(editor, 10, buffer)
-
+            ! Tab 10, the way a keyboard's digit row runs.
+            call begin_tab_jump(editor, buffer, 10)
         case('ctrl-alt-left', 'alt-ctrl-left', 'super-ctrl-left', 'ctrl-pageup')
             ! Previous entry on row 1. With no groups that is the previous
             ! tab, exactly as before; with groups a whole group is one entry,
@@ -8188,6 +8206,144 @@ contains
     !>
     !> An entry is a group or an ungrouped tab, so with no groups this is
     !> exactly the previous/next tab it always was. Wraps at both ends.
+    !> Jump to tab `n`, then wait briefly to see whether more digits follow.
+    subroutine begin_tab_jump(editor, buffer, n)
+        use platform_module, only: platform_now_ms
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer, intent(in) :: n
+
+        call clear_tab_jump()
+        if (n < 1 .or. n > size(editor%tabs)) return
+
+        call switch_to_tab_with_buffer(editor, n, buffer)
+        g_jump_value = n
+        g_jump_deadline = platform_now_ms() + int(JUMP_WINDOW_MS, int64)
+        g_jump_group = editor%tabs(n)%group_id
+        call announce_tab_jump(editor)
+    end subroutine begin_tab_jump
+
+    !> A key arrived while a jump was pending. True when it was consumed.
+    function continue_tab_jump(editor, buffer, key_str) result(handled)
+        use platform_module, only: platform_now_ms
+        use editor_state_module, only: group_members
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=*), intent(in) :: key_str
+        logical :: handled
+        integer, allocatable :: members(:)
+        integer :: digit, target
+        character(len=48) :: msg
+
+        handled = .false.
+
+        ! Expired, or not a digit at all: the jump that already happened stands
+        ! and this key is whatever it is. Clearing before returning matters --
+        ! otherwise a digit typed much later would be read as a continuation.
+        if (platform_now_ms() > g_jump_deadline) then
+            call clear_tab_jump()
+            return
+        end if
+        if (len_trim(key_str) /= 1) then
+            call clear_tab_jump()
+            return
+        end if
+        if (key_str(1:1) < '0' .or. key_str(1:1) > '9') then
+            call clear_tab_jump()
+            return
+        end if
+
+        digit = iachar(key_str(1:1)) - iachar('0')
+        handled = .true.
+
+        if (g_jump_group /= 0) then
+            ! Into the group the first digit landed in. Its members are
+            ! numbered by their order in the group, not by their tab index --
+            ! that order is what row 2 shows, so it is what the user is
+            ! counting.
+            call group_members(editor, g_jump_group, members)
+            if (digit >= 1 .and. digit <= size(members)) then
+                call switch_to_tab_with_buffer(editor, members(digit), buffer)
+                call clear_tab_jump()
+                call set_status_message('Group member ' // digit_str(digit))
+            else
+                write(msg, '(a,i0,a)') 'This group has ', size(members), ' members'
+                call clear_tab_jump()
+                call set_status_message(trim(msg))
+            end if
+            return
+        end if
+
+        target = g_jump_value * 10 + digit
+        if (target < 1 .or. target > size(editor%tabs)) then
+            ! Out of range. The earlier jump stands rather than being undone,
+            ! and the digit is not typed into the document either -- it was
+            ! meant as part of a chord, and inserting it would be a surprise
+            ! edit to a file the user was only navigating.
+            write(msg, '(a,i0,a)') 'No tab ', target, ''
+            call clear_tab_jump()
+            call set_status_message(trim(msg))
+            return
+        end if
+
+        call switch_to_tab_with_buffer(editor, target, buffer)
+        ! Re-arm, so three-digit tab numbers work on the way up too.
+        g_jump_value = target
+        g_jump_deadline = platform_now_ms() + int(JUMP_WINDOW_MS, int64)
+        g_jump_group = editor%tabs(target)%group_id
+        call announce_tab_jump(editor)
+    end function continue_tab_jump
+
+    subroutine clear_tab_jump()
+        g_jump_value = 0
+        g_jump_deadline = 0
+        g_jump_group = 0
+    end subroutine clear_tab_jump
+
+    !> Expire a pending jump once its window has passed.
+    !>
+    !> Called from the frame loop, whose key read times out every 50ms, so this
+    !> runs even while nothing is typed. Without it the status hint would sit
+    !> there claiming a window that has long closed.
+    subroutine tab_jump_tick(changed)
+        use platform_module, only: platform_now_ms
+        logical, intent(inout) :: changed
+
+        if (g_jump_value == 0) return
+        if (platform_now_ms() <= g_jump_deadline) return
+        call clear_tab_jump()
+        call set_status_message('')
+        changed = .true.
+    end subroutine tab_jump_tick
+
+    !> Say what a further digit would do, so the window never feels like a
+    !> keystroke that went missing.
+    subroutine announce_tab_jump(editor)
+        use editor_state_module, only: group_members
+        type(editor_state_t), intent(inout) :: editor
+        integer, allocatable :: members(:)
+        character(len=64) :: msg
+
+        if (g_jump_group /= 0) then
+            call group_members(editor, g_jump_group, members)
+            write(msg, '(a,i0,a)') 'Tab ' // digit_str(g_jump_value) // &
+                ' - digit picks a member (1-', size(members), ')'
+        else
+            write(msg, '(a)') 'Tab ' // digit_str(g_jump_value) // &
+                ' - another digit extends it'
+        end if
+        call set_status_message(trim(msg))
+    end subroutine announce_tab_jump
+
+    function digit_str(n) result(s)
+        integer, intent(in) :: n
+        character(len=:), allocatable :: s
+        character(len=12) :: b
+
+        write(b, '(i0)') n
+        s = trim(b)
+    end function digit_str
+
     !> Dragging the panel's top edge to resize it.
     !>
     !> Returns .true. when the event belonged to a resize, so the caller stops

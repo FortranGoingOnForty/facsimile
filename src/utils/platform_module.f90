@@ -1,4 +1,5 @@
 module platform_module
+    use iso_fortran_env, only: int64
     use iso_c_binding
     implicit none
     private
@@ -8,7 +9,7 @@ module platform_module
     public :: canonical_path
     public :: platform_copy_to_clipboard, platform_paste_from_clipboard
     public :: detect_system_pkg_mgr, detect_priv_prefix
-    public :: platform_sleep_ms
+    public :: platform_sleep_ms, platform_now_ms
 
     interface
         subroutine fac_sleep_ms_c(ms) bind(C, name='fac_sleep_ms_f')
@@ -172,6 +173,24 @@ contains
 
         call fac_sleep_ms_c(int(ms, c_int))
     end subroutine platform_sleep_ms
+
+    !> Milliseconds from an arbitrary origin, for measuring elapsed time.
+    !>
+    !> Only differences are meaningful -- the origin is whatever system_clock
+    !> counts from. Deliberately not date_and_time: a wall clock can step
+    !> backwards over an NTP correction or a daylight-saving change, and a
+    !> deadline computed across that would either fire at once or never.
+    function platform_now_ms() result(ms)
+        integer(int64) :: ms
+        integer(int64) :: ticks, rate
+
+        call system_clock(ticks, rate)
+        if (rate <= 0) then
+            ms = 0
+        else
+            ms = ticks * 1000_int64 / rate
+        end if
+    end function platform_now_ms
 
     function get_temp_dir() result(path)
         character(len=:), allocatable :: path
