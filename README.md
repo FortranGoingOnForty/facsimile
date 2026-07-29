@@ -66,6 +66,8 @@ fpm run -- [filename]
 - `backspace` / `ctrl-h` - delete backward
 - `delete` - delete forward
 - `tab` - indent to the next tab stop, or indent the selection (a hard tab in Makefiles, where spaces are a syntax error)
+  - on a line holding only whitespace it jumps straight to where the line belongs, read from the block above, so re-entering a nested block is one press
+- `backspace` in leading whitespace - removes a whole indent level, not one space
 - `shift-tab` - dedent selection or current line
 - `ctrl-/` - toggle line comment (indent-aware; comments whole lines for a partial selection)
 - `ctrl-k` - kill line forward (yank stack)

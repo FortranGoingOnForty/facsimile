@@ -1483,7 +1483,8 @@ contains
             if (size(editor%cursors) > 1) then
                 call enter_multiple_cursors(editor, buffer)
             else
-                call handle_enter(editor%cursors(editor%active_cursor), buffer)
+                call handle_enter(editor%cursors(editor%active_cursor), buffer, &
+                                  active_pane_filename(editor))
             end if
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
@@ -3028,6 +3029,7 @@ contains
     subroutine handle_backspace(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
+        integer :: n, i
 
         ! Delete selection if one exists
         if (cursor%has_selection) then
@@ -3036,6 +3038,21 @@ contains
         end if
 
         if (cursor%column > 1) then
+            ! Inside a run of leading spaces, unwind a whole indent level at a
+            ! time. Twelve presses to undo three levels is the friction; every
+            ! modern editor treats the indent as the unit here (VSCode calls it
+            ! useTabStops). Only spaces: a hard tab is already one press, and
+            ! one press is already the answer.
+            n = spaces_back_to_tab_stop(buffer, cursor)
+            if (n > 1) then
+                do i = 1, n
+                    cursor%column = cursor%column - 1
+                    call buffer_delete_at_cursor(buffer, cursor)
+                end do
+                cursor%desired_column = cursor%column
+                return
+            end if
+
             ! Delete character before cursor
             cursor%column = cursor%column - 1
             call buffer_delete_at_cursor(buffer, cursor)
@@ -3045,6 +3062,44 @@ contains
             call join_line_with_previous(cursor, buffer)
         end if
     end subroutine handle_backspace
+
+    !> How many spaces one Backspace should take, when the caret sits in a run
+    !> of leading spaces: enough to land on the previous tab stop.
+    !>
+    !> Returns 1 in every other case, which is the ordinary behaviour, so the
+    !> caller can treat "1" as "nothing special here".
+    function spaces_back_to_tab_stop(buffer, cursor) result(n)
+        use renderer_module, only: display_offset_of
+        use indent_policy_module, only: INDENT_WIDTH
+        type(buffer_t), intent(inout) :: buffer
+        type(cursor_t), intent(in) :: cursor
+        integer :: n
+        character(len=:), allocatable :: line
+        integer :: display_col, target, before_bytes, i
+
+        n = 1
+        line = buffer_get_line(buffer, cursor%line)
+        before_bytes = utf8_char_to_byte_index(line, cursor%column) - 1
+        if (before_bytes < 1) return
+        if (before_bytes > len(line)) return
+
+        ! Everything to the caret's left must be spaces -- otherwise the caret
+        ! is in the text, where deleting four characters would be destructive
+        ! rather than helpful.
+        do i = 1, before_bytes
+            if (line(i:i) /= ' ') return
+        end do
+
+        display_col = display_offset_of(line, 1, cursor%column)
+        if (display_col <= 0) return
+
+        target = ((display_col - 1) / INDENT_WIDTH) * INDENT_WIDTH
+        n = display_col - target
+        if (n < 1) n = 1
+        ! Only spaces are being removed, so cells and characters agree; still,
+        ! never ask for more than there are.
+        if (n > before_bytes) n = before_bytes
+    end function spaces_back_to_tab_stop
 
     subroutine handle_delete(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
@@ -3085,9 +3140,10 @@ contains
     ! expand_pair pushes a closing brace that sits directly after the caret
     ! onto its own line. It adds a second line, which the multi-cursor
     ! transform cannot model, so enter_multiple_cursors turns it off.
-    subroutine handle_enter(cursor, buffer, expand_pair)
+    subroutine handle_enter(cursor, buffer, filename, expand_pair)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
+        character(len=*), intent(in) :: filename
         logical, intent(in), optional :: expand_pair
         character(len=:), allocatable :: current_line, before, after
         integer :: indent_level, new_indent, split_byte
@@ -3122,14 +3178,14 @@ contains
         call buffer_insert_newline(buffer, cursor)
         cursor%line = cursor%line + 1
         cursor%column = 1
-        call set_line_indent(buffer, cursor%line, new_indent)
+        call set_line_indent(buffer, cursor%line, new_indent, filename)
         cursor%column = new_indent + 1
 
         ! '{|}' becomes an open brace, an indented blank line for the caret,
         ! and the closer back at the outer indent
         if (closes_immediately .and. do_expand) then
             call buffer_insert_text_at(buffer, cursor%line, cursor%column, char(10))
-            call set_line_indent(buffer, cursor%line + 1, indent_level)
+            call set_line_indent(buffer, cursor%line + 1, indent_level, filename)
         end if
 
         cursor%desired_column = cursor%column
@@ -3197,34 +3253,104 @@ contains
     ! untouched when it already measures that wide, so tab-indented files keep
     ! their tabs and a repeated Enter on a blank line is a no-op rather than a
     ! doubling. Leading whitespace is ASCII, so bytes and columns agree.
-    subroutine set_line_indent(buffer, line_num, width)
+    !> Replace a line's leading whitespace with `width` display columns of it.
+    !>
+    !> Takes the filename because the CHARACTER is not universal: this wrote
+    !> spaces unconditionally, so auto-indenting inside a makefile recipe
+    !> produced a "missing separator" build failure. Tab learned that in 0.22;
+    !> this path did not, because the decision lived at the Tab call site.
+    subroutine set_line_indent(buffer, line_num, width, filename)
+        use indent_policy_module, only: indent_string_for, indent_uses_hard_tabs
         type(buffer_t), intent(inout) :: buffer
         integer, intent(in) :: line_num, width
-        character(len=:), allocatable :: line
+        character(len=*), intent(in) :: filename
+        character(len=:), allocatable :: line, pad
         integer :: ws
 
         line = buffer_get_line(buffer, line_num)
-        if (indent_width(line) == width) return
-
         ws = leading_ws_len(line)
+
+        ! Already the right WIDTH: leave the characters alone. A C file
+        ! indented with tabs keeps its tabs -- rewriting them as spaces because
+        ! they measure the same would reformat code nobody asked to reformat.
+        !
+        ! The exception is a file where the character is a build error rather
+        ! than a preference, and then only when it is actually wrong: a
+        ! makefile recipe measured four columns wide is still broken if those
+        ! four columns are spaces.
+        if (indent_width(line) == width) then
+            if (.not. indent_uses_hard_tabs(filename)) return
+            if (ws == 0) return
+            if (verify(line(1:ws), achar(9)) == 0) return
+        end if
+
+        pad = indent_string_for(filename, width)
         if (ws > 0) call buffer_delete_range(buffer, line_num, 1, line_num, ws + 1)
-        if (width > 0) call buffer_insert_text_at(buffer, line_num, 1, repeat(' ', width))
+        if (len(pad) > 0) call buffer_insert_text_at(buffer, line_num, 1, pad)
     end subroutine set_line_indent
+
+    !> Where a blank line's indentation ought to be, judged from the code
+    !> above it.
+    !>
+    !> The previous NON-BLANK line, plus a level if it opens a block. Blank
+    !> lines are skipped because they carry no information -- the whole problem
+    !> being solved is that the line you are on has none either, so inheriting
+    !> from another empty line just propagates the nothing.
+    !>
+    !> Brace-based, and deliberately the same rule handle_enter already uses:
+    !> if Tab and Enter disagreed about where a line belongs, one of them would
+    !> always be wrong.
+    function expected_indent_at(buffer, line_no) result(width)
+        type(buffer_t), intent(inout) :: buffer
+        integer, intent(in) :: line_no
+        integer :: width
+        character(len=:), allocatable :: prev
+        integer :: i
+
+        width = 0
+        do i = line_no - 1, 1, -1
+            prev = buffer_get_line(buffer, i)
+            if (len_trim(prev) == 0) cycle
+            width = indent_width(prev)
+            if (last_nonblank_is(prev, '{')) width = width + ENTER_INDENT_WIDTH
+            return
+        end do
+    end function expected_indent_at
 
     subroutine handle_tab(cursor, buffer, filename)
         use renderer_module, only: display_offset_of
-        use indent_policy_module, only: indent_text_for
+        use indent_policy_module, only: indent_text_for, indent_string_for
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character(len=*), intent(in) :: filename
         character(len=:), allocatable :: line, pad
-        integer :: i, display_col
+        integer :: i, display_col, target
 
         ! The tab stop is a DISPLAY column, and cursor%column is a character
         ! index -- equal only on a line of plain ASCII with no tabs. Convert,
         ! or Tab lands somewhere other than where the text appears.
         line = buffer_get_line(buffer, cursor%line)
         display_col = display_offset_of(line, 1, cursor%column)
+
+        ! On a line with nothing but whitespace, one Tab goes straight to where
+        ! the line belongs rather than one stop nearer it. Pressing Tab four
+        ! times to get back into a nested block is the friction this removes,
+        ! and it is what every modern editor does.
+        !
+        ! Only when the target is FURTHER RIGHT than the indent already there,
+        ! so Tab never pulls a line leftwards -- that would make it a dedent
+        ! key, which Shift-Tab already is. Once at the expected indent, Tab
+        ! goes on stepping one level at a time, so going deeper still works.
+        if (len_trim(line) == 0) then
+            target = expected_indent_at(buffer, cursor%line)
+            if (target > indent_width(line)) then
+                call set_line_indent(buffer, cursor%line, target, filename)
+                pad = indent_string_for(filename, target)
+                cursor%column = len(pad) + 1
+                cursor%desired_column = cursor%column
+                return
+            end if
+        end if
 
         pad = indent_text_for(filename, display_col)
         do i = 1, len(pad)
@@ -3841,7 +3967,8 @@ contains
             c0 = editor%cursors(i)%column
             ! expand_pair off: pushing a closer onto its own line adds a
             ! second line, which mc_others_inserted cannot represent
-            call handle_enter(editor%cursors(i), buffer, expand_pair=.false.)
+            call handle_enter(editor%cursors(i), buffer, &
+                              active_pane_filename(editor), expand_pair=.false.)
             call mc_others_inserted(editor, i, l0, c0, &
                 editor%cursors(i)%line, editor%cursors(i)%column)
         end do

@@ -22,6 +22,7 @@ module indent_policy_module
     private
 
     public :: indent_uses_hard_tabs, indent_text_for, dedent_width_at
+    public :: indent_string_for
     public :: INDENT_WIDTH
 
     ! Display columns per indent level. Matches renderer_module's TAB_WIDTH;
@@ -101,6 +102,37 @@ contains
         if (n <= 0) n = INDENT_WIDTH
         text = repeat(' ', n)
     end function indent_text_for
+
+    !> Whitespace representing `width` display columns of indentation.
+    !>
+    !> For writing a whole indent at once -- auto-indent on Enter, or Tab
+    !> jumping a blank line to where it belongs -- as opposed to indent_text_for
+    !> above, which answers "one more press from here".
+    !>
+    !> The character matters for the same reason it does there: auto-indent was
+    !> writing spaces into makefile recipes, which is not a style question but a
+    !> "missing separator" build failure. Tab was fixed for that in 0.22 and
+    !> Enter was not, because the choice lived at the Tab call site instead of
+    !> here.
+    function indent_string_for(filename, width) result(text)
+        character(len=*), intent(in) :: filename
+        integer, intent(in) :: width
+        character(len=:), allocatable :: text
+        integer :: n
+
+        text = ''
+        if (width <= 0) return
+
+        if (indent_uses_hard_tabs(filename)) then
+            ! Round up: a recipe line needs at least one tab, and half a tab
+            ! does not exist. Anything under a full width still gets one.
+            n = (width + INDENT_WIDTH - 1) / INDENT_WIDTH
+            if (n < 1) n = 1
+            text = repeat(achar(9), n)
+        else
+            text = repeat(' ', width)
+        end if
+    end function indent_string_for
 
     !> How many leading characters one Shift-Tab should remove, so that
     !> dedent undoes exactly what indent did.

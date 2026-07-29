@@ -49,7 +49,9 @@ Complete keyboard shortcut reference for `fac` editor.
 | `Ctrl+V` | Paste | Paste from clipboard |
 | `Alt+A` | Select All | Select entire file |
 | `Shift+F10` or `Alt+Z` | Context Menu | Open the context menu at the caret (right-click opens it at the pointer) |
-| `Tab` | Accept Suggestion | Accept the whole inline suggestion |
+| `Tab` | Indent | Advance to the next tab stop. On a line holding only whitespace it jumps straight to the indentation the line belongs at, judged from the block above — so getting back into a nested block is one press, not four |
+| `Backspace` (in leading whitespace) | Unindent | Removes a whole indent level at a time rather than one space |
+| `Tab` | Accept Suggestion | Accept the whole inline suggestion (when one is offered) |
 | `Ctrl+Right` | Accept One Word | Accept a single word of an inline suggestion, keeping the rest offered |
 | `Alt+Right` | Accept One Line | Accept one line of a multi-line suggestion, keeping the rest offered |
 | `Alt+I` / `Alt+Shift+I` | Toggle AI Completion | Turn inline completion on or off. Off is instant; on probes the backend and reports what it found |
