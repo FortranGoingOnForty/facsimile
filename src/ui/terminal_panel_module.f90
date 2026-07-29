@@ -20,6 +20,11 @@ module terminal_panel_module
     public :: terminal_panel_scroll
     public :: terminal_panel_resize
     public :: get_terminal_panel_height
+    public :: height_for, permille_for
+    public :: terminal_panel_set_height, terminal_panel_nudge_height
+    public :: terminal_panel_toggle_maximize, terminal_panel_is_maximized
+    public :: terminal_panel_set_default_permille
+    public :: terminal_panel_get_permille
 
     ! C PTY interface
     interface
@@ -199,7 +204,14 @@ module terminal_panel_module
     end interface
 
     integer, parameter :: MIN_HEIGHT = 5
-    integer, parameter :: HEIGHT_PERCENT = 30
+    ! What the EDITOR must keep. The old code capped the panel at 80% of the
+    ! screen, which says the same thing from the wrong end -- on a 24-row
+    ! terminal it left the document 4 rows without ever saying so. Naming the
+    ! floor after the thing it protects makes the clamp arguable.
+    integer, parameter :: MIN_EDITOR_ROWS = 4
+    ! Only the DEFAULT now. The height a user has chosen lives in
+    ! panel%height_permille; see height_for.
+    integer, parameter :: DEFAULT_PERMILLE = 300
     integer, parameter :: READ_BUF_SIZE = 8192
 
     character(len=1), parameter :: ESC_CH = achar(27)
@@ -207,7 +219,17 @@ module terminal_panel_module
     type :: terminal_panel_t
         logical :: visible = .false.
         logical :: focused = .false.
+        ! The DERIVED row count, cached here because the renderer reads it
+        ! several times a frame. height_permille is the thing that means
+        ! something; this is what it works out to at the current screen size.
         integer :: height = 0
+        ! The user's intent, as a fraction of the screen. Kept as a ratio
+        ! rather than a row count so the panel holds its proportion when the
+        ! window is resized -- which is the whole reason terminal_panel_resize
+        ! can stay a one-liner instead of growing a special case.
+        integer :: height_permille = DEFAULT_PERMILLE
+        ! Where to go back to when un-maximising. 0 = not maximised.
+        integer :: prev_permille = 0
         type(c_ptr) :: pty_handle = c_null_ptr
         type(c_ptr) :: grid_handle = c_null_ptr
         integer :: pty_rows = 0
@@ -230,6 +252,10 @@ module terminal_panel_module
         ! A drag that began inside the panel keeps receiving events
         ! even once the pointer leaves it -- see the router.
         logical :: sel_dragging = .false.
+        ! Dragging the top edge to resize. Separate from sel_dragging because
+        ! the two are mutually exclusive and start from the same button press;
+        ! which one begins is decided by the row the press landed on.
+        logical :: resize_dragging = .false.
         integer :: sel_anchor_row = 0
         integer :: sel_anchor_col = 0
         integer :: sel_end_row = 0
@@ -278,14 +304,7 @@ contains
             return
         end if
 
-        ! Calculate height
-        panel%height = max(MIN_HEIGHT, &
-            screen_rows * HEIGHT_PERCENT / 100)
-        ! Cap at 80% of screen
-        if (panel%height > screen_rows * 80 / 100) then
-            panel%height = screen_rows * 80 / 100
-        end if
-
+        panel%height = height_for(panel%height_permille, screen_rows)
         panel%pty_rows = panel%height - 1  ! -1 for separator
         panel%pty_cols = screen_cols
 
@@ -379,6 +398,138 @@ contains
             h = 0
         end if
     end function get_terminal_panel_height
+
+    !> Rows for a given ratio at a given screen size.
+    !>
+    !> The single place the arithmetic lives. It used to be six lines
+    !> duplicated between opening the panel and resizing it, which is how the
+    !> two came to disagree about whether a chosen height survived.
+    !>
+    !> Both clamps can fight on a small screen -- a 10-row terminal cannot give
+    !> the panel MIN_HEIGHT and still leave the editor MIN_EDITOR_ROWS. The
+    !> editor wins, because a panel one row short is awkward whereas a document
+    !> with no visible lines is useless.
+    pure function height_for(permille, screen_rows) result(h)
+        integer, intent(in) :: permille, screen_rows
+        integer :: h, ceiling_h
+
+        ! Rounded, not truncated, and permille_for rounds to match. Truncating
+        ! both directions makes rows -> permille -> rows lose a row on screen
+        ! sizes that do not divide evenly, so the panel would creep one row
+        ! smaller every time the window was touched.
+        h = (screen_rows * permille + 500) / 1000
+        if (h < MIN_HEIGHT) h = MIN_HEIGHT
+
+        ! Leave room for the status bar (1) and the document.
+        ceiling_h = screen_rows - 1 - MIN_EDITOR_ROWS
+        if (h > ceiling_h) h = ceiling_h
+
+        ! Below this the panel has no usable rows at all: one goes to the
+        ! separator bar, so 2 is the least that shows a single line of shell.
+        if (h < 2) h = 2
+    end function height_for
+
+    !> The inverse, so a row count arrived at by dragging or by a keypress can
+    !> be stored back as the ratio that is the real source of truth.
+    pure function permille_for(rows, screen_rows) result(permille)
+        integer, intent(in) :: rows, screen_rows
+        integer :: permille
+
+        if (screen_rows <= 0) then
+            permille = DEFAULT_PERMILLE
+        else
+            permille = (rows * 1000 + screen_rows / 2) / screen_rows
+        end if
+        if (permille < 1) permille = 1
+        if (permille > 1000) permille = 1000
+    end function permille_for
+
+    !> Set the panel's height from a ratio, resizing the pty and grid to match.
+    !>
+    !> `changed` reports whether the derived ROW COUNT moved, not whether the
+    !> ratio did. A drag delivers an event per cell of pointer travel and most
+    !> of them land on the row already showing; resizing the grid for those
+    !> would be a calloc and a SIGWINCH to the shell for no visible change.
+    subroutine terminal_panel_set_height(panel, permille, screen_rows, &
+                                         screen_cols, changed)
+        type(terminal_panel_t), intent(inout) :: panel
+        integer, intent(in) :: permille, screen_rows, screen_cols
+        logical, intent(out) :: changed
+        integer :: new_height
+
+        changed = .false.
+        if (.not. panel%visible) return
+
+        new_height = height_for(permille, screen_rows)
+        ! Store the clamped ratio, not the requested one. Otherwise dragging
+        ! past the end accumulates an out-of-range intent that springs back
+        ! the moment the window grows.
+        panel%height_permille = permille_for(new_height, screen_rows)
+        if (new_height == panel%height) return
+
+        changed = .true.
+        call terminal_panel_resize(panel, screen_rows, screen_cols)
+    end subroutine terminal_panel_set_height
+
+    !> Grow or shrink by whole rows.
+    !>
+    !> Steps in rows rather than in permille so a keypress feels the same on
+    !> any screen -- a fixed ratio step moves two rows on a tall terminal and
+    !> none at all on a short one.
+    subroutine terminal_panel_nudge_height(panel, rows, screen_rows, &
+                                           screen_cols, changed)
+        type(terminal_panel_t), intent(inout) :: panel
+        integer, intent(in) :: rows, screen_rows, screen_cols
+        logical, intent(out) :: changed
+
+        panel%prev_permille = 0        ! a manual nudge ends "maximised"
+        call terminal_panel_set_height(panel, &
+            permille_for(panel%height + rows, screen_rows), &
+            screen_rows, screen_cols, changed)
+    end subroutine terminal_panel_nudge_height
+
+    !> Toggle between as-tall-as-allowed and whatever it was before.
+    subroutine terminal_panel_toggle_maximize(panel, screen_rows, &
+                                              screen_cols, changed)
+        type(terminal_panel_t), intent(inout) :: panel
+        integer, intent(in) :: screen_rows, screen_cols
+        logical, intent(out) :: changed
+        integer :: target
+
+        if (panel%prev_permille > 0) then
+            target = panel%prev_permille
+            panel%prev_permille = 0
+        else
+            ! Remember the ratio, not the row count: restoring onto a
+            ! differently-sized window should give back the same proportion.
+            panel%prev_permille = panel%height_permille
+            target = 1000
+        end if
+        call terminal_panel_set_height(panel, target, screen_rows, &
+                                       screen_cols, changed)
+    end subroutine terminal_panel_toggle_maximize
+
+    !> True while the panel is at its maximum by way of the maximise toggle.
+    function terminal_panel_is_maximized(panel) result(res)
+        type(terminal_panel_t), intent(in) :: panel
+        logical :: res
+        res = panel%visible .and. panel%prev_permille > 0
+    end function terminal_panel_is_maximized
+
+    !> The stored ratio, for persistence.
+    function terminal_panel_get_permille(panel) result(permille)
+        type(terminal_panel_t), intent(in) :: panel
+        integer :: permille
+        permille = panel%height_permille
+    end function terminal_panel_get_permille
+
+    !> Seed the default height. Called once at startup; a workspace that has a
+    !> stored height overrides this afterwards.
+    subroutine terminal_panel_set_default_permille(panel, permille)
+        type(terminal_panel_t), intent(inout) :: panel
+        integer, intent(in) :: permille
+        panel%height_permille = max(50, min(950, permille))
+    end subroutine terminal_panel_set_default_permille
 
     ! Non-blocking read from PTY, feed to grid
     ! Also intercepts terminal queries and responds automatically
@@ -994,7 +1145,15 @@ contains
         end do
     end subroutine terminal_panel_paste
 
-    ! Resize the terminal panel
+    !> Re-derive the panel's rows for a new screen size.
+    !>
+    !> This APPLIES the stored ratio rather than recomputing from a constant,
+    !> which is the whole of the "keep its proportion" behaviour: the window
+    !> poll already calls this on every size change, so a panel taking a third
+    !> goes on taking a third for free. It used to recompute from a fixed
+    !> percentage, which silently threw away any chosen height the next time
+    !> the window was touched -- and toggle_terminal_panel calls this too, so
+    !> that included merely opening the panel.
     subroutine terminal_panel_resize(panel, screen_rows, &
                                      screen_cols)
         type(terminal_panel_t), intent(inout) :: panel
@@ -1003,12 +1162,7 @@ contains
 
         if (.not. panel%visible) return
 
-        panel%height = max(MIN_HEIGHT, &
-            screen_rows * HEIGHT_PERCENT / 100)
-        if (panel%height > screen_rows * 80 / 100) then
-            panel%height = screen_rows * 80 / 100
-        end if
-
+        panel%height = height_for(panel%height_permille, screen_rows)
         panel%pty_rows = panel%height - 1
         panel%pty_cols = screen_cols
         c_rows = int(panel%pty_rows, c_int)

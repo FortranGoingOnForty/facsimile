@@ -43,7 +43,7 @@ program facsimile
     use editor_state_module, only: save_tab_pane
     use renderer_module, only: tab_group_preview_visible, set_group_preview_enabled
     use group_picker_module, only: is_group_picker_visible
-    use settings_module, only: settings_get_logical
+    use settings_module, only: settings_get_logical, settings_get_integer
     use text_buffer_module
     use renderer_module
     use ai_engine_module, only: ai_tick, ai_configure
@@ -55,7 +55,8 @@ program facsimile
     use save_prompt_module
     use command_palette_module, only: register_command
     use terminal_panel_module, only: is_terminal_panel_visible, &
-        terminal_panel_poll, terminal_panel_resize
+        terminal_panel_poll, terminal_panel_resize, &
+        terminal_panel_set_default_permille
     use iso_c_binding, only: c_int
     use welcome_menu_module, only: show_welcome_menu
     use fortress_navigator_module, only: open_fortress_navigator
@@ -320,6 +321,11 @@ program facsimile
     ! preview; the pinned member row still works.
     call set_group_preview_enabled( &
         settings_get_logical('tabs.group_hover_preview', .true.))
+    ! The terminal panel's starting height, as a percentage of the screen. Only
+    ! a starting point -- resizing it stores the new ratio per workspace, which
+    ! then wins over this.
+    call terminal_panel_set_default_permille(editor%terminal_panel, &
+        10 * settings_get_integer('terminal.height_percent', 30))
     call ai_configure(editor%ai)
     running = .true.
 
