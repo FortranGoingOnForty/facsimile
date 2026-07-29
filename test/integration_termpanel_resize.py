@@ -426,6 +426,103 @@ def test_pane_navigation_is_untouched(binary):
         s.close()
 
 
+def test_the_height_survives_a_restart(binary):
+    """Workspace state is only written when fac was opened on a DIRECTORY."""
+    import shutil
+    import tempfile
+    import pexpect as _px
+    import pyte as _pyte
+
+    home = tempfile.mkdtemp(prefix="fac_tr_")
+    os.makedirs(os.path.join(home, ".config", "fac"))
+    with open(os.path.join(home, ".config", "fac", "state.json"), "w") as f:
+        f.write('{"first_run_completed": true, "lsp_installer_seen": true,'
+                ' "version": "1.0"}\n')
+    ws = os.path.join(home, "ws")
+    os.makedirs(ws)
+    with open(os.path.join(ws, "a.txt"), "w") as f:
+        f.write("hello\n")
+
+    env = {**os.environ, "TERM": "xterm-256color", "HOME": home,
+           "PS1": "$ ", "SHELL": "/bin/sh"}
+    env.pop("XDG_CONFIG_HOME", None)
+
+    class WS:
+        pass
+
+    s = WS()
+    s.screen = _pyte.Screen(100, ROWS)
+    s.stream = _pyte.Stream(s.screen)
+
+    def spawn():
+        s.child = _px.spawn(binary, [ws], dimensions=(ROWS, 100),
+                            env=env, cwd=ws)
+
+    def drain(w=0.6):
+        import time
+        end = time.time() + w
+        while time.time() < end:
+            try:
+                s.stream.feed(s.child.read_nonblocking(65536, 0.1)
+                              .decode("utf-8", "replace"))
+            except _px.TIMEOUT:
+                pass
+            except _px.EOF:
+                break
+
+    s.drain = drain
+    s.panel_open = lambda: any("TERMINAL" in r for r in s.screen.display)
+
+    try:
+        spawn()
+        drain(2.2)
+        s.child.send(ALT_T)
+        drain(1.6)
+        if not s.panel_open():
+            print("SKIP: the panel did not open in workspace mode")
+            return
+
+        for _ in range(4):
+            s.child.send(GROW)
+            drain(0.6)
+        grown = height(s)
+        check(grown > 0, "the panel was resized before quitting", grown)
+
+        # Leave the panel before quitting. While it has focus every key is
+        # forwarded to the shell, ctrl-q included -- it is ^Q, a legitimate
+        # shell key -- so the editor would never see it.
+        s.child.send(ALT_T)
+        drain(1.0)
+        s.child.send("\x11")                   # ctrl-q
+        drain(2.0)
+
+        state = os.path.join(ws, ".fac", "workspace.json")
+        check(os.path.exists(state), "quitting writes the workspace file", state)
+        if not os.path.exists(state):
+            return
+        text = open(state).read()
+        check('"height_permille"' in text,
+              "the panel height is in the state file", text[-300:])
+        check('"version": "1.2"' in text, "at schema version 1.2", text[:200])
+
+        # Reopen: the panel should come back the same height.
+        s.screen = _pyte.Screen(100, ROWS)
+        s.stream = _pyte.Stream(s.screen)
+        spawn()
+        drain(2.5)
+        s.child.send(ALT_T)
+        drain(1.6)
+        check(height(s) == grown,
+              "and the panel is the same height after a restart",
+              f"{grown} -> {height(s)}")
+    finally:
+        try:
+            s.child.terminate(force=True)
+        except Exception:
+            pass
+        shutil.rmtree(home, ignore_errors=True)
+
+
 def main():
     binary = find_binary()
     for fn in (test_the_panel_starts_at_a_third,
@@ -442,6 +539,7 @@ def main():
                test_the_grab_handle_is_visible,
                test_shrinking_keeps_the_newest_output,
                test_shrinking_pushes_the_old_rows_into_scrollback,
+               test_the_height_survives_a_restart,
                test_pane_navigation_is_untouched):
         try:
             fn(binary)

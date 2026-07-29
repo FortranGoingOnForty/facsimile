@@ -17,6 +17,8 @@ Complete keyboard shortcut reference for `fac` editor.
 | `F6` or `Alt+P` | Workspace Symbols | Search symbols across all files |
 | `Ctrl+P` | Command Palette | Search and execute any command |
 | `F5` or `Alt+T` | Integrated Terminal | Toggle the terminal panel |
+| `Ctrl+Shift+Up` / `Down` | Resize Terminal | Taller / shorter — **only while the terminal has focus** |
+| `Ctrl+Shift+M` | Maximize Terminal | Fill the screen, or go back to the previous height |
 | `Shift+Alt+F` | Format Document | Auto-format current file |
 | `Alt+,` | Jump Back | Return to previous location (jump stack) |
 
@@ -95,8 +97,8 @@ Complete keyboard shortcut reference for `fac` editor.
 | `Alt+Q` | Close Pane | Close current pane only |
 | `Alt+H` or `Ctrl+Shift+Left` | Navigate Left | Move to pane on the left |
 | `Alt+L` or `Ctrl+Shift+Right` | Navigate Right | Move to pane on the right |
-| `Alt+K` or `Ctrl+Shift+Up` | Navigate Up | Move to pane above |
-| `Alt+J` or `Ctrl+Shift+Down` | Navigate Down | Move to pane below |
+| `Alt+K` or `Ctrl+Shift+Up` | Navigate Up | Move to pane above. While the terminal panel has focus this resizes it instead — pane navigation would have nowhere to go |
+| `Alt+J` or `Ctrl+Shift+Down` | Navigate Down | Move to pane below. Same exception as above |
 
 ---
 
@@ -136,6 +138,8 @@ Complete keyboard shortcut reference for `fac` editor.
 |------------|---------|-------------|
 | `Ctrl+P` | Command Palette | Search and execute any command |
 | `F5` or `Alt+T` | Integrated Terminal | Toggle the terminal panel |
+| `Ctrl+Shift+Up` / `Down` | Resize Terminal | Taller / shorter — **only while the terminal has focus** |
+| `Ctrl+Shift+M` | Maximize Terminal | Fill the screen, or go back to the previous height |
 | `Ctrl+?` or `F1` | Help | Show help screen (`Ctrl+?` needs a terminal that supports the kitty keyboard protocol; `F1` always works) |
 | `Ctrl+B` or `F3` | File Tree | Toggle file explorer (Fuss mode) |
 | `Ctrl+L` | Redraw Screen | Clear and redraw the screen |
@@ -297,6 +301,7 @@ Some vim-style keybindings work:
 |---------|--------|
 | Click | Position the cursor. With the file tree open this also closes it and takes focus, since the tree owns the keyboard while it is up |
 | Drag | Select text. Left button only — a right- or middle-drag does nothing |
+| Drag the terminal's top edge | Resize the panel. The separator bar carries a `⇕` marker to say it can be grabbed |
 | `Alt+Click` | Add or remove a cursor |
 | Right-click | Context menu at the pointer. Any modifier held still counts |
 | `Ctrl+Click` | The same menu, for a one-button pointer |

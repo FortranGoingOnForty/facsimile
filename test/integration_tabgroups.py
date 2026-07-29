@@ -514,7 +514,9 @@ def test_groups_survive_a_restart(binary):
         if not os.path.exists(state):
             return
         text = open(state).read()
-        check('"version": "1.1"' in text, "at schema version 1.1", text[:200])
+        # 1.2 adds the terminal panel height; tab groups arrived in 1.1 and
+        # every addition since has been additive, so the number only goes up.
+        check('"version": "1.2"' in text, "at schema version 1.2", text[:200])
         check('"tab_groups"' in text, "with a tab_groups array", text[:200])
         check(text.index('"tab_groups"') < text.index('"tabs"'),
               "written before the tabs, so members can reference it")

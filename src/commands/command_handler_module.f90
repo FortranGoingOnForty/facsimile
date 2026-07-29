@@ -8117,6 +8117,21 @@ contains
         end select
     end function terminal_resize_drag
 
+    !> Resize the panel from the command palette, where the panel is usually
+    !> not the thing with focus.
+    subroutine palette_resize_terminal(editor, chord)
+        type(editor_state_t), intent(inout) :: editor
+        character(len=*), intent(in) :: chord
+
+        if (.not. is_terminal_panel_visible(editor%terminal_panel)) then
+            ! Say what is wrong rather than reporting a limit that is not the
+            ! reason nothing happened.
+            call set_status_message('The terminal panel is not open (F5 opens it)')
+            return
+        end if
+        call resize_terminal_panel_key(editor, chord)
+    end subroutine palette_resize_terminal
+
     !> Grow, shrink or maximise the terminal panel.
     !>
     !> Every height change has to do three things together, which is why they
@@ -9907,6 +9922,18 @@ contains
         ! Panes and tabs. ctrl-w closes the TAB and alt-q closes the PANE;
         ! the single "Close Pane / Ctrl+W" entry that used to be here named
         ! one and did the other, and did neither because it had no case.
+        case('terminal')
+            call handle_key_command('f5', editor, buffer, should_quit)
+        ! Deliberately NOT delegating to the ctrl-shift chords. Those only
+        ! resize while the panel has focus, and reaching them from the palette
+        ! means it usually does not -- they would navigate panes instead.
+        case('terminal-taller')
+            call palette_resize_terminal(editor, 'ctrl-shift-up')
+        case('terminal-shorter')
+            call palette_resize_terminal(editor, 'ctrl-shift-down')
+        case('terminal-max')
+            call palette_resize_terminal(editor, 'ctrl-shift-m')
+
         case('close-tab')
             call handle_key_command('ctrl-w', editor, buffer, should_quit)
         case('close-pane')

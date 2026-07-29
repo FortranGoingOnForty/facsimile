@@ -11,6 +11,8 @@ module workspace_module
     use text_buffer_module, only: buffer_t, init_buffer, buffer_to_string
     use lsp_server_manager_module, only: notify_file_opened
     use recents_module, only: recents_add_or_update
+    use terminal_panel_module, only: terminal_panel_get_permille, &
+                                     terminal_panel_set_default_permille
     implicit none
     private
 
@@ -279,10 +281,12 @@ contains
 
         ! Write JSON header
         write(unit, '(A)') '{'
-        ! 1.1 adds tab groups. Purely additive: a 1.0 file has no
-        ! "tab_groups" key and no "group" on its tabs, so it restores as it
-        ! always did with no migration code.
-        write(unit, '(A)') '  "version": "1.1",'
+        ! 1.1 added tab groups; 1.2 adds the terminal panel's height. Both
+        ! purely additive: an older file simply has no such key, the parser
+        ! never fires that branch, and the field keeps its default. The version
+        ! string is written for humans reading the file -- nothing reads it
+        ! back, and nothing should have to.
+        write(unit, '(A)') '  "version": "1.2",'
         write(unit, '(A)') '  "workspace_path": "' // trim(dir_path) // '",'
         write(unit, '(A)') '  "last_opened": "' // trim(timestamp) // '",'
 
@@ -487,6 +491,14 @@ contains
             write(unit, '(A)') '    "active": false,'
         end if
         write(unit, '(A)') '    "width": 30'
+        write(unit, '(A)') '  },'
+        ! The panel's height as a fraction of the screen, so it comes back the
+        ! same shape on a differently-sized terminal. Unlike the fuss_mode
+        ! block above -- whose "width" is a literal nothing ever reads -- this
+        ! one round-trips; see the parser.
+        write(unit, '(A)') '  "terminal": {'
+        write(unit, '(A,I0)') '    "height_permille": ', &
+            terminal_panel_get_permille(editor%terminal_panel)
         write(unit, '(A)') '  }'
         write(unit, '(A)') '}'
 
@@ -673,6 +685,26 @@ contains
             ! Check if we're entering the tabs array
             if (index(line, '"tabs":') > 0) then
                 in_tabs_array = .true.
+                cycle
+            end if
+
+            ! The terminal panel's stored height. Written after the tabs array
+            ! closes, so in_tabs_array is already false by the time it arrives
+            ! -- but guard anyway, since a pane could in principle carry a key
+            ! with the same name later.
+            if (.not. in_tabs_array .and. &
+                index(line, '"height_permille":') > 0) then
+                block
+                    integer :: permille
+                    permille = json_int(line)
+                    ! Ignore junk rather than adopting it: a corrupt value here
+                    ! would give the user a panel they cannot see and no
+                    ! obvious way to guess why.
+                    if (permille >= 50 .and. permille <= 950) then
+                        call terminal_panel_set_default_permille( &
+                            editor%terminal_panel, permille)
+                    end if
+                end block
                 cycle
             end if
 

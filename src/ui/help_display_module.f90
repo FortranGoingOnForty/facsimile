@@ -110,7 +110,7 @@ contains
         n_lines = n_lines + 3 + 2   ! LINES
         n_lines = n_lines + 9 + 2   ! SEARCH & REPLACE
         n_lines = n_lines + 5 + 2   ! MULTIPLE CURSORS (increased from 4)
-        n_lines = n_lines + 7 + 2   ! SPECIAL
+        n_lines = n_lines + 9 + 2   ! SPECIAL (added the two terminal resize lines)
         n_lines = n_lines + 7 + 2   ! TABS
         n_lines = n_lines + 7 + 2   ! PANES
         n_lines = n_lines + 10 + 2  ! GIT
@@ -215,6 +215,8 @@ contains
         lines(i) = "  ctrl-]/ctrl-shift-z redo"; i = i + 1
         lines(i) = "  ctrl-l              clear/redraw screen"; i = i + 1
         lines(i) = "  F5 / alt-t          terminal panel (esc closes it at a bare prompt)"; i = i + 1
+        lines(i) = "  ctrl-shift-up/down  resize the terminal (while it has focus)"; i = i + 1
+        lines(i) = "  ctrl-shift-m        maximize/restore the terminal"; i = i + 1
         lines(i) = ""; i = i + 1
 
         ! TABS

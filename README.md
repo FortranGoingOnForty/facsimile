@@ -65,7 +65,7 @@ fpm run -- [filename]
 ### Editing
 - `backspace` / `ctrl-h` - delete backward
 - `delete` - delete forward
-- `tab` - insert 4 spaces (or indent selection)
+- `tab` - indent to the next tab stop, or indent the selection (a hard tab in Makefiles, where spaces are a syntax error)
 - `shift-tab` - dedent selection or current line
 - `ctrl-/` - toggle line comment (indent-aware; comments whole lines for a partial selection)
 - `ctrl-k` - kill line forward (yank stack)
@@ -113,6 +113,16 @@ fpm run -- [filename]
 - `ctrl-t` - create new tab
 - `ctrl-pageup` / `ctrl-pagedown` - previous / next tab
 - `alt-1` .. `alt-9` - jump to a tab by number
+
+### Integrated Terminal
+- `f5` / `alt-t` - toggle the terminal panel
+- `ctrl-shift-up` / `ctrl-shift-down` - taller / shorter, while the terminal has focus
+- `ctrl-shift-m` - maximize, or go back to the previous height
+- drag the separator bar (marked `⇕`) to resize it with the mouse
+
+The height is kept as a fraction of the screen, so the panel holds its
+proportion when the window is resized, and it is remembered per workspace.
+Set `"terminal.height_percent"` in `settings.json` to change where it starts.
 
 ### Tab Groups
 Open a directory as a sub-workspace: press `enter` on a directory in the file

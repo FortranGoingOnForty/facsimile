@@ -1518,6 +1518,16 @@ contains
         call register_command('Navigate Pane Right', 'pane-right', 'Alt+L', 'View')
         call register_command('Navigate Pane Up', 'pane-up', 'Alt+K', 'View')
         call register_command('Navigate Pane Down', 'pane-down', 'Alt+J', 'View')
+        ! The terminal had no palette entry at all. These are also the only
+        ! route to resizing it from the editor: the keyboard bindings are
+        ! deliberately live only while the panel itself has focus.
+        call register_command('Toggle Terminal', 'terminal', 'F5', 'View')
+        call register_command('Terminal Taller', 'terminal-taller', &
+                              'Ctrl+Shift+Up', 'View')
+        call register_command('Terminal Shorter', 'terminal-shorter', &
+                              'Ctrl+Shift+Down', 'View')
+        call register_command('Terminal Maximize/Restore', 'terminal-max', &
+                              'Ctrl+Shift+M', 'View')
 
         ! Help
         call register_command('Show Help', 'help', 'Ctrl+?', 'Help')

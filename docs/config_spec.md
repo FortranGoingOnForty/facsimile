@@ -47,6 +47,11 @@ nothing and cost a dependency.
 Keys are documented with their feature. See `docs/AI_COMPLETION.md` for the
 `ai.*` group.
 
+| Key | Default | Meaning |
+|---|---|---|
+| `tabs.group_hover_preview` | `true` | Preview a tab group's members on hover. Off stops the editor asking the terminal to report every pointer movement |
+| `terminal.height_percent` | `30` | How tall the terminal panel opens, as a percentage of the screen. Only a starting point: resizing it stores the new size per workspace, which then wins |
+
 ## Directory Structure
 
 ```
