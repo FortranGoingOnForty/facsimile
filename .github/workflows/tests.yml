@@ -92,10 +92,22 @@ jobs:
         run: sh test/run_ai_http_test.sh
 
   integration:
-    name: Integration (pty)
+    name: Integration (pty) ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
     # Only worth the runner minutes once the build and unit tests are green.
     needs: unit
+    # Sharded because these ran as one serial step and grew into a 25-minute
+    # wall: every suite added pushed the total closer to it, and the run that
+    # hit it had already PASSED fifteen suites before being killed partway
+    # through the sixteenth. A timeout that fires on a healthy suite tells you
+    # nothing about the code.
+    #
+    # fail-fast off so one slow or broken shard does not cancel the others and
+    # hide their results.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v6
 
@@ -128,14 +140,27 @@ jobs:
       # skip means the setup is broken and the job must fail rather than go
       # quietly green.
       - name: Integration suites
-        timeout-minutes: 25
+        timeout-minutes: 20
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARDS: 4
         run: |
           # Without this the pipeline below reports tee's status, not the
           # suite's, and every failure would read as a pass.
           set -o pipefail
           fail=""
           skip=""
+          ran=0
+          i=0
           for suite in test/integration_*.py; do
+            i=$((i + 1))
+            # Round-robin rather than contiguous blocks: the slow suites are
+            # scattered through the alphabet, and splitting into four ranges
+            # would land several of them on one runner.
+            if [ $(( (i - 1) % SHARDS + 1 )) -ne "$SHARD" ]; then
+              continue
+            fi
+            ran=$((ran + 1))
             name=$(basename "$suite")
             echo ""
             echo "--- $name ---"
@@ -148,6 +173,14 @@ jobs:
               skip="$skip $name"
             fi
           done
+          # A shard that matched nothing means the sharding arithmetic is wrong,
+          # which would otherwise pass silently as "no failures".
+          if [ "$ran" -eq 0 ]; then
+            echo "Shard $SHARD of $SHARDS ran no suites at all"
+            exit 1
+          fi
+          echo ""
+          echo "Shard $SHARD of $SHARDS ran $ran suite(s)"
           if [ -n "$fail" ]; then
             echo ""
             echo "Failed suites:$fail"
