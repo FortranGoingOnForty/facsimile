@@ -799,35 +799,67 @@ void vt100_grid_feed_f(void **handle, const char *data, int *len) {
     grid_feed(g, data, *len);
 }
 
+// Resize the visible grid, anchored to the BOTTOM.
+//
+// Shrinking a terminal is not like shrinking a window. The rows worth keeping
+// are the newest ones -- the live prompt and whatever just printed -- so the
+// rows that go are taken off the TOP and pushed into scrollback, exactly as
+// they would be if the shell had scrolled them off itself. This used to copy
+// from row 0, which kept the oldest rows and destroyed the newest; survivable
+// when a window resize was a rare event and the shell redrew on SIGWINCH, very
+// visible once the panel could be dragged.
 void vt100_grid_resize_f(void **handle, int *rows, int *cols) {
     vt100_grid_t *g = (vt100_grid_t *)*handle;
     if (!g) return;
+    if (*rows < 1 || *cols < 1) return;
 
     int new_size = *rows * *cols;
     vt100_cell_t *new_cells = (vt100_cell_t *)calloc(
         (size_t)new_size, sizeof(vt100_cell_t));
+    // Bail rather than crash: the caller keeps the grid it already has, which
+    // is merely the wrong size. The old code dereferenced this unchecked.
+    if (!new_cells) return;
 
     // Initialize to spaces
     for (int i = 0; i < new_size; i++) {
         new_cells[i].cp = ' ';
     }
 
-    // Copy existing content (as much as fits)
     int copy_rows = g->rows < *rows ? g->rows : *rows;
     int copy_cols = g->cols < *cols ? g->cols : *cols;
+
+    // Rows falling off the top when shrinking. On the alternate screen there
+    // is nothing to preserve -- a full-screen app owns the whole grid and
+    // redraws it on SIGWINCH -- and its transient contents do not belong in
+    // the user's scrollback.
+    int dropped = g->rows - *rows;
+    if (dropped < 0) dropped = 0;
+    if (dropped > 0 && !g->alt_screen) {
+        for (int r = 0; r < dropped; r++) {
+            sb_push_line(g, &g->cells[r * g->cols], g->cols);
+        }
+    }
+
     for (int r = 0; r < copy_rows; r++) {
+        int src = r + dropped;
+        if (src >= g->rows) break;
         for (int c = 0; c < copy_cols; c++) {
-            new_cells[r * *cols + c] = g->cells[r * g->cols + c];
+            new_cells[r * *cols + c] = g->cells[src * g->cols + c];
         }
     }
 
     free(g->cells);
     g->cells = new_cells;
+    // The cursor rides with the content it was sitting on, so the prompt does
+    // not jump away from the line it belongs to.
+    g->cursor_row -= dropped;
     g->rows = *rows;
     g->cols = *cols;
     g->scroll_top = 0;
     g->scroll_bottom = *rows - 1;
+    if (g->cursor_row < 0) g->cursor_row = 0;
     if (g->cursor_row >= *rows) g->cursor_row = *rows - 1;
+    if (g->cursor_col < 0) g->cursor_col = 0;
     if (g->cursor_col >= *cols) g->cursor_col = *cols - 1;
 }
 

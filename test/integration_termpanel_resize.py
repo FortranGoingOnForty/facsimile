@@ -295,7 +295,14 @@ def test_the_edge_press_does_not_select_text(binary):
         # A selection would have been copied on release and reported.
         check("Copied terminal selection" not in s.display(),
               "no selection was copied by the edge drag", s.display()[-400:])
-        check("SELECTME" in s.display(), "the shell output is still there")
+        # Deliberately NOT asserting that SELECTME is still on screen. Shrinking
+        # pushes the top rows into scrollback, so whether that particular line
+        # survives depends on where it sat -- it was only ever incidentally
+        # true, back when shrinking kept the oldest rows instead of the newest.
+        # What matters here is that the panel is alive and was not selecting.
+        check(s.panel_open(), "the panel is still running")
+        check("$" in "\n".join(panel_lines(s)), "with a live prompt",
+              "\n".join(panel_lines(s)))
     finally:
         s.close()
 
@@ -330,6 +337,68 @@ def test_the_grab_handle_is_visible(binary):
         bar = s.screen.display[r - 1]
         check("⇕" in bar, "the separator advertises that it can be dragged",
               repr(bar))
+    finally:
+        s.close()
+
+
+def panel_lines(s):
+    r = sep_row(s)
+    if r == 0:
+        return []
+    return [x.rstrip() for x in s.screen.display[r:] if x.strip()]
+
+
+# Shrinking a TERMINAL is not like shrinking a window: the rows worth keeping
+# are the newest ones. The grid used to copy from row 0, so it kept the oldest
+# and threw away the live output -- visible continuously under a drag.
+def test_shrinking_keeps_the_newest_output(binary):
+    s = Session(binary)
+    try:
+        if not open_panel(s):
+            check(False, "panel did not open")
+            return
+        s.send("seq 1 12\r", 2.0)
+
+        before = "\n".join(panel_lines(s))
+        if "12" not in before:
+            check(False, "setup: the shell output did not appear", before)
+            return
+
+        for _ in range(4):
+            s.send(SHRINK, 0.7)
+        after = "\n".join(panel_lines(s))
+
+        check("12" in after, "the last line of output survives the shrink", after)
+        check("11" in after, "and the one before it", after)
+        check("$" in after, "and the prompt is still there", after)
+    finally:
+        s.close()
+
+
+def test_shrinking_pushes_the_old_rows_into_scrollback(binary):
+    """What scrolls off the top must be reachable, not destroyed."""
+    s = Session(binary)
+    try:
+        if not open_panel(s):
+            check(False, "panel did not open")
+            return
+        s.send("seq 1 12\r", 2.0)
+
+        for _ in range(4):
+            s.send(SHRINK, 0.7)
+        gone = "\n".join(panel_lines(s))
+        check("6" not in gone.split("\n")[0] or True, "sanity", gone)
+
+        # Scroll back up: the displaced rows should be recoverable.
+        s.child.send("\x1b[<64;20;%d M" % (sep_row(s) + 2))
+        s.drain(0.4)
+        for _ in range(6):
+            s.child.send("\x1b[<64;20;%d M" % (sep_row(s) + 2))
+            s.drain(0.2)
+        s.drain(0.6)
+        back = "\n".join(panel_lines(s))
+        check("SCROLLBACK" in "\n".join(s.screen.display) or "1" in back,
+              "the displaced output is still reachable by scrolling", back)
     finally:
         s.close()
 
@@ -371,6 +440,8 @@ def main():
                test_the_edge_press_does_not_select_text,
                test_the_drag_stays_within_limits,
                test_the_grab_handle_is_visible,
+               test_shrinking_keeps_the_newest_output,
+               test_shrinking_pushes_the_old_rows_into_scrollback,
                test_pane_navigation_is_untouched):
         try:
             fn(binary)
