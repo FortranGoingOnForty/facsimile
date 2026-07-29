@@ -49,7 +49,7 @@ module command_handler_module
         terminal_panel_is_dragging, terminal_panel_has_selection, &
         terminal_panel_copy_selection, &
         terminal_panel_nudge_height, terminal_panel_toggle_maximize, &
-        terminal_panel_is_maximized
+        terminal_panel_is_maximized, terminal_panel_set_height, permille_for
     use input_handler_module, only: get_paste_text, parse_mouse_event
     use bracket_matching_module, only: find_matching_bracket
     use comment_command_module, only: toggle_comment_lines, comment_syntax_available
@@ -379,6 +379,12 @@ contains
                 ! them here would silently disable panel scrolling.
                 if (index(key_str, 'mouse-scroll-') == 1) ok = .false.
                 if (ok) then
+                    ! Dragging the separator bar resizes the panel. Claimed
+                    ! before the selection handler below, which would otherwise
+                    ! take it: the separator row counts as inside the panel,
+                    ! and a press there maps to grid row -1, gets clamped to 0,
+                    ! and silently anchors a text selection instead.
+                    if (terminal_resize_drag(editor, trim(ev), btn, mrow)) return
                     ! A drag that began in the panel keeps its events even
                     ! once the pointer leaves -- dragging up past the top is
                     ! how you select the last few lines, and without this the
@@ -8055,6 +8061,62 @@ contains
     !>
     !> An entry is a group or an ungrouped tab, so with no groups this is
     !> exactly the previous/next tab it always was. Wraps at both ends.
+    !> Dragging the panel's top edge to resize it.
+    !>
+    !> Returns .true. when the event belonged to a resize, so the caller stops
+    !> before the selection handler.
+    !>
+    !> Lives here rather than in terminal_panel_module because a height change
+    !> needs the screen size and the viewport, neither of which the panel knows
+    !> about -- and because the panel's own mouse handler exists to map screen
+    !> coordinates into the grid, which is precisely what the separator row
+    !> must NOT do.
+    function terminal_resize_drag(editor, ev, button, mrow) result(handled)
+        type(editor_state_t), intent(inout) :: editor
+        character(len=*), intent(in) :: ev
+        integer, intent(in) :: button, mrow
+        logical :: handled
+        logical :: changed
+        integer :: new_height
+
+        handled = .false.
+        if (.not. is_terminal_panel_visible(editor%terminal_panel)) return
+
+        select case (ev)
+        case ('mouse-click')
+            ! Left button only, and only on the separator bar itself.
+            if (iand(button, 3) /= 0) return
+            if (mrow /= editor%terminal_panel%screen_start_row) return
+            editor%terminal_panel%resize_dragging = .true.
+            editor%terminal_panel%focused = .true.
+            handled = .true.
+
+        case ('mouse-drag')
+            if (.not. editor%terminal_panel%resize_dragging) return
+            handled = .true.
+            ! The pointer row IS where the separator should go, so the bar
+            ! stays under the cursor instead of drifting away from it.
+            new_height = editor%screen_rows - mrow
+            call terminal_panel_set_height(editor%terminal_panel, &
+                permille_for(new_height, editor%screen_rows), &
+                editor%screen_rows, editor%screen_cols, changed)
+            ! Only when the row count actually moved. A drag delivers an event
+            ! per cell of pointer travel and most land on the row already
+            ! showing; resizing for those is a calloc and a SIGWINCH to the
+            ! shell for no visible change.
+            if (changed) then
+                call update_viewport(editor)
+                call terminal_write(achar(27) // '[2J')
+                g_lsp_ui_changed = .true.
+            end if
+
+        case ('mouse-release')
+            if (.not. editor%terminal_panel%resize_dragging) return
+            editor%terminal_panel%resize_dragging = .false.
+            handled = .true.
+        end select
+    end function terminal_resize_drag
+
     !> Grow, shrink or maximise the terminal panel.
     !>
     !> Every height change has to do three things together, which is why they

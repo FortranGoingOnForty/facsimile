@@ -215,6 +215,8 @@ module terminal_panel_module
     integer, parameter :: READ_BUF_SIZE = 8192
 
     character(len=1), parameter :: ESC_CH = achar(27)
+    ! Says "this bar can be dragged". A single cell wide.
+    character(len=*), parameter :: GRAB_GLYPH = '⇕'
 
     type :: terminal_panel_t
         logical :: visible = .false.
@@ -641,7 +643,19 @@ contains
                 else
                     call terminal_write(' terminal ')
                 end if
-                call terminal_write(repeat('-', cols - 16))
+                ! A grab handle, centred in what is left of the bar. Drawn
+                ! always rather than on hover: knowing the pointer is over the
+                ! bar needs any-motion reporting, which costs an event per
+                ! pixel of travel for the whole session -- too much to pay for
+                ! an affordance that can simply be visible.
+                if (cols > 34) then
+                    call terminal_write(repeat('-', (cols - 16) / 2 - 2))
+                    call terminal_write(' ' // GRAB_GLYPH // ' ')
+                    call terminal_write(repeat('-', &
+                        cols - 16 - ((cols - 16) / 2 - 2) - 3))
+                else
+                    call terminal_write(repeat('-', cols - 16))
+                end if
             end if
         end if
         call terminal_write(ESC_CH // '[0m')
@@ -1300,6 +1314,12 @@ contains
     !> lines looks like -- never delivered its release, and the copy that fires
     !> on release simply never happened. The selection stayed on screen, so it
     !> looked like copy was broken rather than unreached.
+    !>
+    !> Deliberately NOT extended to cover the resize drag. That one is claimed
+    !> earlier in the router, before the in-region test this predicate feeds,
+    !> so it never needs the exemption -- and including it would hand the
+    !> selection handler any resize event the resize branch declined, such as a
+    !> middle-button drag, as though it were a selection.
     function terminal_panel_is_dragging(panel) result(res)
         type(terminal_panel_t), intent(in) :: panel
         logical :: res

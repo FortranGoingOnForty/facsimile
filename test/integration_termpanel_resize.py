@@ -227,6 +227,113 @@ def test_a_manual_resize_ends_maximized(binary):
         s.close()
 
 
+def vdrag(s, row_from, row_to, col=20, release=True):
+    """Press on `row_from`, drag vertically to `row_to`, release there."""
+    s.child.send(f"\x1b[<0;{col};{row_from}M")
+    s.drain(0.4)
+    step = 1 if row_to >= row_from else -1
+    for r in range(row_from + step, row_to + step, step):
+        s.child.send(f"\x1b[<32;{col};{r}M")
+        s.drain(0.12)
+    s.drain(0.5)
+    if release:
+        s.child.send(f"\x1b[<0;{col};{row_to}m")
+        s.drain(0.8)
+
+
+def test_dragging_the_edge_down_shrinks_it(binary):
+    s = Session(binary)
+    try:
+        if not open_panel(s):
+            check(False, "panel did not open")
+            return
+        start = sep_row(s)
+        vdrag(s, start, start + 3)
+        check(sep_row(s) == start + 3,
+              "the separator followed the pointer down",
+              f"{start} -> {sep_row(s)}")
+        check(height(s) < ROWS - start + 1, "so the panel got shorter", height(s))
+    finally:
+        s.close()
+
+
+# The one that needs the router predicate. Dragging UP takes the pointer out
+# of the panel on the very first event, so without resize_dragging being
+# reported the panel could only ever be made shorter.
+def test_dragging_the_edge_up_grows_it(binary):
+    s = Session(binary)
+    try:
+        if not open_panel(s):
+            check(False, "panel did not open")
+            return
+        start = sep_row(s)
+        vdrag(s, start, start - 4)
+        check(sep_row(s) == start - 4,
+              "the separator followed the pointer up, out of the panel",
+              f"{start} -> {sep_row(s)}")
+        check(height(s) > ROWS - start + 1, "so the panel got taller", height(s))
+    finally:
+        s.close()
+
+
+def test_the_edge_press_does_not_select_text(binary):
+    """A press on the separator used to anchor a text selection.
+
+    The row counts as inside the panel and maps to grid row -1, which was
+    clamped to 0 -- so grabbing the edge quietly started selecting the
+    terminal's first line.
+    """
+    s = Session(binary)
+    try:
+        if not open_panel(s):
+            check(False, "panel did not open")
+            return
+        s.send("echo SELECTME\r", 1.2)
+        start = sep_row(s)
+
+        vdrag(s, start, start + 2)
+        # A selection would have been copied on release and reported.
+        check("Copied terminal selection" not in s.display(),
+              "no selection was copied by the edge drag", s.display()[-400:])
+        check("SELECTME" in s.display(), "the shell output is still there")
+    finally:
+        s.close()
+
+
+def test_the_drag_stays_within_limits(binary):
+    s = Session(binary)
+    try:
+        if not open_panel(s):
+            check(False, "panel did not open")
+            return
+        start = sep_row(s)
+        vdrag(s, start, 1)                 # drag to the very top
+        check(sep_row(s) >= 2, "dragging to the top still leaves the editor a row",
+              sep_row(s))
+        check(s.panel_open(), "and the panel is still drawn")
+
+        cur = sep_row(s)
+        vdrag(s, cur, ROWS)                # drag to the very bottom
+        check(s.panel_open(), "dragging to the bottom does not close the panel")
+        check(height(s) >= 2, "the panel keeps a usable height", height(s))
+    finally:
+        s.close()
+
+
+def test_the_grab_handle_is_visible(binary):
+    s = Session(binary)
+    try:
+        if not open_panel(s):
+            check(False, "panel did not open")
+            return
+        r = sep_row(s)
+        bar = s.screen.display[r - 1]
+        check("⇕" in bar, "the separator advertises that it can be dragged",
+              repr(bar))
+    finally:
+        s.close()
+
+
 def test_pane_navigation_is_untouched(binary):
     """ctrl+shift+up is only a resize while the terminal has focus.
 
@@ -259,6 +366,11 @@ def main():
                test_it_stops_at_the_limit,
                test_maximize_and_restore,
                test_a_manual_resize_ends_maximized,
+               test_dragging_the_edge_down_shrinks_it,
+               test_dragging_the_edge_up_grows_it,
+               test_the_edge_press_does_not_select_text,
+               test_the_drag_stays_within_limits,
+               test_the_grab_handle_is_visible,
                test_pane_navigation_is_untouched):
         try:
             fn(binary)
