@@ -45,10 +45,29 @@ module group_picker_module
     integer, parameter :: GP_FOCUS_NAME = 1
     integer, parameter :: GP_FOCUS_LIST = 2
 
-    character(len=*), parameter :: ESC     = char(27)
-    character(len=*), parameter :: INVERSE = ESC // '[7m'
-    character(len=*), parameter :: DIM     = ESC // '[90m'
-    character(len=*), parameter :: RESET   = ESC // '[0m'
+    character(len=*), parameter :: ESC   = char(27)
+    character(len=*), parameter :: RESET = ESC // '[0m'
+
+    ! A filled 256-colour panel, the same family references_panel and
+    ! symbols_panel use. The picker predated that style and drew ASCII on
+    ! whatever background the document happened to have, so it read as part of
+    ! the text rather than as something floating over it.
+    character(len=*), parameter :: BODY_BG   = ESC // '[48;5;235m'
+    character(len=*), parameter :: CHROME_BG = ESC // '[48;5;237m'
+    character(len=*), parameter :: SEL_BG    = ESC // '[48;5;240m'
+    character(len=*), parameter :: SHADOW_BG = ESC // '[48;5;233m'
+    character(len=*), parameter :: BORDER_FG = ESC // '[38;5;67m'
+    character(len=*), parameter :: TITLE_FG  = ESC // '[1;38;5;81m'
+    character(len=*), parameter :: DIR_FG    = ESC // '[38;5;75m'
+    character(len=*), parameter :: TICK_FG   = ESC // '[38;5;114m'
+    character(len=*), parameter :: HINT_FG   = ESC // '[38;5;245m'
+    character(len=*), parameter :: TEXT_FG   = ESC // '[38;5;252m'
+    character(len=*), parameter :: SEL_FG    = ESC // '[1;38;5;231m'
+
+    ! Frame chrome resets first: the title and the selected row set bold, and a
+    ! bare colour change does not clear intensity, so the bold would otherwise
+    ! bleed into whichever border character came next.
+    character(len=*), parameter :: FRAME = RESET // BODY_BG // BORDER_FG
 
     type :: gp_item_t
         character(len=256) :: name = ''
@@ -70,6 +89,9 @@ module group_picker_module
     integer :: g_focus = GP_FOCUS_NAME
     integer :: g_sel = 1, g_scroll = 0
     integer :: g_row0 = 0, g_col0 = 0, g_width = 0, g_height = 0
+    ! Kept so the drop shadow can be clipped to the screen rather than
+    ! wrapping, which would smear it across the row below.
+    integer :: g_screen_rows = 0, g_screen_cols = 0
     logical :: g_visible = .false.
     integer :: g_result = GP_PENDING
     character(len=64) :: g_note = ''
@@ -97,9 +119,13 @@ contains
         g_name = basename(trim(g_dir)) // '/'
         g_name_len = len_trim(g_name)
 
+        g_screen_rows = screen_rows
+        g_screen_cols = screen_cols
         g_width = min(GP_WIDTH, max(24, screen_cols - 4))
         g_height = GP_VISIBLE + 7
-        g_col0 = max(1, (screen_cols - g_width) / 2)
+        ! Biased a little left and up of dead centre, so the shadow has room
+        ! to fall without being clipped on a snugly-sized terminal.
+        g_col0 = max(1, (screen_cols - g_width) / 2 - 1)
         g_row0 = max(1, (screen_rows - g_height) / 2)
         if (g_row0 + g_height - 1 > screen_rows) g_row0 = max(1, screen_rows - g_height + 1)
 
@@ -487,110 +513,158 @@ contains
         call region_add(REGION_BLOCK, g_row0, g_row0 + g_height - 1, &
                         g_col0, g_col0 + g_width - 1)
 
+        ! Before the box, so the box overwrites any overlap rather than the
+        ! shadow being painted over the frame it is supposed to sit under.
+        call put_shadow()
+
         r = g_row0
-        call put(r, '+' // dashes(' New Tab Group ') // '+')
+        call put_edge(r, '╭', '╮', 'New Tab Group')
 
         r = r + 1
         line = ' Name  ' // trim(g_name(1:max(0, g_name_len)))
         if (g_focus == GP_FOCUS_NAME) then
-            call put_styled(r, line, INVERSE)
+            call put_row(r, line, SEL_BG // SEL_FG)
         else
-            call put(r, line)
+            call put_row(r, line, CHROME_BG // TEXT_FG)
         end if
         call region_add(REGION_GP_NAME, r, r, g_col0, g_col0 + g_width - 1)
 
         r = r + 1
-        call put(r, '+' // repeat('-', g_width - 2) // '+')
+        call put_edge(r, '├', '┤', '')
 
         do i = 1, GP_VISIBLE
             r = r + 1
             idx = g_scroll + i
             if (idx > g_n_items) then
-                call put(r, '')
+                call put_row(r, '', BODY_BG)
                 cycle
             end if
             line = item_line(idx)
             if (idx == g_sel .and. g_focus == GP_FOCUS_LIST) then
-                call put_styled(r, line, INVERSE)
+                call put_row(r, line, SEL_BG // SEL_FG)
             else if (g_items(idx)%is_dir) then
-                call put_styled(r, line, DIM)
+                call put_row(r, line, BODY_BG // DIR_FG)
+            else if (picked_index(full_path(idx)) > 0) then
+                ! Ticked rows carry the accent colour too, so a glance down the
+                ! list says what is in the group without reading each box.
+                call put_row(r, line, BODY_BG // TICK_FG)
             else
-                call put(r, line)
+                call put_row(r, line, BODY_BG // TEXT_FG)
             end if
             call region_add(REGION_GP_ROW, r, r, g_col0, g_col0 + g_width - 1, idx)
         end do
 
         r = r + 1
-        call put(r, '+' // repeat('-', g_width - 2) // '+')
+        call put_edge(r, '├', '┤', '')
 
         r = r + 1
         ! The count matters: ticks in other directories have scrolled out of
         ! sight, and without this the ../ row looks like it loses them.
         write(foot, '(i0,a)') g_n_picked, ' selected'
-        call put(r, ' ' // clip_dir(trim(g_dir), g_width - 16) // '  ' // trim(foot))
+        line = ' ' // clip_dir(trim(g_dir), g_width - 16) // '  ' // trim(foot)
+        call put_row(r, line, CHROME_BG // TEXT_FG)
 
         r = r + 1
         if (len_trim(g_note) > 0) then
-            call put(r, ' ' // trim(g_note))
+            call put_row(r, ' ' // trim(g_note), CHROME_BG // TICK_FG)
         else
-            call put(r, ' tab focus | space tick | enter create | esc cancel')
+            line = ' tab focus  ·  space tick  ·  enter create  ·  esc cancel'
+            call put_row(r, line, CHROME_BG // HINT_FG)
         end if
 
         r = r + 1
-        call put(r, '+' // repeat('-', g_width - 2) // '+')
+        call put_edge(r, '╰', '╯', '')
 
         if (g_focus == GP_FOCUS_NAME) then
-            call terminal_move_cursor(g_row0 + 1, g_col0 + 7 + g_name_len)
+            ! +1 for the left border, +7 for the ' Name  ' label.
+            call terminal_move_cursor(g_row0 + 1, g_col0 + 8 + g_name_len)
         else
             call terminal_hide_cursor()
         end if
     end subroutine render_group_picker
 
+    !> One framed row: coloured border, filled body, padded to the full width.
+    !>
+    !> The border characters are written separately from the text on purpose.
+    !> clip_to_cells counts DISPLAY CELLS, so an escape sequence embedded in
+    !> the string would be counted as though it were visible and would silently
+    !> shorten the row -- the text it clips must stay free of styling.
+    subroutine put_row(row, text, body_style)
+        integer, intent(in) :: row
+        character(len=*), intent(in) :: text, body_style
+        character(len=:), allocatable :: shown
+        integer :: used, inner
+
+        inner = max(0, g_width - 2)
+        call clip_to_cells(text, inner, shown, used)
+        call terminal_move_cursor(row, g_col0)
+        call terminal_write(FRAME // '│')
+        call terminal_write(body_style // shown // repeat(' ', max(0, inner - used)))
+        call terminal_write(FRAME // '│' // RESET)
+    end subroutine put_row
+
+    !> A horizontal rule with the given corners, and optionally a title set
+    !> into it.
+    subroutine put_edge(row, left, right, title)
+        integer, intent(in) :: row
+        character(len=*), intent(in) :: left, right, title
+        integer :: inner, pad
+
+        inner = max(0, g_width - 2)
+        call terminal_move_cursor(row, g_col0)
+        call terminal_write(FRAME // left)
+        if (len_trim(title) > 0 .and. inner > len_trim(title) + 2) then
+            pad = inner - (len_trim(title) + 2)
+            call terminal_write(repeat('─', pad / 2) // ' ')
+            call terminal_write(TITLE_FG // trim(title) // FRAME)
+            call terminal_write(' ' // repeat('─', pad - pad / 2))
+        else
+            call terminal_write(repeat('─', inner))
+        end if
+        call terminal_write(right // RESET)
+    end subroutine put_edge
+
+    !> A drop shadow, so the dialog reads as floating above the document
+    !> rather than pasted into it. Two columns right and one row down, each
+    !> run clipped to the screen -- an over-long write would wrap and smear
+    !> the shadow across the far side of the row below.
+    subroutine put_shadow()
+        integer :: r, w, c
+
+        c = g_col0 + g_width
+        do r = g_row0 + 1, min(g_row0 + g_height, g_screen_rows)
+            w = min(2, g_screen_cols - c + 1)
+            if (w < 1) exit
+            call terminal_move_cursor(r, c)
+            call terminal_write(SHADOW_BG // repeat(' ', w) // RESET)
+        end do
+
+        r = g_row0 + g_height
+        if (r <= g_screen_rows) then
+            w = min(g_width, g_screen_cols - (g_col0 + 2) + 1)
+            if (w > 0) then
+                call terminal_move_cursor(r, g_col0 + 2)
+                call terminal_write(SHADOW_BG // repeat(' ', w) // RESET)
+            end if
+        end if
+    end subroutine put_shadow
+
     function item_line(idx) result(text)
         integer, intent(in) :: idx
         character(len=:), allocatable :: text
 
+        ! The unticked box stays '[ ]': it is the affordance that says these
+        ! rows can be ticked at all, and a bare glyph would not.
         if (g_items(idx)%is_up) then
-            text = '  ^ ..'
+            text = '  ▴ ..'
         else if (g_items(idx)%is_dir) then
-            text = '  > ' // trim(g_items(idx)%name) // '/'
+            text = '  ▸ ' // trim(g_items(idx)%name) // '/'
         else if (picked_index(full_path(idx)) > 0) then
-            text = ' [x] ' // trim(g_items(idx)%name)
+            text = ' [✓] ' // trim(g_items(idx)%name)
         else
             text = ' [ ] ' // trim(g_items(idx)%name)
         end if
     end function item_line
-
-    ! Every row is written as one string with every cell painted, so document
-    ! text cannot show through a gap.
-    subroutine put(row, text)
-        integer, intent(in) :: row
-        character(len=*), intent(in) :: text
-
-        call put_styled(row, text, '')
-    end subroutine put
-
-    subroutine put_styled(row, text, style)
-        integer, intent(in) :: row
-        character(len=*), intent(in) :: text, style
-        character(len=:), allocatable :: shown
-        integer :: used
-
-        call clip_to_cells(text, g_width, shown, used)
-        call terminal_move_cursor(row, g_col0)
-        if (len(style) > 0) call terminal_write(style)
-        call terminal_write(shown // repeat(' ', max(0, g_width - used)))
-        if (len(style) > 0) call terminal_write(RESET)
-    end subroutine put_styled
-
-    function dashes(title) result(text)
-        character(len=*), intent(in) :: title
-        character(len=:), allocatable :: text
-        integer :: pad
-
-        pad = max(0, g_width - 2 - len(title))
-        text = repeat('-', pad / 2) // title // repeat('-', pad - pad / 2)
-    end function dashes
 
     function clip_dir(path, cells) result(text)
         character(len=*), intent(in) :: path
