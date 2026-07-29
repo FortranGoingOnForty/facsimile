@@ -47,7 +47,9 @@ module command_handler_module
         get_terminal_panel_height, &
         terminal_panel_is_alive, terminal_panel_restart, &
         terminal_panel_is_dragging, terminal_panel_has_selection, &
-        terminal_panel_copy_selection
+        terminal_panel_copy_selection, &
+        terminal_panel_nudge_height, terminal_panel_toggle_maximize, &
+        terminal_panel_is_maximized
     use input_handler_module, only: get_paste_text, parse_mouse_event
     use bracket_matching_module, only: find_matching_bracket
     use comment_command_module, only: toggle_comment_lines, comment_syntax_available
@@ -654,6 +656,24 @@ contains
             if (trim(key_str) == 'ctrl-shift-v') then
                 call terminal_panel_paste(editor%terminal_panel, &
                                           paste_from_clipboard())
+                return
+            end if
+            ! Resizing the panel. These are only bound while the panel has
+            ! focus, where their editor meaning -- navigate to the pane above
+            ! or below -- cannot apply anyway: the document is not what the
+            ! keyboard is pointed at. Doing it this way costs no new chord,
+            ! and every one- and two-modifier arrow combination is already
+            ! spoken for.
+            !
+            ! They have to be caught HERE. Anything that reaches
+            ! terminal_panel_handle_key below is forwarded to the shell, and
+            ! the tail of this block deliberately swallows what it does not
+            ! recognise -- so a chord handled in the main dispatch instead
+            ! would fail silently, or worse, arrive as text at a prompt.
+            if (trim(key_str) == 'ctrl-shift-up' .or. &
+                trim(key_str) == 'ctrl-shift-down' .or. &
+                trim(key_str) == 'ctrl-shift-m') then
+                call resize_terminal_panel_key(editor, trim(key_str))
                 return
             end if
             if (index(key_str, 'mouse-scroll-up') == 1) then
@@ -8035,6 +8055,52 @@ contains
     !>
     !> An entry is a group or an ungrouped tab, so with no groups this is
     !> exactly the previous/next tab it always was. Wraps at both ends.
+    !> Grow, shrink or maximise the terminal panel.
+    !>
+    !> Every height change has to do three things together, which is why they
+    !> live here rather than at each call site: resize the panel, re-clamp the
+    !> viewport -- the document just gained or lost rows and the caret may now
+    !> be off-screen -- and force a full repaint, because the panel draws only
+    !> its own rows and shrinking would otherwise leave the old ones behind.
+    subroutine resize_terminal_panel_key(editor, key_str)
+        type(editor_state_t), intent(inout) :: editor
+        character(len=*), intent(in) :: key_str
+        logical :: changed
+        character(len=48) :: msg
+
+        changed = .false.
+        select case (key_str)
+        case ('ctrl-shift-up')
+            call terminal_panel_nudge_height(editor%terminal_panel, 1, &
+                editor%screen_rows, editor%screen_cols, changed)
+        case ('ctrl-shift-down')
+            call terminal_panel_nudge_height(editor%terminal_panel, -1, &
+                editor%screen_rows, editor%screen_cols, changed)
+        case ('ctrl-shift-m')
+            call terminal_panel_toggle_maximize(editor%terminal_panel, &
+                editor%screen_rows, editor%screen_cols, changed)
+        end select
+
+        if (.not. changed) then
+            ! Say so rather than doing nothing visible: at the clamp the key
+            ! is not broken, there is simply no room.
+            call set_status_message('Terminal panel is at its limit')
+            return
+        end if
+
+        call update_viewport(editor)
+        call terminal_write(achar(27) // '[2J')
+        g_lsp_ui_changed = .true.
+
+        if (terminal_panel_is_maximized(editor%terminal_panel)) then
+            call set_status_message('Terminal maximized (ctrl-shift-m restores)')
+        else
+            write(msg, '(a,i0,a)') 'Terminal panel ', &
+                get_terminal_panel_height(editor%terminal_panel), ' rows'
+            call set_status_message(trim(msg))
+        end if
+    end subroutine resize_terminal_panel_key
+
     subroutine step_row1_entry(editor, buffer, delta)
         use editor_state_module, only: active_group_id, group_members
         type(editor_state_t), intent(inout) :: editor
