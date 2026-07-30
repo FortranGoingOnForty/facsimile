@@ -8,6 +8,7 @@ import sys
 import os
 import time
 import tempfile
+import shutil
 import subprocess
 from typing import List, Tuple, Optional
 
@@ -51,6 +52,7 @@ class FacsimileTest:
         self.binary_path = paths[0]
         self.process = None
         self.test_file = None
+        self.home = None
 
     def start(self, initial_content: str = "") -> None:
         """Start the editor with a temporary file."""
@@ -60,9 +62,24 @@ class FacsimileTest:
         self.test_file.flush()
         self.test_file.close()
 
+        # A HOME of our own, marked as already set up. Without this the editor
+        # takes its first-run path and opens the language-server panel over the
+        # document, which is a different thing from the editing this suite is
+        # about -- and on a machine with no fac config, which is what CI is,
+        # that is the ONLY thing it would have tested. Every other suite here
+        # does the same; this one predated the convention and inherited the
+        # real HOME, so it passed locally and failed in CI.
+        self.home = tempfile.mkdtemp(prefix="fac_it_")
+        os.makedirs(os.path.join(self.home, ".config", "fac"), exist_ok=True)
+        with open(os.path.join(self.home, ".config", "fac", "state.json"), "w") as f:
+            f.write('{"first_run_completed": true, "lsp_installer_seen": true,'
+                    ' "version": "1.0"}\n')
+        env = {**os.environ, "HOME": self.home}
+        env.pop("XDG_CONFIG_HOME", None)
+
         # Start the editor
         self.process = pexpect.spawn(self.binary_path, [self.test_file.name],
-                                     timeout=5, encoding='utf-8')
+                                     timeout=5, encoding='utf-8', env=env)
         # Wait for the first rendered frame before typing: fac flushes any
         # pending input when it enables raw mode during startup (and startup
         # shells out several times), so keys sent too early are silently
@@ -110,6 +127,12 @@ class FacsimileTest:
             except:
                 pass
             self.test_file = None
+
+        # And the throwaway HOME. Each start() makes its own, so leaving them
+        # behind would litter /tmp once per test.
+        if getattr(self, "home", None):
+            shutil.rmtree(self.home, ignore_errors=True)
+            self.home = None
 
     def drain(self, wait: float = 0.05) -> None:
         """Consume pending editor output. The editor redraws the whole

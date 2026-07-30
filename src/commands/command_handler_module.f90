@@ -880,6 +880,18 @@ contains
                     editor%screen_cols)
                 return
             end if
+            ! The panel did not recognise the key, and it must still not reach
+            ! the document. This panel claims j, k, enter, c, r and q and let
+            ! everything else through, so typing at it edited the file behind
+            ! it -- invisibly, since the panel covers the text. On first run it
+            ! is the first thing a user ever sees, so anything typed then was
+            ! certainly aimed at the panel.
+            !
+            ! Found by a CI failure that looked like a dropped keystroke:
+            ! 'Hello World' arrived as 'Hello Wold' because the panel took the
+            ! r as its refresh command. The same guard is on the terminal
+            ! panel, for the same reason. Ctrl-Q stays live as the way out.
+            if (trim(key_str) /= 'ctrl-q') return
         end if
 
         ! Ghost text: tab accepts the shadow suggestion; right accepts it
