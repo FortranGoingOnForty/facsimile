@@ -358,6 +358,13 @@ manager often takes `Super+Arrow` before the terminal sees it. The `Ctrl+PageUp`
 and `Alt+Ctrl+Arrow` bindings are the ones that work everywhere — treat Super as
 the enhancement, not the headline.
 
+The file tree keeps its place: closing and reopening it leaves the same
+directories open and the same hidden/shown choice in effect. It also opens the
+folders holding files you have open, even hidden or gitignored ones — having a
+file open in a directory is taken as a better answer to "should this be shown"
+than the name it starts with. Other hidden entries stay hidden, and because
+open tabs are already saved with the workspace, this survives a restart.
+
 Hovering a group on the tab bar previews its members without moving your text.
 The preview stays while the pointer is somewhere that belongs to the group —
 its entry on the top row, or the member strip itself — so you can move down into

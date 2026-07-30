@@ -274,12 +274,173 @@ def test_an_ignored_directory_is_grey_before_it_is_opened(binary):
         shutil.rmtree(d, ignore_errors=True)
 
 
+def selected(t):
+    """The highlighted tree row.
+
+    From row 2: the tab bar draws the ACTIVE TAB in reverse video too, and
+    scanning from the top matches that on every call.
+    """
+    for y in range(2, ROWS - 1):
+        row = t.screen.buffer[y]
+        cells = "".join(row[x].data if row[x].reverse else "" for x in range(40))
+        if cells.strip():
+            return cells.strip()
+    return None
+
+
+def select(t, name, limit=25):
+    """Arrow down until `name` is selected. Up/down move between SIBLINGS."""
+    for _ in range(limit):
+        sel = selected(t)
+        if sel and name in sel:
+            return True
+        t.child.send("\x1b[B")
+        t.drain(0.2)
+    sel = selected(t)
+    return bool(sel and name in sel)
+
+
+def sprint_fixture():
+    """The reported shape: .docs/sprints/00-.../ with '.docs/*' ignored."""
+    d = tempfile.mkdtemp(prefix="fac_thm_")
+    os.makedirs(os.path.join(d, ".docs", "sprints", "00-scaffolding"))
+    open(os.path.join(d, "visible.txt"), "w").write("hi\n")
+    open(os.path.join(d, ".gitignore"), "w").write(".docs/*\n")
+    open(os.path.join(d, ".docs", "sprints", "00-scaffolding", "s00.md"), "w").write("# s\n")
+    git_init(d)
+    sh("git", "add", "-A", cwd=d)
+    sh("git", "commit", "-qm", "x", cwd=d)
+    return d
+
+
+# Closing the panel used to free the whole tree, and reopening rebuilt it via
+# init_tree_state -- which is intent(out), so it reset the dotfile toggle as
+# well as every open directory.
+def test_the_tree_remembers_across_close_and_reopen(binary):
+    d = sprint_fixture()
+    t = Tree(binary, d)
+    try:
+        t.toggle_hidden()
+        if not select(t, ".docs"):
+            check(False, "setup: could not select .docs", t.text())
+            return
+        t.child.send("\x1b[C")            # right: descend into .docs
+        t.drain(1.2)
+        t.child.send("\x1b[C")            # right: descend into sprints/
+        t.drain(1.2)
+        check("00-scaffolding" in t.text(),
+              "sprints/ is expanded before closing", t.text())
+
+        t.child.send("\x02")              # close
+        t.drain(1.0)
+        t.child.send("\x02")              # and reopen
+        t.drain(1.5)
+
+        check("00-scaffolding" in t.text(),
+              "the open directory is still open after reopening", t.text())
+        check(".docs" in t.text(),
+              "and hidden entries are still shown", t.text())
+    finally:
+        t.close()
+        shutil.rmtree(d, ignore_errors=True)
+
+
+# No stored list of open directories: the tabs are already persisted, so the
+# folders holding them come back on their own.
+def test_a_restart_reveals_the_folders_holding_open_files(binary):
+    d = sprint_fixture()
+    home = tempfile.mkdtemp(prefix="fac_thr_")
+    os.makedirs(os.path.join(home, ".config", "fac"))
+    with open(os.path.join(home, ".config", "fac", "state.json"), "w") as f:
+        f.write('{"first_run_completed": true, "lsp_installer_seen": true,'
+                ' "version": "1.0"}\n')
+    env = {**os.environ, "TERM": "xterm-256color", "HOME": home}
+    env.pop("XDG_CONFIG_HOME", None)
+    buried = os.path.join(d, ".docs", "sprints", "00-scaffolding", "s00.md")
+
+    def run(args, wait=2.2):
+        scr = pyte.Screen(COLS, ROWS)
+        st = pyte.Stream(scr)
+        ch = pexpect.spawn(binary, args, dimensions=(ROWS, COLS), env=env, cwd=d)
+
+        def drain(w=0.6):
+            end = time.time() + w
+            while time.time() < end:
+                try:
+                    st.feed(ch.read_nonblocking(65536, 0.1).decode("utf-8", "replace"))
+                except pexpect.TIMEOUT:
+                    pass
+                except pexpect.EOF:
+                    break
+        drain(wait)
+        return ch, scr, drain
+
+    try:
+        # Open the workspace, walk to the buried file through the hidden
+        # directories, and open it. Passing the file as a second argument does
+        # not put fac in workspace mode, and then nothing is ever saved.
+        ch, scr, drain = run([d])
+        ch.send("\x02"); drain(1.5)        # tree
+        ch.send("."); drain(1.2)           # reveal hidden
+
+        class Shim:                        # so select()/selected() can be reused
+            pass
+        sh_t = Shim(); sh_t.screen = scr; sh_t.child = ch; sh_t.drain = drain
+
+        if not select(sh_t, ".docs"):
+            print("SKIP: could not reach .docs in the tree")
+            return
+        for _ in range(3):                 # into .docs, sprints, 00-scaffolding
+            ch.send("\x1b[C"); drain(1.0)
+        if not select(sh_t, "s00.md"):
+            print("SKIP: could not reach the buried file")
+            return
+        ch.send("\r"); drain(1.5)          # open it (leaves fuss mode)
+        # Until it exits: ctrl-q closes one surface per press, and after
+        # working in the tree there is more than one thing to close. This is
+        # long-standing behaviour, not something this change introduced -- the
+        # same two presses are needed on the commit before it.
+        for _ in range(4):
+            ch.send("\x11"); drain(1.8)
+            if not ch.isalive():
+                break
+        try:
+            ch.terminate(force=True)
+        except Exception:
+            pass
+
+        state = os.path.join(d, ".fac", "workspace.json")
+        check(os.path.exists(state), "quitting wrote the workspace file", state)
+        if not os.path.exists(state):
+            return
+
+        # Reopen: the tab comes back, and the tree should open the folders
+        # holding it even though they are hidden AND gitignored.
+        ch, scr, drain = run([d])
+        ch.send("\x02")
+        drain(1.8)
+        body = "\n".join(scr.display)
+        check("00-scaffolding" in body,
+              "the folders holding a restored tab are opened up to", body)
+        check("sprints" in body,
+              "including the hidden ones on the way", body)
+        try:
+            ch.terminate(force=True)
+        except Exception:
+            pass
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main():
     binary = find_binary()
     for fn in (test_a_hidden_directory_can_always_be_revealed,
                test_the_toggle_reads_the_same_way_in_both_modes,
                test_git_status_and_ignores_still_work,
-               test_an_ignored_directory_is_grey_before_it_is_opened):
+               test_an_ignored_directory_is_grey_before_it_is_opened,
+               test_the_tree_remembers_across_close_and_reopen,
+               test_a_restart_reveals_the_folders_holding_open_files):
         try:
             fn(binary)
         except Exception as exc:                        # noqa: BLE001

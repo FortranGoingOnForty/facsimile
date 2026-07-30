@@ -7407,7 +7407,7 @@ contains
                 editor%fuss_hints_expanded = .false.  ! Reset to collapsed
                 fuss_git_prefix_active = .false.
                 call fuss_reset_search()
-                call cleanup_tree_state(tree_state)
+                ! Tree kept: see open_fuss_tree.
             end if
 
         case default
@@ -7602,10 +7602,10 @@ contains
             full_path = trim(file_path)
         end if
 
-        ! Exit fuss mode
+        ! Exit fuss mode. The tree is kept -- opening a file from it is the
+        ! strongest possible signal that its directory is worth showing again.
         editor%fuss_mode_active = .false.
         editor%fuss_hints_expanded = .false.
-        call cleanup_tree_state(tree_state)
 
         ! If no tabs exist, create one first
         if (size(editor%tabs) == 0 .or. editor%active_tab_index == 0) then
@@ -7694,10 +7694,10 @@ contains
             full_path = trim(file_path)
         end if
 
-        ! Exit fuss mode
+        ! Exit fuss mode. The tree is kept -- opening a file from it is the
+        ! strongest possible signal that its directory is worth showing again.
         editor%fuss_mode_active = .false.
         editor%fuss_hints_expanded = .false.
-        call cleanup_tree_state(tree_state)
 
         ! If no tabs exist, create one first
         if (size(editor%tabs) == 0 .or. editor%active_tab_index == 0) then
@@ -7770,20 +7770,72 @@ contains
     end subroutine open_file_in_horizontal_split
 
     ! Toggle fuss mode (file tree)
+    !> Show the tree, building it only if there is not one already.
+    !>
+    !> A refresh re-reads the directories, so files that appeared or vanished
+    !> while the panel was closed still show up -- it just no longer forgets
+    !> which directories were open, or whether hidden ones were being shown.
+    subroutine open_fuss_tree(editor)
+        type(editor_state_t), intent(inout) :: editor
+
+        if (associated(tree_state%root) .and. &
+            trim(tree_state%workspace_path) == trim(editor%workspace_path)) then
+            call refresh_tree_state(tree_state, editor%workspace_path)
+        else
+            ! First time here, or the workspace changed underneath us.
+            call cleanup_tree_state(tree_state)
+            call init_tree_state(tree_state, editor%workspace_path)
+        end if
+
+        call reveal_open_files(editor)
+    end subroutine open_fuss_tree
+
+    !> Open the folders holding the files that are open.
+    !>
+    !> The same rule the tree already applies to git's changes: what you are
+    !> working on is worth showing, whatever its directory is called. It is
+    !> also why no list of open directories needs storing anywhere -- the tabs
+    !> are already persisted, so after a restart the folders holding them come
+    !> back on their own rather than from a second record that could disagree.
+    subroutine reveal_open_files(editor)
+        type(editor_state_t), intent(inout) :: editor
+        character(len=:), allocatable :: root, rel
+        integer :: i, n
+
+        if (.not. allocated(editor%workspace_path)) return
+        if (.not. allocated(editor%tabs)) return
+
+        root = trim(editor%workspace_path)
+        n = len(root)
+
+        do i = 1, size(editor%tabs)
+            if (.not. allocated(editor%tabs(i)%filename)) cycle
+            rel = trim(editor%tabs(i)%filename)
+            if (len(rel) == 0) cycle
+            ! Tabs may hold an absolute path or one already relative to the
+            ! workspace; the tree only speaks the latter.
+            if (len(rel) > n + 1) then
+                if (rel(1:n) == root .and. rel(n+1:n+1) == '/') rel = rel(n+2:)
+            end if
+            if (index(rel, '/') <= 0) cycle     ! at the root; nothing to open
+            call tree_reveal_path(tree_state, rel, force=.true.)
+        end do
+    end subroutine reveal_open_files
+
     subroutine toggle_fuss_mode(editor)
         type(editor_state_t), intent(inout) :: editor
 
         editor%fuss_mode_active = .not. editor%fuss_mode_active
 
         if (editor%fuss_mode_active) then
-            ! Entering fuss mode - initialize tree state
-            if (allocated(editor%workspace_path)) then
-                call init_tree_state(tree_state, editor%workspace_path)
-            end if
-        else
-            ! Exiting fuss mode - cleanup tree state
-            call cleanup_tree_state(tree_state)
+            if (allocated(editor%workspace_path)) call open_fuss_tree(editor)
         end if
+        ! Leaving fuss mode deliberately keeps the tree. It used to be freed
+        ! here and rebuilt from nothing on the way back in -- init_tree_state is
+        ! intent(out), so that reset the dotfile toggle as well as every open
+        ! directory. Closing the panel is not a reason to forget where the user
+        ! had got to; the tree is released when the workspace changes or the
+        ! editor exits.
     end subroutine toggle_fuss_mode
 
     ! UNUSED: Toggle diagnostics panel

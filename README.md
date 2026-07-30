@@ -197,6 +197,13 @@ When in fuss mode (ctrl-b), you get a split view with a git-aware file tree on t
 - Red `✗` - modified tracked files
 - Gray `✗` - untracked files
 
+**Memory:**
+- closing and reopening the tree keeps the directories you had open, and
+  whether hidden files were showing
+- folders holding an open file are opened up to, even hidden or gitignored
+  ones; everything else hidden stays hidden. Open tabs are saved with the
+  workspace, so this survives a restart
+
 **Exit:**
 - `esc` - exit fuss mode back to editor
 - `ctrl-b` - toggle fuss mode off

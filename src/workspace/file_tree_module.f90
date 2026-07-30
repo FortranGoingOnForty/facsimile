@@ -8,7 +8,7 @@ module file_tree_module
     public :: init_tree_state, cleanup_tree_state, refresh_tree_state
     public :: tree_move_up, tree_move_down, get_selected_item_path
     public :: tree_stage_file, tree_unstage_file, tree_toggle_expand
-    public :: tree_expand_node
+    public :: tree_expand_node, tree_reveal_path
     public :: build_selectable_list
     public :: update_tree_viewport
 
@@ -26,6 +26,13 @@ module file_tree_module
         logical :: is_gitignored = .false.  ! Is this file gitignored
         logical :: all_children_hidden = .false.  ! For directories: all children are hidden
         logical :: scan_pending = .false.  ! Dir not yet scanned (lazy mode); eager paths never set it
+        ! Shown even while hidden entries are being hidden.
+        !
+        ! Set on the directories leading to a file the user has open. Having a
+        ! file open in a directory is a better answer to "should this be shown"
+        ! than the name it happens to start with -- and it is narrow: the
+        ! folders on that path are revealed, every other dotfile stays hidden.
+        logical :: force_visible = .false.
         type(tree_node_t), pointer :: parent => null()  ! Parent node for sibling navigation
         type(tree_node_t), pointer :: first_child => null()
         type(tree_node_t), pointer :: next_sibling => null()
@@ -122,9 +129,21 @@ contains
         character(len=*), intent(in) :: workspace_path
         type(file_entry_t), allocatable :: all_files(:), dirty_files(:)
         integer :: n_all_files, n_dirty_files
+        ! Bounded: past this many open directories the tree is not something
+        ! anyone is reading anyway, and the rest reopen on demand.
+        integer, parameter :: MAX_REMEMBERED = 256
+        ! Allocatable rather than automatic: 256 x 512 bytes is past the point
+        ! where gfortran quietly moves an array to static storage, which would
+        ! make this procedure unsafe to reenter.
+        character(len=512), allocatable :: was_open(:)
+        integer :: n_was_open, k
 
         ! Free existing tree if present
+        ! Where the user had got to, noted before the tree is thrown away.
+        allocate(was_open(MAX_REMEMBERED))
+        n_was_open = 0
         if (associated(state%root)) then
+            call collect_expanded(state%root, was_open, n_was_open)
             call free_tree(state%root)
             state%root => null()
         end if
@@ -163,6 +182,11 @@ contains
         end if
 
         n_all_files = 0
+        ! Freed before every rebuild. This is a REFRESH, which can now run more
+        ! than once against the same state -- it used to be reached only
+        ! through init_tree_state, whose intent(out) silently cleared these
+        ! first, so allocating them here was safe by accident.
+        if (allocated(state%files)) deallocate(state%files)
         if (is_git_repo) then
             call get_ignored_paths(workspace_path, state)
             call get_dirty_files(workspace_path, dirty_files, n_dirty_files)
@@ -189,7 +213,12 @@ contains
         state%root%scan_pending = .true.
         call scan_directory_children(state, state%root)
 
-        ! Open the folders the changes are in, the way the eager tree did.
+        ! Put back what was open before, then open the folders holding
+        ! changes. Order matters only in that both are cheap and idempotent.
+        do k = 1, n_was_open
+            call tree_reveal_path(state, trim(was_open(k)))
+        end do
+        deallocate(was_open)
         if (is_git_repo) call expand_to_dirty_files(state)
 
         call build_selectable_list(state%root, state%selectable_files, &
@@ -217,46 +246,117 @@ contains
     !> nothing in it worth showing.
     subroutine expand_to_dirty_files(state)
         type(tree_state_t), intent(inout) :: state
-        type(tree_node_t), pointer :: parent, child
-        character(len=512) :: rest, component
-        integer :: i, slash
+        integer :: i
 
         if (state%n_files == 0) return
         if (.not. allocated(state%files)) return
 
         do i = 1, state%n_files
-            rest = trim(state%files(i)%path)
-            parent => state%root
-            do
-                slash = index(trim(rest), '/')
-                if (slash <= 0) exit          ! the file itself; nothing to open
-                component = rest(1:slash-1)
-                rest = rest(slash+1:)
-
-                if (parent%scan_pending) call scan_directory_children(state, parent)
-                child => parent%first_child
-                parent => null()
-                do while (associated(child))
-                    if (trim(child%name) == trim(component) .and. &
-                        .not. child%is_file) then
-                        ! Scanned as it is opened, not on the next turn of the
-                        ! loop: the LAST directory in a path never gets another
-                        ! turn, so it would be drawn open and empty with the
-                        ! changed file it was opened for missing from it.
-                        child%expanded = .true.
-                        if (child%scan_pending) &
-                            call scan_directory_children(state, child)
-                        parent => child
-                        exit
-                    end if
-                    child => child%next_sibling
-                end do
-                ! The path named something no longer on disk -- git's list can
-                ! be a moment stale. Give up on this one rather than guess.
-                if (.not. associated(parent)) exit
-            end do
+            call tree_reveal_path(state, trim(state%files(i)%path))
         end do
     end subroutine expand_to_dirty_files
+
+    !> Every directory currently open, as workspace-relative paths.
+    !>
+    !> A refresh throws the tree away and reads the directories again, which is
+    !> how it notices files that appeared or vanished. Collecting the open
+    !> directories first and reopening them afterwards is what keeps that from
+    !> also throwing away where the user had got to.
+    recursive subroutine collect_expanded(node, paths, n)
+        type(tree_node_t), pointer, intent(in) :: node
+        character(len=512), intent(inout) :: paths(:)
+        integer, intent(inout) :: n
+        type(tree_node_t), pointer :: child
+
+        if (.not. associated(node)) return
+        child => node%first_child
+        do while (associated(child))
+            if (.not. child%is_file .and. child%expanded) then
+                if (n < size(paths)) then
+                    n = n + 1
+                    ! Stored with a trailing '/' so tree_reveal_path treats the
+                    ! directory itself as something to open rather than as a
+                    ! leaf to stop before.
+                    paths(n) = trim(child%full_path) // '/'
+                end if
+                call collect_expanded(child, paths, n)
+            end if
+            child => child%next_sibling
+        end do
+    end subroutine collect_expanded
+
+    !> Open every directory along `path`, so whatever sits at the end of it can
+    !> be seen.
+    !>
+    !> Three callers want exactly this and none of them care why: the folders
+    !> holding git's changes, the folders holding open files, and the folders
+    !> that were open before a refresh. `path` is relative to the workspace
+    !> root; a trailing filename is ignored, since only the directories on the
+    !> way to it need opening.
+    !>
+    !> Hidden and ignored directories are opened like any other. That is the
+    !> point -- being asked for something inside one is a better answer to
+    !> "should this be shown" than the name it happens to start with.
+    subroutine tree_reveal_path(state, path, force)
+        type(tree_state_t), intent(inout) :: state
+        character(len=*), intent(in) :: path
+        logical, intent(in), optional :: force
+        type(tree_node_t), pointer :: parent, child
+        character(len=512) :: rest, component
+        integer :: slash
+        logical :: do_force
+
+        do_force = .false.
+        if (present(force)) do_force = force
+
+        if (.not. associated(state%root)) return
+        if (len_trim(path) == 0) return
+
+        rest = trim(path)
+        parent => state%root
+        do
+            slash = index(trim(rest), '/')
+            if (slash <= 0) exit          ! the leaf itself; nothing to open
+            component = rest(1:slash-1)
+            rest = rest(slash+1:)
+
+            if (parent%scan_pending) call scan_directory_children(state, parent)
+            child => parent%first_child
+            parent => null()
+            do while (associated(child))
+                if (trim(child%name) == trim(component) .and. &
+                    .not. child%is_file) then
+                    ! Scanned as it is opened, not on the next turn of the loop:
+                    ! the LAST directory in a path never gets another turn, so
+                    ! it would be drawn open and empty with the very thing it
+                    ! was opened for missing from it.
+                    child%expanded = .true.
+                    if (do_force) child%force_visible = .true.
+                    if (child%scan_pending) &
+                        call scan_directory_children(state, child)
+                    parent => child
+                    exit
+                end if
+                child => child%next_sibling
+            end do
+            ! Named something no longer on disk -- a git listing or a stored
+            ! path can be a moment stale. Give up rather than guess.
+            if (.not. associated(parent)) exit
+        end do
+
+        ! The leaf. Without this the folders open but the file that caused all
+        ! of it stays hidden inside them.
+        if (do_force .and. associated(parent) .and. len_trim(rest) > 0) then
+            child => parent%first_child
+            do while (associated(child))
+                if (trim(child%name) == trim(rest)) then
+                    child%force_visible = .true.
+                    exit
+                end if
+                child => child%next_sibling
+            end do
+        end if
+    end subroutine tree_reveal_path
 
     !> Copy git's view of a file onto the node standing for it.
     subroutine apply_git_status(state, node)
@@ -761,7 +861,8 @@ contains
         if (.not. associated(node)) return
 
         ! Skip hidden entries when hide_dotfiles is enabled (match renderer)
-        if (hide_dotfiles .and. (node%is_dotfile .or. node%is_gitignored)) return
+        if (hide_dotfiles .and. (node%is_dotfile .or. node%is_gitignored) &
+            .and. .not. node%force_visible) return
 
         ! Add both files and directories to selectable list
         ! Skip root node (name = '.')
