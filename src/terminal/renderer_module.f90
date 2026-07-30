@@ -141,6 +141,18 @@ module renderer_module
     integer :: g_tabbar_width = 80
     logical :: g_group_preview_enabled = .true.
 
+    ! Where the preview strip was last actually drawn, so the pointer can move
+    ! down into it without dismissing the thing it is moving towards.
+    !
+    ! Recorded at draw time rather than re-derived: row 2 is the preview strip
+    ! only while OUTSIDE a group, and the pinned member row while inside one.
+    ! Asking "was a preview drawn there" is a different question from "what is
+    ! at row 2", and only the first one should keep a hover alive.
+    ! g_preview_row = 0 means no preview is on screen.
+    integer :: g_preview_row = 0
+    integer :: g_preview_col0 = 0
+    integer :: g_preview_col1 = 0
+
     type :: strip_entry_t
         character(len=192) :: label = ''
         integer :: payload = 0
@@ -664,11 +676,32 @@ contains
             ! Row 1 stores a group as a negative payload.
             if (hit%kind == REGION_TAB .and. hit%payload < 0) &
                 found = int(-hit%payload, int32)
+        else if (g_hover_group /= 0 .and. row == g_preview_row) then
+            ! Inside the strip that is already being previewed, the hover
+            ! stands. Without this, moving the pointer down towards the members
+            ! dismissed them -- the preview could be seen but never reached,
+            ! which is most of what a preview is for.
+            !
+            ! The WHOLE drawn strip counts, padding past the last member
+            ! included. Resolving this through the region table would make the
+            ! empty tail of the strip "outside", so the preview would vanish on
+            ! crossing from the last member into blank space inside the same
+            ! visual band. The band is one thing to the eye and is treated as
+            ! one thing here.
+            if (col >= g_preview_col0 .and. col <= g_preview_col1) &
+                found = g_hover_group
         end if
 
         ! Resolving through the region table rather than re-deriving the
         ! layout is the point of having the table: multibyte labels come out
         ! right for free.
+        !
+        ! Still true only on a CHANGE. Persisting must cost nothing: motion is
+        ! reported per cell of pointer travel, so repainting for "still on the
+        ! same group" would be a frame per cell crossed. That is also why
+        ! g_group_scroll is reset here and not on every event -- otherwise a
+        ! scrolled member list would snap back to its head as the pointer moved
+        ! within the strip.
         moved = (found /= g_hover_group)
         if (moved) g_group_scroll = 1     ! a preview always starts at its head
         g_hover_group = found
@@ -695,12 +728,22 @@ contains
     subroutine render_group_preview(editor)
         type(editor_state_t), intent(in) :: editor
 
+        ! Disarmed on every path that draws nothing, so the pointer can never
+        ! persist a hover against a strip that is not on screen -- including
+        ! row 2 while inside a group, where that row belongs to the pinned
+        ! member list instead.
+        g_preview_row = 0
+
         if (g_hover_group == 0) return
         if (group_find_public(editor, g_hover_group) == 0) return
         if (tab_bar_height(editor) >= 2) return
 
         call render_group_row(editor, g_hover_group, 2, &
                               g_tabbar_col0, g_tabbar_width)
+
+        g_preview_row = 2
+        g_preview_col0 = g_tabbar_col0
+        g_preview_col1 = g_tabbar_col0 + g_tabbar_width - 1
     end subroutine render_group_preview
 
 

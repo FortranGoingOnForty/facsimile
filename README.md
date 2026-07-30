@@ -141,7 +141,9 @@ tree and tick the files you want. The group appears in the tab bar as
 Left/right is one continuous line through every open file, so it always gets you
 out of a group even if your window manager eats the Super bindings.
 
-Hovering a group previews its members without moving your text. Group members
+Hovering a group previews its members without moving your text, and the preview
+stays while the pointer is over the group's own area, so you can move down into
+the members rather than watching them vanish as you reach for them. Group members
 are read from disk the first time you look at them, so a forty-file group costs
 one file read, not forty. Groups are saved in `workspace.json` and come back on
 restart. See [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md#tab-groups) for detail.

@@ -359,6 +359,10 @@ and `Alt+Ctrl+Arrow` bindings are the ones that work everywhere — treat Super 
 the enhancement, not the headline.
 
 Hovering a group on the tab bar previews its members without moving your text.
+The preview stays while the pointer is somewhere that belongs to the group —
+its entry on the top row, or the member strip itself — so you can move down into
+the members you are previewing. Moving anywhere else hides it again: sideways
+off the entry, or on down into the document.
 Set `"tabs.group_hover_preview": false` in `settings.json` to turn that off; the
 pinned member row still works, and it stops the editor asking the terminal to
 report every pointer movement.

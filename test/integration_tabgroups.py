@@ -288,6 +288,153 @@ def test_hover_previews_without_reflowing(binary):
         s.close()
 
 
+def previewing(s):
+    """True when row 2 lists a group's members rather than document text."""
+    return s.gutter_line(2) is None and s.names[0] in s.row(2)
+
+
+def motion_bytes(s, row, col, w=0.7):
+    """Send bare motion and return how many bytes the editor emitted.
+
+    A repaint is thousands of bytes; staying on the same group should cost
+    approximately none. Motion is reported per cell of pointer travel, so a
+    repaint per event would be a frame per cell crossed.
+    """
+    s.child.send(f"\x1b[<35;{col};{row}M")
+    total = 0
+    end = time.time() + w
+    while time.time() < end:
+        try:
+            data = s.child.read_nonblocking(65536, 0.1)
+            total += len(data)
+            s.stream.feed(data.decode("utf-8", "replace"))
+        except pexpect.TIMEOUT:
+            continue
+        except pexpect.EOF:
+            break
+    return total
+
+
+# The point of the feature: the pointer can reach what it is previewing.
+def test_the_preview_survives_moving_into_it(binary):
+    s = Session(binary)
+    try:
+        if not group_some_and_leave(s):
+            print("SKIP: could not build a group with a tab outside it")
+            return
+        base3 = s.gutter_line(3)
+
+        motion(s, 1, 3)                       # onto the group entry
+        check(previewing(s), "hovering the entry previews the members", s.row(2))
+
+        motion(s, 2, 3)                       # down into the strip
+        check(previewing(s),
+              "moving down into the strip KEEPS the preview", s.row(2))
+        check(s.gutter_line(3) == base3,
+              "and the document still has not moved",
+              f"row3 was {base3}, now {s.gutter_line(3)}")
+
+        # Past the last member, still inside the drawn band. Deliberate: the
+        # band is one thing to the eye, so it is one region here.
+        motion(s, 2, 60)
+        check(previewing(s),
+              "and the padding past the last member counts as inside", s.row(2))
+    finally:
+        s.close()
+
+
+def test_leaving_the_area_hides_the_preview(binary):
+    s = Session(binary)
+    try:
+        if not group_some_and_leave(s):
+            print("SKIP: could not build a group with a tab outside it")
+            return
+
+        # Down through the strip and on into the document.
+        motion(s, 1, 3)
+        motion(s, 2, 3)
+        check(previewing(s), "previewing from inside the strip", s.row(2))
+        motion(s, 3, 20)
+        check(not previewing(s),
+              "moving on into the document hides it", s.row(2))
+
+        # Sideways off the entry along row 1, without ever entering the strip.
+        motion(s, 1, 3)
+        check(previewing(s), "previewing again from the entry", s.row(2))
+        motion(s, 1, 60)
+        check(not previewing(s),
+              "moving sideways off the entry hides it", s.row(2))
+
+        # Well below the bar.
+        motion(s, 1, 3)
+        motion(s, 2, 10)
+        motion(s, 4, 10)
+        check(not previewing(s), "and so does moving further down", s.row(2))
+    finally:
+        s.close()
+
+
+# Risk: persisting must not cost a state change, or mode 1003 -- which reports
+# motion per cell of travel -- would pay for one per cell crossed.
+#
+# Note what this does NOT claim. The editor emits something for every motion
+# event regardless, around 1300 bytes on a 24x100 screen, which is the standing
+# cost of any-motion reporting and predates this. The claim is only that
+# staying on the same group costs no more than any other motion that changes
+# nothing, and markedly less than a change.
+def test_persisting_costs_no_more_than_any_other_motion(binary):
+    s = Session(binary)
+    try:
+        if not group_some_and_leave(s):
+            print("SKIP: could not build a group with a tab outside it")
+            return
+
+        # Baseline: motion over the document with no preview up, so nothing
+        # anywhere changes.
+        baseline = motion_bytes(s, 6, 20)
+        baseline = max(baseline, motion_bytes(s, 6, 24))
+
+        appearing = motion_bytes(s, 1, 3)      # state changes
+        check(appearing > baseline,
+              "showing the preview costs more than an idle motion",
+              f"{appearing} vs baseline {baseline}")
+
+        staying = motion_bytes(s, 2, 8)        # inside the strip, same group
+        check(staying < appearing,
+              "but staying inside the strip costs less than that change",
+              f"staying {staying} vs appearing {appearing}")
+        check(staying <= baseline * 3 // 2,
+              "and is within half again of an idle motion",
+              f"staying {staying} vs baseline {baseline}")
+        check(previewing(s), "with the preview still up", s.row(2))
+    finally:
+        s.close()
+
+
+def test_row_two_inside_a_group_is_not_a_preview_area(binary):
+    """Inside a group, row 2 is the pinned member row and no preview exists.
+
+    The rect must be armed only when a preview was actually drawn, or hovering
+    there would keep alive a hover for a strip that is not on screen.
+    """
+    s = Session(binary)
+    try:
+        open_all(s)
+        s.palette("Group All Tabs")
+        if "(" not in s.row(1):
+            print("SKIP: could not form the group")
+            return
+        check(s.gutter_line(3) == 1, "inside a group the bar is two rows",
+              s.row(3))
+        before = s.row(2)
+        motion(s, 2, 10)
+        check(s.row(2) == before,
+              "hovering the pinned row changes nothing", f"{before!r} -> {s.row(2)!r}")
+        check(s.gutter_line(3) == 1, "and the document stays put", s.row(3))
+    finally:
+        s.close()
+
+
 def test_the_preview_clears(binary):
     s = Session(binary)
     try:
@@ -723,6 +870,10 @@ def main():
                test_the_caret_stays_on_a_drawn_line,
                test_the_count_follows_a_close,
                test_hover_previews_without_reflowing,
+               test_the_preview_survives_moving_into_it,
+               test_leaving_the_area_hides_the_preview,
+               test_persisting_costs_no_more_than_any_other_motion,
+               test_row_two_inside_a_group_is_not_a_preview_area,
                test_the_preview_clears,
                test_a_keystroke_dismisses_the_preview,
                test_super_ctrl_arrows_navigate_without_moving_the_caret,
