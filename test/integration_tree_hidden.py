@@ -217,11 +217,69 @@ def test_git_status_and_ignores_still_work(binary):
         shutil.rmtree(d, ignore_errors=True)
 
 
+def grey_rows(t):
+    """(text, is_grey) per row of the TREE pane, stopping at the separator."""
+    out = []
+    for y in range(ROWS):
+        row = t.screen.buffer[y]
+        cols = []
+        for x in range(COLS):
+            if row[x].data == "│":
+                break
+            cols.append(x)
+        txt = "".join(row[x].data for x in cols).strip()
+        if not txt or txt.startswith(("esc/", ".:hide")):
+            continue
+        fg = {row[x].fg for x in cols if row[x].data.strip()}
+        out.append((txt, "brightblack" in fg))
+    return out
+
+
+# Reported: ignored directories were grey only AFTER being expanded once.
+# The grey came from all_children_hidden, which is computed when a directory
+# is scanned -- so it arrived as a reward for opening the thing it was meant
+# to warn about.
+def test_an_ignored_directory_is_grey_before_it_is_opened(binary):
+    d = tempfile.mkdtemp(prefix="fac_thi_")
+    os.makedirs(os.path.join(d, ".docs", "sprints", "00-scaffolding"))
+    open(os.path.join(d, "visible.txt"), "w").write("hi\n")
+    # '.docs/*' ignores the CONTENTS of .docs without ignoring .docs itself,
+    # which is the shape that showed the bug.
+    open(os.path.join(d, ".gitignore"), "w").write(".docs/*\n")
+    open(os.path.join(d, ".docs", "sprints", "00-scaffolding", "s00.md"), "w").write("# s\n")
+    git_init(d)
+    sh("git", "add", "-A", cwd=d)
+    sh("git", "commit", "-qm", "x", cwd=d)
+
+    t = Tree(binary, d)
+    try:
+        t.toggle_hidden()
+        rows = dict(grey_rows(t))
+        docs = [k for k in rows if ".docs" in k]
+        check(bool(docs), "the hidden directory is listed", str(list(rows)))
+
+        # Open .docs, then look at sprints/ WITHOUT opening that.
+        t.child.send(" ")
+        t.drain(1.2)
+        rows = grey_rows(t)
+        sprint = [(txt, grey) for txt, grey in rows if "sprints" in txt]
+        check(bool(sprint), "sprints/ appears once .docs is opened", str(rows))
+        if sprint:
+            txt, grey = sprint[0]
+            check(txt.startswith("+"),
+                  "and is still collapsed, never having been expanded", txt)
+            check(grey, "yet is already drawn grey", txt)
+    finally:
+        t.close()
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main():
     binary = find_binary()
     for fn in (test_a_hidden_directory_can_always_be_revealed,
                test_the_toggle_reads_the_same_way_in_both_modes,
-               test_git_status_and_ignores_still_work):
+               test_git_status_and_ignores_still_work,
+               test_an_ignored_directory_is_grey_before_it_is_opened):
         try:
             fn(binary)
         except Exception as exc:                        # noqa: BLE001

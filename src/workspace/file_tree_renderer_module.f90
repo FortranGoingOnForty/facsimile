@@ -223,7 +223,17 @@ contains
                 if (is_selected) then
                     call terminal_write(ESC // '[7m' // line // ESC // '[0m')
                 else
-                    if (.not. node%is_file .and. node%all_children_hidden) then
+                    ! Greyed when git would ignore it, or when a directory has
+                    ! nothing in it but hidden things.
+                    !
+                    ! is_gitignored is checked FIRST because it is known the
+                    ! moment the node is created. all_children_hidden is only
+                    ! computed when a directory is scanned, so on its own it
+                    ! meant an ignored directory looked ordinary until it had
+                    ! been expanded once -- the grey arrived as a reward for
+                    ! opening the thing the grey was supposed to warn you about.
+                    if (node%is_gitignored .or. &
+                        (.not. node%is_file .and. node%all_children_hidden)) then
                         call terminal_write(ESC // '[90m' // line // ESC // '[0m')
                     else
                         call terminal_write(line)
