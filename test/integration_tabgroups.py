@@ -374,39 +374,34 @@ def test_leaving_the_area_hides_the_preview(binary):
         s.close()
 
 
-# Risk: persisting must not cost a state change, or mode 1003 -- which reports
-# motion per cell of travel -- would pay for one per cell crossed.
-#
-# Note what this does NOT claim. The editor emits something for every motion
-# event regardless, around 1300 bytes on a 24x100 screen, which is the standing
-# cost of any-motion reporting and predates this. The claim is only that
-# staying on the same group costs no more than any other motion that changes
-# nothing, and markedly less than a change.
-def test_persisting_costs_no_more_than_any_other_motion(binary):
+# Motion is reported per CELL of travel once any-motion tracking is on, so a
+# frame per event means crossing a terminal costs a hundred frames. A motion
+# that changes nothing must therefore draw NOTHING -- not a cheap frame, none.
+def test_a_motion_that_changes_nothing_draws_nothing(binary):
     s = Session(binary)
     try:
         if not group_some_and_leave(s):
             print("SKIP: could not build a group with a tab outside it")
             return
 
-        # Baseline: motion over the document with no preview up, so nothing
-        # anywhere changes.
-        baseline = motion_bytes(s, 6, 20)
-        baseline = max(baseline, motion_bytes(s, 6, 24))
+        # Over the document, no preview up: nothing anywhere differs.
+        idle = motion_bytes(s, 6, 20) + motion_bytes(s, 6, 24)
+        check(idle == 0, "idle pointer motion emits no bytes at all",
+              f"{idle} bytes")
 
-        appearing = motion_bytes(s, 1, 3)      # state changes
-        check(appearing > baseline,
-              "showing the preview costs more than an idle motion",
-              f"{appearing} vs baseline {baseline}")
+        appearing = motion_bytes(s, 1, 3)      # state changes: must draw
+        check(appearing > 0, "showing the preview does draw", f"{appearing} bytes")
+        check(previewing(s), "and the preview is up", s.row(2))
 
-        staying = motion_bytes(s, 2, 8)        # inside the strip, same group
-        check(staying < appearing,
-              "but staying inside the strip costs less than that change",
-              f"staying {staying} vs appearing {appearing}")
-        check(staying <= baseline * 3 // 2,
-              "and is within half again of an idle motion",
-              f"staying {staying} vs baseline {baseline}")
+        staying = motion_bytes(s, 2, 8) + motion_bytes(s, 2, 12)
+        check(staying == 0,
+              "and moving within the strip emits nothing either",
+              f"{staying} bytes")
         check(previewing(s), "with the preview still up", s.row(2))
+
+        leaving = motion_bytes(s, 6, 20)       # state changes: must draw
+        check(leaving > 0, "hiding it draws again", f"{leaving} bytes")
+        check(not previewing(s), "and it is gone", s.row(2))
     finally:
         s.close()
 
@@ -872,7 +867,7 @@ def main():
                test_hover_previews_without_reflowing,
                test_the_preview_survives_moving_into_it,
                test_leaving_the_area_hides_the_preview,
-               test_persisting_costs_no_more_than_any_other_motion,
+               test_a_motion_that_changes_nothing_draws_nothing,
                test_row_two_inside_a_group_is_not_a_preview_area,
                test_the_preview_clears,
                test_a_keystroke_dismisses_the_preview,

@@ -144,6 +144,7 @@ module command_handler_module
     public :: g_lsp_ui_changed       ! Flag for immediate render after LSP UI changes
     public :: g_cursor_only_move     ! Flag for cursor-only moves (skip full re-render)
     public :: tab_jump_tick
+    public :: g_no_visible_change
 
     ! Flag to track if LSP modified the buffer (for immediate rendering)
     logical :: g_lsp_modified_buffer = .false.
@@ -151,6 +152,13 @@ module command_handler_module
     logical :: g_lsp_ui_changed = .false.
     ! Flag for cursor-only movements (can skip full re-render)
     logical :: g_cursor_only_move = .false.
+    ! This key changed nothing on screen, so the frame need not be drawn again.
+    !
+    ! Opt-in, and reset to .false. at the top of every key: only the paths that
+    ! can prove nothing changed set it. Getting that backwards -- defaulting to
+    ! "no change" and clearing it on mutation -- would mean every unconsidered
+    ! code path silently suppressed its own repaint.
+    logical :: g_no_visible_change = .false.
 
     ! A tab jump waiting to see whether another digit follows.
     !
@@ -374,6 +382,7 @@ contains
         ! was disappearing before the user had looked at it.
         if (is_cursor_move_key(key_str)) call clear_status_message()
         g_cursor_only_move = .false.
+        g_no_visible_change = .false.
 
         ! Ignore empty key strings (from terminal position reports, etc)
         if (len_trim(key_str) == 0 .and. key_str(1:1) /= ' ') then
@@ -607,6 +616,11 @@ contains
                                 ! moved, not on every motion event.
                                 if (context_menu_hover(mr, mc)) then
                                     g_lsp_ui_changed = .true.
+                                else
+                                    ! The pointer moved within the same row.
+                                    ! Nothing on screen differs, so there is
+                                    ! nothing to draw.
+                                    g_no_visible_change = .true.
                                 end if
                                 return
                             end if
@@ -633,7 +647,11 @@ contains
                 call parse_mouse_event(trim(key_str), mev, mb, mr, mc, mok)
                 if (mok) then
                     if (iand(mb, 3) == 3) then      ! motion with no button held
-                        if (tab_group_hover(mr, mc)) g_lsp_ui_changed = .true.
+                        if (tab_group_hover(mr, mc)) then
+                            g_lsp_ui_changed = .true.
+                        else
+                            g_no_visible_change = .true.
+                        end if
                         return
                     end if
                 end if

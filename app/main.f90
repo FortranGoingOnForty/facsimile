@@ -50,7 +50,7 @@ program facsimile
     use command_handler_module, only: handle_key_command, init_command_handler, cleanup_command_handler, &
                                       save_initial_state_for_undo, search_pattern, match_case_sensitive, &
                                       g_lsp_modified_buffer, g_lsp_ui_changed, g_cursor_only_move, &
-                                      tab_jump_tick
+                                      tab_jump_tick, g_no_visible_change
     use workspace_module
     use backup_module
     use save_prompt_module
@@ -101,7 +101,7 @@ program facsimile
     character(len=4096) :: prev_active_name
     ! Snapshot for the caret-move fast path
     integer :: prev_cursor_line, prev_viewport_line, prev_viewport_col
-    logical :: prev_ghost_visible, batch_caret_only
+    logical :: prev_ghost_visible, batch_caret_only, batch_no_change
     integer :: coalesced_keys
     logical :: active_view_changed
     logical :: opened_existing_tab
@@ -698,6 +698,10 @@ program facsimile
             ! scroll position -- lines appearing to move with the caret while
             ! the file stayed put.
             batch_caret_only = .true.
+            ! Per BURST, not per key: a burst mixing a no-op motion with a real
+            ! keystroke must still draw. Only a burst where every key changed
+            ! nothing can skip the frame.
+            batch_no_change = .true.
             prev_cursor_line = 0
             prev_viewport_line = editor%viewport_line
             prev_viewport_col = editor%viewport_column
@@ -758,6 +762,7 @@ program facsimile
             ! One edit anywhere in the batch means the text changed and only
             ! a full frame can show it.
             batch_caret_only = batch_caret_only .and. g_cursor_only_move
+            batch_no_change = batch_no_change .and. g_no_visible_change
 
             ! Did the command move focus to a different tab or pane?
             active_view_changed = (editor%active_tab_index /= prev_active_tab)
@@ -851,7 +856,20 @@ program facsimile
                 ! something else on screen falls back to the full path, so
                 ! the fast path never has to be right about more than the
                 ! caret.
-                if (batch_caret_only .and. &
+                ! Nothing on screen differs, so draw nothing. Pointer motion is
+                ! reported per CELL of travel once any-motion tracking is on,
+                ! and each of those events was repainting the whole frame --
+                ! more than a real caret move costs, for a screen that had not
+                ! changed. Crossing the width of a terminal was a hundred full
+                ! frames.
+                !
+                ! Except when the shell has just printed something: the panel is
+                ! polled a few lines above, and its output is a change this
+                ! burst's keys knew nothing about.
+                if (batch_no_change .and. &
+                    .not. editor%terminal_panel%has_new_output) then
+                    continue
+                else if (batch_caret_only .and. &
                     caret_move_only(editor, prev_cursor_line, prev_viewport_line, &
                                     prev_viewport_col, prev_ghost_visible)) then
                     call render_caret_move(buffer, editor, prev_cursor_line, &
