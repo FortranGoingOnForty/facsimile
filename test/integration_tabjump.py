@@ -257,9 +257,57 @@ def test_too_high_a_member_says_so(binary):
         s.close()
 
 
+# Reported: holding the modifier down for the second digit jumped to tab 1 and
+# then to tab 5, instead of tab 15. Only a BARE digit was accepted as a
+# continuation, so ctrl-5 fell through to the main dispatch's own jump case.
+def test_the_modifier_may_stay_held_between_digits(binary):
+    s = many_tabs(binary)
+    if s is None:
+        check(False, "setup: could not open tabs")
+        return
+    try:
+        alt(s, 1)
+        s.send("\x1b5", 0.9)               # alt-5, without letting go
+        check(showing(s) == "file15.txt",
+              "alt-1 then alt-5 reaches tab 15", showing(s))
+
+        alt(s, 1)
+        s.send("\x1b2", 0.9)
+        check(showing(s) == "file12.txt",
+              "and alt-1 then alt-2 reaches tab 12", showing(s))
+
+        # Bare digits must go on working; this added a form, it did not
+        # replace one.
+        alt(s, 1)
+        s.child.send("4")
+        s.drain(0.9)
+        check(showing(s) == "file14.txt",
+              "a bare digit still continues the jump", showing(s))
+    finally:
+        s.close()
+
+
+def test_a_modified_digit_after_the_window_is_its_own_jump(binary):
+    """The window must not swallow modified digits forever."""
+    s = many_tabs(binary)
+    if s is None:
+        check(False, "setup: could not open tabs")
+        return
+    try:
+        alt(s, 1, 0.9)
+        s.drain(0.8)                       # let the window lapse
+        alt(s, 5, 0.9)
+        check(showing(s) == "file05.txt",
+              "alt-5 on its own still goes to tab 5", showing(s))
+    finally:
+        s.close()
+
+
 def main():
     binary = find_binary()
     for fn in (test_a_single_digit_still_jumps,
+               test_the_modifier_may_stay_held_between_digits,
+               test_a_modified_digit_after_the_window_is_its_own_jump,
                test_two_digits_reach_a_higher_tab,
                test_after_the_window_a_digit_is_just_text,
                test_a_non_digit_ends_the_window,

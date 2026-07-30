@@ -8508,16 +8508,12 @@ contains
             call clear_tab_jump()
             return
         end if
-        if (len_trim(key_str) /= 1) then
-            call clear_tab_jump()
-            return
-        end if
-        if (key_str(1:1) < '0' .or. key_str(1:1) > '9') then
+        digit = digit_of_key(key_str)
+        if (digit < 0) then
             call clear_tab_jump()
             return
         end if
 
-        digit = iachar(key_str(1:1)) - iachar('0')
         handled = .true.
 
         if (g_jump_group /= 0) then
@@ -8557,6 +8553,34 @@ contains
         g_jump_group = editor%tabs(target)%group_id
         call announce_tab_jump(editor)
     end function continue_tab_jump
+
+    !> The digit a key carries, or -1.
+    !>
+    !> A bare '5', and also alt-5 or ctrl-5. Holding the modifier down is the
+    !> natural way to type a two-digit tab number -- alt-1 then 5 without
+    !> letting go -- and only the bare form was accepted, so the second digit
+    !> fell through to the main dispatch and was taken as its own jump. The
+    !> sequence went to tab 1 and then to tab 5 rather than to tab 15.
+    pure function digit_of_key(key_str) result(d)
+        character(len=*), intent(in) :: key_str
+        integer :: d
+        character(len=:), allocatable :: k
+        character :: c
+
+        d = -1
+        k = trim(key_str)
+        if (len(k) == 1) then
+            c = k(1:1)
+        else if (len(k) == 5 .and. k(1:4) == 'alt-') then
+            c = k(5:5)
+        else if (len(k) == 6 .and. k(1:5) == 'ctrl-') then
+            c = k(6:6)
+        else
+            return
+        end if
+        if (c < '0' .or. c > '9') return
+        d = iachar(c) - iachar('0')
+    end function digit_of_key
 
     subroutine clear_tab_jump()
         g_jump_value = 0
