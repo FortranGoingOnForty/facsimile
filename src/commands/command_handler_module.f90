@@ -1541,6 +1541,8 @@ contains
                         if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
                         call insert_line_text(buffer, &
                             editor%cursors(editor%active_cursor), completion_text)
+                        call absorb_closer_the_completion_supplied(editor, buffer, &
+                                                                  completion_text)
                     end if
                     call hide_completion_popup(editor%completion_popup)
                 end block
@@ -3757,6 +3759,37 @@ contains
 
     ! True when ch is the innermost pending closer AND it is the character
     ! sitting at the caret, i.e. typing it would duplicate it
+    !> Drop the auto-closed character when a suggestion brought its own.
+    !>
+    !> Typing the opening quote of an include auto-closes it, so the line holds
+    !> "|" with the caret inside. clangd's completion for a header is
+    !> showme.h" -- it carries the closing quote, because from the server's
+    !> point of view it is completing the whole reference. Inserting that on
+    !> top of the auto-closed one gave "showme.h"" and left the user deleting
+    !> a character by hand.
+    !>
+    !> Only when all three line up: the completion ends with that character,
+    !> the innermost pending closer IS that character, and it is sitting
+    !> immediately after the caret. A closer the user typed themselves is not
+    !> tracked as pending, so this cannot eat one of those.
+    subroutine absorb_closer_the_completion_supplied(editor, buffer, text)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=*), intent(in) :: text
+        character :: last_ch
+        integer :: c
+
+        if (len(text) == 0) return
+        last_ch = text(len(text):len(text))
+
+        c = editor%active_cursor
+        if (c < 1 .or. c > size(editor%cursors)) return
+        if (.not. overtypes_pending_closer(editor%cursors(c), buffer, last_ch)) return
+
+        call buffer_delete_at_cursor(buffer, editor%cursors(c))
+        g_pending_closer_count = g_pending_closer_count - 1
+    end subroutine absorb_closer_the_completion_supplied
+
     function overtypes_pending_closer(cursor, buffer, ch) result(res)
         type(cursor_t), intent(in) :: cursor
         type(buffer_t), intent(in) :: buffer
@@ -9321,6 +9354,10 @@ contains
             call insert_block_at_cursor(buffer, editor%cursors(editor%active_cursor), text)
         else
             call insert_line_text(buffer, editor%cursors(editor%active_cursor), text)
+            ! A header suggestion carries its own closing quote, so accepting
+            ! one on top of the quote auto-close already parked there left
+            ! #include "showme.h"" and a character to delete by hand.
+            call absorb_closer_the_completion_supplied(editor, buffer, text)
         end if
 
         editor%cursors(editor%active_cursor)%desired_column = &

@@ -226,10 +226,58 @@ def phase_include(binary):
     shutil.rmtree(home, ignore_errors=True)
 
 
+def phase_include_quoted(binary):
+    """A QUOTED include, which is where the closing quote doubles up.
+
+    The phase above uses <float.h>, and '<' is not in the auto-close set, so
+    it never met this: '"' auto-closes, the header suggestion carries its own
+    closing quote, and accepting one on top of the other left
+    #include "showme.h"" with a character to delete by hand.
+    """
+    if shutil.which("clangd") is None:
+        print("skip quoted-header phase (clangd not on PATH)")
+        return
+    home = make_home()
+    proj = os.path.join(home, "proj")
+    os.makedirs(proj)
+    with open(os.path.join(proj, "showme.h"), "w") as f:
+        f.write("#ifndef SHOWME_H\n#define SHOWME_H\n#endif\n")
+    with open(os.path.join(proj, "compile_flags.txt"), "w") as f:
+        f.write("-I.\n-std=c11\n")
+    target = os.path.join(proj, "main.c")
+    open(target, "w").close()
+
+    s = Session(binary, target, home)
+    s.drain(2.0)
+
+    for ch in '#include "showme':
+        s.child.send(ch)
+        s.drain(0.15)
+
+    row = s.wait_for('#include "showme.h"', timeout=12.0)
+    check(row is not None, "quoted header completion is ghosted",
+          str(s.row_with("#include")))
+
+    if row is not None:
+        s.child.send("\t")
+        s.drain(0.6)
+        s.child.send("\x13")
+        s.drain(1.0)
+        with open(target) as f:
+            first = f.read().split("\n")[0]
+        check(first == '#include "showme.h"',
+              "accepting it leaves exactly one closing quote", repr(first))
+        check('""' not in first, "and no doubled quote anywhere", repr(first))
+
+    s.close()
+    shutil.rmtree(home, ignore_errors=True)
+
+
 def main():
     binary = find_binary()
     phase_wordscan(binary)
     phase_include(binary)
+    phase_include_quoted(binary)
 
     if failures:
         print(f"integration_ghost: FAILED ({len(failures)}: {', '.join(failures)})")
