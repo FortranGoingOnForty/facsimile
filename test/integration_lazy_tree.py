@@ -46,6 +46,24 @@ def find_binary():
     sys.exit(0)
 
 
+def make_home():
+    """A HOME marked as already set up.
+
+    Without it the editor takes its first-run path and opens the language-server
+    panel over the document. That panel swallows keys it does not recognise, so
+    Ctrl-B and the tree keys this suite sends would never reach the editor. It
+    used to "work" only because the panel let unrecognised keys fall through to
+    the document -- which was the bug that made 'Hello World' arrive as
+    'Hello Wold' in integration_test.
+    """
+    h = tempfile.mkdtemp(prefix="fac_lazy_home_")
+    os.makedirs(os.path.join(h, ".config", "fac"), exist_ok=True)
+    with open(os.path.join(h, ".config", "fac", "state.json"), "w") as f:
+        f.write('{"first_run_completed": true, "lsp_installer_seen": true,'
+                ' "version": "1.0"}\n')
+    return h
+
+
 def make_fixture():
     d = tempfile.mkdtemp(prefix="fac_lazy_it_")
     os.makedirs(os.path.join(d, "sub"))
@@ -93,11 +111,14 @@ class Screen:
 def main():
     binary = find_binary()
     fixture = make_fixture()
+    home = make_home()
+    env = {**os.environ, "HOME": home}
+    env.pop("XDG_CONFIG_HOME", None)
     failures = 0
     try:
         scr = Screen()
         p = pexpect.spawn(binary, ["opened.txt"], cwd=fixture, timeout=15,
-                          encoding=None, dimensions=(ROWS, COLS))
+                          encoding=None, dimensions=(ROWS, COLS), env=env)
 
         # The status bar leads with the fuss chevron, which replaced the
         # literal "ctrl-b:fuss" text that used to serve as this sentinel.
@@ -153,6 +174,7 @@ def main():
         return 1 if failures else 0
     finally:
         shutil.rmtree(fixture, ignore_errors=True)
+        shutil.rmtree(home, ignore_errors=True)
 
 
 if __name__ == "__main__":
