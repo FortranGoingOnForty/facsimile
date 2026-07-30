@@ -969,6 +969,22 @@ contains
             if (continue_tab_jump(editor, buffer, key_str)) return
         end if
 
+        ! A move without Shift ends the selection, and lands on the end it was
+        ! moving towards.
+        block
+            logical :: jumped
+            call collapse_selection_for_move(editor, trim(key_str), jumped)
+            if (jumped) then
+                call sync_editor_to_pane(editor)
+                call update_viewport(editor)
+                ! NOT a cursor-only move. The fast path repaints the caret's
+                ! line and nothing else, which left the rows that had been
+                ! selected still drawn as selected -- the caret went home and
+                ! the highlight stayed behind it.
+                return
+            end if
+        end block
+
         select case(trim(key_str))
         ! File operations
         case('ctrl-q')
@@ -8380,6 +8396,79 @@ contains
             end if
         end do
     end subroutine flush_document_now
+
+    !> A cursor move without Shift ends the selection.
+    !>
+    !> Two things were wrong and they are the same thing. The selection stayed
+    !> painted while the caret walked away from it, so it had to be dismissed
+    !> with Esc; and there was no notion of collapsing to an end, so returning
+    !> from a downward selection went one line up from the BOTTOM rather than
+    !> back to where the selection started.
+    !>
+    !> Which end it collapses to is the direction of the key: left and up to
+    !> the start, right and down to the end.
+    !>
+    !> `handled` is true whenever a selection was collapsed, so the ordinary
+    !> move does not also run.
+    subroutine collapse_selection_for_move(editor, key_str, handled)
+        type(editor_state_t), intent(inout) :: editor
+        character(len=*), intent(in) :: key_str
+        logical, intent(out) :: handled
+        integer(int32) :: s_line, s_col, e_line, e_col
+        logical :: backward
+        integer :: c
+
+        handled = .false.
+        if (.not. allocated(editor%cursors)) return
+        ! Multiple cursors are left alone: their selections come from ctrl-d,
+        ! where an arrow moving every head at once is the point, and Esc is
+        ! already the way back to one cursor.
+        if (size(editor%cursors) /= 1) return
+        c = editor%active_cursor
+        if (c < 1 .or. c > size(editor%cursors)) return
+        if (.not. editor%cursors(c)%has_selection) return
+
+        select case (trim(key_str))
+        case ('left', 'up', 'home', 'pageup', 'ctrl-left', 'alt-left', 'ctrl-home')
+            backward = .true.
+        case ('right', 'down', 'end', 'pagedown', 'ctrl-right', 'alt-right', 'ctrl-end')
+            backward = .false.
+        case default
+            return                      ! not a plain move; leave it alone
+        end select
+
+        ! Anchor and head in document order.
+        s_line = editor%cursors(c)%selection_start_line
+        s_col = editor%cursors(c)%selection_start_col
+        e_line = editor%cursors(c)%line
+        e_col = editor%cursors(c)%column
+        if (s_line > e_line .or. (s_line == e_line .and. s_col > e_col)) then
+            call swap_i32(s_line, e_line)
+            call swap_i32(s_col, e_col)
+        end if
+
+        editor%cursors(c)%has_selection = .false.
+
+        ! Collapse only -- never also move. The first press after selecting
+        ! puts the caret on an end and stops there; the next one moves from it.
+        ! Moving as well would mean Right after selecting rightwards skipped a
+        ! character, and there would be no press that simply lands on the end.
+        if (backward) then
+            editor%cursors(c)%line = s_line
+            editor%cursors(c)%column = s_col
+        else
+            editor%cursors(c)%line = e_line
+            editor%cursors(c)%column = e_col
+        end if
+        editor%cursors(c)%desired_column = editor%cursors(c)%column
+        handled = .true.
+    end subroutine collapse_selection_for_move
+
+    pure subroutine swap_i32(a, b)
+        integer(int32), intent(inout) :: a, b
+        integer(int32) :: t
+        t = a; a = b; b = t
+    end subroutine swap_i32
 
     !> Jump to tab `n`, then wait briefly to see whether more digits follow.
     subroutine begin_tab_jump(editor, buffer, n)
