@@ -11,7 +11,6 @@ module file_tree_module
     public :: tree_expand_node
     public :: build_selectable_list
     public :: update_tree_viewport
-    public :: build_tree
 
     ! Tree node using linked list structure (first-child, next-sibling)
     type :: tree_node_t
@@ -31,12 +30,6 @@ module file_tree_module
         type(tree_node_t), pointer :: first_child => null()
         type(tree_node_t), pointer :: next_sibling => null()
     end type tree_node_t
-
-    ! Wrapper so we can keep an array of node pointers (Fortran forbids
-    ! arrays of raw pointers). Used as the directory stack in build_tree.
-    type :: node_ptr_t
-        type(tree_node_t), pointer :: p => null()
-    end type node_ptr_t
 
     type :: file_entry_t
         character(len=512) :: path = ''
@@ -72,7 +65,28 @@ module file_tree_module
         character(len=1024) :: workspace_path = ''  ! Stored so lazy expand can scan
         logical :: is_git_repo = .false.
         logical :: first_refresh = .true.  ! Guards one-time defaults (hide_dotfiles)
+        ! Paths git would ignore, collected once per refresh.
+        !
+        ! The tree used to be built from `git ls-files --exclude-standard`, so
+        ! ignored files were filtered by never being listed -- is_gitignored
+        ! was declared and read but never once assigned. Reading directories
+        ! instead means they ARE listed, so the ignoring has to be done here
+        ! rather than fall out of the listing. Directory entries keep their
+        ! trailing '/', which is what makes a prefix test enough to cover
+        ! everything beneath them.
+        character(len=512), allocatable :: ignored(:)
+        integer :: n_ignored = 0
     end type tree_state_t
+
+    ! The other temp files in this module use fixed names, which two fac
+    ! instances refreshing at once will fight over. Not repeating that for a
+    ! list whose job is to decide what NOT to show.
+    interface
+        function c_getpid() bind(c, name="getpid")
+            use iso_c_binding, only: c_int
+            integer(c_int) :: c_getpid
+        end function c_getpid
+    end interface
 
 contains
 
@@ -132,62 +146,55 @@ contains
         state%workspace_path = trim(workspace_path)
         state%is_git_repo = is_git_repo
 
-        if (.not. is_git_repo) then
-            ! Non-git: lazy tree. Build only the root and scan its immediate
-            ! children; deeper dirs are scanned on first expand. Dotfiles get
-            ! real nodes now (readdir), so default them hidden once to match
-            ! the old find-based look; the '.' toggle reveals them.
-            if (state%first_refresh) then
-                state%hide_dotfiles = .true.
-                state%first_refresh = .false.
-            end if
-            n_all_files = 0
-            allocate(state%files(0))
-            state%n_files = 0
+        ! ONE way to discover what is in the tree, git repo or not: read the
+        ! directories. The git path used to derive the tree from
+        ! `git ls-files`, which meant a directory existed only if git named a
+        ! file inside it -- so a gitignored or empty directory had no node at
+        ! all, and the '.' toggle could not reveal what was never built. Git is
+        ! now asked only about STATUS and about what to ignore, which are the
+        ! two things git actually knows better than the filesystem.
+        !
+        ! Hidden by default in both modes. This used to be set only on the
+        ! non-git path, so the same '.' key revealed dotfiles outside a repo
+        ! and hid them inside one.
+        if (state%first_refresh) then
+            state%hide_dotfiles = .true.
+            state%first_refresh = .false.
+        end if
 
-            allocate(state%root)
-            state%root%name = '.'
-            state%root%is_file = .false.
-            state%root%expanded = .true.
-            state%root%full_path = ''
-            state%root%scan_pending = .true.
-            call scan_directory_children(state, state%root)
-
-            call build_selectable_list(state%root, state%selectable_files, state%n_selectable, state%hide_dotfiles)
-        else
-
-        state%first_refresh = .false.
-
-        ! Get all files from filesystem
-        call get_all_files(workspace_path, &
-            all_files, n_all_files)
-
-        ! Build tree from ALL files (not just dirty ones)
-        if (n_all_files > 0) then
-            call build_tree(all_files, n_all_files, state%root)
-
-            ! Get dirty files from git status and overlay
-            call get_dirty_files(workspace_path, &
-                dirty_files, n_dirty_files)
+        n_all_files = 0
+        if (is_git_repo) then
+            call get_ignored_paths(workspace_path, state)
+            call get_dirty_files(workspace_path, dirty_files, n_dirty_files)
             if (n_dirty_files > 0) then
-                call overlay_git_status(state%root, &
-                    dirty_files, n_dirty_files)
                 state%files = dirty_files
                 state%n_files = n_dirty_files
             else
                 allocate(state%files(0))
                 state%n_files = 0
             end if
-
-            call collapse_tree_smart(state%root)
-
-            ! Build selectable files list in tree traversal order
-            call build_selectable_list(state%root, state%selectable_files, state%n_selectable, state%hide_dotfiles)
         else
-            state%n_selectable = 0
+            if (allocated(state%ignored)) deallocate(state%ignored)
+            allocate(state%ignored(0))
+            state%n_ignored = 0
+            allocate(state%files(0))
+            state%n_files = 0
         end if
 
-        end if  ! lazy vs git
+        allocate(state%root)
+        state%root%name = '.'
+        state%root%is_file = .false.
+        state%root%expanded = .true.
+        state%root%full_path = ''
+        state%root%scan_pending = .true.
+        call scan_directory_children(state, state%root)
+
+        ! Open the folders the changes are in, the way the eager tree did.
+        if (is_git_repo) call expand_to_dirty_files(state)
+
+        call build_selectable_list(state%root, state%selectable_files, &
+                                   state%n_selectable, state%hide_dotfiles)
+
         end block  ! is_git_repo block
 
         if (allocated(all_files)) deallocate(all_files)
@@ -199,6 +206,166 @@ contains
             state%selected_index = 1
         end if
     end subroutine refresh_tree_state
+
+    !> Open the folders your changes are in.
+    !>
+    !> collapse_tree_smart did this by walking the whole tree asking each node
+    !> whether anything beneath it was dirty. A lazy tree has no "beneath it"
+    !> until something is scanned, so that question cannot be asked -- but it
+    !> does not need to be. Git has already named the dirty paths, so walking
+    !> those is the same answer without reading a single directory that has
+    !> nothing in it worth showing.
+    subroutine expand_to_dirty_files(state)
+        type(tree_state_t), intent(inout) :: state
+        type(tree_node_t), pointer :: parent, child
+        character(len=512) :: rest, component
+        integer :: i, slash
+
+        if (state%n_files == 0) return
+        if (.not. allocated(state%files)) return
+
+        do i = 1, state%n_files
+            rest = trim(state%files(i)%path)
+            parent => state%root
+            do
+                slash = index(trim(rest), '/')
+                if (slash <= 0) exit          ! the file itself; nothing to open
+                component = rest(1:slash-1)
+                rest = rest(slash+1:)
+
+                if (parent%scan_pending) call scan_directory_children(state, parent)
+                child => parent%first_child
+                parent => null()
+                do while (associated(child))
+                    if (trim(child%name) == trim(component) .and. &
+                        .not. child%is_file) then
+                        ! Scanned as it is opened, not on the next turn of the
+                        ! loop: the LAST directory in a path never gets another
+                        ! turn, so it would be drawn open and empty with the
+                        ! changed file it was opened for missing from it.
+                        child%expanded = .true.
+                        if (child%scan_pending) &
+                            call scan_directory_children(state, child)
+                        parent => child
+                        exit
+                    end if
+                    child => child%next_sibling
+                end do
+                ! The path named something no longer on disk -- git's list can
+                ! be a moment stale. Give up on this one rather than guess.
+                if (.not. associated(parent)) exit
+            end do
+        end do
+    end subroutine expand_to_dirty_files
+
+    !> Copy git's view of a file onto the node standing for it.
+    subroutine apply_git_status(state, node)
+        type(tree_state_t), intent(in) :: state
+        type(tree_node_t), pointer, intent(inout) :: node
+        integer :: i
+
+        if (state%n_files == 0) return
+        if (.not. allocated(state%files)) return
+
+        do i = 1, state%n_files
+            if (trim(state%files(i)%path) == trim(node%full_path)) then
+                node%is_staged = state%files(i)%is_staged
+                node%is_unstaged = state%files(i)%is_unstaged
+                node%is_untracked = state%files(i)%is_untracked
+                node%has_incoming = state%files(i)%has_incoming
+                return
+            end if
+        end do
+    end subroutine apply_git_status
+
+    !> What git would ignore, asked once per refresh.
+    !>
+    !> `--directory` collapses an ignored directory to a single entry with a
+    !> trailing slash instead of listing everything beneath it, which is the
+    !> difference between one line for build/ and ten thousand.
+    subroutine get_ignored_paths(workspace_path, state)
+        character(len=*), intent(in) :: workspace_path
+        type(tree_state_t), intent(inout) :: state
+        character(len=1024) :: cmd, tmp_file
+        character(len=512) :: line
+        integer :: unit_num, iostat, status_code, n, pass
+        character(len=32) :: pid_str
+
+        if (allocated(state%ignored)) deallocate(state%ignored)
+        state%n_ignored = 0
+        n = 0
+
+        write(pid_str, '(i0)') c_getpid()
+        tmp_file = '/tmp/.fac_ignored_' // trim(pid_str)
+
+        write(cmd, '(A)') 'cd "' // trim(workspace_path) // &
+            '" && git ls-files --others --ignored --exclude-standard ' // &
+            '--directory 2>/dev/null > "' // trim(tmp_file) // '"'
+        call execute_command_line(trim(cmd), exitstat=status_code)
+        if (status_code /= 0) then
+            allocate(state%ignored(0))
+            return
+        end if
+
+        ! Counted, then read: the list is unbounded and a fixed cap would
+        ! silently stop ignoring things past it, which shows up as a tree full
+        ! of build output rather than as an error.
+        do pass = 1, 2
+            open(newunit=unit_num, file=trim(tmp_file), status='old', &
+                 action='read', iostat=iostat)
+            if (iostat /= 0) exit
+            n = 0
+            do
+                read(unit_num, '(A)', iostat=iostat) line
+                if (iostat /= 0) exit
+                if (len_trim(line) == 0) cycle
+                n = n + 1
+                if (pass == 2) state%ignored(n) = trim(adjustl(line))
+            end do
+            close(unit_num)
+            if (pass == 1) allocate(state%ignored(max(n, 0)))
+        end do
+        state%n_ignored = n
+        if (.not. allocated(state%ignored)) allocate(state%ignored(0))
+
+        call execute_command_line('rm -f "' // trim(tmp_file) // '"', wait=.true.)
+    end subroutine get_ignored_paths
+
+    !> Would git ignore this path?
+    !>
+    !> An ignored DIRECTORY is listed as 'build/', so a prefix test covers
+    !> everything beneath it without git having to enumerate any of it.
+    function path_is_ignored(state, path, is_dir) result(res)
+        type(tree_state_t), intent(in) :: state
+        character(len=*), intent(in) :: path
+        logical, intent(in) :: is_dir
+        logical :: res
+        character(len=:), allocatable :: p, entry
+        integer :: i
+
+        res = .false.
+        if (state%n_ignored == 0) return
+        if (len_trim(path) == 0) return
+
+        p = trim(path)
+        if (is_dir) p = p // '/'
+
+        do i = 1, state%n_ignored
+            entry = trim(state%ignored(i))
+            if (len(entry) == 0) cycle
+            if (p == entry) then
+                res = .true.
+                return
+            end if
+            ! Under an ignored directory.
+            if (entry(len(entry):len(entry)) == '/' .and. len(p) > len(entry)) then
+                if (p(1:len(entry)) == entry) then
+                    res = .true.
+                    return
+                end if
+            end if
+        end do
+    end function path_is_ignored
 
     subroutine get_dirty_files(workspace_path, files, n_files)
         character(len=*), intent(in) :: workspace_path
@@ -271,74 +438,6 @@ contains
     ! List all tracked + untracked-unignored files in a git repo (eager
     ! mode). Non-git workspaces use lazy per-directory scanning instead
     ! (scan_directory_children).
-    subroutine get_all_files(workspace_path, files, n_files)
-        character(len=*), intent(in) :: workspace_path
-        type(file_entry_t), allocatable, intent(out) :: files(:)
-        integer, intent(out) :: n_files
-        integer :: iostat, unit_num, status_code
-        character(len=1024) :: line, cmd
-        character(len=1024) :: file_path
-        integer :: max_files
-        type(file_entry_t), allocatable :: temp_files(:)
-
-        max_files = 5000
-        allocate(temp_files(max_files))
-        n_files = 0
-
-        ! Git repo: use git ls-files for speed
-        write(cmd, '(A,A,A)') 'cd "', &
-            trim(workspace_path), &
-            '" && { git ls-files 2>/dev/null; ' // &
-            'git ls-files --others ' // &
-            '--exclude-standard 2>/dev/null; }' // &
-            ' | sort -u > ' // &
-            '/tmp/fac_all_files.txt 2>/dev/null'
-        call execute_command_line(trim(cmd), &
-            exitstat=status_code)
-
-        if (status_code /= 0) then
-            allocate(files(0))
-            return
-        end if
-
-        ! Read file list
-        open(newunit=unit_num, file='/tmp/fac_all_files.txt', status='old', action='read', iostat=iostat)
-
-        if (iostat /= 0) then
-            allocate(files(0))
-            return
-        end if
-
-        do
-            read(unit_num, '(A)', iostat=iostat) line
-            if (iostat /= 0) exit
-
-            file_path = adjustl(line)
-
-            ! Skip if path is empty
-            if (len_trim(file_path) == 0) cycle
-
-            n_files = n_files + 1
-            if (n_files > max_files) then
-                max_files = max_files * 2
-                call resize_file_array(temp_files, max_files)
-            end if
-
-            temp_files(n_files)%path = trim(file_path)
-            temp_files(n_files)%status = '  '  ! No git status yet
-            temp_files(n_files)%is_staged = .false.
-            temp_files(n_files)%is_unstaged = .false.
-            temp_files(n_files)%is_untracked = .false.
-            temp_files(n_files)%has_incoming = .false.
-        end do
-
-        close(unit_num, status='delete')
-
-        ! Copy to output array
-        allocate(files(n_files))
-        if (n_files > 0) files(1:n_files) = temp_files(1:n_files)
-        deallocate(temp_files)
-    end subroutine get_all_files
 
     subroutine overlay_git_status(root, dirty_files, n_dirty_files)
         type(tree_node_t), pointer, intent(inout) :: root
@@ -394,110 +493,6 @@ contains
         call move_alloc(temp, arr)
     end subroutine resize_file_array
 
-    subroutine build_tree(files, n_files, root)
-        type(file_entry_t), intent(in) :: files(:)
-        integer, intent(in) :: n_files
-        type(tree_node_t), pointer, intent(out) :: root
-        integer, parameter :: MAX_DEPTH = 256
-        type(node_ptr_t) :: pstack(MAX_DEPTH)   ! dir node at each depth of prev path
-        character(len=256) :: nstack(MAX_DEPTH) ! dir name  at each depth of prev path
-        integer :: cur_depth                    ! dir depth of the previous path
-        integer :: i, level, slash_pos
-        logical :: matched, is_last
-        character(len=1024) :: remaining_path
-        character(len=256) :: component
-        type(tree_node_t), pointer :: parent, new_node
-
-        ! Create root
-        allocate(root)
-        root%name = '.'
-        root%is_file = .false.
-        root%first_child => null()
-        root%next_sibling => null()
-
-        cur_depth = 0
-
-        ! Input paths are pre-sorted (git ls-files|sort, or find|sort), so
-        ! consecutive paths share directory prefixes. Keep the previous path's
-        ! directory stack and reuse matching prefix nodes instead of rescanning
-        ! siblings. This is O(total path components), replacing the old
-        ! O(sum of children^2) find-or-create + insertion sort.
-        do i = 1, n_files
-            remaining_path = trim(files(i)%path)
-            if (len_trim(remaining_path) == 0) cycle
-            parent => root
-            matched = .true.
-            level = 0
-
-            do while (len_trim(remaining_path) > 0)
-                slash_pos = index(remaining_path, '/')
-                if (slash_pos > 0) then
-                    component = remaining_path(1:slash_pos-1)
-                    remaining_path = remaining_path(slash_pos+1:)
-                    is_last = .false.
-                else
-                    component = remaining_path(1:min(len(component), &
-                                               len_trim(remaining_path)))
-                    remaining_path = ''
-                    is_last = .true.
-                end if
-                level = level + 1
-
-                if (is_last) then
-                    ! Leaf file: paths are unique, so always a new node.
-                    allocate(new_node)
-                    new_node%name = trim(component)
-                    new_node%is_file = .true.
-                    new_node%parent => parent
-                    new_node%first_child => null()
-                    new_node%next_sibling => parent%first_child
-                    new_node%is_dotfile = (len_trim(component) > 0 .and. &
-                                           component(1:1) == '.')
-                    new_node%full_path = trim(files(i)%path)
-                    new_node%is_staged = files(i)%is_staged
-                    new_node%is_unstaged = files(i)%is_unstaged
-                    new_node%is_untracked = files(i)%is_untracked
-                    new_node%has_incoming = files(i)%has_incoming
-                    parent%first_child => new_node
-                    cur_depth = level - 1
-                else
-                    ! Directory component. Reuse the prefix node from the
-                    ! previous path when it still matches.
-                    if (matched .and. level <= cur_depth .and. &
-                        level <= MAX_DEPTH) then
-                        if (associated(pstack(level)%p) .and. &
-                            trim(nstack(level)) == trim(component)) then
-                            parent => pstack(level)%p
-                            cycle
-                        end if
-                    end if
-                    ! Diverged (or past the stack cap): create a fresh dir node.
-                    matched = .false.
-                    allocate(new_node)
-                    new_node%name = trim(component)
-                    new_node%is_file = .false.
-                    new_node%expanded = .true.
-                    new_node%parent => parent
-                    new_node%first_child => null()
-                    new_node%next_sibling => parent%first_child
-                    new_node%is_dotfile = (len_trim(component) > 0 .and. &
-                                           component(1:1) == '.')
-                    parent%first_child => new_node
-                    parent => new_node
-                    if (level <= MAX_DEPTH) then
-                        pstack(level)%p => new_node
-                        nstack(level) = trim(component)
-                    end if
-                end if
-            end do
-        end do
-
-        ! Sort tree (directories first, then alphabetical)
-        call sort_tree(root)
-
-        ! Mark directories that only contain hidden files
-        if (mark_empty_directories(root)) continue
-    end subroutine build_tree
 
     ! Recursively mark directories that only contain hidden files
     recursive function mark_empty_directories(node) result(all_hidden)
@@ -1021,14 +1016,22 @@ contains
                 new_node%full_path = trim(node%full_path) // '/' // trim(entries(i)%name)
             end if
             new_node%is_dotfile = (entries(i)%name(1:1) == '.')
+            ! Marked as the node is created rather than overlaid afterwards:
+            ! the tree is lazy, so a pass over it would only ever reach the
+            ! directories that happen to be open.
+            new_node%is_gitignored = path_is_ignored(state, &
+                trim(new_node%full_path), entries(i)%is_dir)
             if (entries(i)%is_dir) then
                 new_node%expanded = .false.
                 new_node%scan_pending = .true.
+            else
+                call apply_git_status(state, new_node)
             end if
             new_node%parent => node
             new_node%next_sibling => node%first_child
             node%first_child => new_node
-            if (.not. new_node%is_dotfile) any_visible = .true.
+            if (.not. (new_node%is_dotfile .or. new_node%is_gitignored)) &
+                any_visible = .true.
         end do
 
         call sort_children(node)
