@@ -359,6 +359,19 @@ contains
             return
         end if
 
+        ! A chord's letter is named in lower case whatever the terminal
+        ! reports. Nobody asks for a different command by having caps lock on,
+        ! and a terminal that sends the shifted codepoint would otherwise
+        ! produce 'ctrl-S', which matches nothing and is silently swallowed.
+        !
+        ! Shift stays in the PREFIX, so the chords that genuinely differ still
+        ! do: ctrl-shift-Z arrives as ctrl-shift-z (redo), not as ctrl-z
+        ! (undo). Only the letter's case is discarded, never the modifier.
+        if (len(base_name) == 1) then
+            if (base_name(1:1) >= 'A' .and. base_name(1:1) <= 'Z') &
+                base_name = achar(iachar(base_name(1:1)) + 32)
+        end if
+
         key_str = prefix // base_name
         ok = .true.
     end subroutine decode_csi_u

@@ -1910,6 +1910,17 @@ contains
             ! (All panes in a tab share the same buffer, so saving saves the entire tab)
             call save_file(editor, buffer)
 
+        case('ctrl-shift-s')
+            ! Save every modified tab.
+            !
+            ! The palette has advertised this as Ctrl+Shift+S since it was
+            ! added and delegated to this key, but no case ever existed to
+            ! catch it -- so both the menu entry and the chord did nothing at
+            ! all. It is also what a hand reaching for Ctrl+S with Shift still
+            ! down produces, which is how it came to be reported as "ctrl+S
+            ! does not save".
+            call save_all_tabs(editor, buffer)
+
         ! LSP features
         case('ctrl-space')
             ! Trigger code completion (popup shows when the response arrives)
@@ -4832,6 +4843,56 @@ contains
             deallocate(text)
         end if
     end subroutine paste_clipboard
+
+    !> Save every modified tab.
+    !>
+    !> The active one goes through save_file, which knows how to prompt for a
+    !> name when the tab is untitled and how to tell the language servers. The
+    !> rest are written from their own panes: their edits live there, not in
+    !> the working buffer, which only ever holds the tab being looked at.
+    subroutine save_all_tabs(editor, buffer)
+        use editor_state_module, only: save_tab_pane, tab_is_resident
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer :: i, status, saved, failed
+        character(len=64) :: msg
+
+        saved = 0
+        failed = 0
+
+        ! The working buffer is the active tab's only copy until this runs.
+        call sync_editor_to_pane(editor)
+
+        if (allocated(editor%tabs)) then
+            do i = 1, size(editor%tabs)
+                if (i == editor%active_tab_index) cycle
+                if (.not. editor%tabs(i)%modified) cycle
+                ! A deferred tab holds no text, so there is nothing of its own
+                ! to write; save_tab_pane refuses it rather than truncating the
+                ! file to the empty buffer standing in for it.
+                if (.not. tab_is_resident(editor, i)) cycle
+                call save_tab_pane(editor, i, &
+                                   max(1, int(editor%tabs(i)%active_pane_index)), status)
+                if (status == 0) then
+                    editor%tabs(i)%modified = .false.
+                    saved = saved + 1
+                else
+                    failed = failed + 1
+                end if
+            end do
+        end if
+
+        ! Last, because it may open a prompt for an untitled file and that
+        ! should not interrupt a run of silent writes.
+        call save_file(editor, buffer)
+
+        if (failed > 0) then
+            write(msg, '(a,i0,a,i0,a)') 'Saved ', saved + 1, ', failed ', failed, ''
+        else
+            write(msg, '(a,i0,a)') 'Saved ', saved + 1, ' file(s)'
+        end if
+        call set_status_message(trim(msg))
+    end subroutine save_all_tabs
 
     subroutine save_file(editor, buffer)
         use text_prompt_module, only: show_text_prompt

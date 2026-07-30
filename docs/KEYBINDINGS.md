@@ -28,7 +28,8 @@ Complete keyboard shortcut reference for `fac` editor.
 
 | Keybinding | Command | Description |
 |------------|---------|-------------|
-| `Ctrl+S` | Save | Save current file |
+| `Ctrl+S` | Save | Save current file. Caps lock and a held Shift make no difference — a chord's letter case is ignored |
+| `Ctrl+Shift+S` | Save All | Write every modified tab |
 | `Ctrl+Q` | Quit | Exit editor (prompts if unsaved) |
 | `Ctrl+O` | Open File | Open file browser (Fortress mode) |
 | `Ctrl+N` | New File | Create new untitled buffer |
