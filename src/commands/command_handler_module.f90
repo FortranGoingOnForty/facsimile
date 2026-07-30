@@ -7339,11 +7339,31 @@ contains
                     ! A single CLICK on a directory still just expands it (the
                     ! region router sends 'space'). A click opening a modal
                     ! would be hostile; Enter is a deliberate act.
-                    if (group_picker_show(selected_path, editor%screen_rows, &
-                                          editor%screen_cols)) then
-                        editor%fuss_mode_active = .false.
-                        g_lsp_ui_changed = .true.
-                    end if
+                    ! Absolute, not workspace-relative: the picker reads the
+                    ! directory itself, and resolving a relative path would
+                    ! depend on the working directory happening to be the
+                    ! workspace root.
+                    block
+                        character(len=:), allocatable :: abs_dir
+
+                        abs_dir = selected_path
+                        if (allocated(editor%workspace_path)) then
+                            if (len_trim(selected_path) > 0) then
+                                if (selected_path(1:1) /= '/') &
+                                    abs_dir = trim(editor%workspace_path) // &
+                                              '/' // trim(selected_path)
+                            end if
+                        end if
+                        if (group_picker_show(abs_dir, editor%screen_rows, &
+                                              editor%screen_cols)) then
+                            editor%fuss_mode_active = .false.
+                            g_lsp_ui_changed = .true.
+                        else
+                            ! Say so rather than appearing to ignore the key.
+                            call set_status_message( &
+                                'Cannot read ' // trim(selected_path))
+                        end if
+                    end block
                 end if
             end if
 

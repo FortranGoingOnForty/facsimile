@@ -567,6 +567,51 @@ def test_enter_on_a_directory_opens_the_dialog(binary):
         s.close()
 
 
+# Reported: only first-level directories opened the dialog. The selectable
+# list stored a directory's NAME where a file got its full path, and at depth 1
+# those are the same string -- so 'ch5' resolved and 'ch5/printaf' did not.
+def test_enter_works_on_a_nested_directory(binary):
+    s = Session(binary)
+    try:
+        deep = os.path.join(s.ws, "ch5", "printaf")
+        os.makedirs(deep, exist_ok=True)
+        for n in ("main.c", "util.c"):
+            with open(os.path.join(deep, n), "w") as f:
+                f.write("int x;\n")
+
+        s.send("\x02", 1.2)
+        for _ in range(20):                     # to ch5/
+            sel = s.tree_selection()
+            if sel and "ch5" in sel:
+                break
+            s.send("\x1b[B", 0.15)
+        else:
+            check(False, "could not reach ch5/ in the tree", s.row(3))
+            return
+
+        s.send("\x1b[C", 1.2)                   # right: descend into ch5/
+        for _ in range(20):                     # to printaf/
+            sel = s.tree_selection()
+            if sel and "printaf" in sel:
+                break
+            s.send("\x1b[B", 0.15)
+        else:
+            check(False, "could not reach printaf/ inside ch5/",
+                  "\n".join(r for r in s.screen.display if r.strip())[:300])
+            return
+
+        s.send("\r", 1.5)
+        body = "\n".join(s.screen.display)
+        check("New Tab Group" in body,
+              "Enter on a nested directory opens the dialog too", body[:400])
+        check("Name  printaf/" in body,
+              "pre-filled from the nested directory, not its parent", body[:300])
+        check("[ ] main.c" in body,
+              "and it lists the files actually inside it", body[:300])
+    finally:
+        s.close()
+
+
 def test_ticking_and_creating(binary):
     s = Session(binary)
     try:
@@ -878,6 +923,7 @@ def main():
                test_lock_states_do_not_break_the_chord,
                test_the_old_chords_still_do_what_they_did,
                test_enter_on_a_directory_opens_the_dialog,
+               test_enter_works_on_a_nested_directory,
                test_ticking_and_creating,
                test_escape_creates_nothing,
                test_ctrl_q_is_not_trapped,

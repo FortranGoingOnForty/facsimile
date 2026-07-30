@@ -872,13 +872,13 @@ contains
                 max_size = max_size * 2
                 call resize_selectable_array(list, max_size)
             end if
-            if (node%is_file) then
-                list(count)%path = node%full_path
-                list(count)%is_directory = .false.
-            else
-                list(count)%path = node%name
-                list(count)%is_directory = .true.
-            end if
+            ! Both hold a PATH. Directories used to hold only their name,
+            ! which is identical to the path at depth 1 and wrong below it --
+            ! so 'ch5' worked and 'ch5/printaf' resolved to nothing. Enter on a
+            ! nested directory opened no group dialog, and staging one ran
+            ! `git add printaf` from the workspace root.
+            list(count)%path = node%full_path
+            list(count)%is_directory = .not. node%is_file
             list(count)%is_staged = node%is_staged
             list(count)%is_unstaged = node%is_unstaged
             list(count)%is_untracked = node%is_untracked
