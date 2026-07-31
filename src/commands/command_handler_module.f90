@@ -474,11 +474,13 @@ contains
         ! fuss mode swallows every unrecognised key, and the panels return
         ! "unhandled" for mouse events, so a region registered by either
         ! would never be reached from further down.
-        ! Anything that opens the context menu. The decoder classifies by
-        ! modifier before button, so a right-click with any modifier held
+        ! Anything that opens the context menu. A PRESS with a modifier held
         ! arrives as mouse-ctrl:/mouse-shift:/mouse-alt: rather than
-        ! mouse-click:, and matching only the latter lost it. Ctrl+left-click
-        ! opens the menu too, the macOS convention for a one-button pointer.
+        ! mouse-click:, and matching only the latter lost it. Movement is
+        ! classified before the modifiers, so none of these are motion events
+        ! -- the bit-32 guard below is belt and braces.
+        ! Ctrl+left-click opens the menu too, the macOS convention for a
+        ! one-button pointer.
         if (index(key_str, 'mouse-click:') == 1 .or. &
             index(key_str, 'mouse-ctrl:') == 1 .or. &
             index(key_str, 'mouse-shift:') == 1 .or. &
@@ -6101,6 +6103,11 @@ contains
         call context_menu_add_item('Dissolve Group', '', ACT_GROUP_DISSOLVE)
 
         call menu_bounds(editor, top_row, bottom_row, left_col, right_col)
+        ! A menu opened FROM the tab bar hangs directly under the row that was
+        ! clicked, rather than being pushed below the whole bar. Inside a group
+        ! the bar is two rows, so the general rule left two rows of dead space
+        ! between the pointer and the thing it is travelling to.
+        if (mrow < top_row) top_row = min(mrow + 1, bottom_row)
         shown = context_menu_show(mrow, mcol, top_row, bottom_row, left_col, right_col)
         if (shown) g_lsp_ui_changed = .true.
     end subroutine open_group_context_menu
@@ -6136,6 +6143,11 @@ contains
             ACT_TAB_UNGROUP, enabled=in_group)
 
         call menu_bounds(editor, top_row, bottom_row, left_col, right_col)
+        ! A menu opened FROM the tab bar hangs directly under the row that was
+        ! clicked, rather than being pushed below the whole bar. Inside a group
+        ! the bar is two rows, so the general rule left two rows of dead space
+        ! between the pointer and the thing it is travelling to.
+        if (mrow < top_row) top_row = min(mrow + 1, bottom_row)
         shown = context_menu_show(mrow, mcol, top_row, bottom_row, left_col, right_col)
         if (shown) g_lsp_ui_changed = .true.
     end subroutine open_tab_context_menu

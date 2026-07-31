@@ -235,6 +235,65 @@ def test_a_modified_tab_is_not_closed_silently(binary):
         s.close()
 
 
+def test_moving_after_a_ctrl_click_keeps_the_menu(binary):
+    """Reported: the menu vanished as soon as you moved towards it.
+
+    The cause was not where it opened. SGR reports a POINTER MOVEMENT with
+    bit 32, and that is orthogonal to which modifiers happen to be down --
+    but the decoder tested the modifier bits first, so a movement made while
+    ctrl was still held was indistinguishable from a ctrl-CLICK. The menu's
+    motion branch never saw it and it fell through to "anything else
+    dismisses". Letting go of ctrl before moving worked fine, which is what
+    made it look like a placement problem.
+    """
+    print("\nMoving with ctrl still held does not dismiss the menu")
+    s = Session(binary)
+    try:
+        s.open_all()
+        hit = s.tab_entry("alpha.c")
+        check(hit is not None, "found the tab entry", s.tab_bar())
+        if hit is None:
+            return
+        s.click(hit[0], hit[1], button=16)          # ctrl + left click
+        check("Close Tab" in s.text(), "ctrl+click opened the menu")
+
+        # 35 = motion, no button, no modifier. The case that always worked.
+        s.child.send(f"\x1b[<35;{hit[1] + 2};3M")
+        s.drain(0.8)
+        check("Close Tab" in s.text(), "plain movement keeps it")
+
+        # 51 = the same motion with ctrl STILL HELD (32 | 3 | 16).
+        s.child.send(f"\x1b[<51;{hit[1] + 2};4M")
+        s.drain(0.8)
+        check("Close Tab" in s.text(),
+              "and so does movement with ctrl still held", s.text()[:300])
+    finally:
+        s.close()
+
+
+def test_the_menu_hangs_under_the_row_clicked(binary):
+    """No dead space between the pointer and the menu it opened."""
+    print("\nA tab-bar menu opens directly under the pointer")
+    s = Session(binary)
+    try:
+        s.open_all()
+        hit = s.tab_entry("beta.c")
+        if hit is None:
+            check(False, "found the tab entry", s.tab_bar())
+            return
+        s.click(hit[0], hit[1], button=2)
+        top = 0
+        for i, r in enumerate(s.screen.display):
+            if "┌" in r:
+                top = i + 1
+                break
+        check(top == hit[0] + 1,
+              "the menu starts on the row below the click",
+              f"clicked row {hit[0]}, menu top {top}")
+    finally:
+        s.close()
+
+
 def test_remove_from_group(binary):
     print("\nRemove from Group takes a member out but keeps the tab")
     s = Session(binary)
@@ -271,6 +330,8 @@ def test_remove_from_group(binary):
 def main():
     binary = find_binary()
     for fn in (test_the_menu_appears,
+               test_moving_after_a_ctrl_click_keeps_the_menu,
+               test_the_menu_hangs_under_the_row_clicked,
                test_close_acts_on_the_tab_you_clicked,
                test_close_others_keeps_the_one_you_clicked,
                test_a_modified_tab_is_not_closed_silently,

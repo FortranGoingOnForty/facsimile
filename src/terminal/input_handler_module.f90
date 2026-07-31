@@ -1246,6 +1246,19 @@ contains
                                     case default
                                         key_str = ''   ! horizontal wheel
                                     end select
+                                ! Motion FIRST, before the modifier bits.
+                                !
+                                ! Bit 32 says "this report is a movement", and
+                                ! that is orthogonal to which modifiers happen
+                                ! to be down. Testing the modifiers first made
+                                ! a movement with ctrl held indistinguishable
+                                ! from a ctrl-CLICK, so moving the pointer
+                                ! after ctrl-clicking dismissed the menu that
+                                ! click had just opened -- including moving
+                                ! towards it. The modifier bits survive in
+                                ! `button` for anything that wants them.
+                                else if (iand(button, 32) /= 0) then  ! motion
+                                    write(key_str, '(a,i0,a,i0,a,i0)') 'mouse-drag:', button, ':', row, ':', col
                                 ! Check modifiers in button code
                                 else if (iand(button, 4) /= 0) then  ! Shift
                                     write(key_str, '(a,i0,a,i0,a,i0)') 'mouse-shift:', button, ':', row, ':', col
@@ -1253,8 +1266,6 @@ contains
                                     write(key_str, '(a,i0,a,i0,a,i0)') 'mouse-alt:', button, ':', row, ':', col
                                 else if (iand(button, 16) /= 0) then  ! Ctrl
                                     write(key_str, '(a,i0,a,i0,a,i0)') 'mouse-ctrl:', button, ':', row, ':', col
-                                else if (iand(button, 32) /= 0) then  ! Mouse motion (drag)
-                                    write(key_str, '(a,i0,a,i0,a,i0)') 'mouse-drag:', button, ':', row, ':', col
                                 else
                                     write(key_str, '(a,i0,a,i0,a,i0)') 'mouse-click:', button, ':', row, ':', col
                                 end if
