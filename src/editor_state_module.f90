@@ -49,6 +49,7 @@ module editor_state_module
     public :: group_member_count, group_members, group_label
     public :: group_add_member, group_remove_member, active_group_id
     public :: prune_empty_groups, find_tab_by_path_public
+    public :: reorder_tab, reorder_group_block, set_group_ordinal
     public :: tab_is_resident, hydrate_tab, defer_tab
     public :: switch_to_tab, &
         switch_to_tab_with_buffer, get_active_tab_index, close_tab
@@ -823,6 +824,178 @@ contains
 
         i = 0   ! silence unused-variable warnings on compilers that want it
     end subroutine move_tab
+
+    !> Move the tab at `from_idx` to `to_idx`, shifting everything between.
+    !>
+    !> An insertion, not a swap: dragging a tab three places to the right
+    !> should leave the two it passed in their original relative order, which
+    !> is what every editor does and what a swap would not give.
+    !>
+    !> move_tab leaves its source deallocated, so the shuffle goes through a
+    !> temporary and never has two tabs owning the same buffer. Assigning
+    !> tab_t directly instead would deep-copy every pane's text.
+    subroutine reorder_tab(editor, from_idx, to_idx)
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: from_idx, to_idx
+        type(tab_t) :: held
+        integer :: i, n, was_active
+
+        n = size(editor%tabs)
+        if (from_idx < 1 .or. from_idx > n) return
+        if (to_idx < 1 .or. to_idx > n) return
+        if (from_idx == to_idx) return
+
+        was_active = editor%active_tab_index
+
+        call move_tab(held, editor%tabs(from_idx))
+        if (to_idx > from_idx) then
+            do i = from_idx, to_idx - 1
+                call move_tab(editor%tabs(i), editor%tabs(i + 1))
+            end do
+        else
+            do i = from_idx, to_idx + 1, -1
+                call move_tab(editor%tabs(i), editor%tabs(i - 1))
+            end do
+        end if
+        call move_tab(editor%tabs(to_idx), held)
+
+        ! The active tab is a POSITION, so it has to follow the shuffle or the
+        ! editor ends up showing a different file than the one it names.
+        editor%active_tab_index = shifted_index(was_active, from_idx, to_idx)
+    end subroutine reorder_tab
+
+    !> Where an index lands after a tab moves from `from_idx` to `to_idx`.
+    pure function shifted_index(idx, from_idx, to_idx) result(moved)
+        integer, intent(in) :: idx, from_idx, to_idx
+        integer :: moved
+
+        moved = idx
+        if (idx == from_idx) then
+            moved = to_idx
+        else if (to_idx > from_idx) then
+            if (idx > from_idx .and. idx <= to_idx) moved = idx - 1
+        else
+            if (idx >= to_idx .and. idx < from_idx) moved = idx + 1
+        end if
+    end function shifted_index
+
+    !> Move a whole run of tabs -- a group's members -- to start at `to_idx`.
+    !>
+    !> A group is ONE entry on the tab bar but several entries in the array,
+    !> and its position on the bar is wherever its first member sits. Moving
+    !> the entry therefore means moving every member, keeping their order.
+    !> The members need not be contiguous to begin with; they are afterwards,
+    !> which is the only arrangement the bar can draw.
+    !>
+    !> Works out the whole destination order FIRST and then sorts the array
+    !> into it, rather than moving members one at a time to their slots. The
+    !> obvious version is wrong: a member moved up from below the block drags
+    !> the already-placed ones back down with it, so a two-member group landed
+    !> interleaved with the tabs it was supposed to have passed.
+    subroutine reorder_group_block(editor, gid, to_idx)
+        type(editor_state_t), intent(inout) :: editor
+        integer(int32), intent(in) :: gid
+        integer, intent(in) :: to_idx
+        integer, allocatable :: members(:), want(:)
+        integer :: i, n, total, dest, cursor, pos, cur
+
+        total = size(editor%tabs)
+        n = group_member_count(editor, gid)
+        if (n == 0 .or. total == 0) return
+        dest = max(1, min(to_idx, total - n + 1))
+
+        ! The order we want, as tab_ids. Ids, not indices: the sort below
+        ! moves tabs, and an index recorded now would mean something else one
+        ! move later.
+        call group_members(editor, gid, members)
+        allocate(want(total))
+        cursor = 0
+        pos = 0
+        do i = 1, total
+            if (editor%tabs(i)%group_id == gid) cycle
+            pos = pos + 1
+            if (pos == dest) then
+                do cursor = 1, n
+                    want(pos + cursor - 1) = editor%tabs(members(cursor))%tab_id
+                end do
+                pos = pos + n
+            end if
+            want(pos) = editor%tabs(i)%tab_id
+        end do
+        ! The block goes last when dest is past every non-member.
+        if (pos < total) then
+            do cursor = 1, n
+                want(pos + cursor) = editor%tabs(members(cursor))%tab_id
+            end do
+        end if
+
+        ! Place position by position. Everything below `i` is already correct,
+        ! so the tab being fetched is always at or after i and the move can
+        ! only shift tabs that are not yet placed.
+        do i = 1, total
+            cur = index_of_tab_id(editor, want(i))
+            if (cur > i) call reorder_tab(editor, cur, i)
+        end do
+    end subroutine reorder_group_block
+
+    !> Where the tab carrying `id` currently sits, or 0.
+    function index_of_tab_id(editor, id) result(idx)
+        type(editor_state_t), intent(in) :: editor
+        integer(int32), intent(in) :: id
+        integer :: idx, i
+
+        idx = 0
+        do i = 1, size(editor%tabs)
+            if (editor%tabs(i)%tab_id == id) then
+                idx = i
+                return
+            end if
+        end do
+    end function index_of_tab_id
+
+    !> Put `tab_idx` at position `pos` within its group, 1-based.
+    !>
+    !> Row 2's order is the ordinals, not the tabs array, so reordering inside
+    !> a group touches no arrays at all -- and must not, or moving a file
+    !> within a group would drag the group's neighbours around row 1.
+    !>
+    !> `pos` counts in the FINAL list, the one the user is looking at. Writing
+    !> it as "skip the moved member, insert at pos" is off by one whenever the
+    !> member is moving right, because the slot it vacated is still being
+    !> counted; building the final order and numbering it is not.
+    subroutine set_group_ordinal(editor, tab_idx, pos)
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: tab_idx, pos
+        integer, allocatable :: members(:), final(:)
+        integer(int32) :: gid
+        integer :: i, n, slot, k
+
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        gid = editor%tabs(tab_idx)%group_id
+        if (gid == 0) return
+
+        call group_members(editor, gid, members)
+        n = size(members)
+        if (n == 0) return
+        slot = max(1, min(pos, n))
+
+        allocate(final(n))
+        k = 0
+        do i = 1, n
+            if (k + 1 == slot) then
+                k = k + 1
+                final(k) = tab_idx
+            end if
+            if (members(i) == tab_idx) cycle
+            k = k + 1
+            if (k <= n) final(k) = members(i)
+        end do
+        if (k < n) final(n) = tab_idx
+
+        do i = 1, n
+            editor%tabs(final(i))%group_ordinal = int(i, int32)
+        end do
+    end subroutine set_group_ordinal
 
     !> Index of the tab carrying `id`, or 0 if it is gone.
     function find_tab_by_id(editor, id) result(idx)
