@@ -92,9 +92,17 @@ contains
         character(len=*), intent(in) :: path
         character(len=:), allocatable :: out
         character(len=:), allocatable :: work
-        integer :: i, n, seg_start, up
-        character(len=:), allocatable :: segs(:)
-        integer :: n_segs, seg_len
+        integer :: i, n, seg_start
+        ! Segments as BOUNDS into `work`, not as copies of it.
+        !
+        ! This was an allocatable array of deferred-length characters, which
+        ! gfortran reports as "used uninitialized" however thoroughly it is
+        ! initialised -- a long-standing false positive for that one shape.
+        ! Indices sidestep it, and they are the better representation anyway:
+        ! nothing here needs a segment's text except to compare it, so the
+        ! copies were only ever costing allocations.
+        integer, allocatable :: seg_a(:), seg_b(:)
+        integer :: n_segs
         logical :: absolute
 
         work = trim(adjustl(path))
@@ -107,26 +115,21 @@ contains
 
         ! Split on '/', dropping empty segments (which collapses '//') and
         ! '.' segments, and cancelling a '..' against the segment before it.
-        seg_len = len(work)
         n = 0
         do i = 1, len(work)
             if (work(i:i) == '/') n = n + 1
         end do
-        allocate(character(len=seg_len) :: segs(n + 1))
-        ! Blanked rather than left to `push`, the contained procedure that
-        ! fills it. Host-associated writes are not something every gfortran
-        ! sees as initialisation, and trim() reads the whole element below.
-        segs = ''
+        allocate(seg_a(n + 1), seg_b(n + 1))
         n_segs = 0
-        up = 0
         seg_start = 1
         do i = 1, len(work) + 1
             if (i > len(work)) then
-                call push_segment(segs, n_segs, absolute, &
-                                  work(seg_start:len(work)))
+                call push_segment(work, seg_a, seg_b, n_segs, absolute, &
+                                  seg_start, len(work))
             else if (work(i:i) == '/') then
                 if (i > seg_start) &
-                    call push_segment(segs, n_segs, absolute, work(seg_start:i-1))
+                    call push_segment(work, seg_a, seg_b, n_segs, absolute, &
+                                      seg_start, i - 1)
                 seg_start = i + 1
             end if
         end do
@@ -134,9 +137,9 @@ contains
         out = ''
         do i = 1, n_segs
             if (len(out) > 0) then
-                out = out // '/' // trim(segs(i))
+                out = out // '/' // work(seg_a(i):seg_b(i))
             else
-                out = trim(segs(i))
+                out = work(seg_a(i):seg_b(i))
             end if
         end do
 
@@ -149,27 +152,27 @@ contains
 
     end function canonical_path
 
-    !> Add one path segment to `segs`, applying '.' and '..'.
+    !> Record one path segment, applying '.' and '..'.
     !>
-    !> A module procedure taking what it touches, rather than the contained
-    !> one it used to be. Host association let it reach straight into an
-    !> allocatable array in the frame above, which gfortran reports as
-    !> "used uninitialized" -- and being explicit about the three things it
-    !> mutates is clearer besides.
-    subroutine push_segment(segs, n_segs, absolute, seg)
-        character(len=*), intent(inout) :: segs(:)
+    !> `a`/`b` are the segment's bounds in `work`; the kept segments are
+    !> accumulated as bounds too. A module procedure taking what it touches,
+    !> rather than the contained one it used to be, which reached into the
+    !> frame above by host association.
+    subroutine push_segment(work, seg_a, seg_b, n_segs, absolute, a, b)
+        character(len=*), intent(in) :: work
+        integer, intent(inout) :: seg_a(:), seg_b(:)
         integer, intent(inout) :: n_segs
         logical, intent(in) :: absolute
-        character(len=*), intent(in) :: seg
+        integer, intent(in) :: a, b
 
-        if (len(seg) == 0) return
-        if (seg == '.') return
-        if (seg == '..') then
+        if (b < a) return
+        if (work(a:b) == '.') return
+        if (work(a:b) == '..') then
             ! Cancel against a real segment, but never walk above an
             ! absolute root, and keep leading '..' on a relative path
             ! because there is nothing here to cancel them against.
             if (n_segs > 0) then
-                if (trim(segs(n_segs)) /= '..') then
+                if (work(seg_a(n_segs):seg_b(n_segs)) /= '..') then
                     n_segs = n_segs - 1
                     return
                 end if
@@ -177,7 +180,8 @@ contains
             if (absolute) return
         end if
         n_segs = n_segs + 1
-        segs(n_segs) = seg
+        seg_a(n_segs) = a
+        seg_b(n_segs) = b
     end subroutine push_segment
 
     !> Pause briefly. Only for UI feedback that would otherwise be replaced
