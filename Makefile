@@ -98,6 +98,7 @@ SOURCES = src/version_module.f90 \
           src/utils/utf8_module.f90 \
           src/utils/regex_module.f90 \
           src/utils/dir_scan_module.f90 \
+          src/workspace/session_ipc_module.f90 \
           src/ui/clickable_region_module.f90 \
           src/syntax/comment_syntax_module.f90 \
           src/ai/ai_http_module.f90 \

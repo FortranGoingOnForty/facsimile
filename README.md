@@ -129,6 +129,20 @@ The height is kept as a fraction of the screen, so the panel holds its
 proportion when the window is resized, and it is remembered per workspace.
 Set `"terminal.height_percent"` in `settings.json` to change where it starts.
 
+`fac` typed at the panel's prompt opens in the session you are already in,
+rather than starting a second editor inside the first:
+
+```
+$ fac notes.md      # opens as a tab here
+$ fac src/parser    # opens as a tab group here
+```
+
+A directory means something different in the panel than outside it. From a
+normal shell `fac src/parser` opens that directory as a whole new workspace,
+which is unchanged; from the panel you already have a workspace, so it opens
+the group dialog instead. Focus moves out of the terminal either way. Pass
+`-w` to opt out and get a separate editor.
+
 ### Tab Groups
 Open a directory as a sub-workspace: press `enter` on a directory in the file
 tree and tick the files you want. The group appears in the tab bar as

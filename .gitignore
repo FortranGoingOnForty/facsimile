@@ -19,3 +19,5 @@ CLAUDE.md
 
 # Python
 __pycache__/
+tests/lsp/test_json
+tests/lsp/test_lsp_init

@@ -3,6 +3,7 @@ module terminal_panel_module
     use iso_c_binding
     use terminal_io_module, only: terminal_write, terminal_move_cursor, &
                                    terminal_flush
+    use session_ipc_module, only: session_ipc_dir
     implicit none
     private
 
@@ -37,6 +38,13 @@ module terminal_panel_module
             integer(c_int), intent(in) :: rows, cols
             type(c_ptr), intent(out) :: handle
             integer(c_int), intent(out) :: error
+        end subroutine
+
+        subroutine c_pty_set_session(dir, dir_len) &
+            bind(C, name='pty_set_session_f')
+            import :: c_char, c_int
+            character(kind=c_char), intent(in) :: dir(*)
+            integer(c_int), intent(in) :: dir_len
         end subroutine
 
         function c_pty_read(handle, buffer, bufsize) &
@@ -323,6 +331,16 @@ contains
             c_rows = int(panel%pty_rows, c_int)
             c_cols = int(panel%pty_cols, c_int)
             c_shell_len = int(shell_len, c_int)
+
+            ! Advertise the spool to the shell we are about to start, so a fac
+            ! run in there talks to us instead of nesting a second editor.
+            ! Set on the child at exec, never on our own environment.
+            block
+                character(len=:), allocatable :: sdir
+                sdir = session_ipc_dir()
+                if (len_trim(sdir) > 0) &
+                    call c_pty_set_session(sdir, int(len_trim(sdir), c_int))
+            end block
 
             call c_pty_spawn(shell_path, c_shell_len, &
                              c_rows, c_cols, &

@@ -145,6 +145,7 @@ module command_handler_module
     public :: g_cursor_only_move     ! Flag for cursor-only moves (skip full re-render)
     public :: tab_jump_tick
     public :: g_no_visible_change
+    public :: session_requests_tick
 
     ! Flag to track if LSP modified the buffer (for immediate rendering)
     logical :: g_lsp_modified_buffer = .false.
@@ -8374,6 +8375,55 @@ contains
     end function int_to_text
 
 
+
+    !> Act on anything `fac` typed in the integrated terminal handed us.
+    !>
+    !> A file opens as a tab, exactly as opening it any other way would. A
+    !> directory opens the group dialog, which is what a directory already
+    !> means inside a session -- Enter on one in the tree does the same thing.
+    !> It stays a whole new workspace only from a normal terminal, where there
+    !> is no session to add it to.
+    !>
+    !> `changed` is set when the screen needs redrawing, so an idle session
+    !> with a terminal open does not repaint on every tick.
+    subroutine session_requests_tick(editor, buffer, changed)
+        use session_ipc_module, only: session_ipc_take
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        logical, intent(inout) :: changed
+        character(len=:), allocatable :: kind, path
+        logical :: found
+
+        call session_ipc_take(kind, path, found)
+        if (.not. found) return
+
+        ! Focus has to leave the panel, and this is the whole reason it is
+        ! done here rather than left alone: the request arrives while the user
+        ! is typing in the terminal, so the panel still owns the keyboard. A
+        ! dialog opened underneath that gets no keys at all -- Esc reaches the
+        ! shell instead, and the dialog sits there unreachable. Opening a file
+        ! moves focus for the same reason it does in any other editor: you
+        ! asked for the file because you want to be in it.
+        !
+        ! The panel stays VISIBLE. Only the keyboard moves.
+        editor%terminal_panel%focused = .false.
+
+        if (kind == 'dir') then
+            if (group_picker_show(path, editor%screen_rows, &
+                                  editor%screen_cols)) then
+                ! Leave the terminal up. The dialog draws over it and the
+                ! command that opened it is still worth seeing underneath.
+                editor%fuss_mode_active = .false.
+                changed = .true.
+            else
+                call set_status_message('Cannot read ' // path)
+                changed = .true.
+            end if
+        else
+            call open_file_in_editor(path, editor, buffer)
+            changed = .true.
+        end if
+    end subroutine session_requests_tick
 
     !> Turn a confirmed dialog into a real group.
     !>

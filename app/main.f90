@@ -47,6 +47,7 @@ program facsimile
     use text_buffer_module
     use renderer_module
     use ai_engine_module, only: ai_tick, ai_configure
+    use command_handler_module, only: session_requests_tick
     use command_handler_module, only: handle_key_command, init_command_handler, cleanup_command_handler, &
                                       save_initial_state_for_undo, search_pattern, match_case_sensitive, &
                                       g_lsp_modified_buffer, g_lsp_ui_changed, g_cursor_only_move, &
@@ -57,7 +58,7 @@ program facsimile
     use command_palette_module, only: register_command
     use terminal_panel_module, only: is_terminal_panel_visible, &
         terminal_panel_poll, terminal_panel_resize, &
-        terminal_panel_set_default_permille
+        terminal_panel_set_default_permille, terminal_panel_is_alive
     use iso_c_binding, only: c_int
     use welcome_menu_module, only: show_welcome_menu
     use fortress_navigator_module, only: open_fortress_navigator
@@ -77,6 +78,8 @@ program facsimile
                                          set_diagnostics_handler, set_lsp_workspace_root
     use lsp_protocol_module, only: lsp_message_t
     use app_state_module, only: is_first_run, mark_first_run_complete
+    use session_ipc_module, only: session_ipc_begin, session_ipc_end, &
+                                  session_ipc_send, session_ipc_take
     use lsp_server_installer_panel_module, only: show_lsp_server_installer_panel
     implicit none
 
@@ -94,6 +97,9 @@ program facsimile
     logical :: running, should_quit, quit_confirmed
     logical :: is_workspace_mode, workspace_success
     logical :: welcome_cancelled, is_browse, nav_cancelled, is_directory
+    logical :: arg_is_directory, forwarded
+    character(len=512) :: session_dir
+    integer :: session_len
     logical :: explicit_lsp_workspace
     character(len=:), allocatable :: selected_path
     integer :: status, argc, rows, cols, i
@@ -112,6 +118,7 @@ program facsimile
     ! Get command line arguments
     argc = command_argument_count()
     is_workspace_mode = .false.
+    arg_is_directory = .false.
     workspace_dir = ""
     filename = ""
     lsp_workspace = ""
@@ -185,6 +192,7 @@ program facsimile
         call read_file_type(status)
         if (status == 0) then
             ! Directory - workspace mode
+            arg_is_directory = .true.
             is_workspace_mode = .true.
             call workspace_get_path(trim(arg), workspace_dir)
         else
@@ -216,6 +224,51 @@ program facsimile
         end if
         i = i + 1
     end do
+
+    ! Started from inside another fac's terminal panel? Hand the argument to
+    ! that editor and exit, instead of nesting a whole second editor inside a
+    ! pane of the first. This is `code foo.c` behaviour.
+    !
+    ! Read BEFORE we ever advertise a spool of our own, which is what makes it
+    ! impossible to mistake ourselves for a client: at this point FAC_SESSION
+    ! can only have come from a parent.
+    !
+    ! An explicit -w is a deliberate request for a separate workspace, so it
+    ! opts out. So does a bare `fac`, which has no argument to forward.
+    if (.not. explicit_lsp_workspace .and. &
+        (len_trim(filename) > 0 .or. arg_is_directory)) then
+        call get_environment_variable('FAC_SESSION', session_dir, session_len)
+        if (session_len > 0) then
+            if (arg_is_directory) then
+                call session_ipc_send(session_dir(1:session_len), 'dir', &
+                                      trim(workspace_dir), forwarded)
+            else
+                call session_ipc_send(session_dir(1:session_len), 'file', &
+                                      trim(filename), forwarded)
+            end if
+            if (forwarded) then
+                ! Say which, because the editor that opens it may be scrolled
+                ! away from the tab bar and the terminal is what you are
+                ! looking at.
+                if (arg_is_directory) then
+                    write(output_unit, '(A,A)') 'Opening group in facsimile: ', &
+                        trim(workspace_dir)
+                else
+                    write(output_unit, '(A,A)') 'Opening in facsimile: ', &
+                        trim(filename)
+                end if
+                stop
+            end if
+            ! Could not reach it -- fall through and open normally rather
+            ! than failing to open the file at all.
+        end if
+    end if
+
+    ! Now that FAC_SESSION has been read, it is safe to advertise our own.
+    block
+        character(len=:), allocatable :: my_session
+        call session_ipc_begin(my_session)
+    end block
 
     if (argc == 0) then
         ! No arguments - launch Fortress welcome menu (Phase 5)
@@ -610,6 +663,13 @@ program facsimile
         ! way the status hint gets cleared when the user simply stops.
         call tab_jump_tick(g_lsp_ui_changed)
 
+        ! Anything `fac` in the terminal handed us. Gated on the panel being
+        ! alive because that shell is the only thing that can produce a
+        ! request -- a session that has never opened a terminal never looks.
+        if (terminal_panel_is_alive(editor%terminal_panel)) then
+            call session_requests_tick(editor, buffer, g_lsp_ui_changed)
+        end if
+
         ! Poll integrated terminal for new output
         if (is_terminal_panel_visible(editor%terminal_panel)) then
             call terminal_panel_poll(editor%terminal_panel)
@@ -918,6 +978,7 @@ program facsimile
     ! Cleanup
     call cleanup_renderer()
     call cleanup_command_handler()
+    call session_ipc_end()
     call terminal_cleanup()
     call cleanup_editor(editor)
     call cleanup_buffer(buffer)

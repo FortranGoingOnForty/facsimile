@@ -213,6 +213,26 @@ static void handle_startup_queries(pty_state_t *state) {
     }
 }
 
+// The session spool directory advertised to the shell as FAC_SESSION.
+//
+// Set on the CHILD only, never on our own environment. A fac started from the
+// panel must see it so it can hand its argument back to us, but WE must not,
+// or a fac launched normally from a directory we happen to have spawned would
+// mistake itself for a client. Nothing here is inherited by us.
+static char g_session_dir[512] = {0};
+
+void pty_set_session_f(const char *dir, int *dir_len) {
+    int n = *dir_len;
+
+    if (n < 0) n = 0;
+    if (n >= (int)sizeof(g_session_dir)) n = (int)sizeof(g_session_dir) - 1;
+    memcpy(g_session_dir, dir, (size_t)n);
+    g_session_dir[n] = '\0';
+    while (n > 0 && g_session_dir[n - 1] == ' ') {
+        g_session_dir[--n] = '\0';
+    }
+}
+
 // Spawn a shell in a new PTY
 void pty_spawn_f(const char *shell, int *shell_len,
                  int *rows, int *cols,
@@ -328,6 +348,11 @@ void pty_spawn_f(const char *shell, int *shell_len,
 
         // Set TERM
         setenv("TERM", "xterm-256color", 1);
+
+        // Tell anything started here how to reach the editor that owns it
+        if (g_session_dir[0]) {
+            setenv("FAC_SESSION", g_session_dir, 1);
+        }
 
         // Exec shell as login shell
         // Build argv[0] with leading dash for login shell
