@@ -591,22 +591,17 @@ contains
                                                            buffer, should_quit)
                             return
                         case (REGION_TAB)
-                            ! A positive payload is a tab index; a negative one
-                            ! is -(group id), which row 1 uses for a group
-                            ! entry. Clicking a group enters it, landing on the
-                            ! member it was last on.
-                            if (hit%payload < 0) then
-                                call enter_tab_group(editor, buffer, &
-                                                     int(-hit%payload, int32))
-                            else if (hit%payload >= 1 .and. &
-                                     hit%payload <= size(editor%tabs)) then
-                                call switch_to_tab_with_buffer(editor, &
-                                                               hit%payload, buffer)
-                            end if
-                            ! Switching first is deliberate and is what was
-                            ! asked for: grabbing a tab to move it selects it,
-                            ! exactly as clicking it would. Arming is not yet
-                            ! dragging -- see arm_tab_drag.
+                            ! Arm only. Pressing a tab does NOT open it: a tab
+                            ! can be picked up and carried somewhere without
+                            ! ever being looked at, which is what makes moving
+                            ! tabs around cheap and is what dropping one into
+                            ! the document needs -- the split has to be beside
+                            ! the document that is already there, not beside
+                            ! the file being dropped.
+                            !
+                            ! The switch happens on RELEASE instead, and only
+                            ! if the pointer never moved. A click is still a
+                            ! click; see activate_tab_entry.
                             call arm_tab_drag(editor, hit%payload, mrow, mcol)
                             return
                         case (REGION_TAB_SCROLL)
@@ -680,7 +675,7 @@ contains
                 end block
             end if
             if (index(key_str, 'mouse-release:') == 1) then
-                call tab_drag_release(editor)
+                call tab_drag_release(editor, buffer)
                 return
             end if
             ! Anything else -- a key, another button -- abandons the drag
@@ -6164,6 +6159,70 @@ contains
 
     ! ---- dragging a tab -------------------------------------------------
 
+    !> What a plain click on a tab-bar entry does: switch to it, or enter the
+    !> group. Deferred from the press so that a drag never opens what it
+    !> carries.
+    subroutine activate_tab_entry(editor, buffer, payload)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer, intent(in) :: payload
+
+        if (payload < 0) then
+            call enter_tab_group(editor, buffer, int(-payload, int32))
+        else if (payload >= 1 .and. payload <= size(editor%tabs)) then
+            call switch_to_tab_with_buffer(editor, payload, buffer)
+        end if
+    end subroutine activate_tab_entry
+
+    !> Would dropping here split the view, and along which edge?
+    !>
+    !> Measured against the ACTIVE pane's rectangle, in quarters: the outer
+    !> quarter of the left, right or bottom edge means a split along it, and
+    !> the middle means nothing. Quarters rather than a thin border because
+    !> the pointer is carrying something and does not deserve to have to be
+    !> precise.
+    subroutine aim_at_split(editor, mrow, mcol)
+        use tab_drag_module, only: drag_set_split, drag_clear_target, &
+                                   drag_kind, DRAG_TAB, &
+                                   SPLIT_LEFT, SPLIT_RIGHT, SPLIT_BELOW
+        use editor_state_module, only: get_active_pane_indices
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(in) :: mrow, mcol
+        integer :: tab_idx, pane_idx, r0, c0, r1, c1, w, h
+
+        call drag_clear_target()
+        ! Only a file can become a split. A group is several files and has no
+        ! single content to put in a pane.
+        if (drag_kind() /= DRAG_TAB) return
+        ! The last tab cannot leave the bar: something has to remain open.
+        if (size(editor%tabs) < 2) return
+
+        call get_active_pane_indices(editor, tab_idx, pane_idx)
+        if (tab_idx < 1 .or. pane_idx < 1) return
+        if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+        if (pane_idx > size(editor%tabs(tab_idx)%panes)) return
+
+        associate(pane => editor%tabs(tab_idx)%panes(pane_idx))
+            r0 = pane%screen_row
+            c0 = pane%screen_col
+            h = pane%screen_height
+            w = pane%screen_width
+        end associate
+        r1 = r0 + h - 1
+        c1 = c0 + w - 1
+        if (w < 8 .or. h < 4) return
+        if (mrow < r0 .or. mrow > r1) return
+        if (mcol < c0 .or. mcol > c1) return
+
+        if (mrow >= r1 - h / 4 + 1) then
+            call drag_set_split(SPLIT_BELOW, r1 - h / 4 + 1, c0, r1, c1)
+        else if (mcol <= c0 + w / 4 - 1) then
+            call drag_set_split(SPLIT_LEFT, r0, c0, r1, c0 + w / 4 - 1)
+        else if (mcol >= c1 - w / 4 + 1) then
+            call drag_set_split(SPLIT_RIGHT, r0, c1 - w / 4 + 1, r1, c1)
+        end if
+    end subroutine aim_at_split
+
     !> Record a press on a tab-bar entry so a following move can drag it.
     !>
     !> Arming, not dragging. A click that never moves must stay a click, so
@@ -6261,7 +6320,9 @@ contains
             else if (mrow == row2 .and. row2 /= 0) then
                 call drag_set_target(2, tabbar_last_slot(2), tabbar_strip2_gid())
             else
-                call drag_clear_target()
+                ! Off the bar entirely: the document. Near an edge this is a
+                ! split, which is the only meaning "outside the bar" has.
+                call aim_at_split(editor, mrow, mcol)
                 g_dwell_gid = 0
             end if
             return
@@ -6338,19 +6399,114 @@ contains
     end function drag_scroll_due
 
     !> Button released: apply the target, or let go of it.
-    subroutine tab_drag_release(editor)
+    !> Turn the held tab into a split of whatever was showing before it was
+    !> grabbed, and take it off the bar.
+    !>
+    !> The host is the PREVIOUS tab, not the active one: pressing a tab makes
+    !> it active, so by now the document on screen is the dragged file itself
+    !> and splitting that against itself would put the same file in both
+    !> panes. If the previous tab is gone, or is the dragged one, any other
+    !> tab will do -- what matters is that the split has something to be
+    !> beside.
+    subroutine drop_as_split(editor, buffer, side)
+        use tab_drag_module, only: drag_path, &
+                                   SPLIT_LEFT, SPLIT_RIGHT, SPLIT_BELOW
+        use editor_state_module, only: find_tab_by_path_public
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer, intent(in) :: side
+        character(len=:), allocatable :: carried, host
+        integer :: host_idx, i, gone
+
+        carried = trim(drag_path())
+        if (len_trim(carried) == 0) return
+        if (size(editor%tabs) < 2) return
+
+        ! The split RELOADS the file from disk into its new pane, so unsaved
+        ! edits in the tab being consumed would be silently thrown away.
+        ! Refusing is the honest answer; prompting in the middle of a drag,
+        ! with a button still held, is not.
+        gone = find_tab_by_path_public(editor, carried)
+        if (gone /= 0) then
+            if (editor%tabs(gone)%modified) then
+                call set_status_message('Save ' // basename_public(carried) // &
+                                        ' before splitting it off')
+                return
+            end if
+        end if
+
+        ! Whatever is showing. A press no longer switches tabs, so the
+        ! document under the pointer is still the one that was there when the
+        ! drag started -- there is nothing to remember.
+        host = ''
+        if (editor%active_tab_index >= 1 .and. &
+            editor%active_tab_index <= size(editor%tabs)) then
+            if (allocated(editor%tabs(editor%active_tab_index)%filename)) &
+                host = trim(editor%tabs(editor%active_tab_index)%filename)
+        end if
+        if (len_trim(host) > 0) then
+            if (trim(host) == carried) host = ''
+        end if
+        if (len_trim(host) == 0) then
+            do i = 1, size(editor%tabs)
+                if (.not. allocated(editor%tabs(i)%filename)) cycle
+                if (trim(editor%tabs(i)%filename) == carried) cycle
+                host = trim(editor%tabs(i)%filename)
+                exit
+            end do
+        end if
+        if (len_trim(host) == 0) return
+
+        ! Close the carried tab BEFORE splitting, not after.
+        !
+        ! The other order looks more natural and corrupts the host: switching
+        ! away from it to reach the tab being closed SAVES the working buffer
+        ! into the host's pane, and by then the working buffer holds the
+        ! carried file's text. The host ends up modified, holding the wrong
+        ! document.
+        if (gone /= 0) then
+            call switch_to_tab_with_buffer(editor, gone, buffer)
+            call close_tab_without_prompt(editor, buffer)
+        end if
+
+        host_idx = find_tab_by_path_public(editor, host)
+        if (host_idx == 0) return
+        call switch_to_tab_with_buffer(editor, host_idx, buffer)
+
+        if (side == SPLIT_BELOW) then
+            call open_file_in_horizontal_split(carried, editor, buffer)
+        else
+            call open_file_in_vertical_split(carried, editor, buffer)
+        end if
+
+        call set_status_message('Split off ' // basename_public(carried))
+    end subroutine drop_as_split
+
+    subroutine tab_drag_release(editor, buffer)
         use tab_drag_module, only: drag_is_showing, drag_has_target, drag_kind, &
                                    drag_to_row, drag_to_slot, drag_path, &
                                    drag_gid, drag_cancel, drag_to_gid, &
+                                   drag_payload, &
+                                   drag_split_side, SPLIT_NONE, &
                                    DRAG_TAB, DRAG_GROUP
         use editor_state_module, only: find_tab_by_path_public, reorder_tab, &
                                        reorder_group_block, set_group_ordinal, &
                                        group_remove_member, prune_empty_groups
         type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
         integer :: from_idx, dest
         integer(int32) :: was_gid, to_gid
 
         if (.not. drag_is_showing()) then
+            ! Pressed and released without moving: an ordinary click, acted on
+            ! here rather than on the press so that carrying a tab somewhere
+            ! never opens it on the way.
+            call activate_tab_entry(editor, buffer, drag_payload())
+            call end_drag()
+            return
+        end if
+        if (drag_split_side() /= SPLIT_NONE) then
+            call drop_as_split(editor, buffer, drag_split_side())
             call end_drag()
             return
         end if
@@ -8518,8 +8674,15 @@ contains
         character(len=:), allocatable :: full_path
         integer :: status, tab_idx, pane_idx
 
-        ! Build full path
-        if (allocated(editor%workspace_path)) then
+        ! Build full path (skip workspace prefix if already absolute).
+        !
+        ! The absolute case is not hypothetical: an orphan file outside the
+        ! workspace carries an absolute path, and so does a tab dropped into
+        ! the document to make a split. Prepending the workspace to one gave
+        ! /workspace//home/... and quietly opened nothing.
+        if (len_trim(file_path) > 0 .and. file_path(1:1) == '/') then
+            full_path = trim(file_path)
+        else if (allocated(editor%workspace_path)) then
             full_path = trim(editor%workspace_path) // '/' // trim(file_path)
         else
             full_path = trim(file_path)
@@ -8610,8 +8773,15 @@ contains
         character(len=:), allocatable :: full_path
         integer :: status, tab_idx, pane_idx
 
-        ! Build full path
-        if (allocated(editor%workspace_path)) then
+        ! Build full path (skip workspace prefix if already absolute).
+        !
+        ! The absolute case is not hypothetical: an orphan file outside the
+        ! workspace carries an absolute path, and so does a tab dropped into
+        ! the document to make a split. Prepending the workspace to one gave
+        ! /workspace//home/... and quietly opened nothing.
+        if (len_trim(file_path) > 0 .and. file_path(1:1) == '/') then
+            full_path = trim(file_path)
+        else if (allocated(editor%workspace_path)) then
             full_path = trim(editor%workspace_path) // '/' // trim(file_path)
         else
             full_path = trim(file_path)

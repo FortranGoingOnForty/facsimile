@@ -9,7 +9,8 @@ module renderer_module
     use bracket_matching_module
     use tab_drag_module, only: drag_is_showing, drag_payload, drag_to_row, &
                               drag_to_slot, drag_has_target, drag_label, &
-                              drag_pointer_row, drag_pointer_col
+                              drag_pointer_row, drag_pointer_col, &
+                              drag_split_side, drag_split_rect, SPLIT_NONE
     use clickable_region_module, only: regions_begin_frame, region_add, REGION_TAB, &
                                        region_at, clickable_region_t, &
                                        REGION_TAB_SCROLL, &
@@ -661,6 +662,7 @@ contains
 
         ! Except while something is being dragged, which is above even that:
         ! it is attached to the pointer.
+        call render_split_preview(editor)
         call render_drag_ghost(editor)
 
         ! This runs last in every frame, and render_screen's panes branch
@@ -3576,6 +3578,36 @@ contains
             end if
         end if
     end subroutine apply_drag_preview
+
+    !> Shade where a split would open, while a tab is held over an edge.
+    !>
+    !> A filled band rather than a line: it shows the SHAPE the new pane will
+    !> take, so the drop is predictable before it happens. Drawn under the
+    !> ghost, which stays the topmost thing on screen.
+    subroutine render_split_preview(editor)
+        type(editor_state_t), intent(in) :: editor
+        integer :: r0, c0, r1, c1, r, w
+
+        if (.not. drag_is_showing()) return
+        if (drag_split_side() == SPLIT_NONE) return
+
+        call drag_split_rect(r0, c0, r1, c1)
+        if (r1 < r0 .or. c1 < c0) return
+        r0 = max(1, r0)
+        c0 = max(1, c0)
+        r1 = min(int(editor%screen_rows), r1)
+        c1 = min(int(editor%screen_cols), c1)
+        w = c1 - c0 + 1
+        if (w < 1) return
+
+        do r = r0, r1
+            call terminal_move_cursor(r, c0)
+            ! A dim reverse block: visible over text without hiding which
+            ! text it is about to sit next to.
+            call terminal_write(char(27) // '[7;2m' // repeat(' ', w) // &
+                                char(27) // '[0m')
+        end do
+    end subroutine render_split_preview
 
     !> The label under the pointer while a tab is being dragged.
     !>

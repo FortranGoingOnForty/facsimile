@@ -49,7 +49,11 @@ fpm run -- [filename]
 - **drag a tab** along the bar to reorder it. A ghost follows the pointer and
   the bar shows where it will land; release to commit, release anywhere else
   to snap back. Holding over a `<`/`>` chevron scrolls the bar, so a tab can
-  be carried off-screen
+  be carried off-screen. Picking a tab up does not open it — only a click does
+- drag a tab off the bar and into the document to make a **split**: near the
+  left, right or bottom quarter of the pane a band shows the shape the new
+  pane will take, and releasing puts the file there and takes it off the tab
+  bar. Save it first if it has unsaved changes
 - drag a tab GROUP entry and its members travel with it. Drag a member off the
   member row onto the bar to take it out of the group, or hold a tab over a
   group for a moment to open its members and drop it in. Moving a file from

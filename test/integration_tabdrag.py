@@ -201,20 +201,44 @@ def test_a_click_is_still_a_click(binary):
         s.close()
 
 
-def test_grabbing_an_inactive_tab_activates_it(binary):
-    print("\nGrabbing a tab selects it, before any movement")
+def test_picking_a_tab_up_does_not_open_it(binary):
+    """A tab can be carried without ever being looked at.
+
+    Pressing used to switch immediately. It does not, and that is what makes
+    dropping one into the document work: the split has to appear beside the
+    document that is ALREADY there, not beside the file being dropped.
+    """
+    print("\nHolding a tab does not open it; a click still does")
     s = Session(binary)
     try:
         s.open_all()
-        check("gamma.c" in s.status(), "gamma.c is active to begin with", s.status())
+        check("gamma.c" in s.status(), "gamma.c is showing", s.status())
+
         col = s.entry_col("alpha.c")
         s.child.send(f"\x1b[<0;{col};1M")
         s.drain(0.6)
-        check("alpha.c" in s.status(),
-              "pressing alpha.c made it active with the button still down",
+        check("gamma.c" in s.status(),
+              "pressing alpha.c with the button held leaves gamma.c showing",
               s.status())
+
+        # Carry it somewhere and back, still without releasing.
+        for c in range(col, col + 10, 3):
+            s.child.send(f"\x1b[<32;{c};1M")
+            s.drain(0.1)
+        check("gamma.c" in s.status(), "and dragging it does not either",
+              s.status())
+
+        s.child.send(f"\x1b[<0;{col + 9};1m")
+        s.drain(1.0)
+
+        # But a plain click, with no movement at all, still switches.
+        col = s.entry_col("alpha.c")
+        s.child.send(f"\x1b[<0;{col};1M")
+        s.drain(0.4)
         s.child.send(f"\x1b[<0;{col};1m")
-        s.drain(0.5)
+        s.drain(1.0)
+        check("alpha.c" in s.status(), "clicking it opens it as it always did",
+              s.status())
     finally:
         s.close()
 
@@ -245,14 +269,18 @@ def test_release_off_the_bar_changes_nothing(binary):
         s.close()
 
 
-def test_the_moved_tab_stays_active_and_visible(binary):
-    print("\nThe tab you moved is still the one you are looking at")
+def test_moving_a_tab_does_not_change_what_is_showing(binary):
+    print("\nMoving a tab leaves the document alone")
     s = Session(binary)
     try:
         s.open_all()
+        before = s.status()
+        check("gamma.c" in before, "gamma.c is showing", before)
         s.drag(s.entry_col("alpha.c"), s.entry_col("gamma.c"))
-        check("alpha.c" in s.status(), "alpha.c is still active", s.status())
-        check("alpha.c" in s.tab_bar(), "and still on the bar", s.tab_bar())
+        check("alpha.c" in s.tab_bar(), "the moved tab is still on the bar",
+              s.tab_bar())
+        check("gamma.c" in s.status(),
+              "and the file being read is the same one as before", s.status())
     finally:
         s.close()
 
@@ -517,6 +545,16 @@ def test_one_drag_from_one_group_into_another(binary):
               s.tab_bar())
         check("two/ (3)" in s.tab_bar(), "and the target gained one",
               s.tab_bar())
+        # Row 2 still belongs to the group we are INSIDE, which is the one
+        # the file left -- the drag did not switch anywhere. Enter the target
+        # group to see what it now holds.
+        check("b.c" not in s.row2(), "it is out of the group it came from",
+              repr(s.row2()))
+        g2 = s.entry_col("two/")
+        if g2 is None:
+            check(False, "found the target group", s.tab_bar())
+            return
+        s.click(1, g2 + 2)
         after = s.row2().split()
         check("b.c" in after, "the file is in the target group now",
               repr(s.row2()))
@@ -527,18 +565,152 @@ def test_one_drag_from_one_group_into_another(binary):
         s.close()
 
 
+def reverse_cells(s, r0, r1, c0, c1):
+    """How many cells in this rectangle are drawn reverse-video.
+
+    The split preview is a band of reverse-video SPACES, so it is invisible
+    in screen.display -- which shows characters, not attributes. Counting the
+    attribute is the only way to see it, and is what it actually is.
+    """
+    n = 0
+    for y in range(r0 - 1, min(r1, s.screen.lines)):
+        for x in range(c0 - 1, min(c1, s.screen.columns)):
+            if s.screen.buffer[y][x].reverse:
+                n += 1
+    return n
+
+
+def carry_to(s, name, col, row):
+    """Grab `name` from the bar and carry it to (row, col), without releasing."""
+    src = s.entry_col(name)
+    s.child.send(f"\x1b[<0;{src};1M")
+    s.drain(0.4)
+    for c in range(src, min(col, COLS), 6):
+        s.child.send(f"\x1b[<32;{c};1M")
+        s.drain(0.08)
+    s.child.send(f"\x1b[<32;{col};{row}M")
+    s.drain(0.5)
+
+
+def test_an_edge_previews_a_split(binary):
+    print("\nCarrying a tab to an edge previews the split it would make")
+    s = Session(binary)
+    try:
+        s.open_all()
+        mid = COLS // 2
+        # Middle of the document: no edge, so nothing is offered.
+        carry_to(s, "alpha.c", mid, 12)
+        # Rows either side of the pointer: the GHOST is reverse video too and
+        # sits on the pointer's own row, so counting that row would find the
+        # label and call it a preview.
+        centre = reverse_cells(s, 3, 10, 30, 90) + reverse_cells(s, 14, 25, 30, 90)
+        check(centre == 0, "the middle of the pane offers no split",
+              f"{centre} reverse cells")
+
+        # Right edge.
+        s.child.send(f"\x1b[<32;{COLS - 3};12M")
+        s.drain(0.5)
+        right = reverse_cells(s, 3, 25, COLS - 25, COLS)
+        left_side = reverse_cells(s, 3, 25, 2, 30)
+        check(right > 100, "the right quarter is banded", f"{right} cells")
+        check(left_side == 0, "and the left is not", f"{left_side} cells")
+
+        # Bottom edge.
+        s.child.send(f"\x1b[<32;{mid};26M")
+        s.drain(0.5)
+        bottom = reverse_cells(s, 24, 28, 10, COLS - 10)
+        check(bottom > 100, "moving to the bottom bands that instead",
+              f"{bottom} cells")
+
+        s.child.send(f"\x1b[<0;{mid};26m")
+        s.drain(1.2)
+    finally:
+        s.close()
+
+
+def test_dropping_at_an_edge_makes_a_split(binary):
+    print("\nDropping at an edge splits, and takes the tab off the bar")
+    s = Session(binary)
+    try:
+        s.open_all()
+        check("gamma.c" in s.status(), "gamma.c is showing before the grab",
+              s.status())
+
+        carry_to(s, "alpha.c", COLS - 3, 12)
+        s.child.send(f"\x1b[<0;{COLS - 3};12m")
+        s.drain(1.5)
+
+        check("alpha.c" not in s.tab_bar(), "alpha.c has left the bar",
+              s.tab_bar())
+        check("beta.c" in s.tab_bar() and "gamma.c" in s.tab_bar(),
+              "the other tabs are untouched", s.tab_bar())
+
+        body = s.text()
+        check("int alpha;" in body, "its text is on screen, in a pane",
+              body[:200])
+        check("int gamma;" in body,
+              "beside what was showing before it was grabbed", body[:200])
+        # Two panes means two pane headers on the same row.
+        check(body.count("[alpha.c]") + body.count("[gamma.c]") >= 2,
+              "two panes, labelled", repr(s.screen.display[1]))
+    finally:
+        s.close()
+
+
+def test_the_middle_of_the_document_snaps_back(binary):
+    print("\nDropping in the middle of the document changes nothing")
+    s = Session(binary)
+    try:
+        s.open_all()
+        before = s.order()
+        carry_to(s, "alpha.c", COLS // 2, 12)
+        s.child.send(f"\x1b[<0;{COLS // 2};12m")
+        s.drain(1.2)
+        check(s.order() == before, "the bar is unchanged",
+              f"{before} -> {s.order()}")
+        check("gamma.c" in s.status(),
+              "and the document is the one that was already there",
+              s.status())
+    finally:
+        s.close()
+
+
+def test_a_modified_tab_will_not_split_off(binary):
+    print("\nA tab with unsaved changes refuses rather than losing them")
+    s = Session(binary)
+    try:
+        s.open_all()
+        # gamma.c is active; dirty it, then try to carry it to an edge.
+        s.send("Z", 0.8)
+        check("*" in s.tab_bar(), "gamma.c is modified", s.tab_bar())
+
+        carry_to(s, "gamma.c", COLS - 3, 12)
+        s.child.send(f"\x1b[<0;{COLS - 3};12m")
+        s.drain(1.2)
+
+        check("gamma.c" in s.tab_bar(), "it is still on the bar", s.tab_bar())
+        check("before splitting" in s.text() or "Save" in s.text(),
+              "and it said why", s.status())
+    finally:
+        s.close()
+
+
 def main():
     binary = find_binary()
     for fn in (test_drag_right_and_left,
                test_a_click_is_still_a_click,
-               test_grabbing_an_inactive_tab_activates_it,
+               test_picking_a_tab_up_does_not_open_it,
                test_release_off_the_bar_changes_nothing,
-               test_the_moved_tab_stays_active_and_visible,
+               test_moving_a_tab_does_not_change_what_is_showing,
                test_a_group_moves_as_one_block,
                test_reordering_within_a_group,
                test_carrying_a_member_out_of_its_group,
                test_dwelling_over_a_group_opens_it_to_drop_into,
-               test_one_drag_from_one_group_into_another):
+               test_one_drag_from_one_group_into_another,
+               test_an_edge_previews_a_split,
+               test_dropping_at_an_edge_makes_a_split,
+               test_the_middle_of_the_document_snaps_back,
+               test_a_modified_tab_will_not_split_off):
         try:
             fn(binary)
         except Exception as exc:              # noqa: BLE001

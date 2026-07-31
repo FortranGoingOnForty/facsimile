@@ -30,8 +30,16 @@ module tab_drag_module
     public :: drag_set_pointer, drag_press_row, drag_press_col
     public :: drag_to_row, drag_to_slot, drag_to_gid, drag_has_target
     public :: drag_set_target, drag_clear_target, drag_tab_count
+    public :: SPLIT_NONE, SPLIT_LEFT, SPLIT_RIGHT, SPLIT_BELOW
+    public :: drag_set_split, drag_split_side, drag_split_rect
 
     integer, parameter :: DRAG_NONE = 0, DRAG_TAB = 1, DRAG_GROUP = 2
+
+    ! Where a drop into the document would put the held tab. A split target
+    ! and a strip target are mutually exclusive: the pointer is either on the
+    ! tab bar or in the document, never both.
+    integer, parameter :: SPLIT_NONE = 0, SPLIT_LEFT = 1
+    integer, parameter :: SPLIT_RIGHT = 2, SPLIT_BELOW = 3
 
     integer :: g_kind = DRAG_NONE
     logical :: g_armed = .false.      ! pressed, threshold not yet crossed
@@ -46,6 +54,9 @@ module tab_drag_module
 
     integer :: g_press_row = 0, g_press_col = 0
     integer :: g_row = 0, g_col = 0
+
+    integer :: g_split_side = SPLIT_NONE
+    integer :: g_split_r0 = 0, g_split_c0 = 0, g_split_r1 = 0, g_split_c1 = 0
 
     logical :: g_has_target = .false.
     integer :: g_to_row = 0
@@ -185,7 +196,39 @@ contains
         g_to_row = 0
         g_to_slot = 0
         g_to_gid = 0
+        g_split_side = SPLIT_NONE
     end subroutine drag_clear_target
+
+    !> A drop here would split, along `side`, filling the given rectangle.
+    !> The rectangle is worked out by the caller, which knows the pane
+    !> geometry; the renderer only paints it.
+    subroutine drag_set_split(side, r0, c0, r1, c1)
+        integer, intent(in) :: side, r0, c0, r1, c1
+
+        g_has_target = .false.        ! not a strip drop
+        g_to_row = 0
+        g_to_slot = 0
+        g_to_gid = 0
+        g_split_side = side
+        g_split_r0 = r0
+        g_split_c0 = c0
+        g_split_r1 = r1
+        g_split_c1 = c1
+    end subroutine drag_set_split
+
+    integer function drag_split_side()
+        drag_split_side = g_split_side
+    end function drag_split_side
+
+    subroutine drag_split_rect(r0, c0, r1, c1)
+        integer, intent(out) :: r0, c0, r1, c1
+        r0 = g_split_r0
+        c0 = g_split_c0
+        r1 = g_split_r1
+        c1 = g_split_c1
+    end subroutine drag_split_rect
+
+
 
     logical function drag_has_target()
         drag_has_target = g_has_target
