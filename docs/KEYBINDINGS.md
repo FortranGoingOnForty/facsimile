@@ -186,7 +186,15 @@ Complete keyboard shortcut reference for `fac` editor.
 | *(see the Mouse section below for the rest)* | | |
 | `Ctrl+Alt+↑` | Add Cursor Above | Add cursor on line above |
 | `Ctrl+Alt+↓` | Add Cursor Below | Add cursor on line below |
+| `Super+↑` / `Super+↓` | Add Cursor Above / Below | The same, for terminals that report Super |
+| `Ctrl+Shift+Alt+↑` / `↓` | Add Cursor Above / Below | The same again, for desktops that eat the other two |
 | `Esc` | Single Cursor | Return to single cursor mode |
+
+On GNOME and KDE, `Ctrl+Alt+↑`/`↓` switches workspace and `Super+↑`/`↓` tiles
+or maximises the window, so neither reaches the editor on a stock desktop.
+`Ctrl+Shift+Alt+↑`/`↓` is bound to the same commands as a chord that neither
+of them claims. `Alt+Click` avoids the question entirely.
+
 | *(while multiple cursors active)* | | |
 | Type normally | Edit All | Type at all cursor positions |
 | Arrow keys | Move All | Move all cursors together |

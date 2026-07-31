@@ -91,9 +91,13 @@ fpm run -- [filename]
 ### Multiple Cursors
 - `ctrl-d` - select next match (creates selections + cursors)
 - `alt-click` - add/remove cursor at position
-- `ctrl-alt-up` - add cursor on line above
-- `ctrl-alt-down` - add cursor on line below
+- `ctrl-alt-up` / `ctrl-alt-down` - add cursor on the line above / below
+- `super-up` / `super-down` or `ctrl-shift-alt-up` / `down` - the same
 - `esc` - exit multi-cursor mode (keep active cursor only)
+
+Three chords for one command because most desktops claim the first two:
+`ctrl+alt+arrows` switches workspace on GNOME and KDE, and `super+arrows` tiles
+the window. `ctrl+shift+alt+arrows` is the one neither of them wants.
 
 ### Search
 - `ctrl-f` - search forward

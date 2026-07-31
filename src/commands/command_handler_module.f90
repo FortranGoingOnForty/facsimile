@@ -2632,16 +2632,27 @@ contains
             ! Leave the current group for the nearest tab outside it.
             call leave_current_group(editor, buffer)
 
-        case('super-up', 'ctrl-alt-up', 'alt-ctrl-up')
+        case('super-up', 'ctrl-alt-up', 'alt-ctrl-up', &
+             'alt-ctrl-shift-up', 'ctrl-shift-alt-up', 'ctrl-alt-shift-up')
             ! Add cursor on line above. The input layer emits alt-ctrl- for
             ! modifier 7; ctrl-alt- is kept as a defensive alias. 'opt-meta-'
             ! used to be here for modifier 9, which is super, so it is spelled
             ! that way now.
+            !
+            ! The shift variants (modifier 8) exist because BOTH of the other
+            ! two are chords a Linux desktop routinely takes before the
+            ! terminal ever sees them: ctrl+alt+arrows switches workspace on
+            ! GNOME and KDE, and super+arrows tiles or maximises the window.
+            ! Adding shift is the cheapest chord neither of them wants. The
+            ! prefix builder emits alt-ctrl-shift-; the other two spellings
+            ! are defensive, matching the existing aliases above.
             call add_cursor_above(editor)
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
-        case('super-down', 'ctrl-alt-down', 'alt-ctrl-down')
+        case('super-down', 'ctrl-alt-down', 'alt-ctrl-down', &
+             'alt-ctrl-shift-down', 'ctrl-shift-alt-down', &
+             'ctrl-alt-shift-down')
             ! Add cursor on line below. See above.
             call add_cursor_below(editor, buffer)
             call sync_editor_to_pane(editor)

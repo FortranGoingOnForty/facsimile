@@ -201,6 +201,45 @@ def main():
               f"{removed} cursors")
         s.close()
 
+    # --- The keyboard route in. Every chord that adds a cursor must work,
+    # because on a stock Linux desktop the original two usually do not survive
+    # the window manager: ctrl+alt+arrows switches workspace on GNOME and KDE,
+    # and super+arrows tiles or maximises. Shift is added to make a third that
+    # neither of them claims.
+    #
+    # The CSI modifier number is what the terminal actually sends, so these
+    # exercise the decoder as well as the binding: 7 = ctrl+alt, 9 = super,
+    # 8 = ctrl+alt+shift.
+    for mod, label in ((7, "ctrl+alt+arrows"), (9, "super+arrows"),
+                       (8, "ctrl+shift+alt+arrows")):
+        s = Session(binary, "".join(f"line{i:02d} alpha beta\n" for i in range(1, 21)))
+        s.click(6, 8)                          # a cursor partway down
+        s.child.send(f"\x1b[1;{mod}A")          # add one above
+        s.drain(0.5)
+        up = s.cursor_count()
+        s.child.send(f"\x1b[1;{mod}B")          # and back down again
+        s.drain(0.5)
+        check(up == 2, f"{label}: up adds a cursor", f"{up} cursors")
+        s.close()
+
+        # Separate session for the downward case, so a stuck cursor from the
+        # first cannot make the second look like it worked.
+        s = Session(binary, "".join(f"line{i:02d} alpha beta\n" for i in range(1, 21)))
+        s.click(6, 8)
+        s.child.send(f"\x1b[1;{mod}B")
+        s.drain(0.5)
+        down = s.cursor_count()
+        check(down == 2, f"{label}: down adds a cursor", f"{down} cursors")
+
+        # Proof it is a real editing cursor and not just a counter: typing has
+        # to land on BOTH lines.
+        s.child.send("Z")
+        s.drain(0.5)
+        saved = s.save()
+        hits = sum(1 for ln in saved.splitlines() if "Z" in ln)
+        check(hits == 2, f"{label}: typing edits both lines", f"{hits} lines")
+        s.close()
+
     if failures:
         print(f"integration_multicursor: FAILED ({len(failures)}: {', '.join(failures)})")
         sys.exit(1)
