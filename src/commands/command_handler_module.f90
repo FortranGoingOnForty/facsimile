@@ -128,7 +128,7 @@ module command_handler_module
     ! Context-menu kinds and row actions. The menu module treats these as
     ! opaque integers; the meaning lives here, next to the dispatch.
     integer, parameter :: CTX_KIND_DOC = 1, CTX_KIND_TREE = 2
-    integer, parameter :: CTX_KIND_GROUP = 3
+    integer, parameter :: CTX_KIND_GROUP = 3, CTX_KIND_TAB = 4
     integer, parameter :: ACT_CUT = 1, ACT_COPY = 2, ACT_PASTE = 3
     integer, parameter :: ACT_COMMENT = 4, ACT_SELECT_ALL = 5
     integer, parameter :: ACT_GOTO_DEF = 6, ACT_FIND_REFS = 7, ACT_PALETTE = 8
@@ -137,6 +137,8 @@ module command_handler_module
     integer, parameter :: ACT_TREE_UNSTAGE = 24, ACT_TREE_DIFF = 25
     integer, parameter :: ACT_GROUP_EDIT = 40, ACT_GROUP_RENAME = 41
     integer, parameter :: ACT_GROUP_DISSOLVE = 42
+    integer, parameter :: ACT_TAB_CLOSE = 50, ACT_TAB_CLOSE_OTHERS = 51
+    integer, parameter :: ACT_TAB_COPY_PATH = 52, ACT_TAB_UNGROUP = 53
     ! Matches GP_MAX_PICKED in group_picker_module: an edit can never name
     ! more files than the dialog could tick.
     integer, parameter :: GP_EDIT_MAX = 256
@@ -188,6 +190,12 @@ module command_handler_module
     ! can scroll underneath an open menu and the entry at those coordinates
     ! may be a different group by the time the row is clicked.
     integer(int32) :: g_menu_gid = 0
+
+    ! Which tab the open menu is about, by PATH. Not the index the region
+    ! carried: the bar scrolls, tabs close, and every index renumbers when one
+    ! does -- so an index recorded when the menu opened can name a different
+    ! file by the time a row is clicked.
+    character(len=:), allocatable :: g_menu_tab_path
 
     ! Which group the open dialog is EDITING. Zero means the dialog is
     ! creating a new one, so this single value is what tells the confirm path
@@ -504,6 +512,13 @@ contains
                         hit = region_at(mrow, mcol)
                         if (hit%kind == REGION_TREE_ROW) then
                             call open_tree_context_menu(editor, hit%payload, mrow, mcol)
+                        else if (hit%kind == REGION_TAB .and. hit%payload > 0) then
+                            ! An ordinary tab. Row 2's member entries carry
+                            ! their global tab index too, so right-clicking a
+                            ! group member gets the same menu -- which is what
+                            ! you want, since a member is a tab.
+                            call open_tab_context_menu(editor, hit%payload, &
+                                                       mrow, mcol)
                         else if (hit%kind == REGION_TAB .and. hit%payload < 0) then
                             ! A GROUP entry: the payload is -(group id), the
                             ! same encoding the left-click path decodes to
@@ -516,8 +531,8 @@ contains
                         else if (hit%kind == REGION_NONE) then
                             call open_document_context_menu(editor, buffer, mrow, mcol)
                         end if
-                        ! Ordinary tabs, the chevron and panel blocks get no
-                        ! menu, and the click is swallowed rather than acted on.
+                        ! The chevron and panel blocks get no menu, and the
+                        ! click is swallowed rather than acted on.
                         return
                     end if
                     if (btn == 0) then
@@ -6006,6 +6021,8 @@ contains
             case (ACT_GROUP_DISSOLVE)
                 call dissolve_group_now(editor, g_menu_gid)
             end select
+        else if (kind == CTX_KIND_TAB) then
+            call tab_menu_action(editor, buffer, act)
         end if
 
         if (inner_quit) should_quit = .true.
@@ -6087,6 +6104,152 @@ contains
         shown = context_menu_show(mrow, mcol, top_row, bottom_row, left_col, right_col)
         if (shown) g_lsp_ui_changed = .true.
     end subroutine open_group_context_menu
+
+    !> Right-click on an ordinary tab.
+    subroutine open_tab_context_menu(editor, tab_idx, mrow, mcol)
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: tab_idx, mrow, mcol
+        integer :: top_row, bottom_row, left_col, right_col, others
+        logical :: shown, in_group
+
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(tab_idx)%filename)) return
+
+        ! By path, once, here. Everything the menu then does re-finds the tab
+        ! rather than trusting this index to still mean the same file.
+        if (allocated(g_menu_tab_path)) deallocate(g_menu_tab_path)
+        g_menu_tab_path = editor%tabs(tab_idx)%filename
+
+        others = size(editor%tabs) - 1
+        in_group = editor%tabs(tab_idx)%group_id /= 0
+
+        call context_menu_begin(CTX_KIND_TAB)
+        call context_menu_add_item('Close Tab', 'Ctrl+W', ACT_TAB_CLOSE)
+        ! Greyed rather than hidden when there is nothing else open, so the
+        ! menu keeps the same shape and the row does not move under the
+        ! pointer between one right-click and the next.
+        call context_menu_add_item('Close Other Tabs', '', &
+            ACT_TAB_CLOSE_OTHERS, enabled=(others > 0))
+        call context_menu_add_separator()
+        call context_menu_add_item('Copy Path', '', ACT_TAB_COPY_PATH)
+        call context_menu_add_item('Remove from Group', '', &
+            ACT_TAB_UNGROUP, enabled=in_group)
+
+        call menu_bounds(editor, top_row, bottom_row, left_col, right_col)
+        shown = context_menu_show(mrow, mcol, top_row, bottom_row, left_col, right_col)
+        if (shown) g_lsp_ui_changed = .true.
+    end subroutine open_tab_context_menu
+
+    !> Close the tab holding `path`, prompting if it has unsaved changes.
+    !>
+    !> `was_modified` is passed in rather than read here because a CALLER
+    !> closing several tabs has to sample every flag before the first close:
+    !> switching tabs writes editor%modified back over the outgoing tab's
+    !> flag, so reading them as you go reads values the switching destroyed.
+    subroutine close_tab_by_path(editor, buffer, path, was_modified, closed)
+        use editor_state_module, only: find_tab_by_path_public
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=*), intent(in) :: path
+        logical, intent(in) :: was_modified
+        logical, intent(out) :: closed
+        integer :: tab_idx
+        logical :: dirty
+
+        ! Copied out FIRST. Fortran passes by reference, so if a caller hands
+        ! us editor%tabs(i)%modified directly then `was_modified` is not a
+        ! snapshot -- it is a live view of a field that switch_to_tab_with_buffer
+        ! is about to overwrite, and close_tab is about to reallocate out from
+        ! under. Reading it after either one reads the wrong answer, or freed
+        ! memory. Callers should pass a local; this makes it safe either way.
+        dirty = was_modified
+        closed = .false.
+        tab_idx = find_tab_by_path_public(editor, trim(path))
+        if (tab_idx == 0) return
+
+        ! The prompt names a file and acts on the ACTIVE tab, so the user has
+        ! to be looking at the one being asked about.
+        call switch_to_tab_with_buffer(editor, tab_idx, buffer)
+        tab_idx = find_tab_by_path_public(editor, trim(path))
+        if (tab_idx == 0) return
+
+        if (dirty) then
+            call prompt_save_before_close_tab(editor, buffer)
+        else
+            call close_tab_without_prompt(editor, buffer)
+        end if
+        closed = find_tab_by_path_public(editor, trim(path)) == 0
+    end subroutine close_tab_by_path
+
+    !> Act on the tab the open menu named.
+    subroutine tab_menu_action(editor, buffer, act)
+        use editor_state_module, only: find_tab_by_path_public, &
+                                       group_remove_member, prune_empty_groups
+        use clipboard_module, only: copy_to_clipboard
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer, intent(in) :: act
+        character(len=512) :: others(GP_EDIT_MAX)
+        logical :: others_modified(GP_EDIT_MAX)
+        integer :: n_others, i, tab_idx, gone
+        logical :: closed, dirty
+
+        if (.not. allocated(g_menu_tab_path)) return
+        tab_idx = find_tab_by_path_public(editor, trim(g_menu_tab_path))
+        if (tab_idx == 0) then
+            call set_status_message('That tab is no longer open')
+            return
+        end if
+
+        select case (act)
+        case (ACT_TAB_CLOSE)
+            ! Into a local first -- see close_tab_by_path on why passing the
+            ! component straight through reads a field that has since moved.
+            dirty = editor%tabs(tab_idx)%modified
+            call close_tab_by_path(editor, buffer, trim(g_menu_tab_path), &
+                                   dirty, closed)
+
+        case (ACT_TAB_CLOSE_OTHERS)
+            ! Every path and flag sampled BEFORE the first close, for both
+            ! reasons at once: closing renumbers the indices this loop would
+            ! otherwise walk, and switching clobbers the flags it would read.
+            n_others = 0
+            do i = 1, size(editor%tabs)
+                if (i == tab_idx) cycle
+                if (.not. allocated(editor%tabs(i)%filename)) cycle
+                if (n_others >= GP_EDIT_MAX) exit
+                n_others = n_others + 1
+                others(n_others) = editor%tabs(i)%filename
+                others_modified(n_others) = editor%tabs(i)%modified
+            end do
+            gone = 0
+            do i = 1, n_others
+                call close_tab_by_path(editor, buffer, trim(others(i)), &
+                                       others_modified(i), closed)
+                if (closed) gone = gone + 1
+            end do
+            ! Land back on the tab the menu was about, which is the one the
+            ! user kept -- closing the others walked away from it.
+            tab_idx = find_tab_by_path_public(editor, trim(g_menu_tab_path))
+            if (tab_idx >= 1) &
+                call switch_to_tab_with_buffer(editor, tab_idx, buffer)
+            call set_status_message('Closed ' // trim(int_to_text(gone)) // &
+                ' other tabs')
+
+        case (ACT_TAB_COPY_PATH)
+            call copy_to_clipboard(trim(g_menu_tab_path))
+            call set_status_message('Copied ' // trim(g_menu_tab_path))
+
+        case (ACT_TAB_UNGROUP)
+            if (editor%tabs(tab_idx)%group_id == 0) return
+            call group_remove_member(editor, tab_idx)
+            ! A group with nothing left in it is not a group.
+            call prune_empty_groups(editor)
+            call set_status_message('Removed from the group')
+        end select
+
+        g_lsp_ui_changed = .true.
+    end subroutine tab_menu_action
 
     !> Open the group dialog on an existing group, members already ticked.
     subroutine start_group_edit(editor, gid)

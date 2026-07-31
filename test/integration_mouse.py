@@ -644,9 +644,15 @@ def main():
     check(s.status_ln_col() == before,
           "and does not move the caret", f"{before} -> {s.status_ln_col()}")
 
-    # Right-clicking the tab bar or status bar opens nothing
+    # A tab now has its own menu -- this used to assert the opposite, back
+    # when the tab bar was the one clickable surface that swallowed a right
+    # click. The status bar still opens nothing.
     s.click(1, 5, button=2)
-    check(not box_rows(), "no menu on the tab bar")
+    check(len(box_rows()) >= 4, "a tab opens its own menu")
+    check("Close Tab" in "\n".join(s.screen.display),
+          "and it offers Close Tab")
+    s.send("\x1b", 0.6)
+    check(not box_rows(), "escape dismisses it")
     s.click(ROWS, 5, button=2)
     check(not box_rows(), "no menu on the status bar")
     s.close()

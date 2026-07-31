@@ -46,7 +46,10 @@ fpm run -- [filename]
 - `wheel` - scrolls whatever is under the pointer: the pane, an inactive pane,
   or the terminal panel's scrollback. Over the tab bar or status bar it does
   nothing rather than moving a document you are not pointing at
-- click a `[n: name]` tab to switch to it
+- click a `[n: name]` tab to switch to it; right-click one for Close Tab,
+  Close Other Tabs, Copy Path and Remove from Group. These act on the tab you
+  clicked, not the one you are looking at
+- right-click a tab GROUP entry for Edit, Rename and Dissolve
 - click a file tree row to open it, a directory row to expand it; right-click a
   row for open-in-split and the git actions (stage, unstage, diff) that
   otherwise hide behind the `ctrl-g` prefix
