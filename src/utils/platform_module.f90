@@ -122,9 +122,11 @@ contains
         seg_start = 1
         do i = 1, len(work) + 1
             if (i > len(work)) then
-                call push(work(seg_start:len(work)))
+                call push_segment(segs, n_segs, absolute, &
+                                  work(seg_start:len(work)))
             else if (work(i:i) == '/') then
-                if (i > seg_start) call push(work(seg_start:i-1))
+                if (i > seg_start) &
+                    call push_segment(segs, n_segs, absolute, work(seg_start:i-1))
                 seg_start = i + 1
             end if
         end do
@@ -145,30 +147,38 @@ contains
             out = '.'
         end if
 
-    contains
-
-        subroutine push(seg)
-            character(len=*), intent(in) :: seg
-
-            if (len(seg) == 0) return
-            if (seg == '.') return
-            if (seg == '..') then
-                ! Cancel against a real segment, but never walk above an
-                ! absolute root, and keep leading '..' on a relative path
-                ! because there is nothing here to cancel them against.
-                if (n_segs > 0) then
-                    if (trim(segs(n_segs)) /= '..') then
-                        n_segs = n_segs - 1
-                        return
-                    end if
-                end if
-                if (absolute) return
-            end if
-            n_segs = n_segs + 1
-            segs(n_segs) = seg
-        end subroutine push
-
     end function canonical_path
+
+    !> Add one path segment to `segs`, applying '.' and '..'.
+    !>
+    !> A module procedure taking what it touches, rather than the contained
+    !> one it used to be. Host association let it reach straight into an
+    !> allocatable array in the frame above, which gfortran reports as
+    !> "used uninitialized" -- and being explicit about the three things it
+    !> mutates is clearer besides.
+    subroutine push_segment(segs, n_segs, absolute, seg)
+        character(len=*), intent(inout) :: segs(:)
+        integer, intent(inout) :: n_segs
+        logical, intent(in) :: absolute
+        character(len=*), intent(in) :: seg
+
+        if (len(seg) == 0) return
+        if (seg == '.') return
+        if (seg == '..') then
+            ! Cancel against a real segment, but never walk above an
+            ! absolute root, and keep leading '..' on a relative path
+            ! because there is nothing here to cancel them against.
+            if (n_segs > 0) then
+                if (trim(segs(n_segs)) /= '..') then
+                    n_segs = n_segs - 1
+                    return
+                end if
+            end if
+            if (absolute) return
+        end if
+        n_segs = n_segs + 1
+        segs(n_segs) = seg
+    end subroutine push_segment
 
     !> Pause briefly. Only for UI feedback that would otherwise be replaced
     !> before it could be seen; never for polling.
