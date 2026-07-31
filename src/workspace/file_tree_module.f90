@@ -954,62 +954,35 @@ contains
     end subroutine extract_repo_name
 
     ! Navigation functions (sibling-only)
+    !> Up and down move to the next VISIBLE row, not the next sibling.
+    !>
+    !> They used to search for the next item with the same parent, and did
+    !> nothing at all when there was not one. So the cursor stopped dead on the
+    !> last child of any expanded directory -- inside ch4/ it reached top.c and
+    !> refused to go further, and the only way on was Left back to the parent
+    !> and then Down. That reads as the cursor being blocked, which is exactly
+    !> how it was reported.
+    !>
+    !> The selectable list is already in tree traversal order and already
+    !> excludes what is hidden or collapsed, so walking it by one is the whole
+    !> of "the next thing you can see". Left and Right still move by structure,
+    !> which is where jumping over a subtree belongs.
     subroutine tree_move_up(state)
         type(tree_state_t), intent(inout) :: state
-        type(tree_node_t), pointer :: current_parent, candidate_parent
-        integer :: i
 
-        if (state%selected_index < 1 .or. state%selected_index > state%n_selectable) return
-        if (.not. associated(state%selectable_files(state%selected_index)%node)) return
-
-        ! Get current item's parent
-        current_parent => state%selectable_files(state%selected_index)%node%parent
-
-        ! Search backwards for item with same parent
-        do i = state%selected_index - 1, 1, -1
-            if (associated(state%selectable_files(i)%node)) then
-                candidate_parent => state%selectable_files(i)%node%parent
-                ! Check if parents match (same address or both null)
-                if (associated(current_parent) .and. associated(candidate_parent)) then
-                    if (associated(current_parent, candidate_parent)) then
-                        state%selected_index = i
-                        return
-                    end if
-                else if (.not. associated(current_parent) .and. .not. associated(candidate_parent)) then
-                    state%selected_index = i
-                    return
-                end if
-            end if
-        end do
+        if (state%n_selectable <= 0) return
+        if (state%selected_index > 1) then
+            state%selected_index = state%selected_index - 1
+        end if
     end subroutine tree_move_up
 
     subroutine tree_move_down(state)
         type(tree_state_t), intent(inout) :: state
-        type(tree_node_t), pointer :: current_parent, candidate_parent
-        integer :: i
 
-        if (state%selected_index < 1 .or. state%selected_index > state%n_selectable) return
-        if (.not. associated(state%selectable_files(state%selected_index)%node)) return
-
-        ! Get current item's parent
-        current_parent => state%selectable_files(state%selected_index)%node%parent
-
-        ! Search forwards for item with same parent
-        do i = state%selected_index + 1, state%n_selectable
-            if (associated(state%selectable_files(i)%node)) then
-                candidate_parent => state%selectable_files(i)%node%parent
-                ! Check if parents match (same address or both null)
-                if (associated(current_parent) .and. associated(candidate_parent)) then
-                    if (associated(current_parent, candidate_parent)) then
-                        state%selected_index = i
-                        return
-                    end if
-                else if (.not. associated(current_parent) .and. .not. associated(candidate_parent)) then
-                    state%selected_index = i
-                    return
-                end if
-            end if
-        end do
+        if (state%n_selectable <= 0) return
+        if (state%selected_index < state%n_selectable) then
+            state%selected_index = state%selected_index + 1
+        end if
     end subroutine tree_move_down
 
     function get_selected_item_path(state) result(path)

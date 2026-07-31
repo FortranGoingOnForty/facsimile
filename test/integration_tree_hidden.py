@@ -433,6 +433,123 @@ def test_a_restart_reveals_the_folders_holding_open_files(binary):
         shutil.rmtree(d, ignore_errors=True)
 
 
+def nested_project():
+    """ch4/ with several subdirectories and ch5/ after it, as reported."""
+    d = tempfile.mkdtemp(prefix="fac_nav_")
+    layout = {"ch1": [], "ch4": ["printaf", "rpn", "rpn2"], "ch5": ["showme"]}
+    for top, subs in layout.items():
+        os.makedirs(os.path.join(d, top), exist_ok=True)
+        with open(os.path.join(d, top, "top.c"), "w") as f:
+            f.write("int x;\n")
+        for sub in subs:
+            os.makedirs(os.path.join(d, top, sub), exist_ok=True)
+            with open(os.path.join(d, top, sub, "main.c"), "w") as f:
+                f.write("int y;\n")
+    with open(os.path.join(d, "visible.txt"), "w") as f:
+        f.write("hi\n")
+    return d
+
+
+def walk_down(t, n):
+    """Selections visited by pressing Down n times."""
+    seen = []
+    for _ in range(n):
+        seen.append(selected(t))
+        t.child.send("\x1b[B")
+        t.drain(0.28)
+    seen.append(selected(t))
+    return seen
+
+
+# Reported: the cursor stopped for no visible reason in a deep tree, and only
+# recovered after traversing up and out. Down searched for the next SIBLING
+# and did nothing when there was not one, so the last child of any expanded
+# directory was a dead end.
+def test_down_leaves_the_last_child_of_a_directory(binary):
+    d = nested_project()
+    t = Tree(binary, d)
+    try:
+        if not select(t, "ch4"):
+            check(False, "could not reach ch4/", t.text())
+            return
+        t.child.send("\x1b[C")             # right: into ch4/
+        t.drain(1.0)
+
+        seen = walk_down(t, 6)
+        # Trailing repeats are the BOTTOM of the tree, where staying put is
+        # right. Only a repeat with different rows still to come is a stall.
+        trimmed = list(seen)
+        while len(trimmed) > 1 and trimmed[-1] == trimmed[-2]:
+            trimmed.pop()
+        stuck = [i for i in range(1, len(trimmed)) if trimmed[i] == trimmed[i - 1]]
+        check(not stuck,
+              "Down never stops on the same row twice inside ch4/",
+              " -> ".join(str(x) for x in seen))
+        check(any(s and "ch5" in s for s in seen),
+              "and walking down out of ch4/ reaches ch5/",
+              " -> ".join(str(x) for x in seen))
+    finally:
+        t.close()
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_up_climbs_back_out_the_same_way(binary):
+    d = nested_project()
+    t = Tree(binary, d)
+    try:
+        if not select(t, "ch4"):
+            check(False, "could not reach ch4/", t.text())
+            return
+        t.child.send("\x1b[C")
+        t.drain(1.0)
+        for _ in range(4):                 # down into the subtree
+            t.child.send("\x1b[B")
+            t.drain(0.28)
+        before = selected(t)
+
+        seen = []
+        for _ in range(5):
+            t.child.send("\x1b[A")
+            t.drain(0.28)
+            seen.append(selected(t))
+        trimmed = list(seen)
+        while len(trimmed) > 1 and trimmed[-1] == trimmed[-2]:
+            trimmed.pop()
+        stuck = [i for i in range(1, len(trimmed)) if trimmed[i] == trimmed[i - 1]]
+        check(not stuck, "Up moves every press too",
+              f"from {before}: " + " -> ".join(str(x) for x in seen))
+        check(any(s and "ch4" in s for s in seen),
+              "and climbs back out to ch4/", " -> ".join(str(x) for x in seen))
+    finally:
+        t.close()
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_the_ends_of_the_list_hold(binary):
+    """Moving past either end must stay put rather than wrap or run off."""
+    d = nested_project()
+    t = Tree(binary, d)
+    try:
+        for _ in range(40):                # far past the bottom
+            t.child.send("\x1b[B")
+            t.drain(0.06)
+        t.drain(0.5)
+        last = selected(t)
+        check(last is not None, "still on a real row at the bottom", str(last))
+
+        for _ in range(60):                # and far past the top
+            t.child.send("\x1b[A")
+            t.drain(0.05)
+        t.drain(0.5)
+        first = selected(t)
+        check(first is not None, "and at the top", str(first))
+        check(first != last, "the two ends are different rows",
+              f"{first!r} vs {last!r}")
+    finally:
+        t.close()
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main():
     binary = find_binary()
     for fn in (test_a_hidden_directory_can_always_be_revealed,
@@ -440,7 +557,10 @@ def main():
                test_git_status_and_ignores_still_work,
                test_an_ignored_directory_is_grey_before_it_is_opened,
                test_the_tree_remembers_across_close_and_reopen,
-               test_a_restart_reveals_the_folders_holding_open_files):
+               test_a_restart_reveals_the_folders_holding_open_files,
+               test_down_leaves_the_last_child_of_a_directory,
+               test_up_climbs_back_out_the_same_way,
+               test_the_ends_of_the_list_hold):
         try:
             fn(binary)
         except Exception as exc:                        # noqa: BLE001

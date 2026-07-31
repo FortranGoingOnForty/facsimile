@@ -176,8 +176,9 @@ Split your view into multiple panes for side-by-side editing of the same file.
 When in fuss mode (ctrl-b), you get a split view with a git-aware file tree on the left (30%) and editor on the right (70%).
 
 **Navigation:**
-- `j` / `↓` - move down in tree
-- `k` / `↑` - move up in tree
+- `↑` / `↓` - move to the previous/next visible row, whatever its depth
+- `→` - descend into a directory (expanding it first if needed)
+- `←` - go back out to the parent
 
 **Opening Files:**
 - `enter` or `o` - open file in new tab
