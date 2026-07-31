@@ -634,6 +634,45 @@ def test_ticking_and_creating(binary):
         s.close()
 
 
+def test_closing_a_member_does_not_crash(binary):
+    """Ctrl-W inside a group used to segfault the editor.
+
+    Group members are read from disk lazily, so all but the one you land on
+    have no buffer at all. close_tab_without_prompt copied the NEXT tab's
+    pane buffer straight out, and the next tab after closing a member is
+    normally one of the deferred ones -- a null dereference. The code
+    predates deferred tabs, so nothing was watching for it.
+
+    Nothing about editing a group is needed to reach this: open a group,
+    press Ctrl-W, and the editor dies.
+    """
+    s = Session(binary)
+    try:
+        if not open_picker_on_lib(s):
+            print("SKIP: could not open the dialog")
+            return
+        s.send("\t", 0.4)
+        s.send("\x1b[B", 0.3)
+        s.send(" ", 0.4)
+        s.send(" ", 0.4)
+        s.send(" ", 0.4)                      # three members: two deferred
+        s.send("\r", 1.8)
+        check("(3)" in s.row(1), "a group of three exists", s.row(1))
+
+        s.send("\x17", 2.0)                   # ctrl-w on the active member
+        check(s.child.isalive(), "the editor survived closing a member",
+              f"signal {s.child.signalstatus}")
+        check("(2)" in s.row(1), "and the group is down to two", s.row(1))
+
+        # It has to have landed somewhere real, not on an empty buffer that
+        # a later save would write over the file.
+        s.send("\x17", 2.0)
+        check(s.child.isalive(), "and again for the last deferred member",
+              f"signal {s.child.signalstatus}")
+    finally:
+        s.close()
+
+
 def test_escape_creates_nothing(binary):
     s = Session(binary)
     try:
@@ -925,6 +964,7 @@ def main():
                test_enter_on_a_directory_opens_the_dialog,
                test_enter_works_on_a_nested_directory,
                test_ticking_and_creating,
+               test_closing_a_member_does_not_crash,
                test_escape_creates_nothing,
                test_ctrl_q_is_not_trapped,
                test_groups_survive_a_restart,

@@ -1,5 +1,10 @@
 module group_picker_module
-    ! The "new tab group" dialog: name it, tick the files, create it.
+    ! The tab-group dialog: name it, tick the files, confirm.
+    !
+    ! Two modes, one dialog. Creating a group and editing one are the same
+    ! act -- choose files, name the result -- so edit mode is this same list
+    ! opened with the group's current members already ticked. The mode reaches
+    ! no further than the title and the footer hint.
     !
     ! Shaped after context_menu_module and for the same reasons: module-level
     ! singleton state (two of these cannot be open), geometry fixed when shown,
@@ -24,7 +29,9 @@ module group_picker_module
     implicit none
     private
 
-    public :: group_picker_show, group_picker_hide, is_group_picker_visible
+    public :: group_picker_show, group_picker_show_edit
+    public :: group_picker_preselect, group_picker_mark_dirty
+    public :: group_picker_hide, is_group_picker_visible
     public :: group_picker_handle_key, group_picker_click
     public :: render_group_picker, group_picker_row_at
     public :: group_picker_result, group_picker_name
@@ -44,6 +51,17 @@ module group_picker_module
     integer, parameter :: GP_NAME_MAX   = 48
     integer, parameter :: GP_FOCUS_NAME = 1
     integer, parameter :: GP_FOCUS_LIST = 2
+
+    ! Two modes, one dialog. Editing a group is the same act as creating one --
+    ! choose files, name the result -- differing only in what is already ticked
+    ! and in what the caller does with the answer. A second dialog would be the
+    ! same 700 lines with a different title.
+    !
+    ! The mode reaches no further than the title and the footer hint. Nothing
+    ! about groups is known here: this is a file picker with a name field, and
+    ! the meaning of the result lives in command_handler_module.
+    integer, parameter :: GP_MODE_NEW  = 1
+    integer, parameter :: GP_MODE_EDIT = 2
 
     character(len=*), parameter :: ESC   = char(27)
     character(len=*), parameter :: RESET = ESC // '[0m'
@@ -83,6 +101,14 @@ module group_picker_module
     character(len=512) :: g_picked(GP_MAX_PICKED)
     integer :: g_n_picked = 0
 
+    ! Ticked members with unsaved changes. Held separately from g_picked
+    ! because unticking one CLOSES its tab, so the dialog has to say which
+    ! rows have work in them before Enter rather than after.
+    character(len=512) :: g_dirty(GP_MAX_PICKED)
+    integer :: g_n_dirty = 0
+
+    integer :: g_mode = GP_MODE_NEW
+
     character(len=GP_NAME_MAX) :: g_name = ''
     integer :: g_name_len = 0
 
@@ -106,18 +132,85 @@ contains
         integer, intent(in) :: screen_rows, screen_cols
         logical :: shown
 
+        g_mode = GP_MODE_NEW
+        shown = open_at(dir, screen_rows, screen_cols)
+        if (.not. shown) return
+
+        ! Pre-fill the name so the happy path is Enter-Enter.
+        g_name = basename(trim(g_dir)) // '/'
+        g_name_len = len_trim(g_name)
+    end function group_picker_show
+
+    !> Open the dialog on an EXISTING group: same list, same navigation, but
+    !> named for the group rather than for the directory, and expecting the
+    !> caller to tick the current members with group_picker_preselect.
+    !>
+    !> Ticking is left to the caller because a member may live outside `dir`
+    !> entirely -- a group can span directories -- so it cannot be expressed as
+    !> an index into what is currently listed.
+    function group_picker_show_edit(dir, name, screen_rows, screen_cols) &
+            result(shown)
+        character(len=*), intent(in) :: dir, name
+        integer, intent(in) :: screen_rows, screen_cols
+        logical :: shown
+
+        g_mode = GP_MODE_EDIT
+        shown = open_at(dir, screen_rows, screen_cols)
+        if (.not. shown) return
+
+        g_name = name
+        g_name_len = min(len_trim(name), GP_NAME_MAX)
+    end function group_picker_show_edit
+
+    !> Tick `path` outright, without it having to be a row in the current list.
+    subroutine group_picker_preselect(path)
+        character(len=*), intent(in) :: path
+
+        if (len_trim(path) == 0) return
+        if (picked_index(path) > 0) return
+        if (g_n_picked >= GP_MAX_PICKED) return
+        g_n_picked = g_n_picked + 1
+        g_picked(g_n_picked) = path
+    end subroutine group_picker_preselect
+
+    !> Mark `path` as having unsaved changes, so its row can say so.
+    subroutine group_picker_mark_dirty(path)
+        character(len=*), intent(in) :: path
+
+        if (len_trim(path) == 0) return
+        if (g_n_dirty >= GP_MAX_PICKED) return
+        g_n_dirty = g_n_dirty + 1
+        g_dirty(g_n_dirty) = path
+    end subroutine group_picker_mark_dirty
+
+    logical function is_dirty(path)
+        character(len=*), intent(in) :: path
+        integer :: k
+
+        is_dirty = .false.
+        do k = 1, g_n_dirty
+            if (trim(g_dirty(k)) == trim(path)) then
+                is_dirty = .true.
+                return
+            end if
+        end do
+    end function is_dirty
+
+    !> Everything both modes do: list the directory and place the box.
+    function open_at(dir, screen_rows, screen_cols) result(shown)
+        character(len=*), intent(in) :: dir
+        integer, intent(in) :: screen_rows, screen_cols
+        logical :: shown
+
         shown = .false.
         g_n_picked = 0
+        g_n_dirty = 0
         g_result = GP_PENDING
         g_note = ''
         g_focus = GP_FOCUS_NAME
 
         call walk_to(dir)
         if (g_n_items == 0) return
-
-        ! Pre-fill the name so the happy path is Enter-Enter.
-        g_name = basename(trim(g_dir)) // '/'
-        g_name_len = len_trim(g_name)
 
         g_screen_rows = screen_rows
         g_screen_cols = screen_cols
@@ -131,7 +224,7 @@ contains
 
         g_visible = .true.
         shown = .true.
-    end function group_picker_show
+    end function open_at
 
     subroutine group_picker_hide()
         g_visible = .false.
@@ -518,7 +611,11 @@ contains
         call put_shadow()
 
         r = g_row0
-        call put_edge(r, '╭', '╮', 'New Tab Group')
+        if (g_mode == GP_MODE_EDIT) then
+            call put_edge(r, '╭', '╮', 'Edit Tab Group')
+        else
+            call put_edge(r, '╭', '╮', 'New Tab Group')
+        end if
 
         r = r + 1
         line = ' Name  ' // trim(g_name(1:max(0, g_name_len)))
@@ -568,7 +665,11 @@ contains
         if (len_trim(g_note) > 0) then
             call put_row(r, ' ' // trim(g_note), CHROME_BG // TICK_FG)
         else
-            line = ' tab focus  ·  space tick  ·  enter create  ·  esc cancel'
+            if (g_mode == GP_MODE_EDIT) then
+                line = ' tab focus  ·  space tick  ·  enter save  ·  esc cancel'
+            else
+                line = ' tab focus  ·  space tick  ·  enter create  ·  esc cancel'
+            end if
             call put_row(r, line, CHROME_BG // HINT_FG)
         end if
 
@@ -660,7 +761,14 @@ contains
         else if (g_items(idx)%is_dir) then
             text = '  ▸ ' // trim(g_items(idx)%name) // '/'
         else if (picked_index(full_path(idx)) > 0) then
-            text = ' [✓] ' // trim(g_items(idx)%name)
+            ! The bullet says "unsaved work in here". It matters only in edit
+            ! mode, where unticking this row closes the tab -- so the warning
+            ! has to be readable BEFORE Enter, not in a prompt afterwards.
+            if (is_dirty(full_path(idx))) then
+                text = ' [✓] ' // trim(g_items(idx)%name) // ' •'
+            else
+                text = ' [✓] ' // trim(g_items(idx)%name)
+            end if
         else
             text = ' [ ] ' // trim(g_items(idx)%name)
         end if

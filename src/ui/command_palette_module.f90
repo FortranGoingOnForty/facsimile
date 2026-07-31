@@ -202,8 +202,17 @@ contains
                     score = score + 5
                 end if
 
-                ! Bonus for matching at word start
-                if (i == 1 .or. text(i-1:i-1) == ' ') then
+                ! Bonus for matching at word start.
+                !
+                ! Nested, not `i == 1 .or. text(i-1:i-1) == ' '`: Fortran does
+                ! not promise to short-circuit .or., and gfortran evaluates
+                ! both sides -- so at i == 1 that reads text(0:0), one
+                ! character before the string. Harmless in a release build,
+                ! which is why it sat here unnoticed, and an immediate
+                ! "substring out of bounds" abort under -fcheck=all.
+                if (i == 1) then
+                    score = score + 15
+                else if (text(i-1:i-1) == ' ') then
                     score = score + 15
                 end if
 

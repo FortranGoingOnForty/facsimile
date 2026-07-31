@@ -267,8 +267,13 @@ contains
                     score = score + 5
                 end if
 
-                ! Bonus for matching at word start
-                if (i == 1 .or. text(i-1:i-1) == ' ' .or. text(i-1:i-1) == '_') then
+                ! Bonus for matching at word start. Nested because Fortran
+                ! does not promise to short-circuit .or., so the flat form
+                ! reads text(0:0) whenever i is 1 -- see the same fix in
+                ! command_palette_module.
+                if (i == 1) then
+                    score = score + 15
+                else if (text(i-1:i-1) == ' ' .or. text(i-1:i-1) == '_') then
                     score = score + 15
                 end if
 

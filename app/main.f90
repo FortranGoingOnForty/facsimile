@@ -1572,6 +1572,9 @@ contains
         call register_command('AI: Status', 'ai-status', '', 'AI')
         call register_command('Group All Tabs', 'group-all', '', 'View')
         call register_command('Leave Tab Group', 'group-leave', '', 'View')
+        call register_command('Edit Tab Group...', 'group-edit', '', 'View')
+        call register_command('Rename Tab Group...', 'group-rename', '', 'View')
+        call register_command('Dissolve Tab Group', 'group-dissolve', '', 'View')
         call register_command('AI: Deep Completion Here', 'ai-deep', 'Alt+\\', 'AI')
         call register_command('Delete Line', 'delete-line', 'Ctrl+Shift+K', 'Edit')
 

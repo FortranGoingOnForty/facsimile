@@ -152,6 +152,15 @@ Open a directory as a sub-workspace: press `enter` on a directory in the file
 tree and tick the files you want. The group appears in the tab bar as
 `src/ (4)`, and its members get their own row while you are inside it.
 
+**Right-click a group entry** for Edit, Rename and Dissolve. Editing reopens
+the same dialog with the current members already ticked, so ticking another
+file adds it and unticking one closes its tab — with the usual save prompt if
+it has unsaved changes, which the dialog marks with a `•` beforehand. The
+dialog opens on the group's own directory, or on wherever most of its members
+live, and `..` still walks anywhere: ticks are kept by path, so a group can
+span directories. Dissolve breaks the group up and leaves every member open.
+The same three are in the command palette as `Edit/Rename/Dissolve Tab Group`.
+
 - `super+ctrl+left` / `right` - previous / next file; steps through a group's members, and off the end of one leaves it
 - `super+ctrl+down` / `up` - enter a group / leave it from any member in one press
 - `ctrl-pageup` / `ctrl-pagedown` or `alt-ctrl-left` / `right` - the same, for terminals that do not report Super

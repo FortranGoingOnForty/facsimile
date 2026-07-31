@@ -11,6 +11,7 @@ module command_handler_module
     use platform_module, only: canonical_path
     use clickable_region_module, only: clickable_region_t, region_at, REGION_TAB_SCROLL, &
                                        REGION_TAB, REGION_BLOCK, REGION_FUSS_TOGGLE, &
+                                       REGION_GP_ROW, REGION_GP_NAME, &
                                        REGION_TREE_ROW, REGION_CTX_ROW, REGION_NONE
     use group_picker_module
     use context_menu_module, only: context_menu_begin, context_menu_add_item, &
@@ -127,12 +128,18 @@ module command_handler_module
     ! Context-menu kinds and row actions. The menu module treats these as
     ! opaque integers; the meaning lives here, next to the dispatch.
     integer, parameter :: CTX_KIND_DOC = 1, CTX_KIND_TREE = 2
+    integer, parameter :: CTX_KIND_GROUP = 3
     integer, parameter :: ACT_CUT = 1, ACT_COPY = 2, ACT_PASTE = 3
     integer, parameter :: ACT_COMMENT = 4, ACT_SELECT_ALL = 5
     integer, parameter :: ACT_GOTO_DEF = 6, ACT_FIND_REFS = 7, ACT_PALETTE = 8
     integer, parameter :: ACT_TREE_ACTIVATE = 20, ACT_TREE_VSPLIT = 21
     integer, parameter :: ACT_TREE_HSPLIT = 22, ACT_TREE_STAGE = 23
     integer, parameter :: ACT_TREE_UNSTAGE = 24, ACT_TREE_DIFF = 25
+    integer, parameter :: ACT_GROUP_EDIT = 40, ACT_GROUP_RENAME = 41
+    integer, parameter :: ACT_GROUP_DISSOLVE = 42
+    ! Matches GP_MAX_PICKED in group_picker_module: an edit can never name
+    ! more files than the dialog could tick.
+    integer, parameter :: GP_EDIT_MAX = 256
     ! How long the clicked row stays highlighted before the menu closes.
     ! Long enough to register, short enough not to feel like a stall.
     integer, parameter :: MENU_FLASH_MS = 70
@@ -175,6 +182,18 @@ module command_handler_module
     ! sends back can be checked against what is actually in the buffer before
     ! anything is written.
     character(len=:), allocatable :: g_rename_expect
+
+    ! Which group the open context menu is about. Recorded when the menu is
+    ! opened rather than re-derived when a row is chosen, because the tab bar
+    ! can scroll underneath an open menu and the entry at those coordinates
+    ! may be a different group by the time the row is clicked.
+    integer(int32) :: g_menu_gid = 0
+
+    ! Which group the open dialog is EDITING. Zero means the dialog is
+    ! creating a new one, so this single value is what tells the confirm path
+    ! which of the two it is finishing. Cleared whenever the dialog closes,
+    ! by either route, or a later create would silently edit this group.
+    integer(int32) :: g_editing_gid = 0
 
     integer :: g_jump_value = 0
     integer(int64) :: g_jump_deadline = 0
@@ -485,11 +504,20 @@ contains
                         hit = region_at(mrow, mcol)
                         if (hit%kind == REGION_TREE_ROW) then
                             call open_tree_context_menu(editor, hit%payload, mrow, mcol)
+                        else if (hit%kind == REGION_TAB .and. hit%payload < 0) then
+                            ! A GROUP entry: the payload is -(group id), the
+                            ! same encoding the left-click path decodes to
+                            ! enter the group. Ordinary tabs -- a positive
+                            ! payload -- still get no menu; that is its own
+                            ! task, and falling through here keeps this change
+                            ! from touching them at all.
+                            call open_group_context_menu(editor, &
+                                int(-hit%payload, int32), mrow, mcol)
                         else if (hit%kind == REGION_NONE) then
                             call open_document_context_menu(editor, buffer, mrow, mcol)
                         end if
-                        ! Tabs, the chevron and panel blocks get no menu, and
-                        ! the click is swallowed rather than acted on.
+                        ! Ordinary tabs, the chevron and panel blocks get no
+                        ! menu, and the click is swallowed rather than acted on.
                         return
                     end if
                     if (btn == 0) then
@@ -568,6 +596,22 @@ contains
                                 else
                                     call handle_fuss_input('enter', editor, buffer)
                                 end if
+                            end if
+                            return
+                        case (REGION_GP_ROW, REGION_GP_NAME)
+                            ! The group dialog. It registered these rows and
+                            ! has resolved clicks on them since it was written,
+                            ! but nothing ever routed one to it -- so the
+                            ! dialog was keyboard-only. That was survivable
+                            ! while the only way in was pressing Enter in the
+                            ! tree; it is not now that a right-click on the tab
+                            ! bar opens it, which would land a mouse user in a
+                            ! box they cannot click.
+                            if (group_picker_click(mrow, mcol)) then
+                                if (group_picker_result() == GP_CONFIRMED) then
+                                    call finish_group_creation(editor, buffer)
+                                end if
+                                g_lsp_ui_changed = .true.
                             end if
                             return
                         case (REGION_BLOCK)
@@ -775,6 +819,8 @@ contains
                         call finish_group_creation(editor, buffer)
                     else if (group_picker_result() == GP_CANCELLED) then
                         call group_picker_hide()
+                        ! Or the next NEW group would silently edit this one.
+                        g_editing_gid = 0
                     end if
                     g_lsp_ui_changed = .true.
                     return
@@ -5947,6 +5993,19 @@ contains
             case (ACT_TREE_DIFF)
                 call invoke_fuss_git('d', editor, buffer)
             end select
+        else if (kind == CTX_KIND_GROUP) then
+            ! g_menu_gid was recorded when the menu was opened. Reading the
+            ! group from the tab bar again here would be wrong: the menu can
+            ! outlive a scroll of the bar, and the entry under those
+            ! coordinates may be a different group by now.
+            select case (act)
+            case (ACT_GROUP_EDIT)
+                call start_group_edit(editor, g_menu_gid)
+            case (ACT_GROUP_RENAME)
+                call rename_group_prompt(editor, g_menu_gid)
+            case (ACT_GROUP_DISSOLVE)
+                call dissolve_group_now(editor, g_menu_gid)
+            end select
         end if
 
         if (inner_quit) should_quit = .true.
@@ -5998,6 +6057,202 @@ contains
         shown = context_menu_show(mrow, mcol, top_row, bottom_row, left_col, right_col)
         if (shown) g_lsp_ui_changed = .true.
     end subroutine open_tree_context_menu
+
+    !> Right-click on a group entry in the tab bar.
+    !>
+    !> A menu rather than opening the dialog outright: the tree is the only
+    !> other right-clickable surface and it gives a menu, and Rename and
+    !> Dissolve have to live somewhere reachable too.
+    subroutine open_group_context_menu(editor, gid, mrow, mcol)
+        use editor_state_module, only: group_find
+        type(editor_state_t), intent(inout) :: editor
+        integer(int32), intent(in) :: gid
+        integer, intent(in) :: mrow, mcol
+        integer :: top_row, bottom_row, left_col, right_col
+        logical :: shown
+
+        if (group_find(editor, gid) == 0) return
+        g_menu_gid = gid
+
+        call context_menu_begin(CTX_KIND_GROUP)
+        call context_menu_add_item('Edit Group...', '', ACT_GROUP_EDIT)
+        call context_menu_add_item('Rename Group...', '', ACT_GROUP_RENAME)
+        call context_menu_add_separator()
+        ! Dissolving leaves every member open as an ordinary tab. It is the
+        ! non-destructive way out of a group, which is why unticking in the
+        ! dialog can afford to be the destructive one.
+        call context_menu_add_item('Dissolve Group', '', ACT_GROUP_DISSOLVE)
+
+        call menu_bounds(editor, top_row, bottom_row, left_col, right_col)
+        shown = context_menu_show(mrow, mcol, top_row, bottom_row, left_col, right_col)
+        if (shown) g_lsp_ui_changed = .true.
+    end subroutine open_group_context_menu
+
+    !> Open the group dialog on an existing group, members already ticked.
+    subroutine start_group_edit(editor, gid)
+        use editor_state_module, only: group_find, group_members, &
+                                       group_member_count
+        type(editor_state_t), intent(inout) :: editor
+        integer(int32), intent(in) :: gid
+        integer, allocatable :: idx(:)
+        integer :: gidx, i, n
+        character(len=:), allocatable :: dir, label
+
+        gidx = group_find(editor, gid)
+        if (gidx == 0) return
+
+        n = group_member_count(editor, gid)
+        dir = group_edit_dir(editor, gid)
+
+        label = ''
+        if (allocated(editor%groups(gidx)%label)) label = editor%groups(gidx)%label
+
+        if (.not. group_picker_show_edit(dir, label, editor%screen_rows, &
+                                         editor%screen_cols)) then
+            call set_status_message('Cannot read ' // dir)
+            return
+        end if
+
+        ! Tick what is already in the group. By PATH, so a member in a
+        ! different directory than the one we opened at is still ticked and
+        ! still counted -- it simply is not on screen until you walk to it.
+        if (n > 0) then
+            call group_members(editor, gid, idx)
+            do i = 1, size(idx)
+                if (idx(i) < 1 .or. idx(i) > size(editor%tabs)) cycle
+                if (.not. allocated(editor%tabs(idx(i))%filename)) cycle
+                ! An [Untitled] member has no path to tick with. Left alone
+                ! rather than listed, so confirming cannot silently drop an
+                ! unsaved scratch buffer.
+                if (index(editor%tabs(idx(i))%filename, '[Untitled') == 1) cycle
+                call group_picker_preselect(editor%tabs(idx(i))%filename)
+                if (editor%tabs(idx(i))%modified) &
+                    call group_picker_mark_dirty(editor%tabs(idx(i))%filename)
+            end do
+        end if
+
+        g_editing_gid = gid
+        editor%fuss_mode_active = .false.
+        editor%terminal_panel%focused = .false.
+        g_lsp_ui_changed = .true.
+    end subroutine start_group_edit
+
+    !> Rename a group in place. The members are untouched.
+    subroutine rename_group_prompt(editor, gid)
+        use editor_state_module, only: group_find
+        use text_prompt_module, only: show_text_prompt
+        type(editor_state_t), intent(inout) :: editor
+        integer(int32), intent(in) :: gid
+        character(len=512) :: new_name
+        logical :: cancelled
+        integer :: gidx
+
+        gidx = group_find(editor, gid)
+        if (gidx == 0) return
+
+        call show_text_prompt('Rename group to: ', new_name, cancelled, &
+                              int(editor%screen_rows, int32))
+        if (cancelled) return
+        if (len_trim(new_name) == 0) return
+
+        if (allocated(editor%groups(gidx)%label)) &
+            deallocate(editor%groups(gidx)%label)
+        editor%groups(gidx)%label = trim(new_name)
+        call set_status_message('Renamed group to ' // trim(new_name))
+        g_lsp_ui_changed = .true.
+    end subroutine rename_group_prompt
+
+    !> Break the group up, leaving every member open as an ordinary tab.
+    subroutine dissolve_group_now(editor, gid)
+        use editor_state_module, only: group_find, group_dissolve, &
+                                       group_member_count
+        type(editor_state_t), intent(inout) :: editor
+        integer(int32), intent(in) :: gid
+        integer :: n
+
+        if (group_find(editor, gid) == 0) return
+        n = group_member_count(editor, gid)
+        call group_dissolve(editor, gid)
+        call set_status_message('Dissolved the group; ' // &
+            trim(int_to_text(n)) // ' tabs are still open')
+        g_lsp_ui_changed = .true.
+    end subroutine dissolve_group_now
+
+    !> Where the edit dialog should open.
+    !>
+    !> The group's origin directory if it still reads; else wherever most of
+    !> its members live, which is the only sensible answer for a group
+    !> assembled from scattered files; else the workspace root.
+    function group_edit_dir(editor, gid) result(dir)
+        use editor_state_module, only: group_find
+        use dir_scan_module, only: dir_entry_t, list_directory
+        type(editor_state_t), intent(in) :: editor
+        integer(int32), intent(in) :: gid
+        character(len=:), allocatable :: dir, cand
+        type(dir_entry_t), allocatable :: probe(:)
+        integer :: gidx, i, j, n, best, count
+        logical :: ok
+
+        dir = ''
+        gidx = group_find(editor, gid)
+
+        if (gidx >= 1) then
+            if (allocated(editor%groups(gidx)%dir_path)) then
+                cand = editor%groups(gidx)%dir_path
+                if (len_trim(cand) > 0) then
+                    call list_directory(trim(cand), probe, n, ok)
+                    if (ok) then
+                        dir = trim(cand)
+                        return
+                    end if
+                end if
+            end if
+        end if
+
+        ! The commonest parent among the members. O(n^2) over a member list
+        ! that is a handful of files, and the alternative -- sorting paths --
+        ! buys nothing at this size.
+        best = 0
+        do i = 1, size(editor%tabs)
+            if (editor%tabs(i)%group_id /= gid) cycle
+            if (.not. allocated(editor%tabs(i)%filename)) cycle
+            cand = parent_dir_of(editor%tabs(i)%filename)
+            if (len_trim(cand) == 0) cycle
+            count = 0
+            do j = 1, size(editor%tabs)
+                if (editor%tabs(j)%group_id /= gid) cycle
+                if (.not. allocated(editor%tabs(j)%filename)) cycle
+                if (parent_dir_of(editor%tabs(j)%filename) == cand) count = count + 1
+            end do
+            if (count > best) then
+                best = count
+                dir = cand
+            end if
+        end do
+        if (len_trim(dir) > 0) then
+            call list_directory(trim(dir), probe, n, ok)
+            if (ok) return
+            dir = ''
+        end if
+
+        if (allocated(editor%workspace_path)) dir = editor%workspace_path
+        if (len_trim(dir) == 0) dir = '.'
+    end function group_edit_dir
+
+    function parent_dir_of(path) result(d)
+        character(len=*), intent(in) :: path
+        character(len=:), allocatable :: d
+        integer :: slash
+
+        slash = index(trim(path), '/', back=.true.)
+        if (slash > 1) then
+            d = path(1:slash - 1)
+        else if (slash == 1) then
+            d = '/'
+        else
+            d = ''
+        end if
+    end function parent_dir_of
 
     !> Close the one surface sitting closest to the user, if any.
     !>
@@ -7478,6 +7733,7 @@ contains
                         end if
                         if (group_picker_show(abs_dir, editor%screen_rows, &
                                               editor%screen_cols)) then
+                            g_editing_gid = 0
                             editor%fuss_mode_active = .false.
                             g_lsp_ui_changed = .true.
                         else
@@ -8422,6 +8678,7 @@ contains
         if (kind == 'dir') then
             if (group_picker_show(path, editor%screen_rows, &
                                   editor%screen_cols)) then
+                g_editing_gid = 0
                 ! Leave the terminal up. The dialog draws over it and the
                 ! command that opened it is still worth seeing underneath.
                 editor%fuss_mode_active = .false.
@@ -8449,6 +8706,14 @@ contains
         integer(int32) :: gid
         integer :: i, n, tab_idx, first_tab
         character(len=:), allocatable :: path
+
+        ! The same dialog answers for both modes, so which one is being
+        ! finished is decided here and nowhere else.
+        if (g_editing_gid /= 0) then
+            call apply_group_edit(editor, buffer, g_editing_gid)
+            g_editing_gid = 0
+            return
+        end if
 
         n = group_picker_count()
         if (n == 0) then
@@ -8493,6 +8758,171 @@ contains
         if (first_tab > 0) call switch_to_tab_with_buffer(editor, first_tab, buffer)
         call set_status_message('Created ' // group_label_public(editor, gid))
     end subroutine finish_group_creation
+
+    !> Make an existing group match what the dialog says it should be.
+    !>
+    !> Additions run BEFORE removals. Removing first can empty the group, and
+    !> an empty group is pruned, which would take the id out from under the
+    !> additions that were about to be made against it.
+    !>
+    !> Everything here works in PATHS, never in tab indices. Closing a tab
+    !> compacts the tabs array and renumbers every index above it, so an index
+    !> read before a close means something different after one -- which is
+    !> exactly the shape of bug that would delete the wrong file.
+    subroutine apply_group_edit(editor, buffer, gid)
+        use editor_state_module, only: group_find, group_add_member, &
+                                       group_members, group_member_count, &
+                                       find_tab_by_path_public, defer_tab
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer(int32), intent(in) :: gid
+        character(len=512) :: want(GP_EDIT_MAX), drop(GP_EDIT_MAX)
+        character(len=512) :: fresh(GP_EDIT_MAX)
+        logical :: drop_modified(GP_EDIT_MAX)
+        integer :: n_want, n_drop, n_fresh
+        integer :: i, gidx, tab_idx, added, removed, kept
+        integer, allocatable :: idx(:)
+        character(len=:), allocatable :: path, label
+
+        call group_picker_hide()
+        gidx = group_find(editor, gid)
+        if (gidx == 0) return
+
+        ! ---- what the dialog asked for
+        n_want = 0
+        do i = 1, group_picker_count()
+            if (n_want >= GP_EDIT_MAX) exit
+            path = group_picker_path(i)
+            if (len_trim(path) == 0) cycle
+            n_want = n_want + 1
+            want(n_want) = path
+        end do
+
+        ! ---- members it no longer names.
+        ! [Untitled] members are skipped, not dropped: they have no path, so
+        ! the dialog could not list them and their absence is not a decision.
+        n_drop = 0
+        do i = 1, size(editor%tabs)
+            if (editor%tabs(i)%group_id /= gid) cycle
+            if (.not. allocated(editor%tabs(i)%filename)) cycle
+            if (index(editor%tabs(i)%filename, '[Untitled') == 1) cycle
+            if (in_list(want, n_want, editor%tabs(i)%filename)) cycle
+            if (n_drop >= GP_EDIT_MAX) exit
+            n_drop = n_drop + 1
+            drop(n_drop) = editor%tabs(i)%filename
+            ! Recorded NOW, before anything switches tabs.
+            ! switch_to_tab_with_buffer writes editor%modified back over the
+            ! outgoing tab's flag as it saves it, and editor%modified is not
+            ! kept current while a modal owns the keyboard -- so switching to
+            ! a tab to close it is what destroys the very fact we then want
+            ! to branch on. Ctrl-W never noticed because it reads the flag
+            ! and closes without switching anywhere first.
+            drop_modified(n_drop) = editor%tabs(i)%modified
+        end do
+
+        ! ---- additions
+        added = 0
+        n_fresh = 0
+        do i = 1, n_want
+            tab_idx = find_tab_by_path_public(editor, trim(want(i)))
+            if (tab_idx == 0) then
+                call open_file_in_editor(trim(want(i)), editor, buffer)
+                tab_idx = editor%active_tab_index
+                if (n_fresh < GP_EDIT_MAX) then
+                    n_fresh = n_fresh + 1
+                    fresh(n_fresh) = want(i)
+                end if
+            end if
+            if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) cycle
+            if (editor%tabs(tab_idx)%group_id == gid) cycle
+            call group_add_member(editor, gid, tab_idx)
+            added = added + 1
+        end do
+
+        ! ---- removals, one at a time, each re-found by path
+        removed = 0
+        kept = 0
+        do i = 1, n_drop
+            tab_idx = find_tab_by_path_public(editor, trim(drop(i)))
+            if (tab_idx == 0) cycle
+            call switch_to_tab_with_buffer(editor, tab_idx, buffer)
+            ! Re-found: switching can hydrate and reorder nothing today, but
+            ! the path is the identity here and the index is not.
+            tab_idx = find_tab_by_path_public(editor, trim(drop(i)))
+            if (tab_idx == 0) cycle
+            if (drop_modified(i)) then
+                ! Same rule ctrl-w applies. Switching first is not cosmetic:
+                ! the prompt names a file and the user should be looking at
+                ! the one it is asking about.
+                call prompt_save_before_close_tab(editor, buffer)
+            else
+                call close_tab_without_prompt(editor, buffer)
+            end if
+            ! Cancelling the prompt leaves the tab alone, and the only honest
+            ! way to know is to look. A tab that survived keeps its membership
+            ! too, so the untick is abandoned rather than half-applied.
+            if (find_tab_by_path_public(editor, trim(drop(i))) == 0) then
+                removed = removed + 1
+            else
+                kept = kept + 1
+            end if
+        end do
+
+        ! ---- the name
+        label = group_picker_name()
+        if (len_trim(label) > 0) then
+            gidx = group_find(editor, gid)
+            if (gidx >= 1) then
+                if (allocated(editor%groups(gidx)%label)) &
+                    deallocate(editor%groups(gidx)%label)
+                editor%groups(gidx)%label = trim(label)
+            end if
+        end if
+
+        ! ---- newly opened members cost one file read, not all of them.
+        ! Only the ones opened just now: an existing member may be resident
+        ! and modified, and deferring that would discard real edits.
+        if (group_find(editor, gid) /= 0) then
+            call group_members(editor, gid, idx)
+            do i = 1, size(idx)
+                if (idx(i) < 1 .or. idx(i) > size(editor%tabs)) cycle
+                if (i == 1) cycle                     ! the one we land on
+                if (editor%tabs(idx(i))%modified) cycle
+                if (.not. allocated(editor%tabs(idx(i))%filename)) cycle
+                if (.not. in_list(fresh, n_fresh, editor%tabs(idx(i))%filename)) cycle
+                call defer_tab(editor, idx(i))
+            end do
+            if (size(idx) >= 1) then
+                if (idx(1) >= 1 .and. idx(1) <= size(editor%tabs)) &
+                    call switch_to_tab_with_buffer(editor, idx(1), buffer)
+            end if
+        end if
+
+        path = 'Group updated: +' // trim(int_to_text(added)) // &
+               ' -' // trim(int_to_text(removed))
+        ! Only mentioned when it happened, and it only happens when someone
+        ! cancelled a save prompt -- silence there would look like the untick
+        ! was applied.
+        if (kept > 0) path = path // '  (' // trim(int_to_text(kept)) // &
+                                     ' kept, still unsaved)'
+        call set_status_message(path)
+        g_lsp_ui_changed = .true.
+    end subroutine apply_group_edit
+
+    logical function in_list(list, n, path)
+        character(len=*), intent(in) :: list(:)
+        integer, intent(in) :: n
+        character(len=*), intent(in) :: path
+        integer :: k
+
+        in_list = .false.
+        do k = 1, n
+            if (trim(list(k)) == trim(path)) then
+                in_list = .true.
+                return
+            end if
+        end do
+    end function in_list
 
     function group_label_public(editor, gid) result(t)
         use editor_state_module, only: group_label
@@ -9301,6 +9731,7 @@ contains
     end subroutine load_active_pane_into_buffer
 
     subroutine close_tab_without_prompt(editor, buffer)
+        use editor_state_module, only: tab_is_resident
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         integer :: tab_idx
@@ -9326,12 +9757,33 @@ contains
 
             ! Copy new active tab's buffer
             if (size(editor%tabs) > 0 .and. editor%active_tab_index > 0) then
-                call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, &
-                    editor%active_tab_index))%buffer)
-                editor%modified = editor%tabs(editor%active_tab_index)%modified
-                if (allocated(editor%filename)) deallocate(editor%filename)
-                allocate(character(len=len(editor%tabs(editor%active_tab_index)%filename)) :: editor%filename)
-                editor%filename = editor%tabs(editor%active_tab_index)%filename
+                ! The tab we land on may never have been READ. Group members
+                ! are deferred, so the neighbour of a closed member usually
+                ! has no panes at all, and reading its buffer below is a null
+                ! dereference -- a segfault on closing a tab next to a lazily
+                ! loaded one. This code predates deferred tabs.
+                !
+                ! switch_to_tab_with_buffer already knows how to read one in,
+                ! and clearing the index first is what tells it there is
+                ! nothing to save: the working buffer still holds the text of
+                ! the tab that was just closed, and saving that into the
+                ! survivor would write the wrong file's contents into it.
+                if (.not. tab_is_resident(editor, int(editor%active_tab_index))) then
+                    block
+                        integer :: landed
+                        landed = editor%active_tab_index
+                        editor%active_tab_index = 0
+                        call switch_to_tab_with_buffer(editor, &
+                            int(landed, int32), buffer)
+                    end block
+                else
+                    call copy_buffer(buffer, editor%tabs(editor%active_tab_index)%panes(active_pane_of(editor, &
+                        editor%active_tab_index))%buffer)
+                    editor%modified = editor%tabs(editor%active_tab_index)%modified
+                    if (allocated(editor%filename)) deallocate(editor%filename)
+                    allocate(character(len=len(editor%tabs(editor%active_tab_index)%filename)) :: editor%filename)
+                    editor%filename = editor%tabs(editor%active_tab_index)%filename
+                end if
             end if
         end if
     end subroutine close_tab_without_prompt
@@ -10633,6 +11085,24 @@ contains
                 call set_status_message('Grouped ' // &
                     trim(int_to_text(group_member_count(editor, new_gid))) // ' tabs')
             end block
+        ! The keyboard route to what right-clicking a group entry offers.
+        ! All three act on the group the active tab is in, which is the only
+        ! group the keyboard can be said to be pointing at.
+        case('group-edit', 'group-rename', 'group-dissolve')
+            block
+                integer(int32) :: cur_gid
+                cur_gid = active_group_id(editor)
+                if (cur_gid == 0) then
+                    call set_status_message('Not inside a tab group')
+                else if (trim(cmd_id) == 'group-edit') then
+                    call start_group_edit(editor, cur_gid)
+                else if (trim(cmd_id) == 'group-rename') then
+                    call rename_group_prompt(editor, cur_gid)
+                else
+                    call dissolve_group_now(editor, cur_gid)
+                end if
+            end block
+
         case('group-leave')
             block
                 integer :: t
