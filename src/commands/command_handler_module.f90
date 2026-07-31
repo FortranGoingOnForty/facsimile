@@ -6189,8 +6189,14 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         integer, intent(in) :: act
-        character(len=512) :: others(GP_EDIT_MAX)
-        logical :: others_modified(GP_EDIT_MAX)
+        ! Allocatable, not fixed. 256 x 512 characters is far past
+        ! -fmax-stack-var-size, so gfortran quietly moves a fixed array of
+        ! that size to STATIC storage -- shared between calls, and the
+        ! procedure stops being reentrant. Sizing it to the tabs actually
+        ! open costs one allocation and keeps it on the stack where a local
+        ! belongs.
+        character(len=512), allocatable :: others(:)
+        logical, allocatable :: others_modified(:)
         integer :: n_others, i, tab_idx, gone
         logical :: closed, dirty
 
@@ -6213,11 +6219,13 @@ contains
             ! Every path and flag sampled BEFORE the first close, for both
             ! reasons at once: closing renumbers the indices this loop would
             ! otherwise walk, and switching clobbers the flags it would read.
+            allocate(others(max(1, size(editor%tabs))))
+            allocate(others_modified(size(others)))
             n_others = 0
             do i = 1, size(editor%tabs)
                 if (i == tab_idx) cycle
                 if (.not. allocated(editor%tabs(i)%filename)) cycle
-                if (n_others >= GP_EDIT_MAX) exit
+                if (n_others >= size(others)) exit
                 n_others = n_others + 1
                 others(n_others) = editor%tabs(i)%filename
                 others_modified(n_others) = editor%tabs(i)%modified
@@ -8939,9 +8947,11 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         integer(int32), intent(in) :: gid
-        character(len=512) :: want(GP_EDIT_MAX), drop(GP_EDIT_MAX)
-        character(len=512) :: fresh(GP_EDIT_MAX)
-        logical :: drop_modified(GP_EDIT_MAX)
+        ! Allocatable for the reason given in tab_menu_action: a fixed array
+        ! this large is moved to static storage and silently shared between
+        ! calls.
+        character(len=512), allocatable :: want(:), drop(:), fresh(:)
+        logical, allocatable :: drop_modified(:)
         integer :: n_want, n_drop, n_fresh
         integer :: i, gidx, tab_idx, added, removed, kept
         integer, allocatable :: idx(:)
@@ -8951,10 +8961,18 @@ contains
         gidx = group_find(editor, gid)
         if (gidx == 0) return
 
-        ! ---- what the dialog asked for
+        ! ---- what the dialog asked for.
+        ! Bounds: the dialog cannot hand back more than it could tick, and no
+        ! more tabs can be dropped than are open. Both +1 so a zero case
+        ! still allocates something indexable.
+        allocate(want(max(1, min(GP_EDIT_MAX, group_picker_count()))))
+        allocate(fresh(size(want)))
+        allocate(drop(max(1, size(editor%tabs))))
+        allocate(drop_modified(size(drop)))
+
         n_want = 0
         do i = 1, group_picker_count()
-            if (n_want >= GP_EDIT_MAX) exit
+            if (n_want >= size(want)) exit
             path = group_picker_path(i)
             if (len_trim(path) == 0) cycle
             n_want = n_want + 1
@@ -8970,7 +8988,7 @@ contains
             if (.not. allocated(editor%tabs(i)%filename)) cycle
             if (index(editor%tabs(i)%filename, '[Untitled') == 1) cycle
             if (in_list(want, n_want, editor%tabs(i)%filename)) cycle
-            if (n_drop >= GP_EDIT_MAX) exit
+            if (n_drop >= size(drop)) exit
             n_drop = n_drop + 1
             drop(n_drop) = editor%tabs(i)%filename
             ! Recorded NOW, before anything switches tabs.
@@ -8991,7 +9009,7 @@ contains
             if (tab_idx == 0) then
                 call open_file_in_editor(trim(want(i)), editor, buffer)
                 tab_idx = editor%active_tab_index
-                if (n_fresh < GP_EDIT_MAX) then
+                if (n_fresh < size(fresh)) then
                     n_fresh = n_fresh + 1
                     fresh(n_fresh) = want(i)
                 end if

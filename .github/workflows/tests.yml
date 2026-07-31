@@ -31,7 +31,21 @@ jobs:
       - name: Build (make)
         run: |
           make clean || true
-          make
+          make 2>&1 | tee /tmp/build.log
+
+      # A warning-free build is a property worth keeping, not a nice-to-have:
+      # the four that prompted this were gfortran saying it had moved large
+      # locals to STATIC storage, which quietly makes a procedure
+      # non-reentrant. They were also visible to anyone installing from the
+      # AUR, which is a poor first impression. Fails the build so a new one
+      # cannot accumulate unnoticed.
+      - name: No compiler warnings
+        run: |
+          if grep -iE '(^|[^-])warning:' /tmp/build.log; then
+            echo "::error::the build emitted warnings (see above)"
+            exit 1
+          fi
+          echo "clean build"
 
       - name: Version reports
         run: ./fac --version
