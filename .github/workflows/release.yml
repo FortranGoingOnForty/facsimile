@@ -1,4 +1,13 @@
-name: Build Windows
+# Builds the release tarballs for all three platforms and publishes them.
+#
+# The three build jobs do NOT publish. They upload artifacts and a single
+# `release` job that needs all of them creates the release once. Each job
+# publishing for itself is what this used to do, and it meant three jobs
+# racing to create the same release: whichever lost failed with
+# "already_exists" and ITS tarball was missing from the release, while the
+# other two reported success. v0.29.0 shipped with no Windows build that way,
+# and v0.29.1 needed a rerun to get macOS.
+name: Release
 
 on:
   push:
@@ -49,14 +58,6 @@ jobs:
         name: facsimile-windows-x86_64
         path: facsimile-*-windows-x86_64.tar.gz
 
-    - name: Release
-      uses: softprops/action-gh-release@v3
-      if: startsWith(github.ref, 'refs/tags/')
-      with:
-        files: facsimile-*-windows-x86_64.tar.gz
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   build-linux:
     runs-on: ubuntu-latest
 
@@ -88,14 +89,6 @@ jobs:
       with:
         name: facsimile-linux-x86_64
         path: facsimile-*-linux-x86_64.tar.gz
-
-    - name: Release
-      uses: softprops/action-gh-release@v3
-      if: startsWith(github.ref, 'refs/tags/')
-      with:
-        files: facsimile-*-linux-x86_64.tar.gz
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-macos:
     runs-on: macos-latest
@@ -129,10 +122,59 @@ jobs:
         name: facsimile-macos
         path: facsimile-*-macos-*.tar.gz
 
-    - name: Release
-      uses: softprops/action-gh-release@v3
-      if: startsWith(github.ref, 'refs/tags/')
+  release:
+    needs: [build-linux, build-macos, build-windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
       with:
-        files: facsimile-*-macos-*.tar.gz
+        # Full history and tags: the release notes come from the tag's own
+        # annotation, which a shallow checkout does not fetch.
+        fetch-depth: 0
+
+    - name: Collect every platform's tarball
+      uses: actions/download-artifact@v7
+      with:
+        path: dist
+        merge-multiple: true
+
+    - name: Refuse to publish a partial release
+      run: |
+        find dist -name '*.tar.gz' -print
+        # find, not a glob: whether download-artifact flattens or nests one
+        # directory per artifact is not worth depending on, and guessing wrong
+        # would mean publishing nothing rather than publishing everything.
+        missing=
+        for platform in linux-x86_64 macos windows-x86_64; do
+          [ -n "$(find dist -name "*${platform}*.tar.gz" -print -quit)" ] \
+            || missing="$missing $platform"
+        done
+        if [ -n "$missing" ]; then
+          echo "No tarball for:$missing"
+          exit 1
+        fi
+
+    - name: Take the release notes from the tag's annotation
+      id: notes
+      run: |
+        tag="${GITHUB_REF_NAME}"
+        git fetch --force origin "refs/tags/${tag}:refs/tags/${tag}"
+        # :body drops the first line, which is the tag subject and would
+        # otherwise repeat the release title.
+        {
+          echo 'text<<FACSIMILE_NOTES_EOF'
+          git tag -l --format='%(contents:body)' "$tag"
+          echo 'FACSIMILE_NOTES_EOF'
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Publish
+      uses: softprops/action-gh-release@v3
+      with:
+        files: dist/**/*.tar.gz
+        body: ${{ steps.notes.outputs.text }}
+        fail_on_unmatched_files: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

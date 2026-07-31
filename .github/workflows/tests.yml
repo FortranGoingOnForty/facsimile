@@ -1,7 +1,7 @@
 name: Tests
 
 # Runs on ordinary development, which the release workflow deliberately does
-# not: build-windows.yml fires only on `v*` tags, so until this existed a green
+# not: release.yml fires only on `v*` tags, so until this existed a green
 # check meant "it compiled on three platforms" and no test had ever run in CI.
 on:
   push:
