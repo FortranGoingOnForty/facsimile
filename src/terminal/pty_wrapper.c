@@ -14,6 +14,14 @@ void pty_spawn_f(const char *shell, int *shell_len,
     *error = -1;
 }
 
+// Nothing to advertise to: there is no terminal panel here to spawn a shell
+// in, so no shell can ever be a client. The stub exists because the Fortran
+// side binds it unconditionally, and a bind with no symbol is a LINK error --
+// which is how this was missed until a Windows build ran.
+void pty_set_session_f(const char *dir, int *dir_len) {
+    (void)dir; (void)dir_len;
+}
+
 int pty_read_f(void **handle, char *buffer, int *bufsize) {
     (void)handle; (void)buffer; (void)bufsize;
     return -1;
