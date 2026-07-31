@@ -20,6 +20,7 @@ Usage: python3 test/integration_tabdrag.py [path-to-fac-binary]
 Requires: pip3 install pexpect pyte
 """
 
+import json
 import os
 import re
 import shutil
@@ -414,6 +415,118 @@ def test_dwelling_over_a_group_opens_it_to_drop_into(binary):
         s.close()
 
 
+def two_group_session(binary):
+    """A workspace restored with two groups: one/{a,b}.c and two/{x,y}.c."""
+    home = tempfile.mkdtemp(prefix="fac_td_home_")
+    os.makedirs(os.path.join(home, ".config", "fac"))
+    with open(os.path.join(home, ".config", "fac", "state.json"), "w") as f:
+        f.write('{"first_run_completed": true, "lsp_installer_seen": true,'
+                ' "version": "1.0"}\n')
+    root = tempfile.mkdtemp(prefix="fac_td_work_")
+    ws = os.path.join(root, "ws")
+    os.makedirs(ws)
+    for d, files in (("one", ("a.c", "b.c")), ("two", ("x.c", "y.c"))):
+        os.makedirs(os.path.join(ws, d))
+        for fn in files:
+            with open(os.path.join(ws, d, fn), "w") as f:
+                f.write("int v;\n")
+
+    def tab(fn, gid, o):
+        return {"filename": fn, "is_orphan": False, "modified": False,
+                "group": gid, "group_ordinal": o,
+                "panes": [{"x_start": 0.0, "y_start": 0.0, "x_end": 1.0,
+                           "y_end": 1.0, "filename": fn, "cursor_line": 1,
+                           "cursor_column": 1, "viewport_line": 1,
+                           "viewport_column": 1}],
+                "active_pane": 1}
+
+    doc = {"version": "1.2", "workspace_path": ws, "last_opened": "20260731",
+           "tab_groups": [
+               {"id": 1, "label": "one/", "dir_path": os.path.join(ws, "one"),
+                "active_member": os.path.join(ws, "one/a.c")},
+               {"id": 2, "label": "two/", "dir_path": os.path.join(ws, "two"),
+                "active_member": os.path.join(ws, "two/x.c")}],
+           "tabs": [tab("one/a.c", 1, 1), tab("one/b.c", 1, 2),
+                    tab("two/x.c", 2, 1), tab("two/y.c", 2, 2)],
+           "active_tab": 1, "fuss_mode": False}
+    os.makedirs(os.path.join(ws, ".fac"))
+    with open(os.path.join(ws, ".fac", "workspace.json"), "w") as f:
+        json.dump(doc, f, indent=2)
+
+    env = {**os.environ, "TERM": "xterm-256color", "HOME": home}
+    env.pop("XDG_CONFIG_HOME", None)
+    env.pop("FAC_SESSION", None)
+    s = Session.__new__(Session)
+    s.home, s.root, s.work = home, root, ws
+    s.screen = pyte.Screen(COLS, ROWS)
+    s.stream = pyte.Stream(s.screen)
+    s.child = pexpect.spawn(binary, [ws], dimensions=(ROWS, COLS), env=env, cwd=ws)
+    s.drain(3.0)
+    return s
+
+
+def test_one_drag_from_one_group_into_another(binary):
+    """The whole point of the dwell: no intermediate drop.
+
+    While inside a group, row 2 is that group's pinned member row -- so the
+    group you are leaving used to own that row for the whole drag and no other
+    group could be reached without letting go first. During a drag the row
+    follows the pointer instead.
+    """
+    print("\nA member moves between groups in a single continuous drag")
+    s = two_group_session(binary)
+    try:
+        check("one/ (2)" in s.tab_bar() and "two/ (2)" in s.tab_bar(),
+              "two groups of two", s.tab_bar())
+        check("b.c" in s.row2(), "we are inside group one", repr(s.row2()))
+
+        src = s.entry_col("b.c", row=2)
+        g2 = s.entry_col("two/")
+        if src is None or g2 is None:
+            check(False, "found the member and the other group", s.tab_bar())
+            return
+
+        # Press on row 2, and never release until the very end.
+        s.child.send(f"\x1b[<0;{src};2M")
+        s.drain(0.4)
+        s.child.send(f"\x1b[<32;{src};1M")
+        s.drain(0.3)
+        for c in range(src, g2 + 3, 2):
+            s.child.send(f"\x1b[<32;{c};1M")
+            s.drain(0.1)
+        for _ in range(8):
+            s.child.send(f"\x1b[<32;{g2 + 2};1M")
+            s.drain(0.12)
+
+        check("x.c" in s.row2(),
+              "resting on the other group shows ITS members on row 2",
+              repr(s.row2()))
+        check("a.c" not in s.row2(),
+              "and no longer the group being left", repr(s.row2()))
+
+        drop = s.entry_col("y.c", row=2)
+        if drop is None:
+            check(False, "found somewhere to drop", repr(s.row2()))
+            return
+        s.child.send(f"\x1b[<32;{drop};2M")
+        s.drain(0.4)
+        s.child.send(f"\x1b[<0;{drop};2m")
+        s.drain(1.2)
+
+        check("one/ (1)" in s.tab_bar(), "the source group lost a member",
+              s.tab_bar())
+        check("two/ (3)" in s.tab_bar(), "and the target gained one",
+              s.tab_bar())
+        after = s.row2().split()
+        check("b.c" in after, "the file is in the target group now",
+              repr(s.row2()))
+        if "b.c" in after and "y.c" in after:
+            check(after.index("b.c") < after.index("y.c"),
+                  "at the position it was dropped on", repr(s.row2()))
+    finally:
+        s.close()
+
+
 def main():
     binary = find_binary()
     for fn in (test_drag_right_and_left,
@@ -424,7 +537,8 @@ def main():
                test_a_group_moves_as_one_block,
                test_reordering_within_a_group,
                test_carrying_a_member_out_of_its_group,
-               test_dwelling_over_a_group_opens_it_to_drop_into):
+               test_dwelling_over_a_group_opens_it_to_drop_into,
+               test_one_drag_from_one_group_into_another):
         try:
             fn(binary)
         except Exception as exc:              # noqa: BLE001

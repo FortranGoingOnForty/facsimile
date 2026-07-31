@@ -3308,7 +3308,7 @@ contains
         type(strip_span_t) :: spans(STRIP_MAX_ENTRIES)
         integer :: i, n_entries, n_spans, tab_count, active_entry
         integer :: start_column, max_width, col, used
-        integer(int32) :: gid
+        integer(int32) :: gid, show_gid
         integer(int32) :: seen_gids(STRIP_MAX_ENTRIES)
         integer :: n_seen
         logical :: more_left, more_right
@@ -3427,8 +3427,20 @@ contains
 
         ! Row 2: the active group's members, pinned while we are inside it.
         ! tab_bar_height already reserved the row, so the document starts below.
+        !
+        ! Except while a tab is being carried. Then the row belongs to the
+        ! drag and shows whichever group the pointer is resting on, so a
+        ! member can be taken out of one group and dropped into another in ONE
+        ! movement -- hover the second group, its members appear here, drop.
+        ! Without this, being inside a group meant this row was permanently
+        ! the group you were leaving, and no other group could be reached.
+        !
+        ! The row is swapped, never removed: collapsing it mid-drag would
+        ! reflow the whole document under the pointer.
         if (active_group_id(editor) /= 0) then
-            call render_group_row(editor, active_group_id(editor), 2, &
+            show_gid = active_group_id(editor)
+            if (drag_is_showing() .and. g_hover_group /= 0) show_gid = g_hover_group
+            call render_group_row(editor, show_gid, 2, &
                                   start_column, max_width)
         end if
     end subroutine render_tab_bar

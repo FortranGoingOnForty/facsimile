@@ -52,7 +52,9 @@ fpm run -- [filename]
   be carried off-screen
 - drag a tab GROUP entry and its members travel with it. Drag a member off the
   member row onto the bar to take it out of the group, or hold a tab over a
-  group for a moment to open its members and drop it in
+  group for a moment to open its members and drop it in. Moving a file from
+  one group to another is one continuous drag: pick it up, rest on the other
+  group until its members appear, drop
 - click a `[n: name]` tab to switch to it; right-click one for Close Tab,
   Close Other Tabs, Copy Path and Remove from Group. These act on the tab you
   clicked, not the one you are looking at
