@@ -19,6 +19,7 @@ Usage: python3 test/integration_groupedit.py [path-to-fac-binary]
 Requires: pip3 install pexpect pyte
 """
 
+import json
 import os
 import re
 import shutil
@@ -341,6 +342,84 @@ def test_a_member_in_another_directory_survives(binary):
         s.close()
 
 
+def test_a_restored_group_opens_with_members_ticked(binary):
+    """The reported bug: after a restart, nothing was ticked.
+
+    workspace.json stores a group's dir_path RELATIVE to the workspace while
+    its members' paths are absolute. Restoring left the group's directory
+    meaning "wherever the process happens to be", so no member could ever
+    match a file listed in it and the dialog opened with every box empty.
+
+    Every other case in this file builds its group in the same session, where
+    the directory is absolute because the dialog put it there -- which is
+    exactly why they all passed while this was broken.
+    """
+    print("\nA group restored from workspace.json opens with members ticked")
+    home = tempfile.mkdtemp(prefix="fac_ge_home_")
+    os.makedirs(os.path.join(home, ".config", "fac"))
+    with open(os.path.join(home, ".config", "fac", "state.json"), "w") as f:
+        f.write('{"first_run_completed": true, "lsp_installer_seen": true,'
+                ' "version": "1.0"}\n')
+    ws = tempfile.mkdtemp(prefix="fac_ge_work_")
+    os.makedirs(os.path.join(ws, "chapter", "sub"))
+    for n in ("main.c", "helper.c", "extra.c"):
+        with open(os.path.join(ws, "chapter", "sub", n), "w") as f:
+            f.write("int x;\n")
+
+    def tab(fn, gid, ordi):
+        return {"filename": fn, "is_orphan": False, "modified": False,
+                "group": gid, "group_ordinal": ordi,
+                "panes": [{"x_start": 0.0, "y_start": 0.0, "x_end": 1.0,
+                           "y_end": 1.0, "filename": fn, "cursor_line": 1,
+                           "cursor_column": 1, "viewport_line": 1,
+                           "viewport_column": 1}],
+                "active_pane": 1}
+
+    doc = {"version": "1.2", "workspace_path": ws, "last_opened": "20260731",
+           "tab_groups": [{"id": 1, "label": "chapter/",
+                           "dir_path": "chapter/sub",        # RELATIVE
+                           "active_member": os.path.join(ws, "chapter/sub/main.c")}],
+           "tabs": [tab("chapter/sub/main.c", 1, 1),
+                    tab("chapter/sub/helper.c", 1, 2)],
+           "active_tab": 1, "fuss_mode": False}
+    os.makedirs(os.path.join(ws, ".fac"))
+    with open(os.path.join(ws, ".fac", "workspace.json"), "w") as f:
+        json.dump(doc, f, indent=2)
+
+    env = {**os.environ, "TERM": "xterm-256color", "HOME": home}
+    env.pop("XDG_CONFIG_HOME", None)
+    env.pop("FAC_SESSION", None)
+    s = Session.__new__(Session)
+    s.home, s.work = home, ws
+    s.screen = pyte.Screen(COLS, ROWS)
+    s.stream = pyte.Stream(s.screen)
+    s.child = pexpect.spawn(binary, [ws], dimensions=(ROWS, COLS), env=env, cwd=ws)
+    s.drain(3.0)
+    try:
+        check(s.group_count() == 2, "the group came back with two members",
+              s.tab_bar())
+        hit = s.find("chapter/ (")
+        check(hit is not None, "its entry is on the tab bar", s.tab_bar())
+        if hit is None:
+            return
+        s.click(hit[0], hit[1] + 2, button=2)
+        row = s.find("Edit Group")
+        check(row is not None, "the menu opened")
+        if row is None:
+            return
+        s.click(row[0], row[1] + 2)
+
+        body = s.text()
+        check("Edit Tab Group" in body, "the dialog opened", body[:300])
+        check("[\u2713] main.c" in body, "main.c is ticked", body)
+        check("[\u2713] helper.c" in body, "helper.c is ticked", body)
+        check("[ ] extra.c" in body, "and extra.c, a non-member, is not", body)
+        check(s.selected_count() == 2, "the footer counts both",
+              str(s.selected_count()))
+    finally:
+        s.close()
+
+
 def main():
     binary = find_binary()
     test_right_click_gives_a_menu(binary)
@@ -351,6 +430,7 @@ def main():
     test_the_name_field_renames_the_group(binary)
     test_a_modified_member_is_not_closed_silently(binary)
     test_a_member_in_another_directory_survives(binary)
+    test_a_restored_group_opens_with_members_ticked(binary)
 
     print()
     if failures:

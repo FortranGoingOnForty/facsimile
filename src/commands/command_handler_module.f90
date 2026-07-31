@@ -6370,6 +6370,14 @@ contains
         if (gidx >= 1) then
             if (allocated(editor%groups(gidx)%dir_path)) then
                 cand = editor%groups(gidx)%dir_path
+                ! Belt and braces. The restore path resolves this against the
+                ! workspace now, but a relative directory here would silently
+                ! be read relative to the process's working directory, and the
+                ! only symptom is a dialog with nothing ticked.
+                if (len_trim(cand) > 0) then
+                    if (cand(1:1) /= '/' .and. allocated(editor%workspace_path)) &
+                        cand = trim(editor%workspace_path) // '/' // trim(cand)
+                end if
                 if (len_trim(cand) > 0) then
                     call list_directory(trim(cand), probe, n, ok)
                     if (ok) then

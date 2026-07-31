@@ -658,6 +658,18 @@ contains
                     g_member = json_str(line)
                     ! Last field of the object: the group is complete.
                     if (g_id > 0) then
+                        ! Absolute, the same way a tab's path is rebuilt a few
+                        ! hundred lines below. The file stores dir_path
+                        ! RELATIVE to the workspace, and leaving it that way
+                        ! left the group's directory meaning "wherever the
+                        ! process happens to be" -- while its members were
+                        ! absolute. Nothing could then match a member against
+                        ! a file listed in that directory, so the edit dialog
+                        ! opened with no member ticked.
+                        if (len_trim(g_dir) > 0) then
+                            if (g_dir(1:1) /= '/') &
+                                g_dir = trim(dir_path) // '/' // trim(g_dir)
+                        end if
                         call group_create(editor, trim(g_dir), trim(g_label), new_gid)
                         ! Remember the id this group had in the file, so the
                         ! tabs below -- which reference the OLD id -- can be
