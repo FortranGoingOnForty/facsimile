@@ -69,6 +69,28 @@ int pty_get_fd_f(void **handle) {
 #include <sys/select.h>
 #include <sys/time.h>
 
+
+// write() that finishes the job.
+//
+// A short write is legal and does happen: the kernel takes what fits in the
+// tty buffer and returns that count. These calls discarded the count, which
+// is exactly what the compiler was warning about, and the consequence is a
+// silently truncated frame -- the screen stays wrong until something else
+// repaints it. Retrying is the fix; ignoring the warning was not.
+static void write_all(int fd, const void *data, size_t len) {
+    const char *buf = data;
+    while (len > 0) {
+        ssize_t n = write(fd, buf, len);
+        if (n > 0) {
+            buf += n;
+            len -= (size_t)n;
+            continue;
+        }
+        if (n < 0 && errno == EINTR) continue;
+        return;                 // a real error: nothing useful to do here
+    }
+}
+
 #define STARTUP_BUF_SIZE 16384
 
 typedef struct {
@@ -117,7 +139,7 @@ static void respond_to_queries(int fd, const char *buf, int n) {
                 memcpy(resp + rlen, buf + key_start, (size_t)klen);
                 rlen += klen;
                 resp[rlen++] = 0x1b; resp[rlen++] = '\\';
-                write(fd, resp, (size_t)rlen);
+                write_all(fd, resp, (size_t)rlen);
             }
         }
 
@@ -128,10 +150,10 @@ static void respond_to_queries(int fd, const char *buf, int n) {
                 if (buf[j] == 'c') {
                     if (j == i+2 || buf[i+2] == '0' ||
                         buf[i+2] == '?') {
-                        write(fd, DA_PRIMARY,
+                        write_all(fd, DA_PRIMARY,
                               sizeof(DA_PRIMARY) - 1);
                     } else if (buf[i+2] == '>') {
-                        write(fd, DA_SECONDARY,
+                        write_all(fd, DA_SECONDARY,
                               sizeof(DA_SECONDARY) - 1);
                     }
                     break;
@@ -142,7 +164,7 @@ static void respond_to_queries(int fd, const char *buf, int n) {
             if (i+2 < n && buf[i+2] == '?') {
                 for (int j = i+3; j < n && j < i+8; j++) {
                     if (buf[j] == 'u') {
-                        write(fd, KEYBOARD_PROTO,
+                        write_all(fd, KEYBOARD_PROTO,
                               sizeof(KEYBOARD_PROTO) - 1);
                         break;
                     }
@@ -152,7 +174,7 @@ static void respond_to_queries(int fd, const char *buf, int n) {
             if (i+2 < n && buf[i+2] == '>') {
                 for (int j = i+3; j < n && j < i+8; j++) {
                     if (buf[j] == 'q') {
-                        write(fd, XTVERSION,
+                        write_all(fd, XTVERSION,
                               sizeof(XTVERSION) - 1);
                         break;
                     }
@@ -164,7 +186,7 @@ static void respond_to_queries(int fd, const char *buf, int n) {
         if (buf[i+1] == ']' && i+4 < n &&
             buf[i+2] == '1' && buf[i+3] == '1' &&
             buf[i+4] == ';') {
-            write(fd, BG_COLOR, sizeof(BG_COLOR) - 1);
+            write_all(fd, BG_COLOR, sizeof(BG_COLOR) - 1);
         }
     }
 }
@@ -331,7 +353,7 @@ void pty_spawn_f(const char *shell, int *shell_len,
         slave_fd = open(slave_name, O_RDWR);
         if (slave_fd < 0) {
             int err = errno;
-            write(exec_err_pipe[1], &err, sizeof(err));
+            write_all(exec_err_pipe[1], &err, sizeof(err));
             _exit(127);
         }
 
@@ -374,7 +396,7 @@ void pty_spawn_f(const char *shell, int *shell_len,
 
         // exec failed — signal parent via pipe
         int err = errno;
-        write(exec_err_pipe[1], &err, sizeof(err));
+        write_all(exec_err_pipe[1], &err, sizeof(err));
         _exit(127);
     }
 

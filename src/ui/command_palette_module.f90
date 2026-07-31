@@ -89,8 +89,12 @@ contains
             do i = 1, registry_size
                 temp(i) = command_registry(i)
             end do
-            deallocate(command_registry)
-            command_registry = temp
+            ! move_alloc, not assignment: assigning would deep-copy every
+            ! entry a second time and leave temp allocated until the
+            ! procedure ends. This hands the allocation over and leaves temp
+            ! deallocated, which is also what stops older gfortran reading
+            ! the branch as "temp may be used uninitialised".
+            call move_alloc(temp, command_registry)
         end if
 
         ! Add command

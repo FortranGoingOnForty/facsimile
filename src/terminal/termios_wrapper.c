@@ -325,6 +325,28 @@ void term_buf_flush(void) {
 #include <sys/select.h>
 #include <string.h>
 
+
+// write() that finishes the job.
+//
+// A short write is legal and does happen: the kernel takes what fits in the
+// tty buffer and returns that count. These calls discarded the count, which
+// is exactly what the compiler was warning about, and the consequence is a
+// silently truncated frame -- the screen stays wrong until something else
+// repaints it. Retrying is the fix; ignoring the warning was not.
+static void write_all(int fd, const void *data, size_t len) {
+    const char *buf = data;
+    while (len > 0) {
+        ssize_t n = write(fd, buf, len);
+        if (n > 0) {
+            buf += n;
+            len -= (size_t)n;
+            continue;
+        }
+        if (n < 0 && errno == EINTR) continue;
+        return;                 // a real error: nothing useful to do here
+    }
+}
+
 static struct termios orig_termios;
 static int raw_mode_enabled = 0;
 
@@ -349,7 +371,10 @@ static void flush_input(void) {
     FD_SET(STDIN_FILENO, &readfds);
     while (select(STDIN_FILENO + 1, &readfds, NULL, NULL, &tv) > 0) {
         char discard[256];
-        read(STDIN_FILENO, discard, sizeof(discard));
+        // Draining leftover input, so the count really is of no interest --
+        // named rather than dropped, to say that is deliberate.
+        ssize_t discarded = read(STDIN_FILENO, discard, sizeof(discard));
+        (void)discarded;
         tv.tv_sec = 0;
         tv.tv_usec = 5000;  // Keep draining with shorter timeout
         FD_ZERO(&readfds);
@@ -543,13 +568,13 @@ void term_buf_write(const char *data, int len) {
     // If this write would overflow, flush first
     if (output_pos + len > OUTPUT_BUFFER_SIZE) {
         if (output_pos > 0) {
-            write(STDOUT_FILENO, output_buf, (size_t)output_pos);
+            write_all(STDOUT_FILENO, output_buf, (size_t)output_pos);
             output_pos = 0;
         }
     }
     // If single write is larger than buffer, write directly
     if (len > OUTPUT_BUFFER_SIZE) {
-        write(STDOUT_FILENO, data, (size_t)len);
+        write_all(STDOUT_FILENO, data, (size_t)len);
         return;
     }
     memcpy(output_buf + output_pos, data, (size_t)len);
@@ -559,7 +584,7 @@ void term_buf_write(const char *data, int len) {
 // Flush the output buffer to stdout in one write() syscall
 void term_buf_flush(void) {
     if (output_pos > 0) {
-        write(STDOUT_FILENO, output_buf, (size_t)output_pos);
+        write_all(STDOUT_FILENO, output_buf, (size_t)output_pos);
         output_pos = 0;
     }
 }

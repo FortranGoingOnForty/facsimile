@@ -5,6 +5,29 @@
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <errno.h>
+
+// write() that finishes the job.
+//
+// A short write is legal and does happen: the kernel takes what fits in the
+// tty buffer and returns that count. These calls discarded the count, which
+// is exactly what the compiler was warning about, and the consequence is a
+// silently truncated frame -- the screen stays wrong until something else
+// repaints it. Retrying is the fix; ignoring the warning was not.
+static void write_all(int fd, const void *data, size_t len) {
+    const char *buf = data;
+    while (len > 0) {
+        ssize_t n = write(fd, buf, len);
+        if (n > 0) {
+            buf += n;
+            len -= (size_t)n;
+            continue;
+        }
+        if (n < 0 && errno == EINTR) continue;
+        return;                 // a real error: nothing useful to do here
+    }
+}
+
 
 // Cell attributes
 #define ATTR_BOLD      0x01
@@ -442,7 +465,7 @@ static void handle_csi(vt100_grid_t *g, char final) {
                 "\x1b[%d;%dR",
                 g->cursor_row + 1, g->cursor_col + 1);
             if (cpr_len > 0)
-                write(g->pty_fd, cpr, (size_t)cpr_len);
+                write_all(g->pty_fd, cpr, (size_t)cpr_len);
         }
         g->cpr_pending = 0;
         break;

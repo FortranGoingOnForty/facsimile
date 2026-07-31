@@ -113,6 +113,10 @@ contains
             if (work(i:i) == '/') n = n + 1
         end do
         allocate(character(len=seg_len) :: segs(n + 1))
+        ! Blanked rather than left to `push`, the contained procedure that
+        ! fills it. Host-associated writes are not something every gfortran
+        ! sees as initialisation, and trim() reads the whole element below.
+        segs = ''
         n_segs = 0
         up = 0
         seg_start = 1

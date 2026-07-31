@@ -489,6 +489,12 @@ contains
         if (plen == 0) return
 
         lower_prefix = to_lower(prefix)
+        ! Defined up front. They are only READ when the matching distance
+        ! moved off huge(1), which is only where they are assigned -- but that
+        ! is a correlation between two variables that nothing enforces, and
+        ! one edit away from being read undefined. Older gfortran warns.
+        best_cs = ''
+        best_ci = ''
         best_cs_dist = huge(1)
         best_ci_dist = huge(1)
 

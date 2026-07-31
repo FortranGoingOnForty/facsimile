@@ -535,50 +535,10 @@ contains
         deallocate(temp_files)
     end subroutine get_dirty_files
 
-    ! List all tracked + untracked-unignored files in a git repo (eager
-    ! mode). Non-git workspaces use lazy per-directory scanning instead
-    ! (scan_directory_children).
+    ! apply_git_status walks the tree once and stamps every node from the
+    ! status map, so the old overlay_git_status -- which searched the tree
+    ! again per dirty file -- had no callers left and is gone.
 
-    subroutine overlay_git_status(root, dirty_files, n_dirty_files)
-        type(tree_node_t), pointer, intent(inout) :: root
-        type(file_entry_t), intent(in) :: dirty_files(:)
-        integer, intent(in) :: n_dirty_files
-        integer :: i
-
-        ! For each dirty file, find it in the tree and update its status
-        do i = 1, n_dirty_files
-            call update_node_status(root, dirty_files(i)%path, &
-                                  dirty_files(i)%is_staged, &
-                                  dirty_files(i)%is_unstaged, &
-                                  dirty_files(i)%is_untracked, &
-                                  dirty_files(i)%has_incoming)
-        end do
-    end subroutine overlay_git_status
-
-    recursive subroutine update_node_status(node, path, is_staged, is_unstaged, is_untracked, has_incoming)
-        type(tree_node_t), pointer, intent(inout) :: node
-        character(len=*), intent(in) :: path
-        logical, intent(in) :: is_staged, is_unstaged, is_untracked, has_incoming
-        type(tree_node_t), pointer :: child
-
-        if (.not. associated(node)) return
-
-        ! Check if this node matches the path
-        if (node%is_file .and. trim(node%full_path) == trim(path)) then
-            node%is_staged = is_staged
-            node%is_unstaged = is_unstaged
-            node%is_untracked = is_untracked
-            node%has_incoming = has_incoming
-            return
-        end if
-
-        ! Recurse to children
-        child => node%first_child
-        do while (associated(child))
-            call update_node_status(child, path, is_staged, is_unstaged, is_untracked, has_incoming)
-            child => child%next_sibling
-        end do
-    end subroutine update_node_status
 
     subroutine resize_file_array(arr, new_size)
         type(file_entry_t), allocatable, intent(inout) :: arr(:)
@@ -630,53 +590,6 @@ contains
 
     end function mark_empty_directories
 
-    ! Collapse tree intelligently - only expand directories with dirty files
-    subroutine collapse_tree_smart(root)
-        type(tree_node_t), pointer, intent(inout) :: root
-        logical :: dummy
-
-        if (.not. associated(root)) return
-
-        ! Recursively determine which directories should be expanded
-        dummy = has_dirty_files(root)
-    end subroutine collapse_tree_smart
-
-    ! Recursive function: returns true if node or descendants have dirty files
-    ! Side effect: sets node%expanded based on whether it should be shown expanded
-    recursive function has_dirty_files(node) result(has_dirty)
-        type(tree_node_t), pointer, intent(inout) :: node
-        logical :: has_dirty
-        type(tree_node_t), pointer :: child
-        logical :: child_has_dirty
-
-        if (.not. associated(node)) then
-            has_dirty = .false.
-            return
-        end if
-
-        ! Files are dirty if they have any git status
-        if (node%is_file) then
-            has_dirty = node%is_staged .or. node%is_unstaged .or. node%is_untracked
-            return
-        end if
-
-        ! For directories, check all children
-        has_dirty = .false.
-        child => node%first_child
-        do while (associated(child))
-            child_has_dirty = has_dirty_files(child)
-            if (child_has_dirty) has_dirty = .true.
-            child => child%next_sibling
-        end do
-
-        ! Collapse this directory if it has no dirty descendants
-        ! Keep root always expanded
-        if (trim(node%name) == '.') then
-            node%expanded = .true.  ! Root always expanded
-        else
-            node%expanded = has_dirty  ! Only expand if has dirty files
-        end if
-    end function has_dirty_files
 
     recursive subroutine sort_tree(node)
         type(tree_node_t), pointer, intent(inout) :: node
