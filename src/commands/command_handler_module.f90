@@ -9,6 +9,7 @@ module command_handler_module
                                    sync_editor_to_pane, tab_t
     use text_buffer_module
     use platform_module, only: canonical_path
+    use tab_drag_module, only: drag_is_armed, drag_cancel, drag_is_showing
     use clickable_region_module, only: clickable_region_t, region_at, REGION_TAB_SCROLL, &
                                        REGION_TAB, REGION_BLOCK, REGION_FUSS_TOGGLE, &
                                        REGION_GP_ROW, REGION_GP_NAME, &
@@ -190,6 +191,10 @@ module command_handler_module
     ! can scroll underneath an open menu and the entry at those coordinates
     ! may be a different group by the time the row is clicked.
     integer(int32) :: g_menu_gid = 0
+
+    ! Throttle for chevron auto-scroll while dragging.
+    integer(int64) :: g_drag_scroll_at = 0
+    integer, parameter :: DRAG_SCROLL_MS = 120
 
     ! Which tab the open menu is about, by PATH. Not the index the region
     ! carried: the bar scrolls, tabs close, and every index renumbers when one
@@ -592,6 +597,11 @@ contains
                                 call switch_to_tab_with_buffer(editor, &
                                                                hit%payload, buffer)
                             end if
+                            ! Switching first is deliberate and is what was
+                            ! asked for: grabbing a tab to move it selects it,
+                            ! exactly as clicking it would. Arming is not yet
+                            ! dragging -- see arm_tab_drag.
+                            call arm_tab_drag(editor, hit%payload, mrow, mcol)
                             return
                         case (REGION_TAB_SCROLL)
                             call nudge_tab_scroll(hit%payload)
@@ -639,6 +649,40 @@ contains
                     end if
                 end if
             end block
+        end if
+
+        ! A tab being carried owns the pointer. Ahead of the document drag
+        ! handler, which would otherwise read the same motion as the start of
+        ! a text selection, and ahead of the menu, which swallows releases.
+        ! Guarded on a press having landed on the bar, so nothing here costs
+        ! anything the rest of the time.
+        if (drag_is_armed()) then
+            if (index(key_str, 'mouse-drag:') == 1) then
+                block
+                    character(len=16) :: dev
+                    integer :: dbtn, drow, dcol
+                    logical :: dok
+
+                    call parse_mouse_event(key_str, dev, dbtn, drow, dcol, dok)
+                    ! Left button held. Mode 1002 reports motion whichever
+                    ! button is down, and only the left one is carrying a tab.
+                    if (dok .and. iand(dbtn, 3) == 0) then
+                        call tab_drag_motion(editor, drow, dcol)
+                        g_lsp_ui_changed = .true.
+                        return
+                    end if
+                end block
+            end if
+            if (index(key_str, 'mouse-release:') == 1) then
+                call tab_drag_release(editor)
+                return
+            end if
+            ! Anything else -- a key, another button -- abandons the drag
+            ! rather than leaving it half-held while the user does something
+            ! unrelated.
+            if (index(key_str, 'mouse-') /= 1) then
+                call drag_cancel()
+            end if
         end if
 
         ! The context menu is topmost, so its keys are taken before the
@@ -6111,6 +6155,155 @@ contains
         shown = context_menu_show(mrow, mcol, top_row, bottom_row, left_col, right_col)
         if (shown) g_lsp_ui_changed = .true.
     end subroutine open_group_context_menu
+
+    ! ---- dragging a tab -------------------------------------------------
+
+    !> Record a press on a tab-bar entry so a following move can drag it.
+    !>
+    !> Arming, not dragging. A click that never moves must stay a click, so
+    !> nothing is drawn and nothing is targeted until the pointer leaves the
+    !> cell it was pressed on.
+    subroutine arm_tab_drag(editor, payload, mrow, mcol)
+        use tab_drag_module, only: drag_arm_only, DRAG_TAB, DRAG_GROUP
+        use renderer_module, only: tabbar_slot_at
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(in) :: payload, mrow, mcol
+        character(len=:), allocatable :: path, label
+        integer :: strip, slot
+
+        slot = tabbar_slot_at(mrow, mcol, strip)
+        if (slot == 0) return
+
+        if (payload < 0) then
+            label = ' ' // group_label_public(editor, int(-payload, int32)) // ' '
+            call drag_arm_only(DRAG_GROUP, payload, '', label, &
+                               int(-payload, int32), strip, mrow, mcol, &
+                               size(editor%tabs))
+        else if (payload >= 1 .and. payload <= size(editor%tabs)) then
+            if (.not. allocated(editor%tabs(payload)%filename)) return
+            path = editor%tabs(payload)%filename
+            label = ' ' // basename_public(path) // ' '
+            call drag_arm_only(DRAG_TAB, payload, path, label, 0_int32, &
+                               strip, mrow, mcol, size(editor%tabs))
+        end if
+    end subroutine arm_tab_drag
+
+    function basename_public(path) result(b)
+        character(len=*), intent(in) :: path
+        character(len=:), allocatable :: b
+        integer :: slash
+
+        slash = index(trim(path), '/', back=.true.)
+        if (slash > 0) then
+            b = path(slash + 1:len_trim(path))
+        else
+            b = trim(path)
+        end if
+    end function basename_public
+
+    !> The pointer moved with the button down. Work out where a drop would
+    !> land; draw nothing here, the renderer reads the target.
+    subroutine tab_drag_motion(editor, mrow, mcol)
+        use tab_drag_module, only: drag_is_armed, drag_is_showing, drag_begin, &
+                                   drag_set_pointer, drag_press_row, &
+                                   drag_press_col, drag_set_target, &
+                                   drag_clear_target, drag_payload, &
+                                   drag_tab_count, drag_cancel
+        use renderer_module, only: tabbar_slot_at, nudge_tab_scroll
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(in) :: mrow, mcol
+        type(clickable_region_t) :: hit
+        integer :: slot, strip
+
+        if (.not. drag_is_armed()) return
+        ! A tab opened or closed underneath us. The drag was aimed at an
+        ! arrangement that no longer exists, so abandon it rather than move
+        ! something the user is no longer pointing at.
+        if (drag_tab_count() /= size(editor%tabs)) then
+            call drag_cancel()
+            return
+        end if
+
+        if (.not. drag_is_showing()) then
+            if (mrow == drag_press_row() .and. mcol == drag_press_col()) return
+            call drag_begin()
+        end if
+        call drag_set_pointer(mrow, mcol)
+
+        ! Held over a chevron: scroll that way so a tab can be carried past
+        ! the edge of a full bar. On a timer, not per event -- a fast pointer
+        ! emits far more motion reports than a slow one and the bar would fly.
+        hit = region_at(mrow, mcol)
+        if (hit%kind == REGION_TAB_SCROLL) then
+            if (drag_scroll_due()) call nudge_tab_scroll(hit%payload)
+            call drag_clear_target()
+            return
+        end if
+
+        slot = tabbar_slot_at(mrow, mcol, strip)
+        if (slot == 0) then
+            call drag_clear_target()
+            return
+        end if
+        call drag_set_target(strip, slot, 0_int32)
+    end subroutine tab_drag_motion
+
+    !> True at most every DRAG_SCROLL_MS, so holding over a chevron scrolls at
+    !> a readable rate rather than once per motion report.
+    logical function drag_scroll_due()
+        integer(int64) :: now, rate
+
+        call system_clock(count=now, count_rate=rate)
+        if (rate <= 0) then
+            drag_scroll_due = .true.
+            return
+        end if
+        drag_scroll_due = (now - g_drag_scroll_at) * 1000 / rate >= DRAG_SCROLL_MS
+        if (drag_scroll_due) g_drag_scroll_at = now
+    end function drag_scroll_due
+
+    !> Button released: apply the target, or let go of it.
+    subroutine tab_drag_release(editor)
+        use tab_drag_module, only: drag_is_showing, drag_has_target, drag_kind, &
+                                   drag_to_row, drag_to_slot, drag_path, &
+                                   drag_gid, drag_cancel, drag_from_row, &
+                                   DRAG_TAB, DRAG_GROUP
+        use editor_state_module, only: find_tab_by_path_public, reorder_tab, &
+                                       reorder_group_block, set_group_ordinal
+        type(editor_state_t), intent(inout) :: editor
+        integer :: from_idx, dest
+
+        if (.not. drag_is_showing()) then
+            call drag_cancel()
+            return
+        end if
+        if (.not. drag_has_target()) then
+            ! Released somewhere that means nothing. Nothing was ever applied,
+            ! so letting go of the target IS the snap back.
+            call drag_cancel()
+            g_lsp_ui_changed = .true.
+            return
+        end if
+
+        dest = drag_to_slot()
+
+        if (drag_kind() == DRAG_GROUP) then
+            if (drag_to_row() == 1) call reorder_group_block(editor, drag_gid(), dest)
+        else
+            from_idx = find_tab_by_path_public(editor, trim(drag_path()))
+            if (from_idx /= 0) then
+                if (drag_to_row() == 2 .and. drag_from_row() == 2) then
+                    ! Within a group: ordinals only, no tab moves.
+                    call set_group_ordinal(editor, from_idx, dest)
+                else if (drag_to_row() == 1) then
+                    call reorder_tab(editor, from_idx, dest)
+                end if
+            end if
+        end if
+
+        call drag_cancel()
+        g_lsp_ui_changed = .true.
+    end subroutine tab_drag_release
 
     !> Right-click on an ordinary tab.
     subroutine open_tab_context_menu(editor, tab_idx, mrow, mcol)

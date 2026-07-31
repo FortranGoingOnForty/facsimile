@@ -7,6 +7,9 @@ module renderer_module
     use editor_state_module, only: active_pane_of, active_group_id, group_label, &
                                    group_members, group_member_count, group_find
     use bracket_matching_module
+    use tab_drag_module, only: drag_is_showing, drag_payload, drag_to_row, &
+                              drag_to_slot, drag_has_target, drag_label, &
+                              drag_pointer_row, drag_pointer_col
     use clickable_region_module, only: regions_begin_frame, region_add, REGION_TAB, &
                                        region_at, clickable_region_t, &
                                        REGION_TAB_SCROLL, &
@@ -56,6 +59,7 @@ module renderer_module
     public :: text_area_height, tab_bar_height, first_content_row
     public :: strip_entry_t, strip_span_t, strip_layout, STRIP_MAX_ENTRIES
     public :: nudge_tab_scroll, tab_group_hover, tab_group_clear_hover
+    public :: tabbar_slot_at, tabbar_strip_rows
     public :: tab_group_preview_visible, set_group_preview_enabled  ! rows the document gets; page size must match
 
     ! Configuration
@@ -137,6 +141,16 @@ module renderer_module
     ! column 1, and the preview must inherit that rather than draw over the
     ! tree.
     integer(int32) :: g_hover_group = 0
+    ! Where each drawn entry sits, per strip, recorded as it is drawn.
+    ! A drop target is a SLOT -- a position among the entries -- and the
+    ! clickable region only carries a payload, so the mapping has to come from
+    ! whoever did the placing.
+    integer :: g_slot_n(2) = 0
+    integer :: g_slot_c0(2, STRIP_MAX_ENTRIES) = 0
+    integer :: g_slot_c1(2, STRIP_MAX_ENTRIES) = 0
+    integer :: g_slot_idx(2, STRIP_MAX_ENTRIES) = 0
+    integer :: g_slot_row(2) = 0
+
     integer :: g_tabbar_col0 = 1
     integer :: g_tabbar_width = 80
     logical :: g_group_preview_enabled = .true.
@@ -630,6 +644,10 @@ contains
 
         ! The dialog is topmost: it is what the user is looking at.
         if (is_group_picker_visible()) call render_group_picker()
+
+        ! Except while something is being dragged, which is above even that:
+        ! it is attached to the pointer.
+        call render_drag_ghost(editor)
 
         ! This runs last in every frame, and render_screen's panes branch
         ! returns straight after it without flushing -- so anything drawn
@@ -3291,6 +3309,7 @@ contains
         ! Payload convention: a positive payload is a tab index, a negative one
         ! is -(group id), so the click router can tell them apart without a
         ! second region kind for the ungrouped case.
+        g_slot_n(1) = 0
         n_entries = 0
         active_entry = 0
         do i = 1, tab_count
@@ -3316,6 +3335,11 @@ contains
             entries(n_entries)%dim = editor%tabs(i)%is_orphan
             if (i == editor%active_tab_index) active_entry = n_entries
         end do
+
+        ! Show the drag where it would land. The array is untouched -- only
+        ! the entries about to be laid out are reordered -- so a drag that is
+        ! abandoned costs exactly nothing to undo.
+        call apply_drag_preview(entries, n_entries, 1, active_entry)
 
         call strip_layout(entries, n_entries, max_width, active_entry, &
                           g_tab_scroll, spans, n_spans, more_left, more_right)
@@ -3352,6 +3376,8 @@ contains
                                 start_column + sp%col0 - 1, &
                                 start_column + sp%col1 - 1, &
                                 entries(sp%idx)%payload)
+                call note_slot(1, 1, sp%idx, start_column + sp%col0 - 1, &
+                               start_column + sp%col1 - 1)
             end associate
         end do
 
@@ -3393,6 +3419,7 @@ contains
         character(len=16) :: more_lbl
 
         if (gid == 0 .or. width < 1) return
+        g_slot_n(2) = 0
         call group_members(editor, gid, members)
         if (size(members) == 0) return
 
@@ -3436,6 +3463,8 @@ contains
                                 start_col + sp%col0 - 1, &
                                 start_col + sp%col1 - 1, &
                                 entries(sp%idx)%payload)
+                call note_slot(2, row, sp%idx, start_col + sp%col0 - 1, &
+                               start_col + sp%col1 - 1)
             end associate
         end do
 
@@ -3451,6 +3480,133 @@ contains
 
     !> Move a strip's scroll by one entry. Payload sign gives the direction,
     !> magnitude gives the row: 1 for the tab row, 2 for the member row.
+    !> Reorder the entries about to be drawn so the held one appears where it
+    !> would land, and mark it so it can be drawn hollow.
+    !>
+    !> An entry-array shuffle, never a tabs-array one: this is a preview of a
+    !> move that has not happened and may never happen.
+    subroutine apply_drag_preview(entries, n_entries, row, active_entry)
+        type(strip_entry_t), intent(inout) :: entries(:)
+        integer, intent(in) :: n_entries, row
+        integer, intent(inout) :: active_entry
+        type(strip_entry_t) :: held
+        integer :: i, from, to
+
+        if (.not. drag_is_showing()) return
+        if (.not. drag_has_target()) return
+        if (drag_to_row() /= row) return
+
+        from = 0
+        do i = 1, n_entries
+            if (entries(i)%payload == drag_payload()) then
+                from = i
+                exit
+            end if
+        end do
+        if (from == 0) return
+
+        to = max(1, min(drag_to_slot(), n_entries))
+        if (to /= from) then
+            held = entries(from)
+            if (to > from) then
+                do i = from, to - 1
+                    entries(i) = entries(i + 1)
+                end do
+            else
+                do i = from, to + 1, -1
+                    entries(i) = entries(i - 1)
+                end do
+            end if
+            entries(to) = held
+            ! The highlight is a POSITION in this array, so it has to follow
+            ! the shuffle or the wrong entry is drawn reversed.
+            if (active_entry == from) then
+                active_entry = to
+            else if (to > from .and. active_entry > from .and. active_entry <= to) then
+                active_entry = active_entry - 1
+            else if (to < from .and. active_entry >= to .and. active_entry < from) then
+                active_entry = active_entry + 1
+            end if
+        end if
+    end subroutine apply_drag_preview
+
+    !> The label under the pointer while a tab is being dragged.
+    !>
+    !> Drawn from the overlay pass so it sits above the bar, the preview strip
+    !> and the document -- it is the thing the pointer is carrying, so nothing
+    !> should cover it. Clipped to the screen rather than wrapped, which would
+    !> smear it onto the row below.
+    subroutine render_drag_ghost(editor)
+        type(editor_state_t), intent(in) :: editor
+        character(len=:), allocatable :: text
+        integer :: r, c, w
+
+        if (.not. drag_is_showing()) return
+        text = trim(drag_label())
+        if (len_trim(text) == 0) return
+
+        r = drag_pointer_row()
+        c = drag_pointer_col()
+        if (r < 1 .or. r > editor%screen_rows) return
+
+        w = len(text)
+        if (c + w - 1 > editor%screen_cols) c = editor%screen_cols - w + 1
+        if (c < 1) then
+            c = 1
+            if (w > editor%screen_cols) text = text(1:editor%screen_cols)
+        end if
+
+        call terminal_move_cursor(r, c)
+        ! Reverse video on a dim background: it reads as lifted off the bar
+        ! rather than as another entry sitting on it.
+        call terminal_write(char(27) // '[7;2m' // text // char(27) // '[0m')
+    end subroutine render_drag_ghost
+
+    !> Remember that entry `slot` of `strip` was drawn at these columns.
+    subroutine note_slot(strip, screen_row, slot, c0, c1)
+        integer, intent(in) :: strip, screen_row, slot, c0, c1
+
+        if (strip < 1 .or. strip > 2) return
+        if (g_slot_n(strip) >= STRIP_MAX_ENTRIES) return
+        g_slot_n(strip) = g_slot_n(strip) + 1
+        g_slot_c0(strip, g_slot_n(strip)) = c0
+        g_slot_c1(strip, g_slot_n(strip)) = c1
+        g_slot_row(strip) = screen_row
+        ! The slot number is the entry index, which is what a drop target is
+        ! expressed in -- not the count of things drawn, since scrolling means
+        ! the first drawn entry is rarely the first entry.
+        g_slot_c0(strip, g_slot_n(strip)) = c0
+        g_slot_idx(strip, g_slot_n(strip)) = slot
+    end subroutine note_slot
+
+    !> Which entry slot is drawn at (row, col), or 0. `strip` comes back as 1
+    !> for the tab bar and 2 for a group's member row.
+    function tabbar_slot_at(row, col, strip) result(slot)
+        integer, intent(in) :: row, col
+        integer, intent(out) :: strip
+        integer :: slot, k, i
+
+        slot = 0
+        strip = 0
+        do k = 1, 2
+            if (g_slot_row(k) /= row) cycle
+            do i = 1, g_slot_n(k)
+                if (col >= g_slot_c0(k, i) .and. col <= g_slot_c1(k, i)) then
+                    slot = g_slot_idx(k, i)
+                    strip = k
+                    return
+                end if
+            end do
+        end do
+    end function tabbar_slot_at
+
+    !> The screen rows the two strips were last drawn on, 0 if not drawn.
+    subroutine tabbar_strip_rows(row1, row2)
+        integer, intent(out) :: row1, row2
+        row1 = g_slot_row(1)
+        row2 = g_slot_row(2)
+    end subroutine tabbar_strip_rows
+
     subroutine nudge_tab_scroll(payload)
         integer, intent(in) :: payload
 
