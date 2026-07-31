@@ -59,7 +59,9 @@ module renderer_module
     public :: text_area_height, tab_bar_height, first_content_row
     public :: strip_entry_t, strip_span_t, strip_layout, STRIP_MAX_ENTRIES
     public :: nudge_tab_scroll, tab_group_hover, tab_group_clear_hover
-    public :: tabbar_slot_at, tabbar_strip_rows
+    public :: tab_group_set_hover
+    public :: tabbar_slot_at, tabbar_strip_rows, tabbar_strip2_gid
+    public :: tabbar_last_slot, tabbar_pre_payload
     public :: tab_group_preview_visible, set_group_preview_enabled  ! rows the document gets; page size must match
 
     ! Configuration
@@ -150,6 +152,18 @@ module renderer_module
     integer :: g_slot_c1(2, STRIP_MAX_ENTRIES) = 0
     integer :: g_slot_idx(2, STRIP_MAX_ENTRIES) = 0
     integer :: g_slot_row(2) = 0
+    ! Which group row 2 belongs to. It is the pinned member row while inside a
+    ! group and a hover preview otherwise, and a drop needs to know WHICH
+    ! group it landed on -- the two cases are the same strip.
+    integer(int32) :: g_slot2_gid = 0
+    ! Row 1's payloads as they stand WITHOUT the drag preview.
+    !
+    ! The preview puts the held entry under the pointer -- that is what it is
+    ! for -- so asking the region table what is being hovered answers "the
+    ! thing you are dragging", always. What a drop is aimed at is whatever
+    ! occupies that slot when the held entry is not there.
+    integer :: g_pre_n = 0
+    integer :: g_pre_payload(STRIP_MAX_ENTRIES) = 0
 
     integer :: g_tabbar_col0 = 1
     integer :: g_tabbar_width = 80
@@ -724,6 +738,21 @@ contains
         if (moved) g_group_scroll = 1     ! a preview always starts at its head
         g_hover_group = found
     end function tab_group_hover
+
+    !> Preview `gid` outright, without asking what is under the pointer.
+    !>
+    !> The hover version resolves through the region table, which during a
+    !> drag describes the PREVIEWED bar -- the held entry sits under the
+    !> pointer, so it would answer "no group here" every time. A drag already
+    !> knows which group it dwelt on; it just needs to say so.
+    function tab_group_set_hover(gid) result(moved)
+        integer(int32), intent(in) :: gid
+        logical :: moved
+
+        moved = (gid /= g_hover_group)
+        if (moved) g_group_scroll = 1
+        g_hover_group = gid
+    end function tab_group_set_hover
 
     !> Forget the hovered group. True if that changed anything.
     function tab_group_clear_hover() result(moved)
@@ -3336,6 +3365,11 @@ contains
             if (i == editor%active_tab_index) active_entry = n_entries
         end do
 
+        g_pre_n = min(n_entries, STRIP_MAX_ENTRIES)
+        do i = 1, g_pre_n
+            g_pre_payload(i) = entries(i)%payload
+        end do
+
         ! Show the drag where it would land. The array is untouched -- only
         ! the entries about to be laid out are reordered -- so a drag that is
         ! abandoned costs exactly nothing to undo.
@@ -3420,6 +3454,7 @@ contains
 
         if (gid == 0 .or. width < 1) return
         g_slot_n(2) = 0
+        g_slot2_gid = gid
         call group_members(editor, gid, members)
         if (size(members) == 0) return
 
@@ -3599,6 +3634,35 @@ contains
             end do
         end do
     end function tabbar_slot_at
+
+    !> The highest entry slot currently drawn on `strip`, or 0.
+    !>
+    !> Dropping on the blank tail of a strip means "at the end", and the end
+    !> is the last thing DRAWN -- not the last that exists, because anything
+    !> scrolled off is not a place the pointer can be aimed at.
+    !> What sits at row-1 slot `slot` when the drag preview is ignored.
+    integer function tabbar_pre_payload(slot)
+        integer, intent(in) :: slot
+
+        tabbar_pre_payload = 0
+        if (slot >= 1 .and. slot <= g_pre_n) tabbar_pre_payload = g_pre_payload(slot)
+    end function tabbar_pre_payload
+
+    integer function tabbar_last_slot(strip)
+        integer, intent(in) :: strip
+        integer :: i
+
+        tabbar_last_slot = 0
+        if (strip < 1 .or. strip > 2) return
+        do i = 1, g_slot_n(strip)
+            if (g_slot_idx(strip, i) > tabbar_last_slot) &
+                tabbar_last_slot = g_slot_idx(strip, i)
+        end do
+    end function tabbar_last_slot
+
+    integer(int32) function tabbar_strip2_gid()
+        tabbar_strip2_gid = g_slot2_gid
+    end function tabbar_strip2_gid
 
     !> The screen rows the two strips were last drawn on, 0 if not drawn.
     subroutine tabbar_strip_rows(row1, row2)

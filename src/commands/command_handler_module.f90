@@ -195,6 +195,12 @@ module command_handler_module
     ! Throttle for chevron auto-scroll while dragging.
     integer(int64) :: g_drag_scroll_at = 0
     integer, parameter :: DRAG_SCROLL_MS = 120
+    ! Hovering a held tab over a group opens that group's member strip, so it
+    ! can be dropped in. On a dwell, not immediately: dragging PAST a group on
+    ! the way somewhere else must not make its members flash open.
+    integer(int32) :: g_dwell_gid = 0
+    integer(int64) :: g_dwell_since = 0
+    integer, parameter :: DRAG_DWELL_MS = 400
 
     ! Which tab the open menu is about, by PATH. Not the index the region
     ! carried: the bar scrolls, tabs close, and every index renumbers when one
@@ -6209,11 +6215,13 @@ contains
                                    drag_press_col, drag_set_target, &
                                    drag_clear_target, drag_payload, &
                                    drag_tab_count, drag_cancel
-        use renderer_module, only: tabbar_slot_at, nudge_tab_scroll
+        use renderer_module, only: tabbar_slot_at, nudge_tab_scroll, &
+                                   tabbar_strip2_gid, tabbar_strip_rows, &
+                                   tabbar_last_slot
         type(editor_state_t), intent(in) :: editor
         integer, intent(in) :: mrow, mcol
         type(clickable_region_t) :: hit
-        integer :: slot, strip
+        integer :: slot, strip, row1, row2
 
         if (.not. drag_is_armed()) return
         ! A tab opened or closed underneath us. The drag was aimed at an
@@ -6242,11 +6250,78 @@ contains
 
         slot = tabbar_slot_at(mrow, mcol, strip)
         if (slot == 0) then
-            call drag_clear_target()
+            ! The blank tail of a strip is still that strip. Dropping there
+            ! means "at the end", which is the only way to carry a tab OUT of
+            ! a group when the group is the only entry on row 1 -- there is
+            ! nothing else to aim at.
+            call tabbar_strip_rows(row1, row2)
+            if (mrow == row1 .and. row1 /= 0) then
+                call drag_set_target(1, tabbar_last_slot(1), 0_int32)
+                call dwell_over_group(0)
+            else if (mrow == row2 .and. row2 /= 0) then
+                call drag_set_target(2, tabbar_last_slot(2), tabbar_strip2_gid())
+            else
+                call drag_clear_target()
+                g_dwell_gid = 0
+            end if
             return
         end if
-        call drag_set_target(strip, slot, 0_int32)
+
+        if (strip == 2) then
+            ! A member row, either a group's pinned one or a strip that a
+            ! dwell opened. Either way the drop joins THAT group.
+            call drag_set_target(2, slot, tabbar_strip2_gid())
+            return
+        end if
+
+        ! Row 1. If the pointer is resting on a DIFFERENT group's entry, open
+        ! it after a moment so its members can be dropped into.
+        call dwell_over_group(slot)
+        call drag_set_target(1, slot, 0_int32)
     end subroutine tab_drag_motion
+
+    !> Open a group's member strip when a dragged tab rests on its entry.
+    !>
+    !> Reuses the hover preview: it already draws a group's members on row 2
+    !> and already treats its own strip as still-hovered, which is exactly the
+    !> "move down into it to drop" behaviour needed here. Nothing new is drawn.
+    subroutine dwell_over_group(slot)
+        use tab_drag_module, only: drag_kind, drag_gid, DRAG_TAB
+        use renderer_module, only: tab_group_set_hover, tabbar_pre_payload
+        integer, intent(in) :: slot
+        integer(int32) :: over
+        integer(int64) :: now, rate
+        integer :: payload
+        logical :: ignored
+
+        ! Deliberately NOT region_at: the region table describes the previewed
+        ! bar, where the held entry has been moved under the pointer, so it
+        ! would always answer "you are hovering the thing you are holding".
+        over = 0
+        payload = tabbar_pre_payload(slot)
+        if (payload < 0) over = int(-payload, int32)
+
+        ! Only a tab can join a group, and never the group it is already the
+        ! entry for.
+        if (drag_kind() /= DRAG_TAB) over = 0
+        if (over /= 0 .and. over == drag_gid()) over = 0
+
+        if (over == 0) then
+            g_dwell_gid = 0
+            return
+        end if
+
+        call system_clock(count=now, count_rate=rate)
+        if (over /= g_dwell_gid) then
+            g_dwell_gid = over
+            g_dwell_since = now
+            return
+        end if
+        if (rate <= 0) return
+        if ((now - g_dwell_since) * 1000 / rate < DRAG_DWELL_MS) return
+
+        ignored = tab_group_set_hover(over)
+    end subroutine dwell_over_group
 
     !> True at most every DRAG_SCROLL_MS, so holding over a chevron scrolls at
     !> a readable rate rather than once per motion report.
@@ -6266,22 +6341,23 @@ contains
     subroutine tab_drag_release(editor)
         use tab_drag_module, only: drag_is_showing, drag_has_target, drag_kind, &
                                    drag_to_row, drag_to_slot, drag_path, &
-                                   drag_gid, drag_cancel, drag_from_row, &
+                                   drag_gid, drag_cancel, drag_to_gid, &
                                    DRAG_TAB, DRAG_GROUP
         use editor_state_module, only: find_tab_by_path_public, reorder_tab, &
-                                       reorder_group_block, set_group_ordinal
+                                       reorder_group_block, set_group_ordinal, &
+                                       group_remove_member, prune_empty_groups
         type(editor_state_t), intent(inout) :: editor
         integer :: from_idx, dest
+        integer(int32) :: was_gid, to_gid
 
         if (.not. drag_is_showing()) then
-            call drag_cancel()
+            call end_drag()
             return
         end if
         if (.not. drag_has_target()) then
             ! Released somewhere that means nothing. Nothing was ever applied,
             ! so letting go of the target IS the snap back.
-            call drag_cancel()
-            g_lsp_ui_changed = .true.
+            call end_drag()
             return
         end if
 
@@ -6292,18 +6368,83 @@ contains
         else
             from_idx = find_tab_by_path_public(editor, trim(drag_path()))
             if (from_idx /= 0) then
-                if (drag_to_row() == 2 .and. drag_from_row() == 2) then
-                    ! Within a group: ordinals only, no tab moves.
-                    call set_group_ordinal(editor, from_idx, dest)
+                was_gid = editor%tabs(from_idx)%group_id
+                if (drag_to_row() == 2) then
+                    to_gid = drag_to_gid()
+                    if (to_gid /= 0) then
+                        if (to_gid == was_gid) then
+                            ! Within one group: ordinals only. Moving a tab in
+                            ! the array here would drag the group's neighbours
+                            ! around row 1 for a change confined to row 2.
+                            call set_group_ordinal(editor, from_idx, dest)
+                        else
+                            call join_group_at(editor, from_idx, to_gid, dest)
+                        end if
+                    end if
                 else if (drag_to_row() == 1) then
-                    call reorder_tab(editor, from_idx, dest)
+                    if (was_gid /= 0) then
+                        ! Carried out of its group and dropped on the bar. It
+                        ! leaves the group and becomes a tab in its own right,
+                        ! which is the whole point of the gesture.
+                        call group_remove_member(editor, from_idx)
+                        call prune_empty_groups(editor)
+                    end if
+                    from_idx = find_tab_by_path_public(editor, trim(drag_path()))
+                    if (from_idx /= 0) call reorder_tab(editor, from_idx, dest)
                 end if
             end if
         end if
 
-        call drag_cancel()
-        g_lsp_ui_changed = .true.
+        call end_drag()
     end subroutine tab_drag_release
+
+    !> Let go of everything the drag was holding, including the group strip a
+    !> dwell may have opened -- that strip exists only as a drop target and
+    !> would otherwise stay open over a drag that has finished.
+    subroutine end_drag()
+        use tab_drag_module, only: drag_cancel
+        use renderer_module, only: tab_group_clear_hover
+        logical :: ignored
+
+        call drag_cancel()
+        g_dwell_gid = 0
+        ignored = tab_group_clear_hover()
+        g_lsp_ui_changed = .true.
+    end subroutine end_drag
+
+    !> Move a tab into `gid`, landing at position `pos` on its member row.
+    !>
+    !> The array move afterwards is not cosmetic. Row 1 draws a group at its
+    !> FIRST member's position, so a tab that joins from the far side of the
+    !> array would yank the whole group entry across the bar to wherever the
+    !> newcomer happened to sit. Pulling the block back to where it already was
+    !> keeps the group still while its membership changes.
+    subroutine join_group_at(editor, tab_idx, gid, pos)
+        use editor_state_module, only: group_add_member, group_remove_member, &
+                                       set_group_ordinal, reorder_group_block, &
+                                       prune_empty_groups, group_members
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: tab_idx, pos
+        integer(int32), intent(in) :: gid
+        integer, allocatable :: members(:)
+        integer :: block_start, i
+
+        ! Where the group sits now, before the newcomer can influence it.
+        block_start = 0
+        call group_members(editor, gid, members)
+        do i = 1, size(members)
+            if (block_start == 0 .or. members(i) < block_start) block_start = members(i)
+        end do
+        if (block_start == 0) return
+
+        if (editor%tabs(tab_idx)%group_id /= 0) then
+            call group_remove_member(editor, tab_idx)
+            call prune_empty_groups(editor)
+        end if
+        call group_add_member(editor, gid, tab_idx)
+        call set_group_ordinal(editor, tab_idx, pos)
+        call reorder_group_block(editor, gid, block_start)
+    end subroutine join_group_at
 
     !> Right-click on an ordinary tab.
     subroutine open_tab_context_menu(editor, tab_idx, mrow, mcol)

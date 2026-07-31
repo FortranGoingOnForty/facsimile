@@ -46,6 +46,13 @@ fpm run -- [filename]
 - `wheel` - scrolls whatever is under the pointer: the pane, an inactive pane,
   or the terminal panel's scrollback. Over the tab bar or status bar it does
   nothing rather than moving a document you are not pointing at
+- **drag a tab** along the bar to reorder it. A ghost follows the pointer and
+  the bar shows where it will land; release to commit, release anywhere else
+  to snap back. Holding over a `<`/`>` chevron scrolls the bar, so a tab can
+  be carried off-screen
+- drag a tab GROUP entry and its members travel with it. Drag a member off the
+  member row onto the bar to take it out of the group, or hold a tab over a
+  group for a moment to open its members and drop it in
 - click a `[n: name]` tab to switch to it; right-click one for Close Tab,
   Close Other Tabs, Copy Path and Remove from Group. These act on the tab you
   clicked, not the one you are looking at

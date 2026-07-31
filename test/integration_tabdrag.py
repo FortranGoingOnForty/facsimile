@@ -314,6 +314,106 @@ def test_reordering_within_a_group(binary):
         s.close()
 
 
+def test_carrying_a_member_out_of_its_group(binary):
+    print("\nA member dragged onto row 1 leaves the group")
+    s = Session(binary, n=4)
+    try:
+        s.open_all()
+        s.send("\x10", 0.7)
+        s.send("Group All Tabs", 0.6)
+        s.send("\r", 1.6)
+        check("(4)" in s.tab_bar(), "all four are in one group", s.tab_bar())
+
+        names = s.row2().split()
+        victim = names[-1]
+        col = s.entry_col(victim, row=2)
+        # Up onto row 1, landing on its blank tail -- with the group as the
+        # only entry there is nothing else to aim at, which is exactly why
+        # the empty part of a strip has to be a valid drop.
+        s.child.send(f"\x1b[<0;{col};2M")
+        s.drain(0.4)
+        for c in range(col, col + 8, 2):
+            s.child.send(f"\x1b[<32;{c};2M")
+            s.drain(0.1)
+        s.child.send(f"\x1b[<32;{col + 8};1M")
+        s.drain(0.4)
+        s.child.send(f"\x1b[<0;{col + 8};1m")
+        s.drain(1.2)
+
+        check("(3)" in s.tab_bar(), "the group is down to three", s.tab_bar())
+        check(victim in s.tab_bar(), "and the member is a tab in its own right",
+              s.tab_bar())
+    finally:
+        s.close()
+
+
+def test_dwelling_over_a_group_opens_it_to_drop_into(binary):
+    print("\nHolding a tab over a group opens it, and it can be dropped in")
+    s = Session(binary, n=4)
+    try:
+        s.open_all()
+        s.send("\x10", 0.7)
+        s.send("Group All Tabs", 0.6)
+        s.send("\r", 1.6)
+
+        # Take one out first, so there is something to put back.
+        names = s.row2().split()
+        victim = names[-1]
+        col = s.entry_col(victim, row=2)
+        s.child.send(f"\x1b[<0;{col};2M")
+        s.drain(0.4)
+        for c in range(col, col + 8, 2):
+            s.child.send(f"\x1b[<32;{c};2M")
+            s.drain(0.1)
+        s.child.send(f"\x1b[<32;{col + 8};1M")
+        s.drain(0.4)
+        s.child.send(f"\x1b[<0;{col + 8};1m")
+        s.drain(1.2)
+        check("(3)" in s.tab_bar(), "staged: three in the group, one out",
+              s.tab_bar())
+
+        src = s.entry_col(victim)
+        grp = s.entry_col("ws/")
+        if src is None or grp is None:
+            check(False, "found both entries on row 1", s.tab_bar())
+            return
+
+        s.child.send(f"\x1b[<0;{src};1M")
+        s.drain(0.4)
+        for c in range(src + 1, grp + 2, 2):
+            s.child.send(f"\x1b[<32;{c};1M")
+            s.drain(0.1)
+        check("alpha" not in s.row2(),
+              "the group is closed while merely passing over it", repr(s.row2()))
+
+        # Rest on it. The strip opens on a DWELL, so that dragging past a
+        # group on the way elsewhere does not flash its members open.
+        for _ in range(8):
+            s.child.send(f"\x1b[<32;{grp + 2};1M")
+            s.drain(0.12)
+        check("alpha" in s.row2(), "resting on it opens its member strip",
+              repr(s.row2()))
+
+        drop = s.entry_col("beta.c", row=2)
+        if drop is None:
+            check(False, "found a member to aim at", repr(s.row2()))
+            return
+        s.child.send(f"\x1b[<32;{drop};2M")
+        s.drain(0.4)
+        s.child.send(f"\x1b[<0;{drop};2m")
+        s.drain(1.2)
+
+        check("(4)" in s.tab_bar(), "dropping in put it back in the group",
+              s.tab_bar())
+        after = s.row2().split()
+        check(victim in after, "it is on the member row", repr(s.row2()))
+        check(after.index(victim) < after.index("beta.c"),
+              "at the position it was dropped on, not appended",
+              repr(s.row2()))
+    finally:
+        s.close()
+
+
 def main():
     binary = find_binary()
     for fn in (test_drag_right_and_left,
@@ -322,7 +422,9 @@ def main():
                test_release_off_the_bar_changes_nothing,
                test_the_moved_tab_stays_active_and_visible,
                test_a_group_moves_as_one_block,
-               test_reordering_within_a_group):
+               test_reordering_within_a_group,
+               test_carrying_a_member_out_of_its_group,
+               test_dwelling_over_a_group_opens_it_to_drop_into):
         try:
             fn(binary)
         except Exception as exc:              # noqa: BLE001
