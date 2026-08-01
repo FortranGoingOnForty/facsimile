@@ -185,6 +185,11 @@ contains
         integer, intent(in) :: to_row, slot
         integer(int32), intent(in) :: gid
 
+        ! The two are mutually exclusive and the release checks the split
+        ! FIRST, so a split armed at an edge and then abandoned by dragging
+        ! back to the bar would still fire on the drop -- the tab would vanish
+        ! into a pane the user had already changed their mind about.
+        g_split_side = SPLIT_NONE
         g_has_target = .true.
         g_to_row = to_row
         g_to_slot = slot

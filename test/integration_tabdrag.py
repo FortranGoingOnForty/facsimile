@@ -695,6 +695,196 @@ def test_a_modified_tab_will_not_split_off(binary):
         s.close()
 
 
+def test_the_bar_never_renders_torn(binary):
+    """Reported: tabs rendering in pieces while dragging over them.
+
+    The ghost was drawn ON the tab bar, overwriting the entries underneath --
+    [1: a alpha.c [3: gamma.c] and so on. The bar already shows where the held
+    tab will land, so a label on top of it was redundant as well as
+    destructive. Balanced brackets is the cheap invariant that catches it.
+    """
+    print("\nThe bar stays intact while a tab is carried over it")
+    s = Session(binary, n=4)
+    try:
+        s.open_all()
+        src = s.entry_col("alpha.c")
+        s.child.send(f"\x1b[<0;{src};1M")
+        s.drain(0.4)
+        torn = []
+        for c in range(src + 1, 60):
+            s.child.send(f"\x1b[<32;{c};1M")
+            s.drain(0.07)
+            bar = s.tab_bar()
+            if bar.count("[") != bar.count("]"):
+                torn.append((c, bar))
+        check(not torn, "no torn entry at any column",
+              f"{len(torn)} of them, first: {torn[0] if torn else ''}")
+        s.child.send("\x1b[<0;59;1m")
+        s.drain(1.0)
+    finally:
+        s.close()
+
+
+def test_no_ghost_is_left_behind(binary):
+    """Reported: a ghost stuck at the far right of a sparse bar.
+
+    It could be painted past the end of the bar's own window -- which is
+    narrower than the screen whenever the file tree is open -- and the next
+    frame's clear does not reach that far.
+    """
+    print("\nNothing is left painted on the bar after a drag")
+    s = Session(binary, n=4)
+    try:
+        s.open_all()
+        s.send("\x02", 1.2)                      # tree open: narrower bar
+        src = s.entry_col("alpha.c")
+        if src is None:
+            check(False, "found the tab with the tree open", s.tab_bar())
+            return
+        s.child.send(f"\x1b[<0;{src};1M")
+        s.drain(0.4)
+        for c in range(src, COLS - 2, 8):
+            s.child.send(f"\x1b[<32;{c};1M")
+            s.drain(0.1)
+        s.child.send(f"\x1b[<0;{COLS - 4};1m")
+        s.drain(1.2)
+        bar = s.tab_bar()
+        check(bar.count("[") == bar.count("]"), "the bar is intact", bar)
+        # The ghost reads " alpha.c " with no brackets; a bare name outside
+        # any entry is the stranded label.
+        check("alpha.c ]" in bar or "alpha.c*]" in bar,
+              "alpha.c appears only as a real entry", bar)
+    finally:
+        s.close()
+
+
+def test_the_group_strip_closes_when_you_leave(binary):
+    """Reported: the strip persisted after moving off, and the bar lagged."""
+    print("\nA group's strip closes as soon as the pointer leaves it")
+    s = Session(binary, n=4)
+    try:
+        s.open_all()
+        s.send("\x10", 0.7)
+        s.send("Group All Tabs", 0.6)
+        s.send("\r", 1.6)
+        names = s.row2().split()
+        victim = names[-1]
+        c = s.entry_col(victim, row=2)
+        s.child.send(f"\x1b[<0;{c};2M")
+        s.drain(0.4)
+        for x in range(c, c + 8, 2):
+            s.child.send(f"\x1b[<32;{x};2M")
+            s.drain(0.1)
+        s.child.send(f"\x1b[<32;{c + 8};1M")
+        s.drain(0.4)
+        s.child.send(f"\x1b[<0;{c + 8};1m")
+        s.drain(1.2)
+
+        src = s.entry_col(victim)
+        grp = s.entry_col("ws/")
+        if src is None or grp is None:
+            check(False, "staged a tab outside the group", s.tab_bar())
+            return
+        s.child.send(f"\x1b[<0;{src};1M")
+        s.drain(0.4)
+        for x in range(src + 1, grp + 2, 2):
+            s.child.send(f"\x1b[<32;{x};1M")
+            s.drain(0.1)
+        for _ in range(8):
+            s.child.send(f"\x1b[<32;{grp + 2};1M")
+            s.drain(0.12)
+        check("alpha.c" in s.row2(), "the strip opened on the dwell",
+              repr(s.row2()))
+
+        s.child.send(f"\x1b[<32;{src};1M")
+        s.drain(0.4)
+        check("alpha.c" not in s.row2(),
+              "and closed immediately on moving off it", repr(s.row2()))
+        s.child.send(f"\x1b[<0;{src};1m")
+        s.drain(1.0)
+    finally:
+        s.close()
+
+
+def test_returning_to_the_bar_cancels_a_split(binary):
+    """Reported: an edge preview survived a change of mind and split anyway."""
+    print("\nGoing to an edge and back to the bar cancels the split")
+    s = Session(binary)
+    try:
+        s.open_all()
+        src = s.entry_col("alpha.c")
+        s.child.send(f"\x1b[<0;{src};1M")
+        s.drain(0.4)
+        s.child.send(f"\x1b[<32;{COLS - 3};12M")
+        s.drain(0.5)
+        armed = reverse_cells(s, 3, 25, COLS - 40, COLS)
+        check(armed > 100, "the split is previewed at the edge", f"{armed} cells")
+
+        s.child.send(f"\x1b[<32;{src + 20};1M")
+        s.drain(0.5)
+        left = reverse_cells(s, 3, 25, COLS - 40, COLS)
+        check(left == 0, "coming back to the bar clears the preview",
+              f"{left} cells")
+
+        s.child.send(f"\x1b[<0;{src + 20};1m")
+        s.drain(1.2)
+        check("alpha.c" in s.tab_bar(), "and the drop lands on the bar",
+              s.tab_bar())
+        check(s.text().count("int gamma;") + s.text().count("int alpha;") <= 1,
+              "with no split created", s.text()[:200])
+    finally:
+        s.close()
+
+
+def test_the_preview_is_the_pane_that_appears(binary):
+    """Reported: the band showed a third of what the split produced."""
+    print("\nThe band is exactly where the new pane lands")
+    s = Session(binary)
+    try:
+        s.open_all()
+        carry_to(s, "alpha.c", COLS - 3, 12)
+        band = [x + 1 for x in range(COLS) if s.screen.buffer[11][x].reverse]
+        check(bool(band), "a band is shown")
+        if not band:
+            return
+        # A vertical split halves the pane, so the band starts at the middle.
+        check(abs(band[0] - (COLS // 2 + 1)) <= 2,
+              "it starts at the halfway column, not a quarter in",
+              f"starts at {band[0]}, half is {COLS // 2 + 1}")
+        check(band[-1] >= COLS - 1, "and runs to the edge", f"ends {band[-1]}")
+
+        # A quarter in from the edge is well inside the pane and must not arm.
+        s.child.send(f"\x1b[<32;{COLS - 3 - COLS // 4};12M")
+        s.drain(0.4)
+        n = reverse_cells(s, 3, 10, 2, COLS) + reverse_cells(s, 14, 25, 2, COLS)
+        check(n == 0, "a quarter in from the edge arms nothing",
+              f"{n} cells")
+        s.child.send(f"\x1b[<0;{COLS - 3 - COLS // 4};12m")
+        s.drain(1.0)
+    finally:
+        s.close()
+
+
+def test_the_left_edge_puts_the_pane_on_the_left(binary):
+    """The split always builds its new pane on the right, so a left drop had
+    to be previewed on the left and then produced on the right."""
+    print("\nDropping on the left edge really does split leftwards")
+    s = Session(binary)
+    try:
+        s.open_all()
+        carry_to(s, "alpha.c", 3, 12)
+        s.child.send("\x1b[<0;3;12m")
+        s.drain(1.5)
+        header = s.screen.display[1]
+        ia, ig = header.find("[alpha.c]"), header.find("[gamma.c]")
+        check(ia >= 0 and ig >= 0, "two panes appeared", header.rstrip()[:100])
+        if ia >= 0 and ig >= 0:
+            check(ia < ig, "the carried file is the LEFT pane",
+                  header.rstrip()[:100])
+    finally:
+        s.close()
+
+
 def main():
     binary = find_binary()
     for fn in (test_drag_right_and_left,
@@ -710,7 +900,13 @@ def main():
                test_an_edge_previews_a_split,
                test_dropping_at_an_edge_makes_a_split,
                test_the_middle_of_the_document_snaps_back,
-               test_a_modified_tab_will_not_split_off):
+               test_a_modified_tab_will_not_split_off,
+               test_the_bar_never_renders_torn,
+               test_no_ghost_is_left_behind,
+               test_the_group_strip_closes_when_you_leave,
+               test_returning_to_the_bar_cancels_a_split,
+               test_the_preview_is_the_pane_that_appears,
+               test_the_left_edge_puts_the_pane_on_the_left):
         try:
             fn(binary)
         except Exception as exc:              # noqa: BLE001

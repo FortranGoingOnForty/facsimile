@@ -6189,6 +6189,7 @@ contains
         type(editor_state_t), intent(in) :: editor
         integer, intent(in) :: mrow, mcol
         integer :: tab_idx, pane_idx, r0, c0, r1, c1, w, h
+        integer :: trig_c, trig_r, mid_c, mid_r
 
         call drag_clear_target()
         ! Only a file can become a split. A group is several files and has no
@@ -6214,12 +6215,24 @@ contains
         if (mrow < r0 .or. mrow > r1) return
         if (mcol < c0 .or. mcol > c1) return
 
-        if (mrow >= r1 - h / 4 + 1) then
-            call drag_set_split(SPLIT_BELOW, r1 - h / 4 + 1, c0, r1, c1)
-        else if (mcol <= c0 + w / 4 - 1) then
-            call drag_set_split(SPLIT_LEFT, r0, c0, r1, c0 + w / 4 - 1)
-        else if (mcol >= c1 - w / 4 + 1) then
-            call drag_set_split(SPLIT_RIGHT, r0, c1 - w / 4 + 1, r1, c1)
+        ! Two different rectangles, and conflating them was the bug.
+        !
+        ! The TRIGGER is a narrow strip at the edge -- a quarter of the pane
+        ! armed a split almost anywhere and made the gesture feel twitchy.
+        ! The PREVIEW is where the new pane will actually be, which is a HALF,
+        ! because that is what splitting does. Showing a quarter and then
+        ! producing a half is the jarring part.
+        trig_c = max(3, w / 8)
+        trig_r = max(2, h / 6)
+        mid_c = c0 + w / 2
+        mid_r = r0 + h / 2
+
+        if (mrow >= r1 - trig_r + 1) then
+            call drag_set_split(SPLIT_BELOW, mid_r, c0, r1, c1)
+        else if (mcol <= c0 + trig_c - 1) then
+            call drag_set_split(SPLIT_LEFT, r0, c0, r1, mid_c - 1)
+        else if (mcol >= c1 - trig_c + 1) then
+            call drag_set_split(SPLIT_RIGHT, r0, mid_c, r1, c1)
         end if
     end subroutine aim_at_split
 
@@ -6348,7 +6361,8 @@ contains
     !> "move down into it to drop" behaviour needed here. Nothing new is drawn.
     subroutine dwell_over_group(slot)
         use tab_drag_module, only: drag_kind, drag_gid, DRAG_TAB
-        use renderer_module, only: tab_group_set_hover, tabbar_pre_payload
+        use renderer_module, only: tab_group_set_hover, tabbar_pre_payload, &
+                                   tab_group_clear_hover
         integer, intent(in) :: slot
         integer(int32) :: over
         integer(int64) :: now, rate
@@ -6368,7 +6382,12 @@ contains
         if (over /= 0 .and. over == drag_gid()) over = 0
 
         if (over == 0) then
+            ! Left the group. Close its strip NOW rather than letting it stand
+            ! until the drag ends: a strip that outlives the pointer keeps
+            ! claiming row 2, so the reorder preview goes on fighting it and
+            ! the bar appears to lag behind the pointer.
             g_dwell_gid = 0
+            if (tab_group_clear_hover()) g_lsp_ui_changed = .true.
             return
         end if
 
@@ -6477,10 +6496,40 @@ contains
             call open_file_in_horizontal_split(carried, editor, buffer)
         else
             call open_file_in_vertical_split(carried, editor, buffer)
+            ! split_pane_vertical always builds the new pane in the RIGHT
+            ! half. Dropping on the left edge therefore previewed a pane on
+            ! the left and produced one on the right. Swapping the two panes'
+            ! column ranges puts each side where it was asked for; the
+            ! contents do not move, only the geometry.
+            if (side == SPLIT_LEFT) call swap_last_two_panes(editor)
         end if
 
         call set_status_message('Split off ' // basename_public(carried))
     end subroutine drop_as_split
+
+    !> Exchange the column ranges of a tab's last two panes.
+    !>
+    !> Only meaningful straight after a vertical split, where they are the two
+    !> halves of what was one pane. Guarded to exactly two so it cannot
+    !> scramble a layout that has been split further.
+    subroutine swap_last_two_panes(editor)
+        type(editor_state_t), intent(inout) :: editor
+        integer :: t, n
+        real :: xs, xe
+
+        t = editor%active_tab_index
+        if (t < 1 .or. t > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(t)%panes)) return
+        n = size(editor%tabs(t)%panes)
+        if (n /= 2) return
+
+        xs = editor%tabs(t)%panes(1)%x_start
+        xe = editor%tabs(t)%panes(1)%x_end
+        editor%tabs(t)%panes(1)%x_start = editor%tabs(t)%panes(2)%x_start
+        editor%tabs(t)%panes(1)%x_end   = editor%tabs(t)%panes(2)%x_end
+        editor%tabs(t)%panes(2)%x_start = xs
+        editor%tabs(t)%panes(2)%x_end   = xe
+    end subroutine swap_last_two_panes
 
     subroutine tab_drag_release(editor, buffer)
         use tab_drag_module, only: drag_is_showing, drag_has_target, drag_kind, &

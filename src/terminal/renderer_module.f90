@@ -3628,6 +3628,17 @@ contains
         c = drag_pointer_col()
         if (r < 1 .or. r > editor%screen_rows) return
 
+        ! Never over a tab strip. The bar already shows where the held tab
+        ! will land -- that is what the reorder preview IS -- so a label drawn
+        ! on top of it is redundant, and it overwrites the entries underneath,
+        ! which reads as tabs rendering in pieces. It can also be painted past
+        ! the end of the bar's own window, which the next frame's clear does
+        ! not reach, leaving it stranded there.
+        !
+        ! Over the document it is the only thing saying what is being carried,
+        ! so that is where it is drawn.
+        if (r == g_slot_row(1) .or. r == g_slot_row(2)) return
+
         w = len(text)
         if (c + w - 1 > editor%screen_cols) c = editor%screen_cols - w + 1
         if (c < 1) then
