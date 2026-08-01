@@ -65,7 +65,7 @@ def find_binary():
 
 
 class Session:
-    def __init__(self, binary):
+    def __init__(self, binary, text=None):
         self.home = tempfile.mkdtemp(prefix="fac_sel_")
         os.makedirs(os.path.join(self.home, ".config", "fac"))
         with open(os.path.join(self.home, ".config", "fac", "state.json"), "w") as f:
@@ -73,7 +73,7 @@ class Session:
                     ' "version": "1.0"}\n')
         self.target = os.path.join(self.home, "t.txt")
         with open(self.target, "w") as f:
-            f.write(SRC)
+            f.write(SRC if text is None else text)
         env = {**os.environ, "TERM": "xterm-256color", "HOME": self.home}
         env.pop("XDG_CONFIG_HOME", None)
         self.screen = pyte.Screen(COLS, ROWS)
@@ -240,9 +240,89 @@ def test_typing_over_a_selection_is_unaffected(binary):
         s.close()
 
 
+FUNC = 'int keep;\nvoid f(void)\n{\n    puts("hi");\n}\nint tail;\n'
+
+
+def saved(s):
+    s.send("\x13", 0.9)
+    with open(s.target) as f:
+        return f.read()
+
+
+def test_cut_removes_exactly_what_was_selected(binary):
+    """Reported: cutting a function left its closing brace behind.
+
+    Selected with one Shift+Right and then Shift+Down to the last line, so
+    the selection ends at column 2 of the brace line -- the brace IS inside
+    it, and the highlight showed as much. Cut deleted everything except the
+    brace while ALSO putting it on the clipboard, so pasting it back gave two.
+
+    The copy and the delete each worked out the extent for themselves and
+    disagreed at the end of a multi-line span. Asserted on the BUFFER so it
+    holds with or without a system clipboard.
+    """
+    print("\nCut removes exactly the selected span")
+    s = Session(binary, text=FUNC)
+    try:
+        s.send("\x1b[B")                       # line 2
+        s.send("\x1b[1;2C")                    # shift+right
+        for _ in range(3):
+            s.send(SHIFT_DOWN)                  # down to the brace line
+        s.send("\x18", 0.9)                    # ctrl-x
+        got = saved(s)
+        check(got == "int keep;\n\nint tail;\n",
+              "the closing brace goes with the rest of the selection",
+              repr(got))
+        check("}" not in got, "no brace is left behind", repr(got))
+    finally:
+        s.close()
+
+
+def test_cut_of_a_partial_last_line(binary):
+    """The general case: the selection ends part way along its last line."""
+    print("\nA selection ending mid-line cuts to exactly there")
+    s = Session(binary, text="abcd\nefgh\nijkl\n")
+    try:
+        s.send("\x1b[C")                       # column 2 of line 1
+        s.send("\x1b[1;2B")                    # shift+down -> (2,2)
+        s.send("\x18", 0.9)
+        got = saved(s)
+        # "bcd\ne" comes out; "a" and "fgh" join.
+        check(got == "afgh\nijkl\n",
+              "the span from (1,2) to (2,2) is what goes", repr(got))
+    finally:
+        s.close()
+
+
+def test_paste_replaces_a_selection(binary):
+    """Reported: pasting over a selection kept it and inserted alongside.
+
+    Driven with a BRACKETED paste, which is what a terminal-native paste
+    sends and needs no system clipboard -- and which was a second copy of the
+    same bug, on its own code path.
+    """
+    print("\nPasting over a selection replaces it")
+    s = Session(binary, text="AAAA\nBBBB\nCCCC\n")
+    try:
+        s.send("\x1b[B")
+        s.send("\x01")                          # home of line 2
+        s.send("\x1b[1;2F")                     # shift+end -> select BBBB
+        s.send("\x1b[200~ZZ\x1b[201~", 0.9)
+        got = saved(s)
+        check(got == "AAAA\nZZ\nCCCC\n",
+              "the selected text is gone and the paste took its place",
+              repr(got))
+        check("BBBB" not in got, "nothing of the selection survives", repr(got))
+    finally:
+        s.close()
+
+
 def main():
     binary = find_binary()
-    for fn in (test_a_plain_move_clears_the_selection,
+    for fn in (test_cut_removes_exactly_what_was_selected,
+               test_cut_of_a_partial_last_line,
+               test_paste_replaces_a_selection,
+               test_a_plain_move_clears_the_selection,
                test_no_highlight_is_left_behind_on_other_rows,
                test_up_returns_to_the_start_of_the_selection,
                test_left_and_right_land_on_the_ends,

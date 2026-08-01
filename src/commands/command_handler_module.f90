@@ -2834,6 +2834,13 @@ contains
                     if (size(editor%cursors) > 1) then
                         call paste_text_multiple_cursors(editor, buffer, ptext)
                     else
+                        ! Replaces a selection, exactly as Ctrl-V and typing
+                        ! do. A paste arriving from the TERMINAL rather than
+                        ! from Ctrl-V lands here, and left the selected text
+                        ! sitting next to what was pasted.
+                        if (editor%cursors(editor%active_cursor)%has_selection) &
+                            call delete_selection( &
+                                editor%cursors(editor%active_cursor), buffer)
                         call insert_text_block( &
                             editor%cursors(editor%active_cursor), &
                             buffer, ptext)
@@ -4267,6 +4274,11 @@ contains
 
         call sort_cursors_by_position(editor)
         do i = 1, size(editor%cursors)
+            ! Each cursor replaces its own selection, the same as the single
+            ! cursor case -- multi-cursor paste should not be the one edit
+            ! that leaves selected text behind.
+            if (editor%cursors(i)%has_selection) &
+                call delete_selection(editor%cursors(i), buffer)
             l0 = editor%cursors(i)%line
             c0 = editor%cursors(i)%column
             call insert_text_block(editor%cursors(i), buffer, text)
@@ -4312,16 +4324,48 @@ contains
         call deduplicate_cursors(editor)
     end subroutine tab_multiple_cursors
 
+    !> Remove the selected span.
+    !>
+    !> Defined as "delete exactly the characters get_selection_text would
+    !> return", and implemented that way rather than re-deriving the extent.
+    !> The two used to walk the selection separately and disagreed at the end
+    !> of a multi-line span: cutting a function left its closing brace in the
+    !> buffer while ALSO putting it on the clipboard, so pasting it back gave
+    !> two of them.
+    !>
+    !> Deleting forward N times from the start is all that is needed, because
+    !> a forward delete at end-of-line joins the next line up -- so the
+    !> newlines inside the span are consumed as the characters they are.
     subroutine delete_selection(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         integer :: start_line, start_col, end_line, end_col
-        integer :: i
-        character(len=:), allocatable :: line
+        integer :: i, n
+        character(len=:), allocatable :: text
 
         if (.not. cursor%has_selection) return
 
-        ! Determine start and end of selection
+        text = get_selection_text(cursor, buffer)
+        n = utf8_char_count(text)
+
+        call selection_bounds(cursor, start_line, start_col, end_line, end_col)
+        cursor%line = start_line
+        cursor%column = start_col
+        cursor%has_selection = .false.
+
+        do i = 1, n
+            call buffer_delete_at_cursor(buffer, cursor)
+        end do
+    end subroutine delete_selection
+
+    !> The selection as (start, end), in document order.
+    !>
+    !> One definition, used by everything that needs the extent. Each caller
+    !> having its own copy is what let the delete and the copy drift apart.
+    subroutine selection_bounds(cursor, start_line, start_col, end_line, end_col)
+        type(cursor_t), intent(in) :: cursor
+        integer, intent(out) :: start_line, start_col, end_line, end_col
+
         if (cursor%line < cursor%selection_start_line .or. &
             (cursor%line == cursor%selection_start_line .and. &
              cursor%column < cursor%selection_start_col)) then
@@ -4335,72 +4379,7 @@ contains
             end_line = cursor%line
             end_col = cursor%column
         end if
-
-        ! Delete the selection
-        if (start_line == end_line) then
-            ! Single-line selection
-            line = buffer_get_line(buffer, start_line)
-            cursor%line = start_line
-            cursor%column = start_col
-            do i = start_col, end_col - 1
-                call buffer_delete_at_cursor(buffer, cursor)
-            end do
-            if (allocated(line)) deallocate(line)
-        else
-            ! Multi-line selection
-            ! Delete from start_col to end of first line
-            cursor%line = start_line
-            cursor%column = start_col
-            line = buffer_get_line(buffer, start_line)
-            do i = start_col, utf8_char_count(line)
-                call buffer_delete_at_cursor(buffer, cursor)
-            end do
-            if (allocated(line)) deallocate(line)
-
-            ! Delete entire lines in between
-            do i = start_line + 1, end_line - 1
-                ! After deleting from first line, the next line moves up
-                ! So we keep deleting line at position start_line + 1
-                if (buffer_get_line_count(buffer) > start_line) then
-                    ! Delete the newline to join with next line
-                    line = buffer_get_line(buffer, start_line)
-                    cursor%column = utf8_char_count(line) + 1
-                    call buffer_delete_at_cursor(buffer, cursor)  ! Delete newline
-                    if (allocated(line)) deallocate(line)
-
-                    ! Delete all content of the joined line
-                    line = buffer_get_line(buffer, start_line)
-                    cursor%column = utf8_char_count(line)
-                    do while (cursor%column > start_col .and. cursor%column > 0)
-                        call buffer_delete_at_cursor(buffer, cursor)
-                        cursor%column = cursor%column - 1
-                    end do
-                    if (allocated(line)) deallocate(line)
-                end if
-            end do
-
-            ! Delete from beginning of last line to end_col
-            if (buffer_get_line_count(buffer) > start_line) then
-                line = buffer_get_line(buffer, start_line)
-                cursor%column = utf8_char_count(line) + 1
-                call buffer_delete_at_cursor(buffer, cursor)  ! Delete newline
-                if (allocated(line)) deallocate(line)
-
-                ! Delete from start to end_col
-                cursor%column = start_col
-                do i = 1, end_col - 1
-                    if (cursor%column <= buffer_get_line_count(buffer)) then
-                        call buffer_delete_at_cursor(buffer, cursor)
-                    end if
-                end do
-            end if
-
-            cursor%line = start_line
-            cursor%column = start_col
-        end if
-
-        cursor%has_selection = .false.
-    end subroutine delete_selection
+    end subroutine selection_bounds
 
     function get_selection_text(cursor, buffer) result(text)
         type(cursor_t), intent(in) :: cursor
@@ -4415,20 +4394,7 @@ contains
             return
         end if
 
-        ! Determine start and end of selection
-        if (cursor%line < cursor%selection_start_line .or. &
-            (cursor%line == cursor%selection_start_line .and. &
-             cursor%column < cursor%selection_start_col)) then
-            start_line = cursor%line
-            start_col = cursor%column
-            end_line = cursor%selection_start_line
-            end_col = cursor%selection_start_col
-        else
-            start_line = cursor%selection_start_line
-            start_col = cursor%selection_start_col
-            end_line = cursor%line
-            end_col = cursor%column
-        end if
+        call selection_bounds(cursor, start_line, start_col, end_line, end_col)
 
         ! Extract text based on selection. Selection columns are character
         ! indices; slicing the line needs the matching byte positions.
@@ -5000,6 +4966,13 @@ contains
         text = paste_from_clipboard()
 
         if (allocated(text)) then
+            ! Pasting over a selection REPLACES it, which is what typing a
+            ! character or pressing backspace already did -- paste was the one
+            ! edit that left the selected text in place and put the clipboard
+            ! down beside it. Deleting first also leaves the cursor at the
+            ! start of the removed span, which is where the pasted text
+            ! belongs.
+            if (cursor%has_selection) call delete_selection(cursor, buffer)
             ! Insert at cursor, UTF-8 and line-break aware
             call insert_text_block(cursor, buffer, text)
             deallocate(text)
