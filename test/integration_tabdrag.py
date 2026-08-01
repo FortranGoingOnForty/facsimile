@@ -885,6 +885,134 @@ def test_the_left_edge_puts_the_pane_on_the_left(binary):
         s.close()
 
 
+def stage_one_out(s):
+    """Group everything, then pull the last member out onto the bar."""
+    s.send("\x10", 0.7)
+    s.send("Group All Tabs", 0.6)
+    s.send("\r", 1.6)
+    names = s.row2().split()
+    victim = names[-1]
+    c = s.entry_col(victim, row=2)
+    s.child.send(f"\x1b[<0;{c};2M")
+    s.drain(0.4)
+    for x in range(c, c + 8, 2):
+        s.child.send(f"\x1b[<32;{x};2M")
+        s.drain(0.1)
+    s.child.send(f"\x1b[<32;{c + 8};1M")
+    s.drain(0.4)
+    s.child.send(f"\x1b[<0;{c + 8};1m")
+    s.drain(1.2)
+    return victim
+
+
+def test_a_group_does_not_run_from_the_pointer(binary):
+    """Reported: impossible to hover a group, because it moves aside.
+
+    Pointing at a group made it the reorder target, which slid it out of the
+    way instantly -- so the only way to hover it was to aim where it had
+    been. Resting on a group entry now freezes the bar instead.
+    """
+    print("\nA group entry stays put while a tab rests on it")
+    s = Session(binary, n=4)
+    try:
+        s.open_all()
+        victim = stage_one_out(s)
+        src = s.entry_col(victim)
+        grp = s.entry_col("ws/")
+        if src is None or grp is None:
+            check(False, "staged a loose tab and a group", s.tab_bar())
+            return
+        settled = s.tab_bar()
+
+        s.child.send(f"\x1b[<0;{src};1M")
+        s.drain(0.3)
+        # FAST, deliberately: slower than the dwell and the member row opens,
+        # which stops row 1 shifting for a different reason and would let a
+        # missing freeze pass unnoticed. This is the freeze on its own.
+        moved = []
+        for x in range(grp, grp + 6):
+            s.child.send(f"\x1b[<32;{x};1M")
+            s.drain(0.05)
+            if s.tab_bar() != settled:
+                moved.append(x)
+        check(not moved, "the bar does not shift while on the group entry",
+              f"shifted at columns {moved}")
+
+        # Now rest, and the members appear.
+        s.drain(0.6)
+        check("alpha.c" in s.row2(), "and resting opens its members",
+              repr(s.row2()))
+        s.child.send(f"\x1b[<0;{grp + 5};1m")
+        s.drain(1.0)
+    finally:
+        s.close()
+
+
+def test_sweeping_past_a_group_does_not_open_it(binary):
+    print("\nSweeping past a group leaves it alone")
+    s = Session(binary, n=4)
+    try:
+        s.open_all()
+        victim = stage_one_out(s)
+        src = s.entry_col(victim)
+        grp = s.entry_col("ws/")
+        if src is None or grp is None:
+            check(False, "staged", s.tab_bar())
+            return
+        s.child.send(f"\x1b[<0;{src};1M")
+        s.drain(0.3)
+        for x in range(src + 1, grp + 12, 2):
+            s.child.send(f"\x1b[<32;{x};1M")
+            s.drain(0.04)
+        check("alpha.c" not in s.row2(),
+              "the member row never flashed open", repr(s.row2()))
+        s.child.send(f"\x1b[<0;{grp + 11};1m")
+        s.drain(1.0)
+    finally:
+        s.close()
+
+
+def test_row_two_shows_where_the_tab_will_land(binary):
+    """Reported: no indication of where the held tab goes in row 2."""
+    print("\nThe member row shows the incoming tab in place")
+    s = Session(binary, n=4)
+    try:
+        s.open_all()
+        victim = stage_one_out(s)
+        src = s.entry_col(victim)
+        grp = s.entry_col("ws/")
+        if src is None or grp is None:
+            check(False, "staged", s.tab_bar())
+            return
+        s.child.send(f"\x1b[<0;{src};1M")
+        s.drain(0.3)
+        s.child.send(f"\x1b[<32;{grp + 2};1M")
+        s.drain(0.6)
+        check(victim in s.row2(), "it appears in the row while still on row 1",
+              repr(s.row2()))
+
+        mid = s.entry_col("beta.c", row=2)
+        if mid is None:
+            check(False, "found a member to aim at", repr(s.row2()))
+            return
+        s.child.send(f"\x1b[<32;{mid};2M")
+        s.drain(0.5)
+        preview = s.row2().split()
+        check(victim in preview and "beta.c" in preview,
+              "and moves to the aimed position", repr(s.row2()))
+        if victim in preview and "beta.c" in preview:
+            check(preview.index(victim) < preview.index("beta.c"),
+                  "ahead of the member under the pointer", repr(s.row2()))
+
+        s.child.send(f"\x1b[<0;{mid};2m")
+        s.drain(1.3)
+        landed = s.row2().split()
+        check(landed == preview, "and the drop lands exactly where shown",
+              f"{preview} -> {landed}")
+    finally:
+        s.close()
+
+
 def main():
     binary = find_binary()
     for fn in (test_drag_right_and_left,
@@ -906,7 +1034,10 @@ def main():
                test_the_group_strip_closes_when_you_leave,
                test_returning_to_the_bar_cancels_a_split,
                test_the_preview_is_the_pane_that_appears,
-               test_the_left_edge_puts_the_pane_on_the_left):
+               test_the_left_edge_puts_the_pane_on_the_left,
+               test_a_group_does_not_run_from_the_pointer,
+               test_sweeping_past_a_group_does_not_open_it,
+               test_row_two_shows_where_the_tab_will_land):
         try:
             fn(binary)
         except Exception as exc:              # noqa: BLE001

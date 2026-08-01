@@ -32,6 +32,7 @@ module tab_drag_module
     public :: drag_set_target, drag_clear_target, drag_tab_count
     public :: SPLIT_NONE, SPLIT_LEFT, SPLIT_RIGHT, SPLIT_BELOW
     public :: drag_set_split, drag_split_side, drag_split_rect
+    public :: drag_candidate_gid, drag_set_candidate
 
     integer, parameter :: DRAG_NONE = 0, DRAG_TAB = 1, DRAG_GROUP = 2
 
@@ -54,6 +55,13 @@ module tab_drag_module
 
     integer :: g_press_row = 0, g_press_col = 0
     integer :: g_row = 0, g_col = 0
+
+    ! The group the pointer is resting ON, before it has committed to going
+    ! into it. While this is set the reorder preview is suppressed for that
+    ! slot, so the group STAYS PUT and can actually be pointed at -- without
+    ! it the entry slides aside the instant the pointer arrives and the only
+    ! way to hover it is to aim where it used to be.
+    integer(int32) :: g_candidate_gid = 0
 
     integer :: g_split_side = SPLIT_NONE
     integer :: g_split_r0 = 0, g_split_c0 = 0, g_split_r1 = 0, g_split_c1 = 0
@@ -105,6 +113,7 @@ contains
         g_gid = 0
         g_from_row = 0
         g_tab_count = 0
+        g_candidate_gid = 0
         if (allocated(g_path)) deallocate(g_path)
         if (allocated(g_label)) deallocate(g_label)
         call drag_clear_target()
@@ -220,6 +229,15 @@ contains
         g_split_r1 = r1
         g_split_c1 = c1
     end subroutine drag_set_split
+
+    integer(int32) function drag_candidate_gid()
+        drag_candidate_gid = g_candidate_gid
+    end function drag_candidate_gid
+
+    subroutine drag_set_candidate(gid)
+        integer(int32), intent(in) :: gid
+        g_candidate_gid = gid
+    end subroutine drag_set_candidate
 
     integer function drag_split_side()
         drag_split_side = g_split_side

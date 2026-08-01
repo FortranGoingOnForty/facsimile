@@ -10,7 +10,8 @@ module renderer_module
     use tab_drag_module, only: drag_is_showing, drag_payload, drag_to_row, &
                               drag_to_slot, drag_has_target, drag_label, &
                               drag_pointer_row, drag_pointer_col, &
-                              drag_split_side, drag_split_rect, SPLIT_NONE
+                              drag_split_side, drag_split_rect, SPLIT_NONE, &
+                              drag_candidate_gid
     use clickable_region_module, only: regions_begin_frame, region_add, REGION_TAB, &
                                        region_at, clickable_region_t, &
                                        REGION_TAB_SCROLL, &
@@ -62,7 +63,7 @@ module renderer_module
     public :: nudge_tab_scroll, tab_group_hover, tab_group_clear_hover
     public :: tab_group_set_hover
     public :: tabbar_slot_at, tabbar_strip_rows, tabbar_strip2_gid
-    public :: tabbar_last_slot, tabbar_pre_payload
+    public :: tabbar_last_slot, tabbar_hit_at
     public :: tab_group_preview_visible, set_group_preview_enabled  ! rows the document gets; page size must match
 
     ! Configuration
@@ -157,14 +158,24 @@ module renderer_module
     ! group and a hover preview otherwise, and a drop needs to know WHICH
     ! group it landed on -- the two cases are the same strip.
     integer(int32) :: g_slot2_gid = 0
-    ! Row 1's payloads as they stand WITHOUT the drag preview.
+    ! Where every entry would be if nothing were being dragged.
     !
-    ! The preview puts the held entry under the pointer -- that is what it is
-    ! for -- so asking the region table what is being hovered answers "the
-    ! thing you are dragging", always. What a drop is aimed at is whatever
-    ! occupies that slot when the held entry is not there.
-    integer :: g_pre_n = 0
-    integer :: g_pre_payload(STRIP_MAX_ENTRIES) = 0
+    ! A drag needs to ask "what is under the pointer" and get a STABLE answer.
+    ! The drawn bar cannot give one: the preview moves the held entry under
+    ! the pointer, and suppressing the preview moves it back, so a decision
+    ! taken from the drawn layout changes the drawn layout and the two
+    ! oscillate frame by frame -- the entry flickering between two places as
+    ! the pointer sits still.
+    !
+    ! So the layout is computed twice: once as it would be with nothing held,
+    ! recorded here and used for every decision, and once with the preview
+    ! applied, which is what gets drawn.
+    integer :: g_hit_n(2) = 0
+    integer :: g_hit_row(2) = 0
+    integer :: g_hit_c0(2, STRIP_MAX_ENTRIES) = 0
+    integer :: g_hit_c1(2, STRIP_MAX_ENTRIES) = 0
+    integer :: g_hit_slot(2, STRIP_MAX_ENTRIES) = 0
+    integer :: g_hit_payload(2, STRIP_MAX_ENTRIES) = 0
 
     integer :: g_tabbar_col0 = 1
     integer :: g_tabbar_width = 80
@@ -3313,7 +3324,7 @@ contains
         integer(int32) :: gid, show_gid
         integer(int32) :: seen_gids(STRIP_MAX_ENTRIES)
         integer :: n_seen
-        logical :: more_left, more_right
+        logical :: more_left, more_right, cand
         character(len=:), allocatable :: shown, base
         character(len=16) :: more_lbl
 
@@ -3367,10 +3378,8 @@ contains
             if (i == editor%active_tab_index) active_entry = n_entries
         end do
 
-        g_pre_n = min(n_entries, STRIP_MAX_ENTRIES)
-        do i = 1, g_pre_n
-            g_pre_payload(i) = entries(i)%payload
-        end do
+        call note_hit_map(1, 1, entries, n_entries, max_width, active_entry, &
+                          g_tab_scroll, start_column)
 
         ! Show the drag where it would land. The array is untouched -- only
         ! the entries about to be laid out are reordered -- so a drag that is
@@ -3400,10 +3409,20 @@ contains
                 call clip_to_cells(trim(entries(sp%idx)%label), MAX_ENTRY_CELLS, &
                                    shown, used)
                 call terminal_move_cursor(1, start_column + sp%col0 - 1)
+                ! A group the pointer is resting on is lit up, and lit up
+                ! IMMEDIATELY -- before its member row opens. That is the
+                ! whole affordance: it says "let go here, or come down into
+                ! it" at the moment the pointer arrives, rather than leaving
+                ! the user to discover the row by waiting.
+                cand = .false.
+                if (drag_candidate_gid() /= 0 .and. entries(sp%idx)%payload < 0) &
+                    cand = (int(-entries(sp%idx)%payload, int32) == drag_candidate_gid())
                 if (entries(sp%idx)%dim) call terminal_write(char(27) // '[90m')
-                if (sp%idx == active_entry) call terminal_write(char(27) // '[7m')
+                if (cand) call terminal_write(char(27) // '[1;7;38;5;114m')
+                if (sp%idx == active_entry .and. .not. cand) &
+                    call terminal_write(char(27) // '[7m')
                 call terminal_write(shown)
-                if (entries(sp%idx)%dim .or. sp%idx == active_entry) &
+                if (entries(sp%idx)%dim .or. sp%idx == active_entry .or. cand) &
                     call terminal_write(char(27) // '[0m')
 
                 ! The span is in CELLS, from the same layout that drew it, so a
@@ -3483,6 +3502,14 @@ contains
             if (members(i) == editor%active_tab_index) active_entry = i
         end do
 
+        call note_hit_map(2, row, entries, n_entries, width, active_entry, &
+                          g_group_scroll, start_col)
+
+        ! Same preview on the member row: a tab carried in from elsewhere is
+        ! inserted where it would land, and a member being moved within the
+        ! group slides to its new place.
+        call apply_drag_preview(entries, n_entries, 2, active_entry)
+
         call strip_layout(entries, n_entries, width, active_entry, &
                           g_group_scroll, spans, n_spans, more_left, more_right)
 
@@ -3536,7 +3563,8 @@ contains
     !> move that has not happened and may never happen.
     subroutine apply_drag_preview(entries, n_entries, row, active_entry)
         type(strip_entry_t), intent(inout) :: entries(:)
-        integer, intent(in) :: n_entries, row
+        integer, intent(inout) :: n_entries
+        integer, intent(in) :: row
         integer, intent(inout) :: active_entry
         type(strip_entry_t) :: held
         integer :: i, from, to
@@ -3552,7 +3580,24 @@ contains
                 exit
             end if
         end do
-        if (from == 0) return
+
+        if (from == 0) then
+            ! The held tab does not belong to this strip: it is arriving from
+            ! somewhere else. Insert it where it would land, so a tab carried
+            ! into a group's member row can be SEEN taking its place rather
+            ! than being dropped blind.
+            if (n_entries >= STRIP_MAX_ENTRIES) return
+            to = max(1, min(drag_to_slot(), n_entries + 1))
+            do i = n_entries, to, -1
+                entries(i + 1) = entries(i)
+            end do
+            n_entries = n_entries + 1
+            entries(to)%label = drag_label()
+            entries(to)%payload = drag_payload()
+            entries(to)%dim = .true.        ! it is not really there yet
+            if (active_entry >= to) active_entry = active_entry + 1
+            return
+        end if
 
         to = max(1, min(drag_to_slot(), n_entries))
         if (to /= from) then
@@ -3695,13 +3740,62 @@ contains
     !> Dropping on the blank tail of a strip means "at the end", and the end
     !> is the last thing DRAWN -- not the last that exists, because anything
     !> scrolled off is not a place the pointer can be aimed at.
-    !> What sits at row-1 slot `slot` when the drag preview is ignored.
-    integer function tabbar_pre_payload(slot)
-        integer, intent(in) :: slot
+    !> Lay a strip out as if nothing were being dragged, and remember where
+    !> each entry would sit. Purely arithmetic -- nothing is drawn.
+    subroutine note_hit_map(strip, screen_row, entries, n_entries, width, &
+                            active_idx, scroll, start_col)
+        integer, intent(in) :: strip, screen_row, n_entries, width, active_idx
+        integer, intent(in) :: scroll, start_col
+        type(strip_entry_t), intent(in) :: entries(:)
+        type(strip_span_t) :: spans(STRIP_MAX_ENTRIES)
+        integer :: n_spans, i, sc
+        logical :: ml, mr
 
-        tabbar_pre_payload = 0
-        if (slot >= 1 .and. slot <= g_pre_n) tabbar_pre_payload = g_pre_payload(slot)
-    end function tabbar_pre_payload
+        g_hit_n(strip) = 0
+        g_hit_row(strip) = screen_row
+        if (n_entries < 1) return
+
+        ! A copy: strip_layout adjusts the scroll to keep the active entry in
+        ! view, and this pass must not have an opinion about that.
+        sc = scroll
+        call strip_layout(entries, n_entries, width, active_idx, sc, spans, &
+                          n_spans, ml, mr)
+        do i = 1, n_spans
+            if (g_hit_n(strip) >= STRIP_MAX_ENTRIES) exit
+            g_hit_n(strip) = g_hit_n(strip) + 1
+            g_hit_c0(strip, g_hit_n(strip)) = start_col + spans(i)%col0 - 1
+            g_hit_c1(strip, g_hit_n(strip)) = start_col + spans(i)%col1 - 1
+            g_hit_slot(strip, g_hit_n(strip)) = spans(i)%idx
+            g_hit_payload(strip, g_hit_n(strip)) = entries(spans(i)%idx)%payload
+        end do
+    end subroutine note_hit_map
+
+    !> What the pointer is over, as if nothing were being dragged.
+    !>
+    !> Returns the strip (1 or 2), the entry slot, and that entry's payload.
+    !> slot 0 means the cell is on a strip but not on any entry; strip 0 means
+    !> it is not on a strip at all.
+    subroutine tabbar_hit_at(row, col, strip, slot, payload)
+        integer, intent(in) :: row, col
+        integer, intent(out) :: strip, slot, payload
+        integer :: k, i
+
+        strip = 0
+        slot = 0
+        payload = 0
+        do k = 1, 2
+            if (g_hit_row(k) /= row .or. g_hit_n(k) == 0) cycle
+            strip = k
+            do i = 1, g_hit_n(k)
+                if (col >= g_hit_c0(k, i) .and. col <= g_hit_c1(k, i)) then
+                    slot = g_hit_slot(k, i)
+                    payload = g_hit_payload(k, i)
+                    return
+                end if
+            end do
+            return
+        end do
+    end subroutine tabbar_hit_at
 
     integer function tabbar_last_slot(strip)
         integer, intent(in) :: strip

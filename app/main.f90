@@ -47,7 +47,7 @@ program facsimile
     use text_buffer_module
     use renderer_module
     use ai_engine_module, only: ai_tick, ai_configure
-    use command_handler_module, only: session_requests_tick
+    use command_handler_module, only: session_requests_tick, tab_drag_tick
     use command_handler_module, only: handle_key_command, init_command_handler, cleanup_command_handler, &
                                       save_initial_state_for_undo, search_pattern, match_case_sensitive, &
                                       g_lsp_modified_buffer, g_lsp_ui_changed, g_cursor_only_move, &
@@ -662,6 +662,10 @@ program facsimile
         ! 50ms, so this runs while nothing is being typed -- which is the only
         ! way the status hint gets cleared when the user simply stops.
         call tab_jump_tick(g_lsp_ui_changed)
+
+        ! A tab resting on a group opens its member row. Here rather than on
+        ! motion, because a pointer that has stopped sends nothing.
+        call tab_drag_tick(g_lsp_ui_changed)
 
         ! Anything `fac` in the terminal handed us. Gated on the panel being
         ! alive because that shell is the only thing that can produce a

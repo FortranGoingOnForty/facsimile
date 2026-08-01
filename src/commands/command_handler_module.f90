@@ -154,6 +154,7 @@ module command_handler_module
     public :: g_lsp_ui_changed       ! Flag for immediate render after LSP UI changes
     public :: g_cursor_only_move     ! Flag for cursor-only moves (skip full re-render)
     public :: tab_jump_tick
+    public :: tab_drag_tick
     public :: g_no_visible_change
     public :: session_requests_tick
 
@@ -200,7 +201,15 @@ module command_handler_module
     ! the way somewhere else must not make its members flash open.
     integer(int32) :: g_dwell_gid = 0
     integer(int64) :: g_dwell_since = 0
-    integer, parameter :: DRAG_DWELL_MS = 400
+    integer :: g_dwell_col = 0
+    ! Whether the resting group's member row has actually opened yet. Before
+    ! it does, sideways movement is still approaching; after it does, sideways
+    ! movement means the user changed their mind.
+    logical :: g_dwell_open = .false.
+    ! Short. The highlight is instant, so this is only the gap before the
+    ! member row itself opens -- long enough that crossing a group on the way
+    ! somewhere else does not flash it, short enough to feel like hovering.
+    integer, parameter :: DRAG_DWELL_MS = 140
 
     ! Which tab the open menu is about, by PATH. Not the index the region
     ! carried: the bar scrolls, tabs close, and every index renumbers when one
@@ -6243,14 +6252,14 @@ contains
     !> cell it was pressed on.
     subroutine arm_tab_drag(editor, payload, mrow, mcol)
         use tab_drag_module, only: drag_arm_only, DRAG_TAB, DRAG_GROUP
-        use renderer_module, only: tabbar_slot_at
+        use renderer_module, only: tabbar_hit_at
         type(editor_state_t), intent(in) :: editor
         integer, intent(in) :: payload, mrow, mcol
         character(len=:), allocatable :: path, label
-        integer :: strip, slot
+        integer :: strip, slot, under
 
-        slot = tabbar_slot_at(mrow, mcol, strip)
-        if (slot == 0) return
+        call tabbar_hit_at(mrow, mcol, strip, slot, under)
+        if (strip == 0) return
 
         if (payload < 0) then
             label = ' ' // group_label_public(editor, int(-payload, int32)) // ' '
@@ -6286,14 +6295,14 @@ contains
                                    drag_set_pointer, drag_press_row, &
                                    drag_press_col, drag_set_target, &
                                    drag_clear_target, drag_payload, &
-                                   drag_tab_count, drag_cancel
-        use renderer_module, only: tabbar_slot_at, nudge_tab_scroll, &
-                                   tabbar_strip2_gid, tabbar_strip_rows, &
-                                   tabbar_last_slot
+                                   drag_tab_count, drag_cancel, &
+                                   drag_candidate_gid, drag_set_candidate
+        use renderer_module, only: tabbar_hit_at, nudge_tab_scroll, &
+                                   tabbar_strip2_gid, tabbar_last_slot
         type(editor_state_t), intent(in) :: editor
         integer, intent(in) :: mrow, mcol
         type(clickable_region_t) :: hit
-        integer :: slot, strip, row1, row2
+        integer :: slot, strip, payload
 
         if (.not. drag_is_armed()) return
         ! A tab opened or closed underneath us. The drag was aimed at an
@@ -6320,88 +6329,168 @@ contains
             return
         end if
 
-        slot = tabbar_slot_at(mrow, mcol, strip)
-        if (slot == 0) then
-            ! The blank tail of a strip is still that strip. Dropping there
-            ! means "at the end", which is the only way to carry a tab OUT of
-            ! a group when the group is the only entry on row 1 -- there is
-            ! nothing else to aim at.
-            call tabbar_strip_rows(row1, row2)
-            if (mrow == row1 .and. row1 /= 0) then
-                call drag_set_target(1, tabbar_last_slot(1), 0_int32)
-                call dwell_over_group(0)
-            else if (mrow == row2 .and. row2 /= 0) then
-                call drag_set_target(2, tabbar_last_slot(2), tabbar_strip2_gid())
-            else
-                ! Off the bar entirely: the document. Near an edge this is a
-                ! split, which is the only meaning "outside the bar" has.
-                call aim_at_split(editor, mrow, mcol)
-                g_dwell_gid = 0
-            end if
+        ! Everything below asks the hit map, not the drawn bar. The drawn bar
+        ! moves in response to these decisions, so taking them from it makes
+        ! the answer depend on the previous answer -- which is an entry that
+        ! flickers between two places while the pointer sits still.
+        call tabbar_hit_at(mrow, mcol, strip, slot, payload)
+
+        if (strip == 0) then
+            ! Off the bar entirely: the document. Near an edge this is a
+            ! split, which is the only meaning "outside the bar" has.
+            call give_up_on_group()
+            call aim_at_split(editor, mrow, mcol)
             return
         end if
 
         if (strip == 2) then
-            ! A member row, either a group's pinned one or a strip that a
-            ! dwell opened. Either way the drop joins THAT group.
+            ! A member row, either a group's pinned one or a strip a hover
+            ! opened. Moving down into it is the commitment: the drop joins
+            ! THAT group, at the position under the pointer.
+            !
+            ! Disarming the candidate matters. The tick keeps re-asserting
+            ! "at the end" for as long as a group is merely being rested on,
+            ! so leaving it armed meant every drop landed last however
+            ! carefully it was aimed. The strip itself stays open -- only the
+            ! resting state ends.
+            call drag_set_candidate(0_int32)
+            g_dwell_open = .false.
+            if (slot == 0) slot = max(1, tabbar_last_slot(2))
             call drag_set_target(2, slot, tabbar_strip2_gid())
             return
         end if
 
-        ! Row 1. If the pointer is resting on a DIFFERENT group's entry, open
-        ! it after a moment so its members can be dropped into.
-        call dwell_over_group(slot)
+        ! Row 1. The blank tail counts as "at the end" -- with a group as the
+        ! only entry there is nothing else to aim at, and carrying a member
+        ! out has to be possible.
+        if (slot == 0) then
+            call give_up_on_group()
+            call drag_set_target(1, max(1, tabbar_last_slot(1)), 0_int32)
+            return
+        end if
+
+        ! Resting on a group entry is its own thing -- see dwell_over_group --
+        ! and while that is live nothing on the bar moves, which is what lets
+        ! the entry be pointed at in the first place.
+        call dwell_over_group(payload, mcol)
+        if (drag_candidate_gid() /= 0) return
         call drag_set_target(1, slot, 0_int32)
     end subroutine tab_drag_motion
 
-    !> Open a group's member strip when a dragged tab rests on its entry.
+    !> Decide what resting on a group entry means, while carrying a tab.
     !>
-    !> Reuses the hover preview: it already draws a group's members on row 2
-    !> and already treats its own strip as still-hovered, which is exactly the
-    !> "move down into it to drop" behaviour needed here. Nothing new is drawn.
-    subroutine dwell_over_group(slot)
-        use tab_drag_module, only: drag_kind, drag_gid, DRAG_TAB
-        use renderer_module, only: tab_group_set_hover, tabbar_pre_payload, &
-                                   tab_group_clear_hover
-        integer, intent(in) :: slot
+    !> The conflict this resolves: pointing at a group used to make it the
+    !> reorder target, which slid it aside instantly -- so the entry ran away
+    !> from the pointer and the only way to hover it was to aim at where it
+    !> had been.
+    !>
+    !> So arriving on a group entry does NOT move anything. The entry is
+    !> highlighted straight away to say it is live, its member row opens a
+    !> moment later, and what happens next is decided by which way the pointer
+    !> goes:
+    !>
+    !>   keeps travelling sideways -> it was passing through. Give up on the
+    !>                                group, close the row, let the bar shift.
+    !>   moves down into the row   -> it meant it. The row stays and the drop
+    !>                                lands among the members.
+    !>
+    !> Sideways and downwards are the two things the pointer can be doing here
+    !> and they mean opposite things, which is why direction and not time is
+    !> what decides.
+    subroutine dwell_over_group(payload, mcol)
+        use tab_drag_module, only: drag_kind, drag_gid, DRAG_TAB, &
+                                   drag_set_candidate, drag_candidate_gid, &
+                                   drag_set_target, drag_clear_target
+        use renderer_module, only: tab_group_clear_hover
+        integer, intent(in) :: payload, mcol
         integer(int32) :: over
         integer(int64) :: now, rate
-        integer :: payload
-        logical :: ignored
 
-        ! Deliberately NOT region_at: the region table describes the previewed
-        ! bar, where the held entry has been moved under the pointer, so it
-        ! would always answer "you are hovering the thing you are holding".
         over = 0
-        payload = tabbar_pre_payload(slot)
         if (payload < 0) over = int(-payload, int32)
-
-        ! Only a tab can join a group, and never the group it is already the
-        ! entry for.
         if (drag_kind() /= DRAG_TAB) over = 0
         if (over /= 0 .and. over == drag_gid()) over = 0
 
         if (over == 0) then
-            ! Left the group. Close its strip NOW rather than letting it stand
-            ! until the drag ends: a strip that outlives the pointer keeps
-            ! claiming row 2, so the reorder preview goes on fighting it and
-            ! the bar appears to lag behind the pointer.
-            g_dwell_gid = 0
-            if (tab_group_clear_hover()) g_lsp_ui_changed = .true.
+            call give_up_on_group()
             return
         end if
 
         call system_clock(count=now, count_rate=rate)
-        if (over /= g_dwell_gid) then
-            g_dwell_gid = over
+
+        if (over /= drag_candidate_gid()) then
+            ! Just arrived. Nothing on the bar moves from here until this
+            ! resolves -- that freeze is the point, since an entry that slides
+            ! aside the moment it is pointed at cannot be pointed at. The
+            ! highlight goes on straight away to say so.
+            call drag_set_candidate(over)
+            g_dwell_open = .false.
             g_dwell_since = now
+            g_dwell_col = mcol
+            call drag_clear_target()
+            g_lsp_ui_changed = .true.
             return
         end if
+
+        if (mcol == g_dwell_col) return         ! settled; the tick opens it
+
+        ! Once the row is up, moving about WITHIN the entry changes nothing --
+        ! the pointer has not gone anywhere. Leaving the entry is what counts
+        ! as changing your mind, and that arrives as over == 0 above.
+        !
+        ! Closing on any sideways step instead looked reasonable and was
+        ! unusable: a slow sweep across a wide entry opened and closed the row
+        ! on every single column.
+        if (g_dwell_open) return
+
+        ! Still crossing, not yet opened. Keep the bar frozen and restart the
+        ! clock, so sweeping past a group never flashes its members open --
+        ! only stopping on it does.
+        g_dwell_since = now
+        g_dwell_col = mcol
+    end subroutine dwell_over_group
+
+    !> Open the resting group's member row once it has been rested on.
+    !>
+    !> Driven from the main loop, not from motion: the pointer that has
+    !> stopped moving generates no events, and it is precisely the pointer
+    !> that has stopped which is asking for the row.
+    subroutine tab_drag_tick(changed)
+        use tab_drag_module, only: drag_is_showing, drag_candidate_gid, &
+                                   drag_set_target
+        use renderer_module, only: tab_group_set_hover
+        logical, intent(inout) :: changed
+        integer(int64) :: now, rate
+        integer(int32) :: gid
+
+        gid = drag_candidate_gid()
+        if (gid == 0) return
+        if (.not. drag_is_showing()) return
+
+        call system_clock(count=now, count_rate=rate)
         if (rate <= 0) return
         if ((now - g_dwell_since) * 1000 / rate < DRAG_DWELL_MS) return
 
-        ignored = tab_group_set_hover(over)
-    end subroutine dwell_over_group
+        if (tab_group_set_hover(gid)) changed = .true.
+        g_dwell_open = .true.
+        ! Releasing here joins the group. The highlight said as much, so a
+        ! drop on the entry should not quietly do nothing.
+        call drag_set_target(2, huge(1), gid)
+    end subroutine tab_drag_tick
+
+    !> Stop treating a group as the drop target: let the bar shift again and
+    !> close the member row at once.
+    subroutine give_up_on_group()
+        use tab_drag_module, only: drag_set_candidate, drag_candidate_gid
+        use renderer_module, only: tab_group_clear_hover
+        logical :: ignored
+
+        if (drag_candidate_gid() == 0) return
+        call drag_set_candidate(0_int32)
+        g_dwell_open = .false.
+        ignored = tab_group_clear_hover()
+        g_lsp_ui_changed = .true.
+    end subroutine give_up_on_group
 
     !> True at most every DRAG_SCROLL_MS, so holding over a chevron scrolls at
     !> a readable rate rather than once per motion report.

@@ -56,7 +56,10 @@ fpm run -- [filename]
   bar. Save it first if it has unsaved changes
 - drag a tab GROUP entry and its members travel with it. Drag a member off the
   member row onto the bar to take it out of the group, or hold a tab over a
-  group for a moment to open its members and drop it in. Moving a file from
+  group for a moment to open its members and drop it in. Resting on a group
+  holds the bar still and lights the entry up, so it can actually be pointed
+  at; sweeping past one leaves it alone. Once its members are showing, moving
+  down among them shows exactly where the tab will land. Moving a file from
   one group to another is one continuous drag: pick it up, rest on the other
   group until its members appear, drop
 - click a `[n: name]` tab to switch to it; right-click one for Close Tab,
