@@ -224,7 +224,7 @@ When in fuss mode (ctrl-b), you get a split view with a git-aware file tree on t
 **Navigation:**
 - `↑` / `↓` - move to the previous/next visible row, whatever its depth
 - `→` - descend into a directory (expanding it first if needed)
-- `←` - go back out to the parent
+- `←` - collapse an open directory, or go back out to the parent
 
 **Opening Files:**
 - `enter` or `o` - open file in new tab

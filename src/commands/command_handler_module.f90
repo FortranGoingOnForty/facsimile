@@ -8356,8 +8356,24 @@ contains
             call update_tree_viewport(tree_state, 18)
 
         case('left')
-            ! Move up to parent directory
+            ! Collapse an open directory; otherwise go up to the parent.
+            !
+            ! Left used to only ever walk to the parent, so pressing it on an
+            ! expanded directory did nothing at all when that directory sat at
+            ! the top level -- there is no parent row to move to. Collapsing
+            ! first is what every tree does, and it is what the key looks like
+            ! it should do when the thing under the cursor is open.
             if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
+                if (tree_state%selectable_files(tree_state%selected_index)%is_directory .and. &
+                    associated(tree_state%selectable_files(tree_state%selected_index)%node)) then
+                    if (tree_state%selectable_files(tree_state%selected_index)%node%expanded) then
+                        ! The same call the space key makes, which also
+                        ! rebuilds the selectable list and keeps the selection
+                        ! on the row it was on.
+                        call tree_toggle_expand(tree_state)
+                        return
+                    end if
+                end if
                 if (associated(tree_state%selectable_files(tree_state%selected_index)%node)) then
                     if (associated(tree_state%selectable_files(tree_state%selected_index)%node%parent)) then
                         ! Find the parent in the selectable list

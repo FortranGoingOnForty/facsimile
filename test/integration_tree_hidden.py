@@ -550,9 +550,92 @@ def test_the_ends_of_the_list_hold(binary):
         shutil.rmtree(d, ignore_errors=True)
 
 
+def rows(t):
+    """Visible tree rows, with '>' marking the selected one."""
+    out = []
+    for y in range(1, ROWS - 1):
+        row = t.screen.buffer[y]
+        text = "".join(row[x].data for x in range(34)).rstrip()
+        if not text.strip():
+            continue
+        if text.strip().startswith(("esc/", ".:hide")):
+            continue
+        mark = ">" if any(row[x].reverse for x in range(34)) else " "
+        out.append(mark + text)
+    return out
+
+
+def test_left_collapses_an_open_directory(binary):
+    """Reported: Left on an expanded directory did nothing.
+
+    It only ever climbed to the parent, and a top-level directory has no
+    parent ROW to climb to -- so the key did nothing at all, which is also
+    what made the state afterwards confusing. Collapsing when the thing under
+    the cursor is open is what every tree does.
+    """
+    d = nested_project()
+    t = Tree(binary, d)
+    try:
+        if not select(t, "ch4"):
+            check(False, "could not reach ch4/", t.text())
+            return
+        t.child.send(" ")                 # expand
+        t.drain(0.8)
+        opened = [r for r in rows(t) if "ch4" in r]
+        check(any("-" in r for r in opened), "ch4/ is expanded", str(opened))
+
+        t.child.send("\x1b[D")            # LEFT
+        t.drain(0.8)
+        after = [r for r in rows(t) if "ch4" in r]
+        check(any("+" in r for r in after), "Left collapsed it", str(after))
+        check(any(r.startswith(">") and "ch4" in r for r in rows(t)),
+              "and the selection stayed on it", str(rows(t)))
+
+        # Space must still work afterwards -- the reported symptom was that it
+        # stopped collapsing once Left had been pressed.
+        t.child.send(" ")
+        t.drain(0.8)
+        check(any("-" in r for r in rows(t) if "ch4" in r),
+              "space still expands after a Left", str(rows(t)))
+        t.child.send(" ")
+        t.drain(0.8)
+        check(any("+" in r for r in rows(t) if "ch4" in r),
+              "and still collapses", str(rows(t)))
+    finally:
+        t.close()
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_left_still_climbs_out_of_a_directory(binary):
+    """The other half of the key: from inside, Left goes to the parent."""
+    d = nested_project()
+    t = Tree(binary, d)
+    try:
+        if not select(t, "ch4"):
+            check(False, "could not reach ch4/", t.text())
+            return
+        t.child.send("\x1b[C")            # right: into ch4/
+        t.drain(1.0)
+        t.child.send("\x1b[B")            # down to a child
+        t.drain(0.5)
+        here = selected(t)
+        check(here is not None and "ch4" not in here,
+              "sitting on a child of ch4/", str(here))
+
+        t.child.send("\x1b[D")            # LEFT
+        t.drain(0.8)
+        check(selected(t) is not None and "ch4" in selected(t),
+              "Left climbs to the parent", str(selected(t)))
+    finally:
+        t.close()
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main():
     binary = find_binary()
-    for fn in (test_a_hidden_directory_can_always_be_revealed,
+    for fn in (test_left_collapses_an_open_directory,
+               test_left_still_climbs_out_of_a_directory,
+               test_a_hidden_directory_can_always_be_revealed,
                test_the_toggle_reads_the_same_way_in_both_modes,
                test_git_status_and_ignores_still_work,
                test_an_ignored_directory_is_grey_before_it_is_opened,
