@@ -609,7 +609,7 @@ program facsimile
     end block
 
     ! Save initial file state for undo (position 0)
-    call save_initial_state_for_undo(buffer, editor)
+    call save_initial_state_for_undo()
 
     ! First-run experience: show LSP server installer panel
     if (is_first_run()) then

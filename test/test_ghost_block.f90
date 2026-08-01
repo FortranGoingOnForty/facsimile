@@ -103,7 +103,7 @@ contains
     subroutine test_block_undo_is_one_step()
         call setup('start')
         call cursor_at(1, 6)
-        call save_initial_state_for_undo(buf, editor)
+        call save_initial_state_for_undo()
 
         call key('X')                       ! an edit, so last_action_was_edit is set
         call ghost_apply_block(editor%ghost, 'a' // NL // 'b', '', 1, 7, GHOST_SRC_LLM)

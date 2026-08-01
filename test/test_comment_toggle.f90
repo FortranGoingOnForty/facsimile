@@ -189,7 +189,7 @@ program test_comment_toggle
     ! --- Undo puts it all back ---
     call setup('x.py', 'a = 1' // NL // 'b = 2')
     call select_range(1, 1, 2, 6)
-    call save_initial_state_for_undo(buffer, editor)
+    call save_initial_state_for_undo()
     call key('ctrl-/')
     call check_text('# a = 1' // NL // '# b = 2', 'commented before undo')
     call key('ctrl-z')

@@ -384,11 +384,13 @@ contains
         call clear_pending_closers()
     end subroutine init_command_handler
 
-    subroutine save_initial_state_for_undo(buffer, editor)
-        use undo_stack_module, only: save_initial_undo_state
-        type(buffer_t), intent(in) :: buffer
-        type(editor_state_t), intent(in) :: editor
-        call save_initial_undo_state(undo_stack, buffer, editor%cursors(editor%active_cursor))
+    !> "A document has just been loaded."
+    !>
+    !> There is no initial snapshot to take any more -- an empty history IS
+    !> the initial state -- so this only makes sure no half-open edit unit is
+    !> carried over from whatever was open before.
+    subroutine save_initial_state_for_undo()
+        call undo_discard_open(undo_stack)
     end subroutine save_initial_state_for_undo
 
     subroutine cleanup_command_handler()
@@ -397,13 +399,36 @@ contains
         if (allocated(search_pattern)) deallocate(search_pattern)
     end subroutine cleanup_command_handler
 
-    subroutine save_undo_state(buffer, editor)
+    !> An edit of `kind` is about to happen.
+    !>
+    !> Replaces the old "push a snapshot if the previous action was not an
+    !> edit" guard, which made a run of ANY consecutive edits one undo: typing,
+    !> then backspacing, then pasting collapsed into a single step as long as
+    !> the caret never moved. The undo stack now decides, and it splits the run
+    !> when the kind changes, when a structural command runs, or after a pause.
+    !> `last_action_was_edit` still carries the caret-moved case, which is the
+    !> one thing only the handler knows.
+    subroutine note_edit_kind(kind, buffer, editor)
+        integer, intent(in) :: kind
         type(buffer_t), intent(in) :: buffer
         type(editor_state_t), intent(in) :: editor
 
-        ! Save current state to undo stack
-        call push_undo_state(undo_stack, buffer, editor%cursors(editor%active_cursor))
-    end subroutine save_undo_state
+        call undo_note_edit(undo_stack, buffer, &
+                            editor%cursors(editor%active_cursor), kind, &
+                            now_ms(), .not. last_action_was_edit)
+    end subroutine note_edit_kind
+
+    !> Milliseconds from the monotonic clock, for the undo idle boundary.
+    integer(int64) function now_ms()
+        integer(int64) :: c, r
+
+        call system_clock(count=c, count_rate=r)
+        if (r <= 0) then
+            now_ms = 0
+        else
+            now_ms = c * 1000_int64 / r
+        end if
+    end function now_ms
 
     subroutine handle_key_command(key_str, editor, buffer, should_quit)
         character(len=*), intent(in) :: key_str
@@ -1189,7 +1214,7 @@ contains
                 ! Check first so an unknown language does not push an
                 ! identical state onto the undo stack for nothing
                 if (comment_syntax_available(comment_file)) then
-                    if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+                    call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
                     call toggle_comment_lines(buffer, editor%cursors, comment_file, &
                                               comment_changed)
                     if (comment_changed) then
@@ -1261,7 +1286,7 @@ contains
 
         case('ctrl-y')
             ! Yank (paste from yank stack)
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
             if (size(editor%cursors) > 1) then
                 ! Apply yank to all cursors
                 do i = 1, size(editor%cursors)
@@ -1521,28 +1546,28 @@ contains
             call update_viewport(editor)
 
         case('alt-up')
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
             call move_line_up(editor%cursors(editor%active_cursor), buffer)
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
             is_edit_action = .true.
 
         case('alt-down')
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
             call move_line_down(editor%cursors(editor%active_cursor), buffer)
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
             is_edit_action = .true.
 
         case('alt-shift-up')
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
             call duplicate_line_up(editor%cursors(editor%active_cursor), buffer)
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
             is_edit_action = .true.
 
         case('alt-shift-down')
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
             call duplicate_line_down(editor%cursors(editor%active_cursor), buffer)
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
@@ -1586,7 +1611,7 @@ contains
 
         ! Text modification
         case('backspace')
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call note_edit_kind(EDIT_DELETE, buffer, editor)
             if (size(editor%cursors) > 1) then
                 call backspace_multiple_cursors(editor, buffer)
             else
@@ -1597,7 +1622,7 @@ contains
             is_edit_action = .true.
 
         case('delete')
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call note_edit_kind(EDIT_DELETE, buffer, editor)
             if (size(editor%cursors) > 1) then
                 call delete_multiple_cursors(editor, buffer)
             else
@@ -1656,7 +1681,7 @@ contains
                     completion_text = get_selected_completion(editor%completion_popup)
                     if (len(completion_text) > 0) then
                         ! Insert the completion text at cursor (UTF-8 aware)
-                        if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+                        call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
                         call insert_line_text(buffer, &
                             editor%cursors(editor%active_cursor), completion_text)
                         call absorb_closer_the_completion_supplied(editor, buffer, &
@@ -1668,7 +1693,7 @@ contains
                 return
             end if
 
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
             if (size(editor%cursors) > 1) then
                 call enter_multiple_cursors(editor, buffer)
             else
@@ -1680,7 +1705,7 @@ contains
             is_edit_action = .true.
 
         case('tab')
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
             if (size(editor%cursors) > 1) then
                 call tab_multiple_cursors(editor, buffer)
             else
@@ -1697,7 +1722,7 @@ contains
             is_edit_action = .true.
 
         case('shift-tab')
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
             if (editor%cursors(editor%active_cursor)%has_selection) then
                 call dedent_selection(editor%cursors(editor%active_cursor), buffer, &
                                       active_pane_filename(editor))
@@ -1715,7 +1740,7 @@ contains
         case('ctrl-shift-k')
             ! Delete the caret's lines outright -- nothing goes to the
             ! clipboard or the yank stack (VSCode's Delete Line)
-            call save_undo_state(buffer, editor)
+            call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
             call delete_lines(editor, buffer)
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
@@ -1752,7 +1777,7 @@ contains
 
         ! Editing keybinds
         case('ctrl-k')
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call note_edit_kind(EDIT_DELETE, buffer, editor)
             if (size(editor%cursors) > 1) then
                 ! Apply to all cursors
                 do i = 1, size(editor%cursors)
@@ -1765,7 +1790,7 @@ contains
             is_edit_action = .true.
 
         case('ctrl-u')
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call note_edit_kind(EDIT_DELETE, buffer, editor)
             if (size(editor%cursors) > 1) then
                 ! Apply to all cursors
                 do i = 1, size(editor%cursors)
@@ -1858,7 +1883,7 @@ contains
             end if
 
         case('alt-d', 'alt-delete')
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call note_edit_kind(EDIT_DELETE, buffer, editor)
             if (size(editor%cursors) > 1) then
                 ! Apply to all cursors
                 do i = 1, size(editor%cursors)
@@ -1872,7 +1897,7 @@ contains
             is_edit_action = .true.
 
         case('alt-backspace')
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call note_edit_kind(EDIT_DELETE, buffer, editor)
             if (size(editor%cursors) > 1) then
                 call delete_word_backward_multiple_cursors(editor, buffer)
             else
@@ -1988,7 +2013,7 @@ contains
 
         case('alt-shift-j')
             ! Join lines
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
             if (size(editor%cursors) > 1) then
                 do i = 1, size(editor%cursors)
                     call join_lines(editor%cursors(i), buffer)
@@ -1999,7 +2024,7 @@ contains
             is_edit_action = .true.
 
         case('ctrl-x')
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
             if (size(editor%cursors) > 1) then
                 ! Apply to all cursors in reverse order (bottom to top)
                 do i = size(editor%cursors), 1, -1
@@ -2016,7 +2041,7 @@ contains
             call copy_selection_or_line(editor%cursors(editor%active_cursor), buffer)
 
         case('ctrl-v')
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
             if (size(editor%cursors) > 1) then
                 call paste_multiple_cursors(editor, buffer)
             else
@@ -2697,7 +2722,7 @@ contains
             ! Cycle quotes: " -> ' -> `
             ! ctrl-': Doesn't work (terminals send plain apostrophe)
             ! alt-': Alternative binding (Option+' on Mac)
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
             call cycle_quotes(editor%cursors(editor%active_cursor), buffer)
             is_edit_action = .true.
 
@@ -2706,7 +2731,7 @@ contains
             ! ctrl-alt-backspace: Doesn't work (terminals send alt-backspace)
             ! alt-shift-backspace: Doesn't work (terminals send alt-backspace)
             ! alt-shift-': Alternative binding (Alt+Shift+' = Alt+")
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
             call remove_brackets(editor%cursors(editor%active_cursor), buffer)
             is_edit_action = .true.
 
@@ -2783,7 +2808,7 @@ contains
 
         case('ctrl-r')
             ! Find and replace
-            if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+            call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
             call show_replace_prompt(editor, buffer)
             call update_viewport(editor)
             is_edit_action = .true.
@@ -2796,7 +2821,7 @@ contains
                 call update_viewport(editor)
             else
                 ! No active search, treat as regular character with multi-cursor support
-                if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+                call note_edit_kind(EDIT_INSERT, buffer, editor)
                 if (size(editor%cursors) > 1) then
                     call insert_char_multiple_cursors(editor, buffer, 'n')
                 else
@@ -2813,7 +2838,7 @@ contains
                 call update_viewport(editor)
             else
                 ! No active search, treat as regular character with multi-cursor support
-                if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+                call note_edit_kind(EDIT_INSERT, buffer, editor)
                 if (size(editor%cursors) > 1) then
                     call insert_char_multiple_cursors(editor, buffer, 'N')
                 else
@@ -2830,7 +2855,7 @@ contains
                 character(len=:), allocatable :: ptext
                 ptext = get_paste_text()
                 if (len(ptext) > 0) then
-                    call save_undo_state(buffer, editor)
+                    call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
                     if (size(editor%cursors) > 1) then
                         call paste_text_multiple_cursors(editor, buffer, ptext)
                     else
@@ -2868,7 +2893,7 @@ contains
                 block
                     integer :: klen
                     klen = max(1, len_trim(key_str))
-                    if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+                    call note_edit_kind(EDIT_INSERT, buffer, editor)
                     ! Handle character input for all cursors
                     if (size(editor%cursors) > 1) then
                         call insert_char_multiple_cursors(editor, buffer, key_str(1:klen))
@@ -10689,7 +10714,7 @@ contains
         ! A block ALWAYS gets its own checkpoint. Without this, accepting one
         ! straight after typing coalesces with that typing run and Ctrl-Z
         ! cannot remove the block on its own.
-        if (is_block .or. .not. last_action_was_edit) call save_undo_state(buffer, editor)
+        call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
 
         if (is_block) then
             ! One insert for the whole block. insert_line_text moves the gap
@@ -10761,7 +10786,7 @@ contains
         word = ghost_take_word(editor%ghost)
         if (len(word) == 0) return
 
-        if (.not. last_action_was_edit) call save_undo_state(buffer, editor)
+        call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
         call insert_line_text(buffer, editor%cursors(editor%active_cursor), word)
         editor%cursors(editor%active_cursor)%desired_column = &
             editor%cursors(editor%active_cursor)%column
@@ -10790,7 +10815,7 @@ contains
 
         ! Each accepted line gets its own checkpoint, so undo walks back
         ! through them one at a time rather than collapsing the lot.
-        call save_undo_state(buffer, editor)
+        call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
         call insert_block_at_cursor(buffer, editor%cursors(editor%active_cursor), text)
 
         ! Re-anchor to wherever the caret actually ended up -- only the buffer
