@@ -565,6 +565,39 @@ def test_one_drag_from_one_group_into_another(binary):
         s.close()
 
 
+def narrow_session(binary, n_files, cols):
+    """A session with `n_files` tabs open in a `cols`-wide window.
+
+    Narrow on purpose: the chevrons only exist when the bar overflows, and
+    six short names in sixty columns is the smallest thing that does.
+    """
+    home = tempfile.mkdtemp(prefix="fac_td_home_")
+    os.makedirs(os.path.join(home, ".config", "fac"))
+    with open(os.path.join(home, ".config", "fac", "state.json"), "w") as f:
+        f.write('{"first_run_completed": true, "lsp_installer_seen": true,'
+                ' "version": "1.0"}\n')
+    root = tempfile.mkdtemp(prefix="fac_td_work_")
+    ws = os.path.join(root, "ws")
+    os.makedirs(ws)
+    names = [f"file{i}.c" for i in range(1, n_files + 1)]
+    for nm in names:
+        with open(os.path.join(ws, nm), "w") as f:
+            f.write("int v;\n")
+
+    env = {**os.environ, "TERM": "xterm-256color", "HOME": home}
+    env.pop("XDG_CONFIG_HOME", None)
+    env.pop("FAC_SESSION", None)
+    s = Session.__new__(Session)
+    s.home, s.root, s.work, s.names = home, root, ws, names
+    s.screen = pyte.Screen(cols, ROWS)
+    s.stream = pyte.Stream(s.screen)
+    s.child = pexpect.spawn(binary, [os.path.join(ws, names[0])],
+                            dimensions=(ROWS, cols), env=env, cwd=ws)
+    s.drain(2.5)
+    s.open_all()
+    return s
+
+
 def reverse_cells(s, r0, r1, c0, c1):
     """How many cells in this rectangle are drawn reverse-video.
 
@@ -1013,6 +1046,58 @@ def test_row_two_shows_where_the_tab_will_land(binary):
         s.close()
 
 
+def test_the_chevron_scrolls_whatever_is_active(binary):
+    """Reported twice over, and one cause.
+
+    The bar laid itself out following the active entry on EVERY redraw. So a
+    chevron click that would push the active tab off the right was undone
+    before it could be seen -- the chevron worked only while the tab beside
+    it happened to be active -- and a tab opening at the far right pinned the
+    bar there with everything else behind a chevron that would not move.
+    """
+    print("\nThe chevron scrolls regardless of which tab is active")
+    s = narrow_session(binary, 6, 60)
+    try:
+        bar = s.tab_bar()
+        check("<" in bar, "opening six tabs in a narrow window overflows", bar)
+        check("file6.c" in bar, "and the newest tab is the one on screen", bar)
+        if "<" not in bar:
+            return
+
+        col = bar.find("<") + 1
+        steps = [bar]
+        for _ in range(4):
+            s.click(1, col)
+            steps.append(s.tab_bar())
+        check(steps[1] != steps[0], "the first click scrolls", str(steps[:2]))
+        check("file1.c" in steps[-1],
+              "and it keeps going past where the active tab drops off, "
+              "all the way to the first", str(steps[-1]))
+        check("file6.c" not in steps[-1],
+              "the active tab is off screen, which is allowed", steps[-1])
+
+        before = s.tab_bar()
+        s.send("\x1b[B", 0.5)
+        s.send("\x1b[A", 0.5)
+        check(s.tab_bar() == before, "and the position survives a redraw",
+              f"{before!r} -> {s.tab_bar()!r}")
+
+        # Switching to an off-screen tab must still reveal it. Land on a
+        # VISIBLE one first: file6 was already active -- scrolling does not
+        # change which tab you are in -- so jumping to it would be a no-op
+        # and would prove nothing.
+        vis = s.entry_col("file2.c")
+        if vis is not None:
+            s.click(1, vis + 3)
+        check("file2.c" in s.status(), "moved to a visible tab", s.status())
+        s.send("\x1b6", 1.0)
+        check("file6.c" in s.status(), "jumped to the hidden tab", s.status())
+        check("file6.c" in s.tab_bar(),
+              "and switching to it scrolled the bar to reveal it", s.tab_bar())
+    finally:
+        s.close()
+
+
 def main():
     binary = find_binary()
     for fn in (test_drag_right_and_left,
@@ -1037,7 +1122,8 @@ def main():
                test_the_left_edge_puts_the_pane_on_the_left,
                test_a_group_does_not_run_from_the_pointer,
                test_sweeping_past_a_group_does_not_open_it,
-               test_row_two_shows_where_the_tab_will_land):
+               test_row_two_shows_where_the_tab_will_land,
+               test_the_chevron_scrolls_whatever_is_active):
         try:
             fn(binary)
         except Exception as exc:              # noqa: BLE001

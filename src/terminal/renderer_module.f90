@@ -138,6 +138,16 @@ module renderer_module
     integer, parameter :: STRIP_MAX_ENTRIES = 256
     integer, parameter :: MAX_ENTRY_CELLS = 24   ! per label, before ellipsis
     ! Kept across frames so a click on a chevron persists.
+    ! The active entry each strip was last laid out with. The bar follows the
+    ! active entry when it CHANGES -- switching tabs should reveal the tab you
+    ! switched to -- and leaves the scroll alone otherwise, so a position
+    ! chosen with the chevrons survives the next redraw.
+    integer :: g_last_active(2) = 0
+    ! And the width it was laid out at. A resize changes what fits, so the
+    ! active entry is worth re-revealing then -- otherwise shrinking the
+    ! window can leave the tab you are editing behind a chevron.
+    integer :: g_last_width(2) = 0
+
     integer :: g_tab_scroll = 1
     integer :: g_group_scroll = 1
     ! The group under the pointer, 0 for none, and the column window the tab
@@ -3212,14 +3222,19 @@ contains
     !> `scroll` is in/out: it is nudged until the active entry is visible, and
     !> the caller keeps it so a click on a chevron persists.
     subroutine strip_layout(entries, n_entries, width, active_idx, scroll, &
-                            spans, n_spans, more_left, more_right)
+                            spans, n_spans, more_left, more_right, follow_active)
         type(strip_entry_t), intent(in) :: entries(:)
         integer, intent(in) :: n_entries, width, active_idx
         integer, intent(inout) :: scroll
         type(strip_span_t), intent(out) :: spans(:)
         integer, intent(out) :: n_spans
         logical, intent(out) :: more_left, more_right
+        !> Bring the active entry into view. Default .true., which is what a
+        !> tab SWITCH wants. A caller that is merely redrawing must pass
+        !> .false., or the bar cannot be scrolled by hand at all -- see below.
+        logical, intent(in), optional :: follow_active
         integer :: i, col, avail, used, first, guard
+        logical :: follow
         character(len=:), allocatable :: shown
 
         n_spans = 0
@@ -3233,7 +3248,18 @@ contains
         ! Bring the active entry into view. Scrolling left is immediate;
         ! scrolling right advances one entry at a time until it fits, with a
         ! guard so a width too small for any single entry cannot spin.
-        if (active_idx >= 1 .and. active_idx <= n_entries) then
+        !
+        ! Only when asked. Doing it on EVERY layout means the bar cannot hold
+        ! a position the user chose: clicking the left chevron scrolls one
+        ! entry, and if that would push the active entry off the right the
+        ! next redraw immediately puts it back -- so the chevron appears to do
+        ! nothing unless the active tab happens to be the adjacent one. It is
+        ! also what pins the bar at the far right after a tab opens there,
+        ! with everything else behind a chevron that will not move.
+        follow = .true.
+        if (present(follow_active)) follow = follow_active
+
+        if (follow .and. active_idx >= 1 .and. active_idx <= n_entries) then
             if (active_idx < scroll) scroll = active_idx
             guard = 0
             do while (.not. fits(scroll, active_idx) .and. scroll < active_idx &
@@ -3387,7 +3413,11 @@ contains
         call apply_drag_preview(entries, n_entries, 1, active_entry)
 
         call strip_layout(entries, n_entries, max_width, active_entry, &
-                          g_tab_scroll, spans, n_spans, more_left, more_right)
+                          g_tab_scroll, spans, n_spans, more_left, more_right, &
+                          follow_active=(active_entry /= g_last_active(1) .or. &
+                                         max_width /= g_last_width(1)))
+        g_last_active(1) = active_entry
+        g_last_width(1) = max_width
 
         ! Remember where the bar was drawn: with the tree open it does not
         ! start at column 1, and the hover preview must inherit that window
@@ -3511,7 +3541,11 @@ contains
         call apply_drag_preview(entries, n_entries, 2, active_entry)
 
         call strip_layout(entries, n_entries, width, active_entry, &
-                          g_group_scroll, spans, n_spans, more_left, more_right)
+                          g_group_scroll, spans, n_spans, more_left, more_right, &
+                          follow_active=(active_entry /= g_last_active(2) .or. &
+                                         width /= g_last_width(2)))
+        g_last_active(2) = active_entry
+        g_last_width(2) = width
 
         call terminal_move_cursor(row, start_col)
         call terminal_write(repeat(' ', width))
@@ -3759,7 +3793,7 @@ contains
         ! view, and this pass must not have an opinion about that.
         sc = scroll
         call strip_layout(entries, n_entries, width, active_idx, sc, spans, &
-                          n_spans, ml, mr)
+                          n_spans, ml, mr, follow_active=.false.)
         do i = 1, n_spans
             if (g_hit_n(strip) >= STRIP_MAX_ENTRIES) exit
             g_hit_n(strip) = g_hit_n(strip) + 1

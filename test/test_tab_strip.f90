@@ -22,6 +22,7 @@ program test_tab_strip
     call test_everything_fits()
     call test_nothing_is_dropped_silently()
     call test_the_active_entry_is_always_visible()
+    call test_a_redraw_keeps_the_scroll()
     call test_spans_never_overlap()
     call test_wide_characters_are_counted_in_cells()
     call test_absurd_widths_terminate()
@@ -116,6 +117,52 @@ contains
             call check(seen, 'and still is when moving back to the left')
         end do
     end subroutine test_the_active_entry_is_always_visible
+
+    !> A redraw must not undo a scroll the user asked for.
+    !>
+    !> strip_layout used to drag the active entry back into view on EVERY
+    !> call, which meant a chevron click that would push the active tab off
+    !> the right was reverted before it could be seen -- the chevron only
+    !> appeared to work when the adjacent tab happened to be the active one.
+    !> It is also what pinned the bar to the far right after a tab opened
+    !> there. Following happens when the active entry CHANGES; a plain redraw
+    !> passes follow_active=.false.
+    subroutine test_a_redraw_keeps_the_scroll()
+        type(strip_entry_t) :: e(STRIP_MAX_ENTRIES)
+        type(strip_span_t) :: sp(STRIP_MAX_ENTRIES)
+        integer :: n_sp, scroll, i
+        logical :: ml, mr, seen
+
+        call build(e, 30, 'file')
+
+        ! Entry 30 is active and in view: the scroll has followed it.
+        scroll = 1
+        call strip_layout(e, 30, 40, 30, scroll, sp, n_sp, ml, mr)
+        seen = .false.
+        do i = 1, n_sp
+            if (sp(i)%idx == 30) seen = .true.
+        end do
+        call check(seen, 'following brings the active entry into view')
+        call check(scroll > 1, 'and it had to scroll to do so')
+
+        ! Now scroll left by hand, far enough that entry 30 cannot be shown,
+        ! and redraw without following.
+        scroll = 1
+        call strip_layout(e, 30, 40, 30, scroll, sp, n_sp, ml, mr, &
+                          follow_active=.false.)
+        call check(scroll == 1, 'a redraw leaves a hand-set scroll alone')
+        seen = .false.
+        do i = 1, n_sp
+            if (sp(i)%idx == 30) seen = .true.
+        end do
+        call check(.not. seen, 'even when the active entry falls off the end')
+        call check(mr, 'and it is reported as more to the right')
+
+        ! Redrawing again must not creep back either.
+        call strip_layout(e, 30, 40, 30, scroll, sp, n_sp, ml, mr, &
+                          follow_active=.false.)
+        call check(scroll == 1, 'and repeated redraws do not creep')
+    end subroutine test_a_redraw_keeps_the_scroll
 
     subroutine test_spans_never_overlap()
         type(strip_entry_t) :: e(STRIP_MAX_ENTRIES)
