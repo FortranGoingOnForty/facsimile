@@ -2932,6 +2932,17 @@ contains
     ! real buffer lines those rows were showing, shifted down so nothing is
     ! hidden. Overlaying instead would make the file look like it had already
     ! changed, which is exactly the impression a suggestion must not give.
+    !> Fill the rest of a pane's row with spaces.
+    !>
+    !> Stands in for ESC[K wherever the thing being drawn belongs to a pane
+    !> rather than to the whole screen -- [K would take the neighbouring pane
+    !> with it.
+    subroutine pad_to_pane(written, cwidth)
+        integer, intent(in) :: written, cwidth
+
+        if (cwidth - written > 0) call terminal_write(repeat(' ', cwidth - written))
+    end subroutine pad_to_pane
+
     subroutine render_ghost_block(editor, buffer, anchor_row, col0, cwidth)
         type(editor_state_t), intent(in) :: editor
         type(buffer_t), intent(in) :: buffer
@@ -2972,7 +2983,16 @@ contains
             ! against the real line pushed down below.
             if (gutter > 0) call terminal_write(repeat(' ', gutter))
             call terminal_write(char(27) // '[2m' // char(27) // '[90m' // &
-                                shown // char(27) // '[0m' // char(27) // '[K')
+                                shown // char(27) // '[0m')
+            ! Pad to the pane's width rather than ESC[K.
+            !
+            ! [K clears to the end of the TERMINAL LINE, which in a vertical
+            ! split is everything to the right of this pane -- so a block
+            ! suggestion erased the neighbouring pane from its first row
+            ! downwards, and dismissing it brought the pane back. Correct
+            ! while a pane spans the full width, which is why this only ever
+            ! showed up in a split.
+            call pad_to_pane(gutter + used, cwidth)
         end do
 
         ! The ghost occupies rows anchor_row .. anchor_row + n - 1, so the
@@ -2982,6 +3002,10 @@ contains
             row = anchor_row + n + i
             if (row > bottom) exit
             src_line = editor%ghost%anchor_line + 1 + i
+            ! Blank this row's slice of the pane first, for the same reason:
+            ! the row has to be cleared, but only as far as the pane goes.
+            call terminal_move_cursor(row, col0)
+            call terminal_write(repeat(' ', cwidth))
             call terminal_move_cursor(row, col0)
             call render_line_number(src_line, line_count, gutter)
             if (src_line <= line_count) then
@@ -2990,7 +3014,6 @@ contains
             else
                 call terminal_write('~')
             end if
-            call terminal_write(char(27) // '[K')
         end do
     end subroutine render_ghost_block
 

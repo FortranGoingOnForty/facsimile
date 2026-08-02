@@ -287,6 +287,113 @@ def test_block_that_does_not_fit_shows_a_marker(binary):
         s.close()
 
 
+class SplitSession(Session):
+    """The same session, with a second file opened beside the first.
+
+    Written for one bug: a multi-line ghost is drawn INSIDE a pane, but each
+    of its rows was finished with ESC[K, which clears to the end of the
+    TERMINAL line. In a vertical split that is the neighbouring pane, so a
+    block suggestion blanked the file next to it from the block's first row
+    downwards, and dismissing the suggestion brought it back.
+    """
+
+    def __init__(self, binary, content, other, **kw):
+        # Its own geometry: the default 24x100 is too short for a block of any
+        # size to fit, and a block that does not fit is drawn as a marker
+        # instead -- which is a different path and not the one under test.
+        kw.setdefault("rows", 30)
+        kw.setdefault("cols", 120)
+        super().__init__(binary, content, True, **kw)
+        self.rows = kw["rows"]
+        self.cols = kw["cols"]
+        self.other = os.path.join(self.home, "other.c")
+        with open(self.other, "w") as f:
+            f.write(other)
+
+    def open_split(self):
+        """alt-v on a tree row: opens that file BESIDE this one.
+
+        Clicking the row would replace the current pane instead, which is not
+        the arrangement under test.
+        """
+        self.send("\x02", 1.2)
+        sel = None
+        for _ in range(10):
+            for y in range(1, self.rows - 1):
+                if any(self.screen.buffer[y][x].reverse for x in range(30)):
+                    sel = "".join(self.screen.buffer[y][x].data
+                                  for x in range(30)).strip()
+                    break
+            if sel and "other.c" in sel:
+                break
+            self.send("\x1b[B", 0.25)
+        self.send("\x1bv", 1.8)
+        self.send("\x1bh", 0.6)              # focus back to the left pane
+        return sel is not None and "other.c" in sel
+
+    def ghost_rows(self):
+        """Rows of the LEFT pane drawn in the dim ghost colour."""
+        n = 0
+        for y in range(2, self.rows - 2):
+            cells = [self.screen.buffer[y][x]
+                     for x in range(6, self.cols // 2 - 4)]
+            if not "".join(c.data for c in cells).strip():
+                continue
+            if all(c.fg == "brightblack" for c in cells if c.data.strip()):
+                n += 1
+        return n
+
+    def right_rows(self):
+        """How many rows of the RIGHT pane still show anything."""
+        n = 0
+        for y in range(2, self.rows - 2):
+            if "".join(self.screen.buffer[y][x].data
+                       for x in range(self.cols // 2 + 2, self.cols - 2)).strip():
+                n += 1
+        return n
+
+
+def test_a_block_does_not_truncate_the_other_pane(binary):
+    print("\nA block suggestion leaves the pane beside it alone")
+    s = SplitSession(
+        binary,
+        "#include <stdio.h>\n\n"
+        "/* Print every number from 1 to 10, one per line, using a for loop. */\n"
+        "void print_numbers(void)\n{\n",
+        "".join(f"int marker{i} = {i};\n" for i in range(1, 40)),
+        max_block_lines=8)
+    try:
+        if not s.open_split():
+            check(False, "opened other.c in a vertical split")
+            return
+        before = s.right_rows()
+        check(before > 10, "the right pane starts full of text", str(before))
+
+        s.send("\x1b[B" * 5, 0.4)
+        s.send("\x05", 0.3)                  # end of line
+        s.send("\n    ", 0.6)
+        s.send("\x1b\\", 1.0)                # ask for a deep completion
+        for _ in range(20):
+            s.drain(1.0)
+            if s.ghost_rows() >= 2:
+                break
+
+        if s.ghost_rows() < 2:
+            print("SKIP: model did not produce a block this run")
+            return
+        during = s.right_rows()
+        check(during == before,
+              "the right pane is intact while the block is shown",
+              f"{before} rows -> {during} while a {s.ghost_rows()}-row block is up")
+
+        s.send("\x1b", 0.8)
+        check(s.right_rows() == before,
+              "and still intact after the block is dismissed",
+              f"{before} -> {s.right_rows()}")
+    finally:
+        s.close()
+
+
 def test_cache_saves_a_repeat_request(binary):
     """Backspace is a trigger key, so deleting and retyping asks the model a
     question it has already answered. The cache is only worth its complexity
@@ -344,6 +451,7 @@ def main():
         test_block_line_and_full_accept(binary)
         test_block_that_does_not_fit_shows_a_marker(binary)
         test_cache_saves_a_repeat_request(binary)
+        test_a_block_does_not_truncate_the_other_pane(binary)
 
     if failures:
         print(f"\nintegration_ai_ghost: FAILED ({len(failures)}): "
