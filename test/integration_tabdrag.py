@@ -1098,6 +1098,126 @@ def test_the_chevron_scrolls_whatever_is_active(binary):
         s.close()
 
 
+
+def mismatched_order_session(binary):
+    """Two groups, with the tab ARRAY in a different order from the bar.
+
+    getopt/ holds one file; tail/ holds three. The array is written
+    tail.c-first while the ordinals still display main.c first, because the
+    bug being pinned was a fallback that scanned the ARRAY -- with the two
+    orders identical it picks the right file by luck and proves nothing.
+
+    Each file's text carries its own marker so a pane can be identified by
+    content rather than by a header that might itself be wrong.
+    """
+    home = tempfile.mkdtemp(prefix="fac_td_home_")
+    os.makedirs(os.path.join(home, ".config", "fac"))
+    with open(os.path.join(home, ".config", "fac", "state.json"), "w") as f:
+        f.write('{"first_run_completed": true, "lsp_installer_seen": true,'
+                ' "version": "1.0"}\n')
+    root = tempfile.mkdtemp(prefix="fac_td_work_")
+    ws = os.path.join(root, "ws")
+    for d, files in (("getopt", ("long.c",)),
+                     ("tail", ("main.c", "tail.c", "tail.h"))):
+        os.makedirs(os.path.join(ws, d))
+        for fn in files:
+            tok = (d + "_" + fn).replace(".", "_").upper()
+            with open(os.path.join(ws, d, fn), "w") as f:
+                f.writelines("int %s_%d;\n" % (tok, i) for i in range(1, 20))
+
+    def tab(fn, gid, o):
+        return {"filename": fn, "is_orphan": False, "modified": False,
+                "group": gid, "group_ordinal": o,
+                "panes": [{"x_start": 0.0, "y_start": 0.0, "x_end": 1.0,
+                           "y_end": 1.0, "filename": fn, "cursor_line": 1,
+                           "cursor_column": 1, "viewport_line": 1,
+                           "viewport_column": 1}],
+                "active_pane": 1}
+
+    doc = {"version": "1.2", "workspace_path": ws, "last_opened": "20260801",
+           "tab_groups": [
+               {"id": 1, "label": "getopt/", "dir_path": os.path.join(ws, "getopt"),
+                "active_member": os.path.join(ws, "getopt/long.c")},
+               {"id": 2, "label": "tail/", "dir_path": os.path.join(ws, "tail"),
+                "active_member": os.path.join(ws, "tail/main.c")}],
+           # tail.c first in the ARRAY, main.c first on the BAR.
+           "tabs": [tab("getopt/long.c", 1, 1), tab("tail/tail.c", 2, 2),
+                    tab("tail/main.c", 2, 1), tab("tail/tail.h", 2, 3)],
+           "active_tab": 1, "fuss_mode": False}
+    os.makedirs(os.path.join(ws, ".fac"))
+    with open(os.path.join(ws, ".fac", "workspace.json"), "w") as f:
+        json.dump(doc, f, indent=2)
+
+    env = {**os.environ, "TERM": "xterm-256color", "HOME": home}
+    env.pop("XDG_CONFIG_HOME", None)
+    env.pop("FAC_SESSION", None)
+    s = Session.__new__(Session)
+    s.home, s.root, s.work = home, root, ws
+    s.screen = pyte.Screen(COLS, ROWS)
+    s.stream = pyte.Stream(s.screen)
+    s.child = pexpect.spawn(binary, [ws], dimensions=(ROWS, COLS), env=env, cwd=ws)
+    s.drain(3.0)
+    return s
+
+
+def test_a_tab_dropped_on_its_own_document_splits_no_stranger(binary):
+    """Reported twice from a real session, and it destroys the gesture's point.
+
+    Carrying a tab into a group ACTIVATES it, so straight afterwards the
+    document on screen is the tab still being held. Dropping it at an edge
+    then had no host, and the code picked the first tab in the array -- an
+    unrelated file, in no particular order -- while the preview had been
+    drawn over something else entirely.
+    """
+    print("\nDropping a tab onto its own document never splits a third file")
+    s = mismatched_order_session(binary)
+    try:
+        # Carry long.c out of getopt/ and into the tail/ group.
+        src = s.entry_col("long.c", row=2) or s.entry_col("long.c", row=1)
+        row = 2 if s.entry_col("long.c", row=2) else 1
+        tgt = s.entry_col("tail/", row=1)
+        if not (src and tgt):
+            check(False, "found long.c and the tail/ group on the bar",
+                  f"{s.tab_bar()} / {s.row2()}")
+            return
+        s.drag(src, tgt, from_row=row, to_row=1)
+        s.drain(1.5)
+        check("long.c" in s.row2(), "long.c joined the tail/ group", s.row2())
+        check("GETOPT_LONG_C" in s.text(),
+              "and is the document on screen, because joining activated it")
+
+        # Now carry it into the document and drop it at the right edge.
+        src2 = s.entry_col("long.c", row=2)
+        if not src2:
+            check(False, "long.c is on the member row", s.row2())
+            return
+        # carry_to looks on row 1; long.c is a group MEMBER now, on row 2.
+        s.child.send(f"\x1b[<0;{src2};2M")
+        s.drain(0.4)
+        for c in range(src2, COLS - 3, 6):
+            s.child.send(f"\x1b[<32;{c};2M")
+            s.drain(0.08)
+        for r in (4, 8, 12):
+            s.child.send(f"\x1b[<32;{COLS - 3};{r}M")
+            s.drain(0.2)
+        s.drain(0.6)
+        s.child.send(f"\x1b[<0;{COLS - 3};12m")
+        s.drain(1.8)
+
+        body = s.text()
+        check("TAIL_TAIL_C" not in body and "TAIL_TAIL_H" not in body,
+              "no unrelated file was pulled into a pane", body[:300])
+        # Either nothing happened, or the split is against what was showing.
+        if "GETOPT_LONG_C" in body and "TAIL_MAIN_C" in body:
+            check(True, "a split against the document that was showing")
+        else:
+            check("long.c" in s.row2() or "long.c" in s.tab_bar(),
+                  "or the drop was refused and the tab stayed on the bar",
+                  s.row2())
+    finally:
+        s.close()
+
+
 def main():
     binary = find_binary()
     for fn in (test_drag_right_and_left,
@@ -1123,7 +1243,8 @@ def main():
                test_a_group_does_not_run_from_the_pointer,
                test_sweeping_past_a_group_does_not_open_it,
                test_row_two_shows_where_the_tab_will_land,
-               test_the_chevron_scrolls_whatever_is_active):
+               test_the_chevron_scrolls_whatever_is_active,
+               test_a_tab_dropped_on_its_own_document_splits_no_stranger):
         try:
             fn(binary)
         except Exception as exc:              # noqa: BLE001

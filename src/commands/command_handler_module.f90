@@ -6568,7 +6568,7 @@ contains
         type(buffer_t), intent(inout) :: buffer
         integer, intent(in) :: side
         character(len=:), allocatable :: carried, host
-        integer :: host_idx, i, gone
+        integer :: host_idx, gone
 
         carried = trim(drag_path())
         if (len_trim(carried) == 0) return
@@ -6596,18 +6596,25 @@ contains
             if (allocated(editor%tabs(editor%active_tab_index)%filename)) &
                 host = trim(editor%tabs(editor%active_tab_index)%filename)
         end if
-        if (len_trim(host) > 0) then
-            if (trim(host) == carried) host = ''
-        end if
-        if (len_trim(host) == 0) then
-            do i = 1, size(editor%tabs)
-                if (.not. allocated(editor%tabs(i)%filename)) cycle
-                if (trim(editor%tabs(i)%filename) == carried) cycle
-                host = trim(editor%tabs(i)%filename)
-                exit
-            end do
-        end if
+        ! The host is whatever the preview was drawn over, and nothing else.
+        !
+        ! There used to be a fallback here that scanned for the first tab in
+        ! the array that was not the carried one. It fired exactly when the
+        ! document on screen WAS the carried tab -- which is the state you are
+        ! left in immediately after carrying that tab into a group, because
+        ! joining a group activates it. The split was then made against an
+        ! arbitrary file: whichever the array happened to hold first, an order
+        ! unrelated to the bar's, so the pane that appeared looked random.
+        !
+        ! Refusing and saying so beats guessing. The refusal is made here
+        ! rather than by withholding the preview, so that it reads the same
+        ! way as the unsaved-tab refusal above.
         if (len_trim(host) == 0) return
+        if (trim(host) == carried) then
+            call set_status_message(basename_public(carried) // &
+                                    ' is already the document here')
+            return
+        end if
 
         ! Close the carried tab BEFORE splitting, not after.
         !
@@ -8956,6 +8963,12 @@ contains
 
                     ! Sync editor state with the new pane
                     call sync_editor_to_pane(editor)
+                else
+                    ! Same as the vertical case: a failed load would otherwise
+                    ! leave the split showing the host twice, silently.
+                    call close_pane(editor)
+                    call set_status_message('Could not open ' // &
+                                            trim(full_path))
                 end if
             end if
         end if
@@ -9055,6 +9068,14 @@ contains
 
                     ! Sync editor state with the new pane
                     call sync_editor_to_pane(editor)
+                else
+                    ! A new pane starts as a COPY of the one it split from, so
+                    ! a load that fails here leaves the same document showing
+                    ! twice and says nothing about it. Take the pane back and
+                    ! report, rather than presenting a duplicate as a split.
+                    call close_pane(editor)
+                    call set_status_message('Could not open ' // &
+                                            trim(full_path))
                 end if
             end if
         end if
