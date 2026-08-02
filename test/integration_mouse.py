@@ -274,6 +274,55 @@ PROMPTS = [
 ]
 
 
+def test_close_pane_in_the_document_menu(binary):
+    """Right-clicking a split document offers Close Pane.
+
+    It acts on the pane that was CLICKED, which need not be the active one:
+    opening the menu positions the caret, and positioning the caret in another
+    pane focuses it, so by the time the row runs the clicked pane is active.
+    """
+    s = Session(binary, "aaa\nbbb\nccc\n")
+    try:
+        def pane_headers():
+            # A split draws one labelled header per pane on row 2. An UNSPLIT
+            # document has no header row at all -- row 2 is document text --
+            # so "back to one pane" reads as zero headers, not one.
+            return s.screen.display[1].count("[")
+
+        s.click(6, 20, button=2)
+        body = "\n".join(s.screen.display)
+        check("Close Pane" not in body,
+              "an unsplit document does not offer Close Pane", body[:200])
+        s.send("\x1b", 0.5)
+
+        s.send("\x1bv", 1.4)                      # alt-v: split vertically
+        check(pane_headers() == 2, "the document is split in two",
+              s.screen.display[1].rstrip())
+
+        # The new pane is the active one, so click the LEFT pane: this closes
+        # a pane that was not active when the menu opened.
+        s.click(6, 12, button=2)
+        body = "\n".join(s.screen.display)
+        check("Close Pane" in body, "a split document offers it", body[:200])
+        row = col = None
+        for i, r in enumerate(s.screen.display):
+            j = r.find("Close Pane")
+            if j >= 0:
+                row, col = i + 1, j + 1
+                break
+        if row is None:
+            check(False, "found the row")
+            return
+        s.click(row, col + 2)
+        s.drain(1.0)
+        check(pane_headers() == 0, "choosing it leaves a single pane",
+              s.screen.display[1].rstrip())
+        check("aaa" in "\n".join(s.screen.display),
+              "and the document is still open", s.screen.display[2].rstrip())
+    finally:
+        s.close()
+
+
 def main():
     binary = find_binary()
 
@@ -995,6 +1044,8 @@ def main():
     check(cells > 0, "drag-select still works after a menu has been open",
           f"{cells} highlighted cells")
     s.close()
+
+    test_close_pane_in_the_document_menu(binary)
 
     if failures:
         print(f"integration_mouse: FAILED ({len(failures)}: {', '.join(failures)})")

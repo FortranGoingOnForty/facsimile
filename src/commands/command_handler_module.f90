@@ -133,6 +133,7 @@ module command_handler_module
     integer, parameter :: ACT_CUT = 1, ACT_COPY = 2, ACT_PASTE = 3
     integer, parameter :: ACT_COMMENT = 4, ACT_SELECT_ALL = 5
     integer, parameter :: ACT_GOTO_DEF = 6, ACT_FIND_REFS = 7, ACT_PALETTE = 8
+    integer, parameter :: ACT_CLOSE_PANE = 9
     integer, parameter :: ACT_TREE_ACTIVATE = 20, ACT_TREE_VSPLIT = 21
     integer, parameter :: ACT_TREE_HSPLIT = 22, ACT_TREE_STAGE = 23
     integer, parameter :: ACT_TREE_UNSTAGE = 24, ACT_TREE_DIFF = 25
@@ -5947,8 +5948,32 @@ contains
         call context_menu_add_item('Find References', 'Shift+F12', ACT_FIND_REFS, &
                                    enabled=(get_lsp_server_for_cap(editor, CAP_REFERENCES) > 0))
         call context_menu_add_separator()
+        ! Only when there is more than one pane. Offering it on an unsplit
+        ! document would either be greyed out for the whole life of the menu
+        ! or would mean "close the tab", which already has its own entry
+        ! elsewhere and is a different act.
+        !
+        ! It closes the pane that was CLICKED: opening the menu positions the
+        ! caret, and positioning the caret in another pane focuses it, so the
+        ! active pane is already the one under the pointer by the time this
+        ! runs.
+        if (panes_here(editor) > 1) then
+            call context_menu_add_item('Close Pane', 'Alt+Q', ACT_CLOSE_PANE)
+            call context_menu_add_separator()
+        end if
         call context_menu_add_item('Command Palette', 'Ctrl+P', ACT_PALETTE)
     end subroutine build_document_menu
+
+    !> How many panes the active tab has.
+    integer function panes_here(editor)
+        type(editor_state_t), intent(in) :: editor
+
+        panes_here = 0
+        if (editor%active_tab_index < 1) return
+        if (editor%active_tab_index > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(editor%active_tab_index)%panes)) return
+        panes_here = size(editor%tabs(editor%active_tab_index)%panes)
+    end function panes_here
 
     function comment_available_here(editor) result(ok)
         type(editor_state_t), intent(in) :: editor
@@ -6039,6 +6064,8 @@ contains
                 call handle_key_command('shift-f12', editor, buffer, inner_quit)
             case (ACT_PALETTE)
                 call open_command_palette(editor, buffer, inner_quit)
+            case (ACT_CLOSE_PANE)
+                call handle_key_command('alt-q', editor, buffer, inner_quit)
             end select
         else if (kind == CTX_KIND_TREE) then
             select case (act)
