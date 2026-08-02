@@ -651,6 +651,7 @@ contains
                             ! keyboard handler act on it: space expands a
                             ! directory, enter opens a file. Delegating keeps
                             ! one definition of what activating a row means.
+                            call tree_ensure_selectable(tree_state)
                             if (hit%payload >= 1 .and. &
                                 hit%payload <= tree_state%n_selectable) then
                                 tree_state%selected_index = hit%payload
@@ -8471,6 +8472,13 @@ contains
         type(tree_node_t), pointer :: sel_node
         integer :: i
 
+        ! Whatever this key does, it does it to the row the tree is DRAWING.
+        ! Cheap when nothing has opened since the last call, which is the
+        ! common case; the alternative is remembering to rebuild at every
+        ! site that opens a directory, and forgetting one is precisely the
+        ! bug this replaces.
+        call tree_ensure_selectable(tree_state)
+
         select case(trim(key_str))
         case('down')
             ! Move down in tree (arrows only; j/k are fuzzy-search)
@@ -9015,8 +9023,10 @@ contains
                     ! Sync editor state with the new pane
                     call sync_editor_to_pane(editor)
                 else
-                    ! Same as the vertical case: a failed load would otherwise
-                    ! leave the split showing the host twice, silently.
+                    ! A new pane starts as a COPY of the one it split from, so
+                    ! a load that fails here leaves the same document showing
+                    ! twice and says nothing about it. Take the pane back and
+                    ! report, rather than presenting a duplicate as a split.
                     call close_pane(editor)
                     call set_status_message('Could not open ' // &
                                             trim(full_path))
@@ -9120,10 +9130,8 @@ contains
                     ! Sync editor state with the new pane
                     call sync_editor_to_pane(editor)
                 else
-                    ! A new pane starts as a COPY of the one it split from, so
-                    ! a load that fails here leaves the same document showing
-                    ! twice and says nothing about it. Take the pane back and
-                    ! report, rather than presenting a duplicate as a split.
+                    ! Same as the vertical case: a failed load would otherwise
+                    ! leave the split showing the host twice, silently.
                     call close_pane(editor)
                     call set_status_message('Could not open ' // &
                                             trim(full_path))
@@ -9183,6 +9191,13 @@ contains
             if (index(rel, '/') <= 0) cycle     ! at the root; nothing to open
             call tree_reveal_path(tree_state, rel, force=.true.)
         end do
+
+        ! Every reveal above opened a directory, and the selectable list was
+        ! built before any of them. Without this the tree DREW the revealed
+        ! children while the keyboard still indexed a list that did not have
+        ! them -- so the highlight sat on one row and enter acted on another,
+        ! further down by however many children had appeared.
+        call tree_ensure_selectable(tree_state)
     end subroutine reveal_open_files
 
     subroutine toggle_fuss_mode(editor)

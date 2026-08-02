@@ -8,7 +8,7 @@ module file_tree_module
     public :: init_tree_state, cleanup_tree_state, refresh_tree_state
     public :: tree_move_up, tree_move_down, get_selected_item_path
     public :: tree_stage_file, tree_unstage_file, tree_toggle_expand
-    public :: tree_expand_node, tree_reveal_path
+    public :: tree_expand_node, tree_reveal_path, tree_ensure_selectable
     public :: build_selectable_list
     public :: update_tree_viewport
 
@@ -63,6 +63,14 @@ module file_tree_module
         type(selectable_file_t), allocatable :: selectable_files(:)
         integer :: n_files = 0
         integer :: n_selectable = 0
+        ! The selectable list is derived from which directories are open, so
+        ! anything that opens one invalidates it. Rebuilding eagerly at every
+        ! such point was what went wrong: one caller (reveal_open_files) ran
+        ! AFTER the build and expanded a directory per open tab, so the list
+        ! the keyboard acted on was missing every child the tree was drawing.
+        ! A flag checked at the point of USE cannot be forgotten by a new
+        ! caller in the way an explicit rebuild can.
+        logical :: selectable_dirty = .true.
         integer :: selected_index = 1
         integer :: viewport_offset = 1
         type(tree_node_t), pointer :: root => null()
@@ -331,6 +339,7 @@ contains
                     ! it would be drawn open and empty with the very thing it
                     ! was opened for missing from it.
                     child%expanded = .true.
+                    state%selectable_dirty = .true.
                     if (do_force) child%force_visible = .true.
                     if (child%scan_pending) &
                         call scan_directory_children(state, child)
@@ -723,6 +732,47 @@ contains
     end function compare_nodes
 
     ! Build list of selectable files in tree traversal order
+    !> Make the selectable list agree with what is on screen.
+    !>
+    !> Both the renderer and the key handler walk expanded directories, so the
+    !> list of things that can be selected has to be rebuilt whenever one is
+    !> opened. Call this before touching selected_index or selectable_files.
+    !>
+    !> The selection is re-anchored to the same NODE rather than the same
+    !> index, because the index is exactly what the rebuild changes.
+    subroutine tree_ensure_selectable(state)
+        type(tree_state_t), intent(inout) :: state
+        type(tree_node_t), pointer :: was
+        integer :: i
+
+        if (.not. state%selectable_dirty) return
+        state%selectable_dirty = .false.
+        if (.not. associated(state%root)) return
+
+        was => null()
+        if (allocated(state%selectable_files)) then
+            if (state%selected_index >= 1 .and. &
+                state%selected_index <= state%n_selectable) &
+                was => state%selectable_files(state%selected_index)%node
+            deallocate(state%selectable_files)
+        end if
+
+        call build_selectable_list(state%root, state%selectable_files, &
+                                   state%n_selectable, state%hide_dotfiles)
+
+        if (associated(was)) then
+            do i = 1, state%n_selectable
+                if (associated(state%selectable_files(i)%node, was)) then
+                    state%selected_index = i
+                    return
+                end if
+            end do
+        end if
+        if (state%selected_index > state%n_selectable) &
+            state%selected_index = max(1, state%n_selectable)
+        if (state%selected_index < 1) state%selected_index = 1
+    end subroutine tree_ensure_selectable
+
     subroutine build_selectable_list(root, selectable, n_selectable, hide_dotfiles)
         type(tree_node_t), pointer, intent(in) :: root
         type(selectable_file_t), allocatable, intent(out) :: selectable(:)
