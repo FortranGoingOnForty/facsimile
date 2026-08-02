@@ -129,6 +129,16 @@ module renderer_module
     character(len=4) :: g_hl_anchor_delim = ''
     integer(int64) :: g_hl_key_rev = -1     ! doc revision the anchor was built from
     integer :: g_hl_key_tab = -1
+    ! WHICH DOCUMENT the anchor was built from.
+    !
+    ! A split is several panes inside ONE tab, each able to show a different
+    ! file, so the tab and its revision do not identify the text being
+    ! scanned. Without this, scrolling a pane whose file is inside a block
+    ! comment left in_multiline_comment set, and the next pane resumed from it
+    ! -- an unrelated file rendered entirely as a comment.
+    character(len=:), allocatable :: g_hl_key_file
+    !> The document currently being drawn. Set before each pane's rows.
+    character(len=:), allocatable :: g_hl_surface
 
     ! ---- tab bar strip ---------------------------------------------------
     !
@@ -580,6 +590,7 @@ contains
         ! established per line by seed_comment_state, so isolated rows are
         ! coloured correctly without walking the viewport here.
         associate(pane => editor%tabs(tab_idx)%panes(pane_idx))
+            if (allocated(pane%filename)) call name_surface(pane%filename)
             adjusted_width = pane%screen_width - line_num_width
             do i = 1, n_dirty
                 if (dirty(i) < 1) cycle
@@ -822,6 +833,28 @@ contains
     !> Called from the one place every render path funnels through, and only
     !> does work when the line being drawn is not the one that would follow
     !> naturally -- so a normal top-to-bottom frame costs nothing extra.
+    !> Is the anchor from the same document we are drawing now?
+    logical function same_hl_file()
+        if (.not. allocated(g_hl_key_file)) then
+            same_hl_file = .not. allocated(g_hl_surface)
+            return
+        end if
+        if (.not. allocated(g_hl_surface)) then
+            same_hl_file = .false.
+            return
+        end if
+        same_hl_file = (g_hl_key_file == g_hl_surface)
+    end function same_hl_file
+
+    !> Name the document about to be drawn, so its comment scan is not
+    !> resumed from another pane's file. An unnamed pane -- an untitled
+    !> buffer -- gets a stable placeholder rather than sharing "no name" with
+    !> every other unnamed one.
+    subroutine name_surface(name)
+        character(len=*), intent(in) :: name
+        g_hl_surface = name
+    end subroutine name_surface
+
     subroutine seed_comment_state(buffer, editor, line_num)
         type(buffer_t), intent(in) :: buffer
         type(editor_state_t), intent(in) :: editor
@@ -841,14 +874,14 @@ contains
 
         ! Continuing the scan we were already on: nothing to do.
         if (line_num == g_hl_next_line .and. rev == g_hl_key_rev .and. &
-            tab_idx == g_hl_key_tab) return
+            tab_idx == g_hl_key_tab .and. same_hl_file()) return
 
         ! The anchor is only usable for the document it was built from, and
         ! only for lines at or after it -- an edit anywhere above invalidates
         ! everything below, which is what the revision check catches.
         from_line = 1
         if (rev == g_hl_key_rev .and. tab_idx == g_hl_key_tab .and. &
-            g_hl_anchor_line <= line_num) then
+            same_hl_file() .and. g_hl_anchor_line <= line_num) then
             from_line = g_hl_anchor_line
             syntax_highlighter%in_multiline_comment = g_hl_anchor_mc
             syntax_highlighter%in_multiline_string = g_hl_anchor_ms
@@ -864,6 +897,11 @@ contains
             g_hl_anchor_delim = ''
             g_hl_key_rev = rev
             g_hl_key_tab = tab_idx
+            if (allocated(g_hl_surface)) then
+                g_hl_key_file = g_hl_surface
+            else if (allocated(g_hl_key_file)) then
+                deallocate(g_hl_key_file)
+            end if
         end if
 
         do ln = from_line, line_num - 1
@@ -1939,6 +1977,8 @@ contains
             end block
 
             ! Use the pane's buffer, not the passed buffer parameter
+            if (allocated(editor%tabs(tab_idx)%panes(1)%filename)) &
+                call name_surface(editor%tabs(tab_idx)%panes(1)%filename)
             call render_editor_pane(editor%tabs(tab_idx)%panes(1)%buffer, editor, start_col, width)
             return
         end if
@@ -1953,6 +1993,9 @@ contains
         ! Render each pane with coordinates adjusted for tree offset
         do i = 1, n_panes
             pane = editor%tabs(tab_idx)%panes(i)
+            ! Each pane is its own document as far as the tokenizer's
+            ! multi-line comment state is concerned.
+            if (allocated(pane%filename)) call name_surface(pane%filename)
 
             ! Calculate pane position relative to editor area (not full screen)
             pane_col = start_col + int(pane%x_start * real(width))
@@ -2318,6 +2361,22 @@ contains
         call terminal_write(char(27) // '[0m')
     end subroutine render_pane_header
 
+    !> The file a pane is showing, for keying the highlight scan.
+    function pane_document(editor, pane_idx) result(name)
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(in) :: pane_idx
+        character(len=:), allocatable :: name
+        integer :: t
+
+        name = '?'
+        t = editor%active_tab_index
+        if (t < 1 .or. t > size(editor%tabs)) return
+        if (.not. allocated(editor%tabs(t)%panes)) return
+        if (pane_idx < 1 .or. pane_idx > size(editor%tabs(t)%panes)) return
+        if (allocated(editor%tabs(t)%panes(pane_idx)%filename)) &
+            name = editor%tabs(t)%panes(pane_idx)%filename
+    end function pane_document
+
     subroutine render_buffer_line_in_pane(buffer, editor, pane_idx, line_num, screen_row, col, width)
         use editor_state_module, only: pane_t
         type(buffer_t), intent(in) :: buffer
@@ -2396,7 +2455,21 @@ contains
 
         ! Get syntax tokens for this line
         if (syntax_highlighter%enabled) then
+            ! Seed the multi-line comment state first. Without this the
+            ! tokenizer simply carried on from whatever line it happened to
+            ! colour last -- which, with a split, is a line in the OTHER
+            ! pane's file. An open block comment there left every following
+            ! line of an unrelated document rendered as a comment, and
+            ! scrolling made real block comments flicker in and out because
+            ! nothing established whether the top of the viewport was inside
+            ! one.
+            !
+            ! The single-pane path has done this all along; this one never
+            ! did, so panes were the only place it was wrong.
+            call name_surface(pane_document(editor, pane_idx))
+            call seed_comment_state(buffer, editor, line_num)
             call tokenize_line(syntax_highlighter, line, tokens)
+            g_hl_next_line = line_num + 1
         else
             allocate(tokens(1))
             tokens(1)%type = TOKEN_PLAIN
@@ -4031,6 +4104,8 @@ contains
 
         ! If only one pane, use simple rendering
         if (n_panes == 1) then
+            if (allocated(editor%tabs(tab_idx)%panes(1)%filename)) &
+                call name_surface(editor%tabs(tab_idx)%panes(1)%filename)
             call render_editor_pane(editor%tabs(tab_idx)%panes(1)%buffer, editor, start_col, width)
             return
         end if
