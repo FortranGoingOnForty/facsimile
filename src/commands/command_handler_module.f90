@@ -5672,25 +5672,44 @@ contains
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: screen_row, screen_col, delta
-        integer :: tab_idx, pane_idx, i, line_count, top, last_top
+        integer :: tab_idx, pane_idx, i, n, line_count, top, last_top, visible
 
         call get_active_pane_indices(editor, tab_idx, pane_idx)
         if (tab_idx < 1) return
         if (tab_idx > size(editor%tabs)) return
         if (.not. allocated(editor%tabs(tab_idx)%panes)) return
+        n = size(editor%tabs(tab_idx)%panes)
 
-        line_count = buffer_get_line_count(buffer)
-        ! Same clamp the keyboard scroll uses. This was an open-coded
-        ! screen_rows - 2 that missed the terminal panel, so wheel scrolling
-        ! could run past the last drawn line while the panel was up.
-        last_top = max(1, line_count - text_area_height(editor) + 1)
-
-        do i = 1, size(editor%tabs(tab_idx)%panes)
+        do i = 1, n
             associate(pane => editor%tabs(tab_idx)%panes(i))
                 if (screen_row >= pane%screen_row .and. &
                     screen_row < pane%screen_row + pane%screen_height .and. &
                     screen_col >= pane%screen_col .and. &
                     screen_col < pane%screen_col + pane%screen_width) then
+
+                    ! Clamp against THIS pane's document, not the active one.
+                    !
+                    ! Both halves of that were wrong for a hovered pane and
+                    ! both stopped the scroll early: the length came from the
+                    ! active pane's buffer, so hovering a long file beside a
+                    ! short one stopped at the short file's end until you
+                    ! clicked in -- which made it active and let it move again,
+                    ! exactly as reported. And the height was the whole text
+                    ! area rather than the pane's, which is smaller for a
+                    ! horizontal split and a row shorter whenever a pane draws
+                    ! its own header.
+                    !
+                    ! The active pane's live text is `buffer`; pane%buffer is
+                    ! only up to date for the panes not being edited.
+                    if (i == pane_idx) then
+                        line_count = buffer_get_line_count(buffer)
+                    else
+                        line_count = buffer_get_line_count(pane%buffer)
+                    end if
+                    visible = pane%screen_height
+                    if (n > 1) visible = visible - 1        ! the pane header
+                    if (visible < 1) visible = 1
+                    last_top = max(1, line_count - visible + 1)
 
                     top = max(1, pane%viewport_line + delta)
                     if (top > last_top) top = last_top
