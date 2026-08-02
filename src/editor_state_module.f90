@@ -50,6 +50,7 @@ module editor_state_module
     public :: group_add_member, group_remove_member, active_group_id
     public :: prune_empty_groups, find_tab_by_path_public
     public :: reorder_tab, reorder_group_block, set_group_ordinal
+    public :: bar_slot_to_index
     public :: tab_is_resident, hydrate_tab, defer_tab
     public :: switch_to_tab, &
         switch_to_tab_with_buffer, get_active_tab_index, close_tab
@@ -886,6 +887,78 @@ contains
             if (idx >= to_idx .and. idx < from_idx) moved = idx + 1
         end if
     end function shifted_index
+
+    !> Turn a tab-bar SLOT into an index into the tabs array.
+    !>
+    !> The two are different units and conflating them was a bug. A slot counts
+    !> a group as ONE entry however many members it has; the array counts every
+    !> member. They agree only while nothing multi-member sits before the
+    !> destination, which is why dragging a group one slot at a time worked and
+    !> a long drag landed short by exactly the members hidden behind the groups
+    !> it passed -- the drop went somewhere the preview had never shown.
+    !>
+    !> Pass the dragged entry so it can be left out of the count: it is being
+    !> moved, so the tabs it occupies do not stand between it and its
+    !> destination. Give `gid` for a group, or `tab_idx` for a lone tab.
+    !>
+    !> Dropping on a slot to the RIGHT lands after the entry sitting there,
+    !> which is what makes a rightward drag advance at all; dropping to the
+    !> LEFT lands before it. That asymmetry is the ordinary drag-and-drop
+    !> convention and it is what reorder_tab already does for indices.
+    integer function bar_slot_to_index(editor, gid, tab_idx, to_slot)
+        type(editor_state_t), intent(in) :: editor
+        integer(int32), intent(in) :: gid
+        integer, intent(in) :: tab_idx, to_slot
+        integer(int32), allocatable :: slot_gid(:)
+        integer, allocatable :: slot_tabs(:)
+        integer(int32) :: g
+        integer :: i, n, slot, n_slots, from_slot, last, tally
+        logical :: seen
+
+        n = size(editor%tabs)
+        bar_slot_to_index = max(1, to_slot)
+        if (n == 0) return
+
+        allocate(slot_gid(n), slot_tabs(n))
+        slot_gid = 0
+        slot_tabs = 0
+        n_slots = 0
+        from_slot = 0
+        do i = 1, n
+            g = editor%tabs(i)%group_id
+            if (g /= 0) then
+                seen = .false.
+                do slot = 1, n_slots
+                    if (slot_gid(slot) == g) then
+                        seen = .true.
+                        slot_tabs(slot) = slot_tabs(slot) + 1
+                        exit
+                    end if
+                end do
+                if (seen) cycle
+                n_slots = n_slots + 1
+                slot_gid(n_slots) = g
+                slot_tabs(n_slots) = 1
+                if (g == gid) from_slot = n_slots
+            else
+                n_slots = n_slots + 1
+                slot_gid(n_slots) = 0
+                slot_tabs(n_slots) = 1
+                if (gid == 0 .and. i == tab_idx) from_slot = n_slots
+            end if
+        end do
+
+        last = max(1, min(to_slot, n_slots))
+        if (from_slot > 0 .and. last < from_slot) last = last - 1
+
+        tally = 0
+        do slot = 1, last
+            if (slot == from_slot) cycle
+            tally = tally + slot_tabs(slot)
+        end do
+        bar_slot_to_index = tally + 1
+        deallocate(slot_gid, slot_tabs)
+    end function bar_slot_to_index
 
     !> Move a whole run of tabs -- a group's members -- to start at `to_idx`.
     !>

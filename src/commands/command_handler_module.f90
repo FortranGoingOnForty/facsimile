@@ -6714,7 +6714,8 @@ contains
                                    DRAG_TAB, DRAG_GROUP
         use editor_state_module, only: find_tab_by_path_public, reorder_tab, &
                                        reorder_group_block, set_group_ordinal, &
-                                       group_remove_member, prune_empty_groups
+                                       group_remove_member, prune_empty_groups, &
+                                       bar_slot_to_index
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         integer :: from_idx, dest
@@ -6743,7 +6744,11 @@ contains
         dest = drag_to_slot()
 
         if (drag_kind() == DRAG_GROUP) then
-            if (drag_to_row() == 1) call reorder_group_block(editor, drag_gid(), dest)
+            ! dest is a BAR SLOT; both reorder routines want an index into the
+            ! tabs array, and a group occupies one slot but several indices.
+            if (drag_to_row() == 1) &
+                call reorder_group_block(editor, drag_gid(), &
+                                         bar_slot_to_index(editor, drag_gid(), 0, dest))
         else
             from_idx = find_tab_by_path_public(editor, trim(drag_path()))
             if (from_idx /= 0) then
@@ -6769,7 +6774,9 @@ contains
                         call prune_empty_groups(editor)
                     end if
                     from_idx = find_tab_by_path_public(editor, trim(drag_path()))
-                    if (from_idx /= 0) call reorder_tab(editor, from_idx, dest)
+                    if (from_idx /= 0) &
+                        call reorder_tab(editor, from_idx, &
+                                         bar_slot_to_index(editor, 0_int32, from_idx, dest))
                 end if
             end if
         end if
