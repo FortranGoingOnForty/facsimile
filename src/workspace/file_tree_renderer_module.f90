@@ -13,6 +13,9 @@ module file_tree_renderer_module
     character(len=*), parameter :: COLLAPSED_DIR = '+'
     character(len=1), parameter :: ESC = achar(27)
 
+    ! Columns of indent per level of nesting.
+    character(len=*), parameter :: NEST_INDENT = '   '
+
 contains
 
     subroutine render_file_tree(state, start_row, end_row, start_col, width, hints_expanded, git_prefix_active)
@@ -260,8 +263,10 @@ contains
             if (is_root) then
                 new_prefix = ''
             else
-                ! 1-space indentation per level for compact tree
-                new_prefix = prefix // ' '
+                ! Depth has to be readable at a glance, and one space was not
+                ! enough to tell a child from its parent, let alone two levels
+                ! apart -- the tree read as a flat list with ragged names.
+                new_prefix = prefix // NEST_INDENT
             end if
 
             call render_tree_node(child, new_prefix, .false., &
