@@ -2789,7 +2789,7 @@ contains
             ! Adding shift is the cheapest chord neither of them wants. The
             ! prefix builder emits alt-ctrl-shift-; the other two spellings
             ! are defensive, matching the existing aliases above.
-            call add_cursor_above(editor)
+            call add_cursor_above(editor, buffer)
             call sync_editor_to_pane(editor)
             call update_viewport(editor)
 
@@ -2967,23 +2967,57 @@ contains
         end if
     end subroutine handle_key_command
 
+    !> The character column on `target_text` that sits under the caret's goal,
+    !> where the goal is held in DISPLAY CELLS rather than characters.
+    !>
+    !> Columns in this editor are character indices, and a tab is one
+    !> character but several cells. Carrying the character column straight to
+    !> another line therefore lands somewhere else on screen whenever the two
+    !> lines are indented differently -- in a Makefile, that is every line.
+    !> Reported from one: with the caret on a line's '=', directly under the
+    !> '=' above it, moving up put the caret in the middle of `gcc`.
+    !>
+    !> `source_text` is the line the caret is on NOW, which is the line
+    !> desired_column is a character index into, and so the only line the goal
+    !> can be converted from.
+    integer function vertical_goal_col(cursor, source_text, target_text)
+        use renderer_module, only: display_offset_of, char_col_at_offset
+        type(cursor_t), intent(inout) :: cursor
+        character(len=*), intent(in) :: source_text, target_text
+        integer :: limit
+
+        ! Recompute whenever something horizontal has moved desired_column;
+        ! it is a character column on the current line at that moment, which
+        ! is what makes it convertible at all.
+        if (cursor%goal_for_column /= cursor%desired_column .or. &
+            cursor%goal_display < 0) then
+            cursor%goal_display = int(display_offset_of(source_text, 1, &
+                                                        cursor%desired_column), int32)
+            cursor%goal_for_column = cursor%desired_column
+        end if
+
+        vertical_goal_col = char_col_at_offset(target_text, 1, cursor%goal_display)
+        limit = utf8_char_count(target_text) + 1
+        if (vertical_goal_col > limit) vertical_goal_col = limit
+        if (vertical_goal_col < 1) vertical_goal_col = 1
+    end function vertical_goal_col
+
     subroutine move_cursor_up(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
-        character(len=:), allocatable :: target_line
+        character(len=:), allocatable :: target_line, source_line
 
         cursor%has_selection = .false.  ! Clear selection
         if (cursor%line > 1) then
+            source_line = buffer_get_line(buffer, cursor%line)
             cursor%line = cursor%line - 1
             target_line = buffer_get_line(buffer, cursor%line)
 
-            ! Always use goal column, clamped to line bounds (standard editor behavior)
-            cursor%column = cursor%desired_column
-            if (cursor%column > utf8_char_count(target_line) + 1) then
-                cursor%column = utf8_char_count(target_line) + 1
-            end if
+            ! The goal column, in display cells, clamped to the line's end.
+            cursor%column = vertical_goal_col(cursor, source_line, target_line)
 
             if (allocated(target_line)) deallocate(target_line)
+            if (allocated(source_line)) deallocate(source_line)
         end if
     end subroutine move_cursor_up
 
@@ -2991,20 +3025,19 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(in) :: buffer
         integer, intent(in) :: line_count
-        character(len=:), allocatable :: target_line
+        character(len=:), allocatable :: target_line, source_line
 
         cursor%has_selection = .false.  ! Clear selection
         if (cursor%line < line_count) then
+            source_line = buffer_get_line(buffer, cursor%line)
             cursor%line = cursor%line + 1
             target_line = buffer_get_line(buffer, cursor%line)
 
-            ! Always use goal column, clamped to line bounds (standard editor behavior)
-            cursor%column = cursor%desired_column
-            if (cursor%column > utf8_char_count(target_line) + 1) then
-                cursor%column = utf8_char_count(target_line) + 1
-            end if
+            ! The goal column, in display cells, clamped to the line's end.
+            cursor%column = vertical_goal_col(cursor, source_line, target_line)
 
             if (allocated(target_line)) deallocate(target_line)
+            if (allocated(source_line)) deallocate(source_line)
         end if
     end subroutine move_cursor_down
 
@@ -7703,10 +7736,12 @@ contains
     ! Multiple Cursor Addition Above/Below
     ! ========================================================================
 
-    subroutine add_cursor_above(editor)
+    subroutine add_cursor_above(editor, buffer)
         type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(in) :: buffer
         type(cursor_t), allocatable :: new_cursors(:)
         type(cursor_t) :: active_cursor
+        character(len=:), allocatable :: source_line, target_line
         integer :: i, new_line
 
         active_cursor = editor%cursors(editor%active_cursor)
@@ -7723,10 +7758,20 @@ contains
             new_cursors(i) = editor%cursors(i)
         end do
 
-        ! Add new cursor above
+        ! Add new cursor above, in the same DISPLAY column.
+        !
+        ! Copying the character column put the new caret somewhere else on
+        ! screen whenever the two lines were indented differently -- the
+        ! reported case was a tab-indented Makefile, where a caret on one
+        ! line's '=' produced a second one inside the word above it.
+        source_line = buffer_get_line(buffer, active_cursor%line)
+        target_line = buffer_get_line(buffer, new_line)
         new_cursors(size(new_cursors))%line = new_line
-        new_cursors(size(new_cursors))%column = active_cursor%column
+        new_cursors(size(new_cursors))%column = &
+            vertical_goal_col(active_cursor, source_line, target_line)
         new_cursors(size(new_cursors))%desired_column = active_cursor%desired_column
+        new_cursors(size(new_cursors))%goal_display = active_cursor%goal_display
+        new_cursors(size(new_cursors))%goal_for_column = active_cursor%goal_for_column
         new_cursors(size(new_cursors))%has_selection = .false.
 
         ! Replace cursors array
@@ -7741,6 +7786,7 @@ contains
         type(buffer_t), intent(in) :: buffer
         type(cursor_t), allocatable :: new_cursors(:)
         type(cursor_t) :: active_cursor
+        character(len=:), allocatable :: source_line, target_line
         integer :: i, new_line, line_count
 
         active_cursor = editor%cursors(editor%active_cursor)
@@ -7758,10 +7804,15 @@ contains
             new_cursors(i) = editor%cursors(i)
         end do
 
-        ! Add new cursor below
+        ! Add new cursor below, in the same DISPLAY column; see above.
+        source_line = buffer_get_line(buffer, active_cursor%line)
+        target_line = buffer_get_line(buffer, new_line)
         new_cursors(size(new_cursors))%line = new_line
-        new_cursors(size(new_cursors))%column = active_cursor%column
+        new_cursors(size(new_cursors))%column = &
+            vertical_goal_col(active_cursor, source_line, target_line)
         new_cursors(size(new_cursors))%desired_column = active_cursor%desired_column
+        new_cursors(size(new_cursors))%goal_display = active_cursor%goal_display
+        new_cursors(size(new_cursors))%goal_for_column = active_cursor%goal_for_column
         new_cursors(size(new_cursors))%has_selection = .false.
 
         ! Replace cursors array

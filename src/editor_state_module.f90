@@ -68,6 +68,14 @@ module editor_state_module
         integer(int32) :: line = 1             ! Line number (1-based)
         integer(int32) :: column = 1           ! UTF-8 character position (1-based), NOT byte index
         integer(int32) :: desired_column = 1   ! For vertical movement (character position)
+        ! The same goal, in DISPLAY CELLS, which is what actually has to be
+        ! preserved when moving between lines: a tab is one character but
+        ! several cells, so equal character columns are not the same place on
+        ! screen. Held lazily -- goal_for_column records which
+        ! desired_column produced goal_display, so a horizontal move (which
+        ! only updates desired_column) is detected and the goal recomputed.
+        integer(int32) :: goal_display = -1
+        integer(int32) :: goal_for_column = -1
         logical :: has_selection = .false.
         integer(int32) :: selection_start_line = 1
         integer(int32) :: selection_start_col = 1  ! UTF-8 character position
