@@ -1,7 +1,8 @@
 module command_handler_module
     use iso_fortran_env, only: int32, int64, error_unit
     use iso_c_binding, only: c_int
-    use editor_state_module, only: editor_state_t, cursor_t, switch_to_tab_with_buffer, &
+    use editor_state_module, only: note_tab_saved, refresh_tab_modified, &
+                                   editor_state_t, cursor_t, switch_to_tab_with_buffer, &
                                    close_tab, create_tab, can_create_tab, save_tab_pane, active_pane_of, close_pane, &
         group_create, group_add_member, group_member_count, active_group_id, &
                                        split_pane_vertical, split_pane_horizontal, &
@@ -445,6 +446,21 @@ contains
         logical :: ghost_extended
         type(cursor_t), allocatable :: new_cursors(:)
         character(len=:), allocatable :: line
+
+        ! Seed the clean baseline while the buffer is still clean.
+        !
+        ! A tab restored from a session has never been saved in this run, so
+        ! there is nothing to compare against and refresh_tab_modified leaves
+        ! the flag alone. Taking the signature HERE -- before this keystroke
+        ! is applied, while the flag still says unmodified -- establishes it
+        ! once, from text that is by definition what is on disk.
+        if (allocated(editor%tabs) .and. editor%active_tab_index > 0) then
+            if (editor%active_tab_index <= size(editor%tabs)) then
+                if (editor%tabs(editor%active_tab_index)%saved_sig == -1_int64 .and. &
+                    .not. editor%tabs(editor%active_tab_index)%modified) &
+                    call note_tab_saved(editor, editor%active_tab_index, buffer)
+            end if
+        end if
 
         should_quit = .false.
         line_count = buffer_get_line_count(buffer)
@@ -2952,6 +2968,25 @@ contains
         ! auto-close parked in front of it, so stop offering to step over it.
         if (.not. is_text_insert) call clear_pending_closers()
 
+        ! Whether the file is dirty is a fact about its TEXT, not a latch.
+        ! Undoing an edit back to the original used to leave the asterisk on
+        ! for a file identical to the one on disk.
+        if (is_edit_action .or. trim(key_str) == 'ctrl-z' .or. &
+            trim(key_str) == 'ctrl-y' .or. trim(key_str) == 'ctrl-]' .or. &
+            trim(key_str) == 'ctrl-shift-z') then
+            if (allocated(editor%tabs) .and. editor%active_tab_index > 0) then
+                call refresh_tab_modified(editor, editor%active_tab_index, buffer)
+                ! The buffer carries the same claim and the main loop copies it
+                ! straight onto the tab each turn, so correcting only the tab
+                ! is undone a moment later. buffer%modified is the latch that
+                ! actually has to stop latching.
+                if (editor%active_tab_index <= size(editor%tabs)) then
+                    if (editor%tabs(editor%active_tab_index)%saved_sig /= -1_int64) &
+                        buffer%modified = editor%tabs(editor%active_tab_index)%modified
+                end if
+            end if
+        end if
+
         ! Update edit action state
         last_action_was_edit = is_edit_action
 
@@ -5148,6 +5183,9 @@ contains
 
         if (ios == 0) then
             buffer%modified = .false.
+            ! The text just written is now the clean state to compare against.
+            if (allocated(editor%tabs) .and. editor%active_tab_index > 0) &
+                call note_tab_saved(editor, editor%active_tab_index, buffer)
 
             ! Send LSP didSave notification to ALL active servers
             if (allocated(editor%tabs) .and. editor%active_tab_index > 0) then

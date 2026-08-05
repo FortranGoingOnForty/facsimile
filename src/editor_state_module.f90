@@ -58,6 +58,7 @@ module editor_state_module
     public :: navigate_to_pane_left, navigate_to_pane_right, navigate_to_pane_up, navigate_to_pane_down
     public :: sync_pane_to_editor, sync_editor_to_pane, switch_to_pane, switch_to_pane_with_buffer
     public :: sync_buffer_to_all_instances
+    public :: note_tab_saved, refresh_tab_modified
 
     ! Cursor position and selection
     ! Cursor type - positions are UTF-8 CHARACTER indices (not byte indices)
@@ -143,6 +144,11 @@ module editor_state_module
         integer(int32) :: active_pane_index = 1
 
         logical :: modified = .false.
+        ! Signature of the text as it was last loaded or saved, so `modified`
+        ! can be recomputed from the CONTENT instead of latching on the first
+        ! edit and staying on. -1 means not established yet, in which case the
+        ! flag is left alone rather than guessed at.
+        integer(int64) :: saved_sig = -1_int64
         logical :: is_orphan = .false.  ! True if file is outside workspace (uses absolute path)
 
         ! Identity that survives the array being rebuilt. Closing a tab
@@ -2082,6 +2088,37 @@ contains
 
     ! Sync buffer to all panes/tabs that have the same file open
     ! This enables live updates when the same file is open in multiple locations
+    !> Record the buffer as the clean state for this tab.
+    subroutine note_tab_saved(editor, tab_idx, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: tab_idx
+        type(buffer_t), intent(in) :: buffer
+
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        editor%tabs(tab_idx)%saved_sig = buffer_signature(buffer)
+        editor%tabs(tab_idx)%modified = .false.
+    end subroutine note_tab_saved
+
+    !> Set a tab's modified flag from what its text actually IS.
+    !>
+    !> Two reported bugs came from the flag being asserted rather than
+    !> derived. Undoing an edit back to the original left the asterisk on,
+    !> because nothing ever cleared it; and switching away from a file set it
+    !> unconditionally, so an untouched file came back dirty every time it was
+    !> left. Both are answered by comparing against the last saved text.
+    subroutine refresh_tab_modified(editor, tab_idx, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: tab_idx
+        type(buffer_t), intent(in) :: buffer
+
+        if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) return
+        ! Never established -- a tab restored from a session, say. Leave the
+        ! flag as it stands rather than declare a file clean on no evidence.
+        if (editor%tabs(tab_idx)%saved_sig == -1_int64) return
+        editor%tabs(tab_idx)%modified = &
+            buffer_signature(buffer) /= editor%tabs(tab_idx)%saved_sig
+    end subroutine refresh_tab_modified
+
     subroutine sync_buffer_to_all_instances(editor, filename, buffer)
         type(editor_state_t), intent(inout) :: editor
         character(len=*), intent(in) :: filename
@@ -2102,7 +2139,11 @@ contains
             ! Update tab's buffer if it matches
             if (allocated(editor%tabs(tab_idx)%filename)) then
                 if (trim(editor%tabs(tab_idx)%filename) == normalized_filename) then
-                    editor%tabs(tab_idx)%modified = .true.
+                    ! Was an unconditional .true.. This routine runs on every
+                    ! tab and pane switch, so leaving a file marked it dirty
+                    ! for the act of leaving it -- saving cleared the asterisk
+                    ! and the next switch put it straight back.
+                    call refresh_tab_modified(editor, tab_idx, buffer)
                 end if
             end if
 

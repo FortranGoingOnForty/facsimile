@@ -8,6 +8,7 @@ module text_buffer_module
     public :: buffer_insert, buffer_delete, buffer_get_char
     public :: buffer_get_line, buffer_get_line_count, buffer_get_line_char_count
     public :: buffer_load_file, buffer_save_file, buffer_load_file_as_hex
+    public :: buffer_signature
     public :: buffer_move_gap
     public :: buffer_char_at, buffer_byte_to_char_col, buffer_char_to_byte_col
     public :: buffer_to_string
@@ -24,6 +25,31 @@ module text_buffer_module
     end type buffer_t
 
 contains
+
+    !> A stand-in for the buffer's exact contents, cheap enough to keep.
+    !>
+    !> Answers "is this still the text that was last saved?" without holding a
+    !> second copy of every open file. The modified flag alone cannot answer
+    !> it: it only ever goes one way, so undoing an edit back to the original
+    !> left the file marked dirty when nothing about it had changed.
+    !>
+    !> FNV-1a, mixed with the length at the end so two texts of different
+    !> lengths can never agree. A collision would show a stale asterisk and
+    !> nothing worse.
+    function buffer_signature(buffer) result(sig)
+        type(buffer_t), intent(in) :: buffer
+        integer(int64) :: sig
+        character(len=:), allocatable :: text
+        integer :: i
+
+        text = buffer_to_string(buffer)
+        sig = 1469598103934665603_int64
+        do i = 1, len(text)
+            sig = ieor(sig, int(iachar(text(i:i)), int64))
+            sig = sig * 1099511628211_int64
+        end do
+        sig = ieor(sig, int(len(text), int64))
+    end function buffer_signature
 
     subroutine init_buffer(buffer, initial_content)
         type(buffer_t), intent(out) :: buffer
