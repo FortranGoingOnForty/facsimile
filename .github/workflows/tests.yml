@@ -106,7 +106,7 @@ jobs:
         run: sh test/run_ai_http_test.sh
 
   integration:
-    name: Integration (pty) ${{ matrix.shard }}/4
+    name: Integration (pty) ${{ matrix.shard }}/6
     runs-on: ubuntu-latest
     # Only worth the runner minutes once the build and unit tests are green.
     needs: unit
@@ -121,7 +121,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v6
 
@@ -154,10 +154,10 @@ jobs:
       # skip means the setup is broken and the job must fail rather than go
       # quietly green.
       - name: Integration suites
-        timeout-minutes: 20
+        timeout-minutes: 30
         env:
           SHARD: ${{ matrix.shard }}
-          SHARDS: 4
+          SHARDS: 6
         run: |
           # Without this the pipeline below reports tee's status, not the
           # suite's, and every failure would read as a pass.
@@ -169,8 +169,8 @@ jobs:
           for suite in test/integration_*.py; do
             i=$((i + 1))
             # Round-robin rather than contiguous blocks: the slow suites are
-            # scattered through the alphabet, and splitting into four ranges
-            # would land several of them on one runner.
+            # scattered through the alphabet, and splitting into contiguous
+            # ranges would land several of them on one runner.
             if [ $(( (i - 1) % SHARDS + 1 )) -ne "$SHARD" ]; then
               continue
             fi
