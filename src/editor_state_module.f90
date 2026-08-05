@@ -1235,7 +1235,10 @@ contains
                 editor%tabs(editor%active_tab_index)%panes(pane_idx)%viewport_line = editor%viewport_line
                 editor%tabs(editor%active_tab_index)%panes(pane_idx)%viewport_column = editor%viewport_column
             end if
-            editor%tabs(editor%active_tab_index)%modified = editor%modified
+            ! Deliberately does NOT touch the tab's modified flag. There is
+            ! no buffer here to compare against, and the editor-level latch
+            ! this used to copy is not maintained by editing -- copying it
+            ! silently cleared the mark on a file with unsaved changes.
         end if
 
         ! Load new tab state
@@ -1298,7 +1301,15 @@ contains
                 editor%tabs(editor%active_tab_index)%panes(pane_idx)%viewport_line = editor%viewport_line
                 editor%tabs(editor%active_tab_index)%panes(pane_idx)%viewport_column = editor%viewport_column
             end if
-            editor%tabs(editor%active_tab_index)%modified = editor%modified
+            ! Whether the tab being LEFT is dirty is a fact about its text.
+            !
+            ! This used to copy editor%modified, an editor-level latch that no
+            ! ordinary edit ever sets -- so switching away from a file with
+            ! unsaved changes cleared its asterisk and the change looked
+            ! saved. Nothing was ever written and the text stayed in the tab's
+            ! buffer, but a mark that cannot be trusted in that direction is
+            ! worse than no mark.
+            call refresh_tab_modified(editor, int(editor%active_tab_index), buffer)
         end if
 
         ! Switch to new tab
@@ -1334,7 +1345,12 @@ contains
             if (allocated(editor%tabs(tab_index)%filename)) &
                 editor%filename = editor%tabs(tab_index)%filename
         end if
+        ! Arriving: the tab owns the answer, and the other two copies of it
+        ! follow. buffer%modified in particular, because the main loop copies
+        ! it straight back onto the tab every turn -- leave it holding the
+        ! previous tab's claim and the new tab inherits it a moment later.
         editor%modified = editor%tabs(tab_index)%modified
+        buffer%modified = editor%tabs(tab_index)%modified
     end subroutine switch_to_tab_with_buffer
 
     ! Get the active tab index
