@@ -59,6 +59,7 @@ module editor_state_module
     public :: sync_pane_to_editor, sync_editor_to_pane, switch_to_pane, switch_to_pane_with_buffer
     public :: sync_buffer_to_all_instances
     public :: note_tab_saved, refresh_tab_modified
+    public :: find_open_file
 
     ! Cursor position and selection
     ! Cursor type - positions are UTF-8 CHARACTER indices (not byte indices)
@@ -528,6 +529,52 @@ contains
 
     !> Index of the tab holding `path`, or 0. Paths are canonicalised where
     !> they are stored, so this is a plain comparison.
+    !> Where a file is already open, if it is: its tab, and the pane within
+    !> that tab showing it.
+    !>
+    !> Searches PANES as well as tab names, because a file opened into a split
+    !> lives in a pane of a tab named after something else -- and it is open
+    !> either way, which is what the caller is asking about.
+    !>
+    !> Canonical paths throughout. Matching on basename would be enough to
+    !> find the wrong file the moment two directories both hold a main.c,
+    !> which is the ordinary case in a C project.
+    subroutine find_open_file(editor, path, tab_idx, pane_idx)
+        type(editor_state_t), intent(in) :: editor
+        character(len=*), intent(in) :: path
+        integer, intent(out) :: tab_idx, pane_idx
+        character(len=:), allocatable :: canon
+        integer :: i, p
+
+        tab_idx = 0
+        pane_idx = 0
+        if (len_trim(path) == 0) return
+        canon = canonical_path(path)
+
+        ! Panes first: a tab whose NAME matches may still be showing something
+        ! else in its active pane, and the pane is the thing to reveal.
+        do i = 1, size(editor%tabs)
+            if (.not. allocated(editor%tabs(i)%panes)) cycle
+            do p = 1, size(editor%tabs(i)%panes)
+                if (.not. allocated(editor%tabs(i)%panes(p)%filename)) cycle
+                if (canonical_path(editor%tabs(i)%panes(p)%filename) == canon) then
+                    tab_idx = i
+                    pane_idx = p
+                    return
+                end if
+            end do
+        end do
+
+        do i = 1, size(editor%tabs)
+            if (.not. allocated(editor%tabs(i)%filename)) cycle
+            if (canonical_path(editor%tabs(i)%filename) == canon) then
+                tab_idx = i
+                pane_idx = 0
+                return
+            end if
+        end do
+    end subroutine find_open_file
+
     function find_tab_by_path_public(editor, path) result(idx)
         type(editor_state_t), intent(in) :: editor
         character(len=*), intent(in) :: path

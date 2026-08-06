@@ -138,6 +138,7 @@ module command_handler_module
     integer, parameter :: ACT_TREE_ACTIVATE = 20, ACT_TREE_VSPLIT = 21
     integer, parameter :: ACT_TREE_HSPLIT = 22, ACT_TREE_STAGE = 23
     integer, parameter :: ACT_TREE_UNSTAGE = 24, ACT_TREE_DIFF = 25
+    integer, parameter :: ACT_TREE_NEWTAB = 26
     integer, parameter :: ACT_GROUP_EDIT = 40, ACT_GROUP_RENAME = 41
     integer, parameter :: ACT_GROUP_DISSOLVE = 42
     integer, parameter :: ACT_TAB_CLOSE = 50, ACT_TAB_CLOSE_OTHERS = 51
@@ -6180,6 +6181,8 @@ contains
                         call handle_fuss_input('enter', editor, buffer)
                     end if
                 end if
+            case (ACT_TREE_NEWTAB)
+                call handle_fuss_input('shift-enter', editor, buffer)
             case (ACT_TREE_VSPLIT)
                 call handle_fuss_input('alt-v', editor, buffer)
             case (ACT_TREE_HSPLIT)
@@ -6212,6 +6215,52 @@ contains
     end subroutine activate_context_menu_row
 
     !> Right-click on a file-tree row. Rows are wired up in a later stage.
+    !> Show `path`, opening it only if it is not already open.
+    !>
+    !> Already open covers a split: the file may be in a PANE of a tab named
+    !> after a different file, and it is on screen either way.
+    subroutine reveal_or_open(editor, buffer, path)
+        use editor_state_module, only: find_open_file, switch_to_tab_with_buffer, &
+                                       switch_to_pane_with_buffer
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=*), intent(in) :: path
+        character(len=:), allocatable :: full
+        integer :: tab_idx, pane_idx
+
+        ! The tree speaks workspace-relative paths; tabs hold absolute ones.
+        ! Comparing the two forms finds nothing, and the file gets opened a
+        ! second time -- which is the bug this exists to stop.
+        full = trim(path)
+        if (len_trim(full) > 0) then
+            if (full(1:1) /= '/' .and. allocated(editor%workspace_path)) &
+                full = trim(editor%workspace_path) // '/' // trim(path)
+        end if
+
+        call find_open_file(editor, full, tab_idx, pane_idx)
+        if (tab_idx == 0) then
+            call open_file_in_editor(path, editor, buffer)
+            return
+        end if
+
+        if (tab_idx /= editor%active_tab_index) &
+            call switch_to_tab_with_buffer(editor, tab_idx, buffer)
+        if (pane_idx > 0) then
+            if (allocated(editor%tabs(tab_idx)%panes)) then
+                if (pane_idx <= size(editor%tabs(tab_idx)%panes) .and. &
+                    pane_idx /= editor%tabs(tab_idx)%active_pane_index) &
+                    call switch_to_pane_with_buffer(editor, tab_idx, pane_idx, buffer)
+            end if
+        end if
+
+        ! The tree STAYS OPEN, because that is what opening a file from it
+        ! does. Revealing and opening differ only in whether a tab is made;
+        ! having one of them also close the panel would make the two feel
+        ! like different gestures when they are the same one.
+        g_lsp_ui_changed = .true.
+        call set_status_message(basename_public(path) // ' is already open')
+    end subroutine reveal_or_open
+
     subroutine open_tree_context_menu(editor, item_idx, mrow, mcol)
         type(editor_state_t), intent(inout) :: editor
         integer, intent(in) :: item_idx, mrow, mcol
@@ -6231,6 +6280,12 @@ contains
             call context_menu_add_item('Expand or Collapse', 'Space', ACT_TREE_ACTIVATE)
         else
             call context_menu_add_item('Open', 'Enter', ACT_TREE_ACTIVATE)
+            ! Enter reveals a file that is already open rather than opening a
+            ! second copy. This is the way to ask for the second copy, and
+            ! the reliable one: Shift+Enter only reaches us from terminals
+            ! that speak the kitty keyboard protocol, and elsewhere arrives
+            ! indistinguishable from a plain Enter.
+            call context_menu_add_item('Open in New Tab', 'Shift+Enter', ACT_TREE_NEWTAB)
             call context_menu_add_item('Open to the Side', 'Alt+V', ACT_TREE_VSPLIT)
             call context_menu_add_item('Open Below', 'Alt+S', ACT_TREE_HSPLIT)
 
@@ -8701,13 +8756,22 @@ contains
                 call handle_fuss_fuzzy_search(key_str)
             end if
 
-        case('enter')
+        case('enter', 'shift-enter')
             ! Open file in editor (only for files, not directories)
             if (tree_state%selected_index >= 1 .and. tree_state%selected_index <= tree_state%n_selectable) then
                 selected_path = get_selected_item_path(tree_state)
                 if (.not. tree_state%selectable_files(tree_state%selected_index)%is_directory) then
                     if (len_trim(selected_path) > 0) then
-                        call open_file_in_editor(selected_path, editor, buffer)
+                        ! A file already open is REVEALED, not opened again.
+                        ! Enter used to add a second tab for it every time,
+                        ! which is how a bar ends up with the same file three
+                        ! times over. Shift+Enter still opens another copy,
+                        ! for when that is genuinely wanted.
+                        if (trim(key_str) == 'shift-enter') then
+                            call open_file_in_editor(selected_path, editor, buffer)
+                        else
+                            call reveal_or_open(editor, buffer, selected_path)
+                        end if
                     end if
                 else if (len_trim(selected_path) > 0) then
                     ! Enter on a directory used to do nothing at all -- the
