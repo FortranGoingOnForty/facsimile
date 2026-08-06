@@ -119,20 +119,8 @@ lsp_process_t* lsp_start_server(const char* command) {
     proc->stdout_read = stdout_read;
     proc->stderr_read = stderr_read;
 
-    // Make stdout and stderr non-blocking by using overlapped I/O
-    // For simplicity, we'll use PeekNamedPipe for non-blocking reads
-
-    // Debug log
-    {
-        char log_path[MAX_PATH];
-        snprintf(log_path, sizeof(log_path), "%sfac_lsp_read.log", get_temp_dir());
-        FILE* dbg = fopen(log_path, "a");
-        if (dbg) {
-            fprintf(dbg, "Started LSP server: pid=%lu, cmd=%s\n",
-                    (unsigned long)proc->pid, command);
-            fclose(dbg);
-        }
-    }
+    // Reads use PeekNamedPipe rather than overlapped I/O, which is where
+    // the non-blocking behaviour comes from on this platform.
 
     return proc;
 }
@@ -236,6 +224,7 @@ DWORD lsp_get_pid(lsp_process_t* proc) {
 #include <sys/wait.h>
 #include <signal.h>
 #include <errno.h>
+#include <poll.h>
 
 typedef struct {
     pid_t pid;
@@ -298,16 +287,6 @@ lsp_process_t* lsp_start_server(const char* command) {
     proc->stdout_fd = stdout_pipe[0];
     proc->stderr_fd = stderr_pipe[0];
 
-    // Debug log
-    {
-        FILE* dbg = fopen("/tmp/fac_lsp_read.log", "a");
-        if (dbg) {
-            fprintf(dbg, "Started LSP server: pid=%d, stdin_fd=%d, stdout_fd=%d, cmd=%s\n",
-                    pid, proc->stdin_fd, proc->stdout_fd, command);
-            fclose(dbg);
-        }
-    }
-
     // Close unused pipe ends
     close(stdin_pipe[0]);
     close(stdout_pipe[1]);
@@ -318,84 +297,87 @@ lsp_process_t* lsp_start_server(const char* command) {
     fcntl(proc->stdout_fd, F_SETFL, flags | O_NONBLOCK);
     flags = fcntl(proc->stderr_fd, F_GETFL, 0);
     fcntl(proc->stderr_fd, F_SETFL, flags | O_NONBLOCK);
+    /* And stdin. Without this the editor DEADLOCKS: a blocking write fills
+       the server's input pipe, the server stops reading because its own
+       output pipe back to us is full, and we cannot drain that because we
+       are inside the write. Confirmed from a hung editor -- two and a half
+       hours in write(), the server parked in futex_do_wait. The EAGAIN
+       handling below was always written for a non-blocking fd; only this
+       line was missing. */
+    flags = fcntl(proc->stdin_fd, F_GETFL, 0);
+    fcntl(proc->stdin_fd, F_SETFL, flags | O_NONBLOCK);
 
     return proc;
 }
 
 // Send data to LSP server
+/* How long we will keep trying to hand a message to a server before
+   declaring it wedged. Generous: a busy server briefly stops reading all the
+   time, and giving up on one of those would drop real requests. */
+#define LSP_WRITE_BUDGET_MS 2000
+#define LSP_WRITE_SLICE_MS   50
+
 int lsp_send_message(lsp_process_t* proc, const char* message, int len) {
     if (!proc || proc->stdin_fd < 0) return -1;
+    if (len <= 0) return 0;
 
-    // Debug log
-    {
-        FILE* dbg = fopen("/tmp/fac_lsp_read.log", "a");
-        if (dbg) {
-            fprintf(dbg, "lsp_send_message: len=%d, stdin_fd=%d, pid=%d\n", len, proc->stdin_fd, proc->pid);
-            fprintf(dbg, "  message (first 200 chars): %.200s\n", message);
-            fclose(dbg);
+    size_t off = 0;
+    int budget = LSP_WRITE_BUDGET_MS;
+
+    /* All of it, or none of it that matters. The caller checks only for a
+       negative result and has nowhere to put a remainder, so a short write
+       reported as success would leave half a JSON-RPC frame in the pipe and
+       desynchronise the server for the rest of the session. */
+    while (off < (size_t)len) {
+        ssize_t n = write(proc->stdin_fd, message + off, (size_t)len - off);
+        if (n > 0) {
+            off += (size_t)n;
+            continue;
         }
-    }
-
-    ssize_t written = write(proc->stdin_fd, message, (size_t)len);
-
-    // Debug log result
-    {
-        FILE* dbg = fopen("/tmp/fac_lsp_read.log", "a");
-        if (dbg) {
-            fprintf(dbg, "  write() returned: %zd, errno=%d\n", written, errno);
-            // Check stderr for errors
-            if (proc->stderr_fd >= 0) {
-                char stderr_buf[512];
-                ssize_t err_bytes = read(proc->stderr_fd, stderr_buf, sizeof(stderr_buf) - 1);
-                if (err_bytes > 0) {
-                    stderr_buf[err_bytes] = '\0';
-                    fprintf(dbg, "  STDERR: %s\n", stderr_buf);
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            struct pollfd pfd;
+            pfd.fd = proc->stdin_fd;
+            pfd.events = POLLOUT;
+            pfd.revents = 0;
+            int r = poll(&pfd, 1, LSP_WRITE_SLICE_MS);
+            if (r < 0) {
+                if (errno == EINTR) continue;
+                return -1;
+            }
+            if (r == 0) {
+                budget -= LSP_WRITE_SLICE_MS;
+                if (budget <= 0) {
+                    /* Wedged. If nothing has gone out we can simply fail. If
+                       part of the frame has, the stream is already unusable,
+                       so close stdin: the server sees EOF and exits, and the
+                       manager can start a clean one. Better than leaving a
+                       truncated frame and a server that will never agree
+                       with us again. */
+                    if (off > 0) {
+                        close(proc->stdin_fd);
+                        proc->stdin_fd = -1;
+                    }
+                    return -1;
                 }
             }
-            fclose(dbg);
+            continue;
         }
+        return -1;
     }
 
-    if (written < 0) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-            return -1;
-        }
-        return 0;
-    }
-
-    return (int)written;
+    return (int)off;
 }
 
 // Read data from LSP server (non-blocking)
 int lsp_read_message(lsp_process_t* proc, char* buffer, int max_len) {
-    static int read_call_count = 0;
-    read_call_count++;
-
     if (!proc || proc->stdout_fd < 0) return -1;
 
+    /* This used to append to a log in /tmp on every read that returned data
+       and on every hundredth that did not -- unbounded, and disk I/O in the
+       middle of the keystroke path. It also READ FROM STDERR to log it,
+       which quietly discarded whatever the server had said there. */
     ssize_t bytes_read = read(proc->stdout_fd, buffer, (size_t)(max_len - 1));
-
-    // Debug: log every 100th call or when data is read
-    if (bytes_read > 0 || read_call_count % 100 == 0) {
-        FILE* dbg = fopen("/tmp/fac_lsp_read.log", "a");
-        if (dbg) {
-            fprintf(dbg, "read call %d: bytes_read=%zd, pid=%d\n",
-                    read_call_count, bytes_read, proc->pid);
-            if (bytes_read > 0) {
-                fprintf(dbg, "  data: %.100s...\n", buffer);
-            }
-            // Check stderr
-            if (proc->stderr_fd >= 0) {
-                char stderr_buf[1024];
-                ssize_t err_bytes = read(proc->stderr_fd, stderr_buf, sizeof(stderr_buf) - 1);
-                if (err_bytes > 0) {
-                    stderr_buf[err_bytes] = '\0';
-                    fprintf(dbg, "  STDERR: %s\n", stderr_buf);
-                }
-            }
-            fclose(dbg);
-        }
-    }
 
     if (bytes_read < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {

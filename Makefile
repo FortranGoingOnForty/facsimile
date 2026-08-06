@@ -344,6 +344,11 @@ test-lsp: lsp-modules
 	@echo "Testing LSP initialization..."
 	@$(FC) $(FFLAGS_DEBUG) tests/lsp/test_lsp_init.f90 src/lsp/json_module.o src/lsp/lsp_protocol_module.o src/lsp/lsp_process_wrapper.o src/lsp/lsp_client_module.o src/lsp/lsp_server_manager_module.o -o tests/lsp/test_lsp_init 2>/dev/null && tests/lsp/test_lsp_init || true
 
+	@echo ""
+	@echo "Testing that a server which never reads cannot hang us..."
+	@$(CC) -O1 -o tests/lsp/test_write_deadlock tests/lsp/test_write_deadlock.c \
+		src/lsp/lsp_process_wrapper.o && timeout 60 tests/lsp/test_write_deadlock
+
 test-lsp-editor: all
 	@echo "Testing LSP in editor with sample C file..."
 	@echo "Opening tests/lsp/sample.c - check for LSP server initialization"
