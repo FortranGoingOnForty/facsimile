@@ -410,8 +410,12 @@ contains
         end do
 
         if (command == "") then
-            ! Never stderr: the editor is drawing on that terminal.
-            call note_lsp_error('No language server configured for ' // trim(language))
+            ! Deliberately silent. Most files have no language server and
+            ! that is not a failure -- announcing it would put a message on
+            ! the status line for every such file, pushing aside whatever the
+            ! editor actually had to say. It used to go to stderr, which was
+            ! wrong for a different reason.
+            continue
             return
         end if
 

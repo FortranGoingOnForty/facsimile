@@ -25,7 +25,11 @@ static const char* get_temp_dir(void) {
 
 // Start an LSP server process
 lsp_process_t* lsp_start_server(const char* command) {
-    lsp_process_t* proc = (lsp_process_t*)malloc(sizeof(lsp_process_t));
+    /* calloc, not malloc: the pending-buffer fields below must start
+   zeroed. Garbage in `wedged` makes a healthy server look dead, and
+   garbage in `pending`/`pending_len` means realloc and memcpy on a
+   wild pointer. */
+    lsp_process_t* proc = (lsp_process_t*)calloc(1, sizeof(lsp_process_t));
     if (!proc) return NULL;
 
     memset(proc, 0, sizeof(lsp_process_t));
@@ -245,7 +249,9 @@ typedef struct {
 
 // Start an LSP server process
 lsp_process_t* lsp_start_server(const char* command) {
-    lsp_process_t* proc = malloc(sizeof(lsp_process_t));
+    /* calloc: see the Windows branch -- the pending-buffer fields must
+   start zeroed or a healthy server reads as wedged. */
+    lsp_process_t* proc = calloc(1, sizeof(lsp_process_t));
     if (!proc) return NULL;
 
     // Create pipes for stdin, stdout, stderr
@@ -333,8 +339,14 @@ lsp_process_t* lsp_start_server(const char* command) {
  * on a slow server.
  */
 int lsp_flush_pending(lsp_process_t* proc) {
-    if (!proc || proc->stdin_fd < 0) return -1;
+    /* Nothing queued is the normal case, and it is NOT a failure. Reporting
+       one here meant the pump announced "stopped responding" on every loop
+       for a perfectly healthy server -- and that message then sat on the
+       status line in place of whatever the editor actually had to say. */
+    if (!proc) return 0;
+    if (proc->pending_len == 0) return 0;
     if (proc->wedged) return -1;
+    if (proc->stdin_fd < 0) return -1;
     while (proc->pending_len > 0) {
         ssize_t n = write(proc->stdin_fd, proc->pending, proc->pending_len);
         if (n > 0) {
