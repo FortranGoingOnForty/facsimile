@@ -74,7 +74,7 @@ program facsimile
     use references_panel_module, only: is_references_panel_visible
     use symbols_panel_module, only: is_symbols_panel_visible
     use lsp_server_installer_panel_module, only: is_lsp_server_installer_panel_visible
-    use lsp_server_manager_module, only: notify_file_opened, notify_file_changed, &
+    use lsp_server_manager_module, only: take_lsp_error, notify_file_opened, notify_file_changed, &
                                          notify_file_closed, process_server_messages, &
                                          set_diagnostics_handler, set_lsp_workspace_root
     use lsp_protocol_module, only: lsp_message_t
@@ -657,6 +657,18 @@ program facsimile
 
         ! Process any LSP messages
         call process_server_messages(editor%lsp_manager)
+
+        ! Anything the LSP layer wanted to say. It cannot say it itself: it
+        ! is compiled before the renderer, and printing would put the text on
+        ! the terminal the editor is drawing on -- which is how a wedged
+        ! server once scribbled over a document.
+        block
+            character(len=:), allocatable :: lsp_msg
+            if (take_lsp_error(lsp_msg)) then
+                call set_status_message(lsp_msg)
+                g_lsp_ui_changed = .true.
+            end if
+        end block
 
         ! Model-backed completion: decide whether to send, and advance
         ! anything already in flight. One state per call, never blocking.

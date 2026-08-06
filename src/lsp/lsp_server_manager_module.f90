@@ -7,6 +7,7 @@ module lsp_server_manager_module
     implicit none
     private
 
+    public :: take_lsp_error
     public :: lsp_server_t
     public :: lsp_manager_t
     public :: init_lsp_manager, cleanup_lsp_manager, set_lsp_workspace_root
@@ -146,6 +147,14 @@ module lsp_server_manager_module
             integer(c_int), value :: message_len
         end function lsp_send_message_f
 
+        !> Push whatever a slow server would not take earlier. Called from
+        !> the pump, which is the only place allowed to spend time on it.
+        function lsp_flush_pending_f(handle) bind(c, name='lsp_flush_pending_f')
+            import :: c_ptr, c_int
+            type(c_ptr), intent(inout) :: handle
+            integer(c_int) :: lsp_flush_pending_f
+        end function lsp_flush_pending_f
+
         function lsp_read_message_f(handle, buffer, buffer_len) bind(c, name='lsp_read_message_f')
             use iso_c_binding
             integer(c_int) :: lsp_read_message_f
@@ -166,6 +175,11 @@ module lsp_server_manager_module
             type(c_ptr), intent(in) :: handle
         end function lsp_get_pid_f
     end interface
+
+    ! Something worth telling the user about a language server. Held rather
+    ! than printed: printing goes to the terminal the editor is drawing on.
+    character(len=256) :: g_lsp_error = ''
+    logical :: g_lsp_error_pending = .false.
 
 contains
 
@@ -396,7 +410,8 @@ contains
         end do
 
         if (command == "") then
-            write(error_unit, '(a,a)') "No LSP server configured for language: ", language
+            ! Never stderr: the editor is drawing on that terminal.
+            call note_lsp_error('No language server configured for ' // trim(language))
             return
         end if
 
@@ -432,7 +447,7 @@ contains
             ! Send initialization request
             call initialize_server(manager%servers(server_index))
         else
-            write(error_unit, '(a,a)') "Failed to start LSP server: ", command
+            call note_lsp_error('Could not start the language server')
         end if
     end function start_new_server
 
@@ -518,21 +533,52 @@ contains
 
         result = lsp_send_message_f(server%handle, message//c_null_char, len(message))
 
-        if (result < 0) then
-            write(error_unit, '(a)') "Failed to send message to LSP server"
-        end if
+        ! NOT stderr. Writing there puts the text straight onto the screen,
+        ! over the document, because the editor owns the terminal -- which is
+        ! exactly what a user saw when a wedged server made this reachable.
+        ! The editor picks this up and shows it on the status line.
+        if (result < 0) call note_lsp_error('Language server stopped responding')
     end subroutine send_raw_message
 
     subroutine process_server_messages(manager)
         type(lsp_manager_t), intent(inout) :: manager
-        integer :: i
+        integer :: i, rc
 
         do i = 1, manager%num_servers
             if (c_associated(manager%servers(i)%handle)) then
+                ! Anything a slow server would not take on the keystroke path
+                ! goes out here instead, where a stall costs a frame rather
+                ! than a keystroke.
+                rc = lsp_flush_pending_f(manager%servers(i)%handle)
+                if (rc < 0) call note_lsp_error('Language server stopped responding')
                 call process_server_output(manager, manager%servers(i))
             end if
         end do
     end subroutine process_server_messages
+
+    !> Remember something worth telling the user, for the editor to collect.
+    !> This module is compiled before the renderer, so it cannot set the
+    !> status line itself -- and it must never print, see send_raw_message.
+    subroutine note_lsp_error(msg)
+        character(len=*), intent(in) :: msg
+
+        if (g_lsp_error_pending) return       ! first one wins; no spew
+        g_lsp_error = msg
+        g_lsp_error_pending = .true.
+    end subroutine note_lsp_error
+
+    !> True once, handing over the message. The editor calls this each loop.
+    logical function take_lsp_error(msg)
+        character(len=:), allocatable, intent(out) :: msg
+
+        take_lsp_error = g_lsp_error_pending
+        if (take_lsp_error) then
+            msg = trim(g_lsp_error)
+            g_lsp_error_pending = .false.
+        else
+            msg = ''
+        end if
+    end function take_lsp_error
 
     subroutine process_server_output(manager, server)
         type(lsp_manager_t), intent(inout) :: manager
@@ -1008,7 +1054,7 @@ contains
             ! Send initialization request
             call initialize_server(manager%servers(server_index))
         else
-            write(error_unit, '(a,a)') "Failed to start LSP server: ", command
+            call note_lsp_error('Could not start the language server')
         end if
     end function start_new_server_from_config
 
