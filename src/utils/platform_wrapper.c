@@ -308,8 +308,6 @@ void get_cwd_f(char* buffer, int buffer_len, int* result_len) {
     }
 }
 
-#endif
-
 /* mkdir -p, without a shell.
  *
  * backup_create used to build its directory with
@@ -340,3 +338,5 @@ int fac_mkdir_p_f(const char* path) {
     if (mkdir(buf, 0755) != 0 && errno != EEXIST) return -1;
     return 0;
 }
+
+#endif

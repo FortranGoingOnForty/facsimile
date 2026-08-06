@@ -349,6 +349,20 @@ test-lsp: lsp-modules
 	@$(CC) -O1 -o tests/lsp/test_write_deadlock tests/lsp/test_write_deadlock.c \
 		src/lsp/lsp_process_wrapper.o && timeout 60 tests/lsp/test_write_deadlock
 
+# Syntax-check the _WIN32 branches without a Windows toolchain. See
+# tests/winstub/README.md -- these branches are invisible to the normal build,
+# and a mistake in one is otherwise found only after a tag has been cut.
+WIN_CHECK_SRC = src/utils/platform_wrapper.c src/terminal/pty_wrapper.c src/ai/ai_http.c
+
+check-windows:
+	@echo "Syntax-checking the Windows branches..."
+	@for f in $(WIN_CHECK_SRC); do \
+		printf '  %-40s ' "$$f"; \
+		$(CC) -fsyntax-only -D_WIN32 -Itests/winstub "$$f" || exit 1; \
+		echo ok; \
+	done
+	@echo "Windows branches OK (see tests/winstub/README.md for what is not covered)"
+
 test-lsp-editor: all
 	@echo "Testing LSP in editor with sample C file..."
 	@echo "Opening tests/lsp/sample.c - check for LSP server initialization"

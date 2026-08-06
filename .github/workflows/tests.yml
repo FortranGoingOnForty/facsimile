@@ -39,6 +39,9 @@ jobs:
       # non-reentrant. They were also visible to anyone installing from the
       # AUR, which is a poor first impression. Fails the build so a new one
       # cannot accumulate unnoticed.
+      - name: Windows branches still compile
+        run: make check-windows
+
       - name: No compiler warnings
         run: |
           if grep -iE '(^|[^-])warning:' /tmp/build.log; then
