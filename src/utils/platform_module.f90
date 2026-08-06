@@ -7,11 +7,19 @@ module platform_module
     public :: get_temp_dir, get_home_dir, get_path_separator, is_windows
     public :: get_config_dir, get_cwd
     public :: canonical_path
+    public :: mkdir_p
     public :: platform_copy_to_clipboard, platform_paste_from_clipboard
     public :: detect_system_pkg_mgr, detect_priv_prefix
     public :: platform_sleep_ms, platform_now_ms
 
     interface
+        !> mkdir -p without a shell. 0 when the directory exists after.
+        function fac_mkdir_p_c(path) bind(C, name='fac_mkdir_p_f') result(rc)
+            import :: c_char, c_int
+            character(kind=c_char), dimension(*), intent(in) :: path
+            integer(c_int) :: rc
+        end function
+
         subroutine fac_sleep_ms_c(ms) bind(C, name='fac_sleep_ms_f')
             import :: c_int
             integer(c_int), value :: ms
@@ -72,6 +80,16 @@ module platform_module
     end interface
 
 contains
+
+    !> Create a directory and any missing parents.
+    !>
+    !> Replaces `execute_command_line("mkdir -p '" // dir // "'")`, which
+    !> forked a shell per call and interpolated the path into a command line.
+    logical function mkdir_p(path)
+        character(len=*), intent(in) :: path
+
+        mkdir_p = fac_mkdir_p_c(trim(path) // c_null_char) == 0
+    end function mkdir_p
 
     !> One spelling per file path.
     !>

@@ -48,6 +48,7 @@ program facsimile
     use renderer_module
     use ai_engine_module, only: ai_tick, ai_configure
     use command_handler_module, only: session_requests_tick, tab_drag_tick
+    use command_handler_module, only: backup_tick, backup_configure
     use command_handler_module, only: handle_key_command, init_command_handler, cleanup_command_handler, &
                                       save_initial_state_for_undo, search_pattern, match_case_sensitive, &
                                       g_lsp_modified_buffer, g_lsp_ui_changed, g_cursor_only_move, &
@@ -381,6 +382,10 @@ program facsimile
     call terminal_panel_set_default_permille(editor%terminal_panel, &
         10 * settings_get_integer('terminal.height_percent', 30))
     call ai_configure(editor%ai)
+
+    ! Autosave settings, read once. Opt-in: with backup.autosave.enabled
+    ! false (the default) the tick below does one logical test and returns.
+    call backup_configure()
     running = .true.
 
     ! Set LSP workspace root if explicit -w flag was provided
@@ -666,6 +671,11 @@ program facsimile
         ! A tab resting on a group opens its member row. Here rather than on
         ! motion, because a pointer that has stopped sends nothing.
         call tab_drag_tick(g_lsp_ui_changed)
+
+        ! Crash backups for buffers with unsaved changes. Inert until
+        ! backup.autosave.enabled is turned on, and even then it writes only
+        ! when a buffer has actually changed since its last backup.
+        call backup_tick(editor, g_lsp_ui_changed)
 
         ! Anything `fac` in the terminal handed us. Gated on the panel being
         ! alive because that shell is the only thing that can produce a

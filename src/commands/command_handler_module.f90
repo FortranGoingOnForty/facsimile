@@ -160,6 +160,7 @@ module command_handler_module
     public :: tab_drag_tick
     public :: g_no_visible_change
     public :: session_requests_tick
+    public :: backup_tick, backup_configure
 
     ! Flag to track if LSP modified the buffer (for immediate rendering)
     logical :: g_lsp_modified_buffer = .false.
@@ -234,6 +235,22 @@ module command_handler_module
     ! there is nothing for a digit to extend towards anyway.
     integer(int32) :: g_jump_group = 0
     integer, parameter :: JUMP_WINDOW_MS = 500
+
+    ! Autosave. Off until backup_configure reads the settings, so a session
+    ! that never opts in does one logical test per loop and nothing else.
+    logical :: g_autosave_on = .false.
+    integer(int64) :: g_autosave_idle_ms = 3000_int64
+    integer(int64) :: g_autosave_max_ms = 60000_int64
+    integer(int64) :: g_last_edit_ms = 0_int64
+    integer, parameter :: MAX_AUTOSAVE_TABS = 256
+    integer(int64) :: g_autosave_sig(MAX_AUTOSAVE_TABS) = 0_int64
+    ! When this tab was first seen dirty since its last backup. The ceiling
+    ! is measured from here, NOT from the last keystroke: a continuous typist
+    ! pushes the last-edit stamp forward constantly, so measuring from it
+    ! meant the ceiling could never fire for them -- which is precisely the
+    ! person it exists for.
+    integer(int64) :: g_autosave_dirty_at(MAX_AUTOSAVE_TABS) = 0_int64
+    logical :: g_autosave_seen(MAX_AUTOSAVE_TABS) = .false.
 
     type(yank_stack_t) :: yank_stack
     type(undo_stack_t) :: undo_stack
@@ -2998,6 +3015,11 @@ contains
                 end if
             end if
         end if
+
+        ! When the buffer last changed, for the autosave idle test. Taken
+        ! here because this is where an edit is already identified; polling
+        ! for it would cost a signature every loop.
+        if (is_edit_action) g_last_edit_ms = now_ms()
 
         ! Update edit action state
         last_action_was_edit = is_edit_action
@@ -10443,6 +10465,89 @@ contains
             call set_status_message(trim(msg))
         end if
     end subroutine resize_terminal_panel_key
+
+    !> Read the autosave settings. Once, at startup.
+    subroutine backup_configure()
+        use settings_module, only: settings_get_logical, settings_get_integer
+
+        g_autosave_on = settings_get_logical('backup.autosave.enabled', .false.)
+        g_autosave_idle_ms = int(settings_get_integer('backup.autosave.idle_ms', 3000), int64)
+        g_autosave_max_ms = int(settings_get_integer('backup.autosave.max_interval_ms', 60000), int64)
+    end subroutine backup_configure
+
+    !> Write a crash backup for any buffer that has gone unsaved long enough.
+    !>
+    !> Called every loop. Inert until opted in, and after that it does
+    !> nothing at all unless a buffer has BOTH unsaved changes and text that
+    !> differs from what was last backed up -- so an idle editor, or one
+    !> whose edits have been undone, never touches the disk.
+    !>
+    !> Two conditions, whichever comes first: quiet for idle_ms, so a natural
+    !> pause is the usual trigger; or max_interval_ms since this buffer's
+    !> last backup, so someone typing without pause is still covered.
+    subroutine backup_tick(editor, ui_changed)
+        use backup_module, only: backup_autosave
+        use editor_state_module, only: tab_is_resident
+        use text_buffer_module, only: buffer_signature, buffer_to_string
+        type(editor_state_t), intent(inout) :: editor
+        logical, intent(inout) :: ui_changed
+        integer(int64) :: now, sig
+        integer :: i, pane_i, written
+        logical :: ok, due
+        character(len=:), allocatable :: text, last_name
+
+        if (.not. g_autosave_on) return
+        if (.not. allocated(editor%tabs)) return
+
+        now = now_ms()
+        written = 0
+
+        do i = 1, min(size(editor%tabs), MAX_AUTOSAVE_TABS)
+            if (.not. editor%tabs(i)%modified) then
+                g_autosave_dirty_at(i) = 0_int64
+                cycle
+            end if
+            if (.not. allocated(editor%tabs(i)%filename)) cycle
+            ! A buffer with no name on disk has nowhere to put a backup.
+            if (index(editor%tabs(i)%filename, '[Untitled') == 1) cycle
+            if (.not. tab_is_resident(editor, i)) cycle
+
+            if (g_autosave_dirty_at(i) == 0_int64) g_autosave_dirty_at(i) = now
+            due = (now - g_last_edit_ms >= g_autosave_idle_ms) .or. &
+                  (now - g_autosave_dirty_at(i) >= g_autosave_max_ms)
+            if (.not. due) cycle
+
+            pane_i = active_pane_of(editor, i)
+            if (.not. allocated(editor%tabs(i)%panes)) cycle
+            if (pane_i < 1 .or. pane_i > size(editor%tabs(i)%panes)) cycle
+
+            text = buffer_to_string(editor%tabs(i)%panes(pane_i)%buffer)
+            sig = buffer_signature(editor%tabs(i)%panes(pane_i)%buffer)
+            ! Nothing new since the last backup: no write, no message.
+            if (g_autosave_seen(i) .and. sig == g_autosave_sig(i)) cycle
+
+            call backup_autosave(editor%tabs(i)%filename, text, ok)
+            if (ok) then
+                g_autosave_sig(i) = sig
+                g_autosave_dirty_at(i) = 0_int64      ! re-anchor next time
+                g_autosave_seen(i) = .true.
+                written = written + 1
+                last_name = basename_public(editor%tabs(i)%filename)
+            end if
+        end do
+
+        if (written == 1) then
+            call set_status_message('Backed up ' // last_name)
+            ui_changed = .true.
+        else if (written > 1) then
+            block
+                character(len=16) :: n_buf
+                write(n_buf, '(i0)') written
+                call set_status_message('Backed up ' // trim(n_buf) // ' files')
+            end block
+            ui_changed = .true.
+        end if
+    end subroutine backup_tick
 
     !> Chords that move between files rather than doing anything to one.
     !>

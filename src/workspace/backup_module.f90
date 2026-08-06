@@ -5,9 +5,11 @@
 
 module backup_module
     use iso_fortran_env, only: int32, int64
+    use platform_module, only: mkdir_p
     implicit none
     private
 
+    public :: backup_autosave
     public :: backup_create, backup_detect, backup_list
     public :: backup_restore, backup_delete
     public :: backup_prompt_restore, backup_info_t
@@ -158,8 +160,12 @@ contains
         do i = 1, count
             if (trim(entries(i)%original_file) == &
                 trim(original_file)) then
-                ! Delete old backup file from disk
-                call delete_file(entries(i)%backup_file)
+                ! Delete the superseded backup -- unless it IS this one.
+                ! An autosave keeps a stable name and is overwritten in
+                ! place, so old and new are the same path and deleting it
+                ! here would throw away what was just written.
+                if (trim(entries(i)%backup_file) /= trim(backup_file)) &
+                    call delete_file(entries(i)%backup_file)
                 entries(i)%backup_file = backup_file
                 entries(i)%timestamp = timestamp
                 replaced = .true.
@@ -229,6 +235,61 @@ contains
     ! ================================================================
 
     !> Create backup of in-memory buffer content
+    !> Write the rolling autosave for a document.
+    !>
+    !> Distinct from backup_create in exactly one way that matters: the name
+    !> is stable, so a session that runs for hours leaves ONE file per
+    !> document rather than one per write. The quit-time path keeps its
+    !> timestamped files and is untouched.
+    !>
+    !> Recovery needs no special case -- the registry entry is upserted the
+    !> same way, and the startup prompt already keeps the newest per file.
+    subroutine backup_autosave(file_path, buffer_content, success)
+        character(len=*), intent(in) :: file_path
+        character(len=*), intent(in) :: buffer_content
+        logical, intent(out) :: success
+        character(len=MAX_PATH_LEN) :: backup_dir, backup_file
+        character(len=MAX_PATH_LEN) :: basename, timestamp_str
+        integer :: unit_dst, ios, i
+
+        success = .false.
+        if (len_trim(file_path) == 0) return
+
+        call backup_get_dir_for_file(file_path, backup_dir)
+        if (.not. mkdir_p(trim(backup_dir))) return
+
+        basename = file_path
+        do i = len_trim(file_path), 1, -1
+            if (file_path(i:i) == '/') then
+                basename = file_path(i+1:)
+                exit
+            end if
+        end do
+
+        write(backup_file, '(A,A,A,A)') &
+            trim(backup_dir), '/', trim(basename), '.autosave'
+
+        open(newunit=unit_dst, file=trim(backup_file), &
+             status='replace', action='write', &
+             access='stream', form='unformatted', &
+             iostat=ios)
+        if (ios /= 0) return
+        if (len(buffer_content) > 0) then
+            write(unit_dst, iostat=ios) buffer_content
+        end if
+        close(unit_dst)
+        if (ios /= 0) return
+
+        ! Timestamp only orders entries; get_timestamp counts whole seconds
+        ! (and approximates months), so two writes in the same second tie.
+        ! The recovery prompt breaks ties by keeping the first seen, which is
+        ! harmless when there is one file per document.
+        call get_timestamp(timestamp_str)
+        call registry_add(file_path, trim(backup_file), trim(timestamp_str))
+
+        success = .true.
+    end subroutine backup_autosave
+
     subroutine backup_create(file_path, buffer_content, success)
         character(len=*), intent(in) :: file_path
         character(len=*), intent(in) :: buffer_content
@@ -241,9 +302,7 @@ contains
 
         ! Determine backup directory from file location
         call backup_get_dir_for_file(file_path, backup_dir)
-        call execute_command_line( &
-            "mkdir -p '" // trim(backup_dir) // "'", &
-            wait=.true.)
+        if (.not. mkdir_p(trim(backup_dir))) return
 
         ! Extract basename
         basename = file_path

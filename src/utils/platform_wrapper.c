@@ -163,8 +163,33 @@ void get_cwd_f(char* buffer, int buffer_len, int* result_len) {
     *result_len = (int)len;
 }
 
+
+/* See the POSIX branch: mkdir -p without a shell. */
+int fac_mkdir_p_f(const char* path) {
+    if (!path || !*path) return -1;
+
+    char buf[MAX_PATH];
+    size_t n = strlen(path);
+    if (n >= sizeof(buf)) return -1;
+    memcpy(buf, path, n + 1);
+
+    for (char* p = buf + 1; *p; p++) {
+        if (*p != '/' && *p != '\\') continue;
+        char sep = *p;
+        *p = '\0';
+        if (!CreateDirectoryA(buf, NULL) &&
+            GetLastError() != ERROR_ALREADY_EXISTS) return -1;
+        *p = sep;
+    }
+    if (!CreateDirectoryA(buf, NULL) &&
+        GetLastError() != ERROR_ALREADY_EXISTS) return -1;
+    return 0;
+}
+
 #else
 // Unix implementation
+#include <sys/stat.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -284,3 +309,34 @@ void get_cwd_f(char* buffer, int buffer_len, int* result_len) {
 }
 
 #endif
+
+/* mkdir -p, without a shell.
+ *
+ * backup_create used to build its directory with
+ *     execute_command_line("mkdir -p '" // dir // "'")
+ * which forks a shell per call -- wrong on a timer, where this now runs --
+ * and interpolates a path into a command line, so a directory containing a
+ * quote would have been command injection.
+ *
+ * Returns 0 when the directory exists afterwards, non-zero otherwise.
+ */
+int fac_mkdir_p_f(const char* path) {
+    if (!path || !*path) return -1;
+
+    char buf[4096];
+    size_t n = strlen(path);
+    if (n >= sizeof(buf)) return -1;
+    memcpy(buf, path, n + 1);
+
+    /* Trailing slashes would make the final mkdir a no-op on an empty name. */
+    while (n > 1 && buf[n - 1] == '/') buf[--n] = '\0';
+
+    for (char* p = buf + 1; *p; p++) {
+        if (*p != '/') continue;
+        *p = '\0';
+        if (mkdir(buf, 0755) != 0 && errno != EEXIST) return -1;
+        *p = '/';
+    }
+    if (mkdir(buf, 0755) != 0 && errno != EEXIST) return -1;
+    return 0;
+}
