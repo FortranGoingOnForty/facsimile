@@ -12,6 +12,14 @@ module fortress_navigator_module
     private
 
     public :: open_fortress_navigator
+    ! The same browser, driven by the editor's loop instead of its own. Same
+    ! shape as group_picker_module, deliberately: show/hide/visible, a key
+    ! handler that claims or declines, a render, and a result the caller acts
+    ! on. See is_group_picker_visible and friends.
+    public :: fortress_show, fortress_hide, is_fortress_visible
+    public :: fortress_handle_key, render_fortress, fortress_click
+    public :: fortress_result, fortress_path, fortress_is_dir, fortress_as_group
+    public :: FT_PENDING, FT_CONFIRMED, FT_CANCELLED
 
     ! classify_escape result for a navigation key, distinct from the ESC_*
     ! values terminal_io returns for sequences it swallowed
@@ -21,6 +29,20 @@ module fortress_navigator_module
     ! the two apart, which is why Ctrl-G does the same thing.
     integer, parameter :: NAV_GROUP = 4
 
+    integer, parameter :: FT_PENDING = 0, FT_CONFIRMED = 1, FT_CANCELLED = 2
+
+    ! Modal state. The navigation state below is shared with the blocking
+    ! driver -- the two are never live at once, and fortress_show resets it
+    ! so nothing is inherited from a previous visit.
+    logical :: g_ft_visible = .false.
+    integer :: g_ft_result = FT_PENDING
+    character(len=MAX_PATH) :: g_ft_path = ''
+    logical :: g_ft_is_dir = .false.
+    logical :: g_ft_as_group = .false.
+    ! Where the box was last drawn, so a click can be mapped back to a row.
+    integer :: g_ft_row0 = 0, g_ft_col0 = 0, g_ft_h = 0, g_ft_w = 0
+    integer :: g_ft_inner_h = 0
+
     ! Navigation state
     character(len=MAX_PATH), dimension(MAX_FILES) :: current_files, parent_files
     logical, dimension(MAX_FILES) :: current_is_dir, parent_is_dir
@@ -28,6 +50,10 @@ module fortress_navigator_module
     integer :: current_count, parent_count
     integer :: selected, parent_selected
     integer :: scroll_offset, parent_scroll_offset
+    ! Where we are, and what the listings were last read for. Module state
+    ! because BOTH drivers need it -- the blocking loop kept these as locals,
+    ! which is why the modal could not see them.
+    character(len=MAX_PATH) :: current_dir = '', last_dir = '', last_parent = ''
 
     ! Fuzzy search state
     character(len=32) :: search_buffer = ''
@@ -53,7 +79,7 @@ contains
         !> onto opening one.
         logical, intent(out), optional :: as_group
         character(len=*), intent(in), optional :: initial_path
-        character(len=MAX_PATH) :: current_dir, parent_dir, temp_dir, last_dir, last_parent
+        character(len=MAX_PATH) :: parent_dir, temp_dir
         character(len=1) :: key
         integer :: esc_kind
         integer :: rows, cols, ios, last_selected, last_scroll
@@ -393,6 +419,227 @@ contains
         key = achar(char_code)
         kind = NAV_ARROW
     end function classify_escape
+
+    ! ---- modal driver -------------------------------------------------
+    !
+    ! The blocking driver above owns its own input loop; this one owns
+    ! nothing and is stepped by the editor. Both reach the SAME navigation
+    ! helpers -- handle_arrow_key, the fuzzy search, the listing refresh --
+    ! so a key cannot come to mean two different things.
+
+    subroutine fortress_show(start_dir)
+        character(len=*), intent(in), optional :: start_dir
+
+        ! Reset explicitly. Two drivers share this state and a `selected`
+        ! carried over from a previous visit would point into a listing that
+        ! is about to be replaced.
+        selected = 1
+        parent_selected = -1
+        scroll_offset = 0
+        parent_scroll_offset = 0
+        search_len = 0
+        search_buffer = ''
+        last_dir = ''
+        last_parent = ''
+
+        if (present(start_dir)) then
+            if (len_trim(start_dir) > 0) then
+                current_dir = start_dir
+            else
+                current_dir = get_pwd()
+            end if
+        else
+            current_dir = get_pwd()
+        end if
+
+        g_ft_result = FT_PENDING
+        g_ft_path = ''
+        g_ft_is_dir = .false.
+        g_ft_as_group = .false.
+        g_ft_visible = .true.
+    end subroutine fortress_show
+
+    subroutine fortress_hide()
+        g_ft_visible = .false.
+    end subroutine fortress_hide
+
+    logical function is_fortress_visible()
+        is_fortress_visible = g_ft_visible
+    end function is_fortress_visible
+
+    integer function fortress_result()
+        fortress_result = g_ft_result
+    end function fortress_result
+
+    function fortress_path() result(p)
+        character(len=:), allocatable :: p
+        p = trim(g_ft_path)
+    end function fortress_path
+
+    logical function fortress_is_dir()
+        fortress_is_dir = g_ft_is_dir
+    end function fortress_is_dir
+
+    logical function fortress_as_group()
+        fortress_as_group = g_ft_as_group
+    end function fortress_as_group
+
+    !> Bring the listings and the selection into agreement with current_dir.
+    !> The blocking loop does this at the top of every iteration; the modal
+    !> does it before drawing.
+    subroutine fortress_sync(vis_h)
+        integer, intent(in) :: vis_h
+        character(len=MAX_PATH) :: parent_dir
+
+        if (current_dir /= last_dir) then
+            parent_dir = get_parent_path(current_dir)
+            if (parent_dir /= last_parent) then
+                call get_file_list(parent_dir, parent_files, parent_is_dir, &
+                                   parent_is_exec, parent_count)
+                last_parent = parent_dir
+            end if
+            call get_file_list(current_dir, current_files, current_is_dir, &
+                               current_is_exec, current_count)
+            last_dir = current_dir
+        end if
+
+        parent_selected = find_in_parent(current_dir, parent_files, parent_count)
+        if (selected < 1) selected = 1
+        if (selected > current_count) selected = current_count
+        if (current_count == 0) selected = 1
+        call adjust_scroll(selected, scroll_offset, vis_h)
+        call adjust_parent_scroll(parent_selected, parent_scroll_offset, &
+                                  parent_count, vis_h)
+    end subroutine fortress_sync
+
+    !> True when the key was ours. The caller stops looking; anything we
+    !> decline goes on to the editor.
+    logical function fortress_handle_key(key_str) result(claimed)
+        character(len=*), intent(in) :: key_str
+        character(len=MAX_PATH) :: temp_dir
+        character(len=1) :: ch
+
+        claimed = .false.
+        if (.not. g_ft_visible) return
+        claimed = .true.
+
+        select case (trim(key_str))
+        case ('up')
+            call handle_arrow_key('A', selected, current_dir, temp_dir, &
+                                  current_files, current_is_dir, current_count)
+        case ('down')
+            call handle_arrow_key('B', selected, current_dir, temp_dir, &
+                                  current_files, current_is_dir, current_count)
+        case ('right')
+            call handle_arrow_key('C', selected, current_dir, temp_dir, &
+                                  current_files, current_is_dir, current_count)
+        case ('left')
+            call handle_arrow_key('D', selected, current_dir, temp_dir, &
+                                  current_files, current_is_dir, current_count)
+        case ('esc')
+            g_ft_result = FT_CANCELLED
+        case ('enter')
+            call fortress_choose(.false.)
+        case ('shift-enter', 'ctrl-g')
+            call fortress_choose(.true.)
+        case ('backspace')
+            if (search_len > 0) then
+                search_len = search_len - 1
+                if (search_len > 0) call fortress_fuzzy_jump(search_buffer(1:search_len))
+            end if
+        case default
+            ! Type-to-jump. Single printable characters only, so editor
+            ! chords fall through to be declined rather than typed.
+            if (len_trim(key_str) == 1) then
+                ch = key_str(1:1)
+                if ((ch >= 'a' .and. ch <= 'z') .or. (ch >= 'A' .and. ch <= 'Z') .or. &
+                    (ch >= '0' .and. ch <= '9') .or. ch == '-' .or. ch == '_' .or. &
+                    ch == '.') then
+                    call fortress_fuzzy_search(ch)
+                else
+                    claimed = .false.
+                end if
+            else
+                claimed = .false.
+            end if
+        end select
+    end function fortress_handle_key
+
+    !> Record what was picked. A file is always just a file; a directory is
+    !> either a workspace or a tab group, which is the caller's business.
+    subroutine fortress_choose(as_group)
+        logical, intent(in) :: as_group
+
+        if (current_count <= 0) return
+        if (selected < 1 .or. selected > current_count) return
+        if (as_group .and. .not. current_is_dir(selected)) return
+
+        g_ft_path = join_path(current_dir, trim(current_files(selected)))
+        g_ft_is_dir = current_is_dir(selected)
+        g_ft_as_group = as_group
+        g_ft_result = FT_CONFIRMED
+    end subroutine fortress_choose
+
+    !> A click inside the listing selects that row; a click anywhere else in
+    !> the box is swallowed so it cannot reach the document underneath.
+    logical function fortress_click(row, col) result(claimed)
+        integer, intent(in) :: row, col
+        integer :: idx
+
+        claimed = .false.
+        if (.not. g_ft_visible) return
+        if (row < g_ft_row0 .or. row > g_ft_row0 + g_ft_h - 1) return
+        if (col < g_ft_col0 .or. col > g_ft_col0 + g_ft_w - 1) return
+        claimed = .true.
+
+        ! Rows inside the listing, below the two header rows the display
+        ! draws at the top of its area.
+        idx = (row - (g_ft_row0 + 1) - 2) + 1 + scroll_offset
+        if (idx >= 1 .and. idx <= current_count) selected = idx
+    end function fortress_click
+
+    !> Draw the window. Centred and about seven tenths of the area given,
+    !> clamped so it stays usable on a small terminal.
+    subroutine render_fortress(top_row, bottom_row, left_col, right_col)
+        use modal_box_module, only: box_frame, box_inner_rect
+        use fortress_display_module, only: draw_fortress_interface
+        integer, intent(in) :: top_row, bottom_row, left_col, right_col
+        integer :: avail_h, avail_w, h, w, r0, c0
+        integer :: ir, ic, ih, iw
+
+        if (.not. g_ft_visible) return
+
+        avail_h = max(0, bottom_row - top_row + 1)
+        avail_w = max(0, right_col - left_col + 1)
+        h = min(avail_h, max(8, (avail_h * 7) / 10))
+        w = min(avail_w, max(30, (avail_w * 7) / 10))
+        if (h < 6 .or. w < 24) return          ! no room to be a window
+
+        r0 = top_row + (avail_h - h) / 2
+        c0 = left_col + (avail_w - w) / 2
+
+        g_ft_row0 = r0
+        g_ft_col0 = c0
+        g_ft_h = h
+        g_ft_w = w
+
+        call box_inner_rect(r0, c0, h, w, ir, ic, ih, iw)
+        g_ft_inner_h = ih
+
+        ! The display reserves three rows of its own (header, blank, footer).
+        ! The frame carries the title and the key hints, so the display is
+        ! asked for the panes only -- otherwise the window shows two titles
+        ! and two footers.
+        call fortress_sync(ih)
+        call box_frame(r0, c0, h, w, 'FORTRESS  ' // trim(current_dir), &
+                       'arrows:nav  enter:open  S-enter/^g:group  esc:close')
+        call draw_fortress_interface(ih, iw, current_dir, current_files, &
+                                     current_is_dir, current_is_exec, current_count, &
+                                     parent_files, parent_is_dir, parent_count, &
+                                     selected, parent_selected, scroll_offset, &
+                                     parent_scroll_offset, row0=ir, col0=ic, &
+                                     chrome=.false.)
+    end subroutine render_fortress
 
     !> Handle arrow key navigation
     subroutine handle_arrow_key(key, sel, curr_dir, temp_dir, files, is_dir, file_count)

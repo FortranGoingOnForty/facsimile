@@ -25,7 +25,7 @@ contains
     subroutine draw_fortress_interface(r, c, current_dir, current_files, current_is_dir, current_is_exec, &
                                        current_count, parent_files, parent_is_dir, parent_count, &
                                        selected, parent_selected, scroll_offset, parent_scroll_offset, &
-                                       first_draw, row0, col0)
+                                       first_draw, row0, col0, chrome)
         integer, intent(in) :: r, c, current_count, parent_count, selected, parent_selected
         integer, intent(in) :: scroll_offset, parent_scroll_offset
         character(len=*), intent(in) :: current_dir
@@ -35,10 +35,14 @@ contains
         logical, intent(in), optional :: first_draw
         !> Top-left of the area to draw in. Absent means the whole screen.
         integer, intent(in), optional :: row0, col0
+        !> Draw the header and footer. False when a frame already provides
+        !> them, so a window does not carry two titles and two footers.
+        logical, intent(in), optional :: chrome
         integer :: left_w, i, j, parent_idx, current_idx, vis_h
         character(len=256) :: parent_name, current_name
         logical :: do_clear
-        integer :: r0, c0, name_w, used
+        integer :: r0, c0, name_w, used, list_top
+        logical :: want_chrome
         character(len=:), allocatable :: shown
 
         ! Origin. Defaults to the whole screen, which is what the startup
@@ -50,9 +54,19 @@ contains
         if (present(row0)) r0 = row0
         if (present(col0)) c0 = col0
 
-        ! Calculate layout
+        want_chrome = .true.
+        if (present(chrome)) want_chrome = chrome
+
+        ! Calculate layout. Without the chrome the panes have the header,
+        ! blank and footer rows back.
         left_w = c * 3 / 10
-        vis_h = r - 3
+        if (want_chrome) then
+            vis_h = r - 3
+            list_top = r0 + 1
+        else
+            vis_h = r
+            list_top = r0 - 1
+        end if
         name_w = max(0, c - left_w - 3)      ! after the " | " separator
 
         ! Clearing the SCREEN is only ever right for the full-screen driver.
@@ -63,18 +77,19 @@ contains
         write(output_unit, '(a)', advance='no') ESC // "[?25l"
         if (do_clear) write(output_unit, '(a)', advance='no') ESC // "[2J"
 
-        ! Header
-        call move_to(r0, c0)
-        call put_cells(BOLD // "FORTRESS" // RESET // " - " // trim(current_dir), &
-                       "FORTRESS - " // trim(current_dir), c)
-        call move_to(r0 + 1, c0)
-        call put_cells("", "", c)
+        if (want_chrome) then
+            call move_to(r0, c0)
+            call put_cells(BOLD // "FORTRESS" // RESET // " - " // trim(current_dir), &
+                           "FORTRESS - " // trim(current_dir), c)
+            call move_to(r0 + 1, c0)
+            call put_cells("", "", c)
+        end if
 
         do i = 1, vis_h
             parent_idx = i + parent_scroll_offset
             current_idx = i + scroll_offset
 
-            call move_to(r0 + 1 + i, c0)
+            call move_to(list_top + i, c0)
 
             ! === Parent pane (left 30%) ===
             parent_name = ''
@@ -127,6 +142,11 @@ contains
         end do
 
         ! Footer
+        if (.not. want_chrome) then
+            write(output_unit, '(a)', advance='no') ESC // "[?25h"
+            flush(output_unit)
+            return
+        end if
         call move_to(r0 + r - 1, c0)
         call put_cells(DIM // "arrows:nav  enter:open  S-enter/^g:tab group  " // &
                        "^f:favorite  esc:quit" // RESET, &

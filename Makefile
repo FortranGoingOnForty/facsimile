@@ -93,6 +93,8 @@ endif
 VERSION := $(shell cat VERSION 2>/dev/null || echo "unknown")
 
 # Source files (order matters for dependencies)
+# Note: the fortress modules sit before renderer_module -- the editor frame
+# now draws the browser window, so the renderer uses them.
 SOURCES = src/version_module.f90 \
           src/utils/platform_module.f90 \
           src/utils/utf8_module.f90 \
@@ -137,7 +139,8 @@ SOURCES = src/version_module.f90 \
           src/ui/command_palette_module.f90 \
           src/ui/workspace_symbols_panel_module.f90 \
           src/ui/lsp_server_installer_panel_module.f90 \
-          src/ui/group_picker_module.f90 \
+          src/ui/modal_box_module.f90 \
+	src/ui/group_picker_module.f90 \
           src/ui/terminal_panel_module.f90 \
           src/ui/ghost_text_module.f90 \
           src/editor_state_module.f90 \
@@ -158,15 +161,15 @@ SOURCES = src/version_module.f90 \
           src/ui/rename_prompt_module.f90 \
           src/ui/search_prompt_module.f90 \
           src/ui/unified_search_module.f90 \
+          src/fortress/filesystem/fortress_fs_module.f90 \
+          src/fortress/ui/fortress_display_module.f90 \
+          src/fortress/fortress_navigator_module.f90 \
           src/terminal/renderer_module.f90 \
           src/ui/replace_prompt_module.f90 \
           src/ui/goto_prompt_module.f90 \
           src/ui/save_prompt_module.f90 \
           src/ui/binary_prompt_module.f90 \
-          src/fortress/filesystem/fortress_fs_module.f90 \
-          src/fortress/ui/fortress_display_module.f90 \
           src/fortress/ui/welcome_menu_module.f90 \
-          src/fortress/fortress_navigator_module.f90 \
           src/ai/ai_engine_module.f90 \
           src/commands/comment_command_module.f90 \
           src/commands/indent_policy_module.f90 \

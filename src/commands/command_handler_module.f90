@@ -64,6 +64,12 @@ module command_handler_module
     use git_ops_module
     use text_prompt_module, only: show_text_prompt, show_yes_no_prompt
     use fortress_navigator_module, only: open_fortress_navigator
+    use fortress_navigator_module, only: fortress_show, fortress_hide, &
+                                         is_fortress_visible, fortress_handle_key, &
+                                         fortress_click, fortress_result, &
+                                         fortress_path, fortress_is_dir, &
+                                         fortress_as_group, &
+                                         FT_CONFIRMED, FT_CANCELLED
     use binary_prompt_module, only: binary_file_prompt
     use lsp_server_manager_module, only: request_completion, request_hover, request_definition, &
                                          request_references, request_code_actions, request_document_symbols, &
@@ -705,6 +711,10 @@ contains
                             ! tree; it is not now that a right-click on the tab
                             ! bar opens it, which would land a mouse user in a
                             ! box they cannot click.
+                            if (fortress_click(mrow, mcol)) then
+                                g_lsp_ui_changed = .true.
+                                return
+                            end if
                             if (group_picker_click(mrow, mcol)) then
                                 if (group_picker_result() == GP_CONFIRMED) then
                                     call finish_group_creation(editor, buffer)
@@ -945,6 +955,33 @@ contains
             ! editor command against the document while the user is looking
             ! at a shell prompt. Ctrl-Q stays live as the way out.
             if (trim(key_str) /= 'ctrl-q') return
+            end if
+        end if
+
+        ! The browser window owns the keyboard while it is up, on the same
+        ! terms as the group dialog below: ctrl-q always passes, so no modal
+        ! can trap the user. It claims nearly every key -- type-to-jump means
+        ! plain letters are its own -- and declines what it does not know.
+        if (is_fortress_visible()) then
+            if (trim(key_str) /= 'ctrl-q') then
+                if (fortress_handle_key(key_str)) then
+                    if (fortress_result() == FT_CONFIRMED) then
+                        block
+                            character(len=:), allocatable :: chosen
+                            logical :: chose_dir, chose_group
+                            chosen = fortress_path()
+                            chose_dir = fortress_is_dir()
+                            chose_group = fortress_as_group()
+                            call fortress_hide()
+                            call apply_fortress_selection(editor, buffer, chosen, &
+                                                          chose_dir, chose_group)
+                        end block
+                    else if (fortress_result() == FT_CANCELLED) then
+                        call fortress_hide()
+                    end if
+                    g_lsp_ui_changed = .true.
+                    return
+                end if
             end if
         end if
 
@@ -9619,30 +9656,41 @@ contains
         end if
     end subroutine handle_git_diff
 
+    !> Ctrl-O. Opens the browser as a WINDOW over the document; the main
+    !> loop drives it from here, and apply_fortress_selection below is what
+    !> runs when something is picked.
     subroutine handle_fortress_navigator(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+
+        if (allocated(editor%workspace_path)) then
+            call fortress_show(editor%workspace_path)
+        else
+            call fortress_show()
+        end if
+        g_lsp_ui_changed = .true.
+        ! `buffer` is untouched; it is here so the signature matches the rest
+        ! of the command handlers and the dispatcher needs no special case.
+        if (.false.) call init_buffer(buffer)
+    end subroutine handle_fortress_navigator
+
+    !> What a fortress selection means. One definition, so the window and the
+    !> full-screen startup browser cannot come to disagree about it.
+    subroutine apply_fortress_selection(editor, buffer, selected_path, &
+                                        is_directory, as_group)
         use workspace_module, only: workspace_is_file_in_workspace, workspace_switch
         use save_prompt_module, only: save_prompt, save_prompt_result_t
         use input_handler_module, only: get_key_input
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
-        character(len=:), allocatable :: selected_path
+        character(len=*), intent(in) :: selected_path
+        logical, intent(in) :: is_directory, as_group
         character(len=32) :: key_input
-        logical :: is_directory, cancelled, is_in_workspace, switch_success
-        logical :: as_group
+        logical :: is_in_workspace, switch_success
         logical :: should_switch
         integer :: load_status, tab_idx, status
 
-        ! Call fortress navigator (start in workspace if available)
-        if (allocated(editor%workspace_path)) then
-            call open_fortress_navigator(selected_path, is_directory, cancelled, &
-                                         editor%workspace_path, as_group)
-        else
-            call open_fortress_navigator(selected_path, is_directory, cancelled, &
-                                         as_group=as_group)
-        end if
-
-        ! If user selected something, open it
-        if (.not. cancelled .and. allocated(selected_path)) then
+        if (.true.) then
             if (len_trim(selected_path) > 0) then
                 if (.not. is_directory) then
                     ! Selected a file - create a new tab for it
@@ -9758,9 +9806,11 @@ contains
             end if
         end if
 
-        ! Re-render after returning from fortress
-        call terminal_clear_screen()
-    end subroutine handle_fortress_navigator
+        ! The window is gone by the time this runs, and the next frame is a
+        ! normal editor frame -- no screen clear, which is what a modal
+        ! dismissal should look like.
+        g_lsp_ui_changed = .true.
+    end subroutine apply_fortress_selection
 
     !> Handle dirty buffers before workspace switch
     !> Write the working buffer to the ACTIVE PANE's file.

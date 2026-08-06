@@ -18,6 +18,7 @@ module renderer_module
                                        REGION_FUSS_TOGGLE
     use context_menu_module, only: render_context_menu, is_context_menu_visible
     use group_picker_module, only: render_group_picker, is_group_picker_visible
+    use fortress_navigator_module, only: render_fortress, is_fortress_visible
     use file_tree_module
     use file_tree_renderer_module
     use syntax_highlighter_module
@@ -690,6 +691,10 @@ contains
         end if
 
         ! The dialog is topmost: it is what the user is looking at.
+        ! The file browser window, on the same footing as the group dialog.
+        if (is_fortress_visible()) &
+            call render_fortress(first_content_row(editor), editor%screen_rows - 1, &
+                                 1, editor%screen_cols)
         if (is_group_picker_visible()) call render_group_picker()
 
         ! Except while something is being dragged, which is above even that:
