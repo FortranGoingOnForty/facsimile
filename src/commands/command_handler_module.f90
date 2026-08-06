@@ -9628,14 +9628,17 @@ contains
         character(len=:), allocatable :: selected_path
         character(len=32) :: key_input
         logical :: is_directory, cancelled, is_in_workspace, switch_success
+        logical :: as_group
         logical :: should_switch
         integer :: load_status, tab_idx, status
 
         ! Call fortress navigator (start in workspace if available)
         if (allocated(editor%workspace_path)) then
-            call open_fortress_navigator(selected_path, is_directory, cancelled, editor%workspace_path)
+            call open_fortress_navigator(selected_path, is_directory, cancelled, &
+                                         editor%workspace_path, as_group)
         else
-            call open_fortress_navigator(selected_path, is_directory, cancelled)
+            call open_fortress_navigator(selected_path, is_directory, cancelled, &
+                                         as_group=as_group)
         end if
 
         ! If user selected something, open it
@@ -9682,6 +9685,19 @@ contains
                         editor%cursors(editor%active_cursor)%line = 1
                         editor%cursors(editor%active_cursor)%column = 1
                         editor%cursors(editor%active_cursor)%desired_column = 1
+                    end if
+                else if (as_group) then
+                    ! Shift+Enter (or Ctrl-G) on a directory: offer to make a
+                    ! tab group of it, which is what `fac <dir>/` already does
+                    ! from the built-in terminal. Plain Enter still switches
+                    ! the workspace, below.
+                    if (group_picker_show(trim(selected_path), &
+                                          editor%screen_rows, editor%screen_cols)) then
+                        g_editing_gid = 0
+                        editor%fuss_mode_active = .false.
+                        g_lsp_ui_changed = .true.
+                    else
+                        call set_status_message('Cannot read ' // trim(selected_path))
                     end if
                 else
                     ! Selected a directory - switch workspace (Phase 6)

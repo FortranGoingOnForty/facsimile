@@ -6,7 +6,7 @@ module fortress_navigator_module
     use fortress_fs_module
     use fortress_display_module
     use terminal_io_module, only: terminal_read_char, terminal_write, terminal_move_cursor, terminal_flush, &
-                                  terminal_consume_csi, ESC_STANDALONE
+                                  terminal_consume_csi, ESC_STANDALONE, ESC_OTHER
     use favorites_module, only: favorites_add
     implicit none
     private
@@ -16,6 +16,10 @@ module fortress_navigator_module
     ! classify_escape result for a navigation key, distinct from the ESC_*
     ! values terminal_io returns for sequences it swallowed
     integer, parameter :: NAV_ARROW = 3
+    ! Shift+Enter, which only exists as a kitty CSI-u report. Terminals that
+    ! do not speak that protocol send a plain Enter for it and cannot tell
+    ! the two apart, which is why Ctrl-G does the same thing.
+    integer, parameter :: NAV_GROUP = 4
 
     ! Navigation state
     character(len=MAX_PATH), dimension(MAX_FILES) :: current_files, parent_files
@@ -37,9 +41,17 @@ contains
     !! @param is_directory - Output: true if selected item is directory
     !! @param cancelled - Output: true if user pressed ESC/q
     !! @param initial_path - Input (optional): starting directory
-    subroutine open_fortress_navigator(selected_path, is_directory, cancelled, initial_path)
+    subroutine open_fortress_navigator(selected_path, is_directory, cancelled, &
+                                       initial_path, as_group)
         character(len=:), allocatable, intent(out) :: selected_path
         logical, intent(out) :: is_directory, cancelled
+        !> Set when the directory was chosen with Shift+Enter (or Ctrl-G):
+        !> the caller should offer to make a TAB GROUP of it rather than
+        !> switch the workspace. Plain Enter leaves this false and keeps its
+        !> old meaning. Reporting rather than deciding, because the startup
+        !> navigator has no workspace for a group to live in and maps both
+        !> onto opening one.
+        logical, intent(out), optional :: as_group
         character(len=*), intent(in), optional :: initial_path
         character(len=MAX_PATH) :: current_dir, parent_dir, temp_dir, last_dir, last_parent
         character(len=1) :: key
@@ -48,6 +60,7 @@ contains
         logical :: running, dir_changed, first_draw, need_redraw
 
         ! Initialize state
+        if (present(as_group)) as_group = .false.
         selected = 1
         parent_selected = -1
         scroll_offset = 0
@@ -172,7 +185,17 @@ contains
                 case (char(27))  ! ESC — arrow key, swallowed sequence, or quit
                     search_len = 0; search_buffer = ''
                     esc_kind = classify_escape(key)
-                    if (esc_kind == NAV_ARROW) then
+                    if (esc_kind == NAV_GROUP) then
+                        if (current_count > 0) then
+                            if (current_is_dir(selected)) then
+                                selected_path = join_path(current_dir, &
+                                    trim(current_files(selected)))
+                                is_directory = .true.
+                                if (present(as_group)) as_group = .true.
+                                running = .false.
+                            end if
+                        end if
+                    else if (esc_kind == NAV_ARROW) then
                         call handle_arrow_key(key, selected, &
                             current_dir, temp_dir, &
                             current_files, &
@@ -183,6 +206,18 @@ contains
                         running = .false.
                     end if
                     ! A mouse report or other CSI was consumed: stay put
+
+                case (char(7))  ! Ctrl-G — same as Shift+Enter, for terminals
+                                ! that cannot report it
+                    if (current_count > 0) then
+                        if (current_is_dir(selected)) then
+                            selected_path = join_path(current_dir, &
+                                trim(current_files(selected)))
+                            is_directory = .true.
+                            if (present(as_group)) as_group = .true.
+                            running = .false.
+                        end if
+                    end if
 
                 case (char(17))  ! Ctrl-Q — quit
                     cancelled = .true.
@@ -317,6 +352,41 @@ contains
             ! an unrecognised "arrow" and the digits then reached
             ! type-to-jump one at a time.
             kind = terminal_consume_csi(char_code)
+            return
+        end if
+
+        ! A CSI-u key report, e.g. ESC [ 13 ; 2 u for Shift+Enter. Parsed
+        ! rather than passed through: the old code returned the FIRST digit
+        ! as an "arrow" and let the rest reach type-to-jump one character at
+        ! a time, so any such key silently corrupted the search buffer.
+        if (char_code >= iachar('0') .and. char_code <= iachar('9')) then
+            block
+                integer :: cp, mods, val, c
+                cp = 0
+                mods = 0
+                val = char_code - iachar('0')
+                c = -1
+                do
+                    c = terminal_read_char()
+                    if (c < 0) exit
+                    if (c >= iachar('0') .and. c <= iachar('9')) then
+                        val = val * 10 + (c - iachar('0'))
+                    else if (c == iachar(';')) then
+                        if (cp == 0) cp = val
+                        val = 0
+                    else
+                        exit                    ! final byte
+                    end if
+                end do
+                if (cp == 0) cp = val
+                mods = val
+                ! 13 is Enter; modifier 2 is Shift (the encoding is 1 + bits).
+                if (c == iachar('u') .and. cp == 13 .and. mods == 2) then
+                    kind = NAV_GROUP
+                else
+                    kind = ESC_OTHER
+                end if
+            end block
             return
         end if
 
