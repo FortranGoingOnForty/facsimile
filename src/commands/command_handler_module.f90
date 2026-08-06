@@ -827,6 +827,14 @@ contains
         ! Route keys to integrated terminal when focused (highest priority)
         if (is_terminal_panel_visible(editor%terminal_panel) .and. &
             editor%terminal_panel%focused) then
+            ! ...except the chords that move between files, which fall
+            ! through to the main dispatch below.
+            !
+            ! Leaving a terminal open while reading around a codebase is the
+            ! point of having one docked, and having to alt-t the panel away
+            ! and back for every file defeats it. These say nothing to a
+            ! shell, so nothing is lost by not forwarding them.
+            if (.not. is_file_navigation_key(trim(key_str))) then
             if (trim(key_str) == 'f5' .or. trim(key_str) == 'alt-t') then
                 ! F5 / Alt-T hides terminal panel
                 editor%terminal_panel%visible = .false.
@@ -919,6 +927,7 @@ contains
             ! editor command against the document while the user is looking
             ! at a shell prompt. Ctrl-Q stays live as the way out.
             if (trim(key_str) /= 'ctrl-q') return
+            end if
         end if
 
         ! The group dialog owns the keyboard while it is up. ctrl-q passes
@@ -1613,6 +1622,8 @@ contains
         case('alt-0', 'ctrl-0')
             ! Tab 10, the way a keyboard's digit row runs.
             call begin_tab_jump(editor, buffer, 10)
+        ! Keep in step with is_file_navigation_key, which the integrated
+        ! terminal consults to decide that these are not for the shell.
         case('ctrl-alt-left', 'alt-ctrl-left', 'super-ctrl-left', 'ctrl-pageup')
             ! Previous entry on row 1. With no groups that is the previous
             ! tab, exactly as before; with groups a whole group is one entry,
@@ -10368,6 +10379,28 @@ contains
             call set_status_message(trim(msg))
         end if
     end subroutine resize_terminal_panel_key
+
+    !> Chords that move between files rather than doing anything to one.
+    !>
+    !> The single list, because two lists rot: the integrated terminal asks
+    !> this to decide what NOT to swallow, and the spellings have to match the
+    !> cases in handle_key_command that reach step_row1_entry. If a binding is
+    !> added or renamed there, add it here too or it will stop working the
+    !> moment the terminal has focus -- which is exactly the bug this fixes.
+    !>
+    !> alt-<digit> tab jumps are deliberately NOT here: Alt+1 is readline's
+    !> numeric argument, and a shell has a real use for it.
+    logical function is_file_navigation_key(key_str)
+        character(len=*), intent(in) :: key_str
+
+        select case (trim(key_str))
+        case ('ctrl-alt-left', 'alt-ctrl-left', 'super-ctrl-left', 'ctrl-pageup', &
+              'ctrl-alt-right', 'alt-ctrl-right', 'super-ctrl-right', 'ctrl-pagedown')
+            is_file_navigation_key = .true.
+        case default
+            is_file_navigation_key = .false.
+        end select
+    end function is_file_navigation_key
 
     subroutine step_row1_entry(editor, buffer, delta)
         use editor_state_module, only: active_group_id, group_members
