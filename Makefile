@@ -352,10 +352,16 @@ test-lsp: lsp-modules
 	@$(CC) -O1 -o tests/lsp/test_write_deadlock tests/lsp/test_write_deadlock.c \
 		src/lsp/lsp_process_wrapper.o && timeout 60 tests/lsp/test_write_deadlock
 
+	@echo ""
+	@echo "Testing that a server's stderr is read, so it cannot wedge on its log..."
+	@$(CC) -O1 -o tests/lsp/test_stderr_drain tests/lsp/test_stderr_drain.c \
+		src/lsp/lsp_process_wrapper.o && timeout 90 tests/lsp/test_stderr_drain
+
 # Syntax-check the _WIN32 branches without a Windows toolchain. See
 # tests/winstub/README.md -- these branches are invisible to the normal build,
 # and a mistake in one is otherwise found only after a tag has been cut.
-WIN_CHECK_SRC = src/utils/platform_wrapper.c src/terminal/pty_wrapper.c src/ai/ai_http.c
+WIN_CHECK_SRC = src/utils/platform_wrapper.c src/terminal/pty_wrapper.c src/ai/ai_http.c \
+                src/lsp/lsp_process_wrapper.c
 
 check-windows:
 	@echo "Syntax-checking the Windows branches..."
@@ -364,6 +370,18 @@ check-windows:
 		$(CC) -fsyntax-only -D_WIN32 -Itests/winstub "$$f" || exit 1; \
 		echo ok; \
 	done
+	@echo "Checking for lsp_ helpers defined on one platform only..."
+	@$(CC) -c -D_WIN32 -Itests/winstub src/lsp/lsp_process_wrapper.c \
+		-o tests/winstub/.win.o
+	@undef=`nm -u tests/winstub/.win.o | awk '{print $$NF}' | grep '^lsp_' || true`; \
+	rm -f tests/winstub/.win.o; \
+	if [ -n "$$undef" ]; then \
+		echo "  MISSING on Windows: $$undef"; \
+		echo "  (every lsp_ helper lives in this one file; an undefined one means"; \
+		echo "   it was written into the POSIX branch only, and Windows will not link)"; \
+		exit 1; \
+	fi
+	@echo "  no one-sided lsp_ helpers                ok"
 	@echo "Windows branches OK (see tests/winstub/README.md for what is not covered)"
 
 test-lsp-editor: all

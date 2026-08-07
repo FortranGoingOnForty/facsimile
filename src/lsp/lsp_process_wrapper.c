@@ -170,6 +170,39 @@ int lsp_read_message(lsp_process_t* proc, char* buffer, int max_len) {
     return (int)bytes_read;
 }
 
+/* Nothing is ever queued here: the Windows send is synchronous. Defined so
+   the common lsp_flush_pending_f below has something to link against -- it
+   is outside both branches, and check-windows is -fsyntax-only, which
+   cannot see a missing definition. */
+int lsp_flush_pending(lsp_process_t* proc) {
+    (void)proc;
+    return 0;
+}
+
+/* Drain and discard the server's stderr. See the POSIX version for why
+   this must happen at all -- a full stderr pipe wedges the server. */
+int lsp_drain_stderr(lsp_process_t* proc) {
+    char sink[4096];
+    int total = 0;
+
+    if (!proc || proc->stderr_read == INVALID_HANDLE_VALUE) return 0;
+
+    while (total < (256 * 1024)) {
+        DWORD available = 0;
+        DWORD got = 0;
+        DWORD want;
+
+        if (!PeekNamedPipe(proc->stderr_read, NULL, 0, NULL, &available, NULL)) break;
+        if (available == 0) break;
+
+        want = (available < (DWORD)sizeof(sink)) ? available : (DWORD)sizeof(sink);
+        if (!ReadFile(proc->stderr_read, sink, want, &got, NULL)) break;
+        if (got == 0) break;
+        total += (int)got;
+    }
+    return total;
+}
+
 // Check if process is still running
 int lsp_is_running(lsp_process_t* proc) {
     if (!proc || proc->hProcess == INVALID_HANDLE_VALUE) return 0;
@@ -437,6 +470,39 @@ int lsp_read_message(lsp_process_t* proc, char* buffer, int max_len) {
     return (int)bytes_read;
 }
 
+/* Read the server's stderr and throw it away.
+
+   Nothing here wants the text, but SOMETHING has to read it. The pipe holds
+   64K; the server's end of it is a blocking write. A language server logs a
+   line per request -- clangd writes "I[21:46:52.345] Code complete: ..." for
+   every completion -- so after an hour of use the pipe is full, the server
+   blocks forever inside write(2, ...), and having blocked it stops reading
+   its stdin too. Every feature dies at once and the editor sees only a
+   server that has gone quiet. Caught on a live session: one clangd thread
+   parked in anon_pipe_write for an hour, and draining this pipe from
+   outside released an hour of backed-up completion responses in one go.
+
+   O_NONBLOCK on this end does not help: it governs OUR reads, not the
+   server's writes.
+
+   Bounded per call so a server that spews cannot hold the frame. Whatever
+   is left stays in the pipe for the next one. */
+int lsp_drain_stderr(lsp_process_t* proc) {
+    char sink[4096];
+    int total = 0;
+
+    if (!proc || proc->stderr_fd < 0) return 0;
+
+    while (total < (256 * 1024)) {
+        ssize_t n = read(proc->stderr_fd, sink, sizeof(sink));
+        if (n > 0) { total += (int)n; continue; }
+        if (n == 0) break;                       /* server closed it */
+        if (errno == EINTR) continue;
+        break;                                   /* EAGAIN: pipe is empty */
+    }
+    return total;
+}
+
 // Check if process is still running
 int lsp_is_running(lsp_process_t* proc) {
     if (!proc || proc->pid <= 0) return 0;
@@ -528,6 +594,11 @@ int lsp_send_message_f(void** handle, const char* message, int message_len) {
 int lsp_flush_pending_f(void** handle) {
     if (!*handle) return -1;
     return lsp_flush_pending((lsp_process_t*)*handle);
+}
+
+int lsp_drain_stderr_f(void** handle) {
+    if (!*handle) return 0;
+    return lsp_drain_stderr((lsp_process_t*)*handle);
 }
 
 int lsp_read_message_f(void** handle, char* buffer, int buffer_len) {

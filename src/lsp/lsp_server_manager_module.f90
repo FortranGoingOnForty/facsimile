@@ -155,6 +155,16 @@ module lsp_server_manager_module
             integer(c_int) :: lsp_flush_pending_f
         end function lsp_flush_pending_f
 
+        !> Read the server's stderr and throw it away. Nobody wants the
+        !> text, but the pipe is only 64K and the server's end of it blocks:
+        !> left unread it fills, the server parks inside write(2, ...), and
+        !> everything it was doing stops with it.
+        function lsp_drain_stderr_f(handle) bind(c, name='lsp_drain_stderr_f')
+            import :: c_ptr, c_int
+            type(c_ptr), intent(inout) :: handle
+            integer(c_int) :: lsp_drain_stderr_f
+        end function lsp_drain_stderr_f
+
         function lsp_read_message_f(handle, buffer, buffer_len) bind(c, name='lsp_read_message_f')
             use iso_c_binding
             integer(c_int) :: lsp_read_message_f
@@ -555,6 +565,12 @@ contains
                 ! than a keystroke.
                 rc = lsp_flush_pending_f(manager%servers(i)%handle)
                 if (rc < 0) call note_lsp_error('Language server stopped responding')
+
+                ! Before reading stdout, not after: a server blocked writing
+                ! its log has nothing left to say on stdout, so draining
+                ! second would leave it wedged for another whole frame.
+                rc = lsp_drain_stderr_f(manager%servers(i)%handle)
+
                 call process_server_output(manager, manager%servers(i))
             end if
         end do
