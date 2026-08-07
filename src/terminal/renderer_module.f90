@@ -635,7 +635,7 @@ contains
         cursor = editor%cursors(editor%active_cursor)
         line_content = buffer_get_line(buffer, cursor%line)
         cursor_char = utf8_char_at(line_content, cursor%column)
-        if (is_opening_bracket(cursor_char) .or. is_closing_bracket(cursor_char)) then
+        if (is_bracket_char(cursor_char)) then
             bracket_line = cursor%line
             bracket_col = cursor%column
             call find_matching_bracket(buffer, bracket_line, bracket_col, &
@@ -2132,7 +2132,7 @@ contains
                 line_content = buffer_get_line(pane%buffer, active_cursor%line)
                 ! Char-index lookup (see render_screen bracket check)
                 cursor_char = utf8_char_at(line_content, active_cursor%column)
-                if (is_opening_bracket(cursor_char) .or. is_closing_bracket(cursor_char)) then
+                if (is_bracket_char(cursor_char)) then
                     bracket_line = active_cursor%line
                     bracket_col = active_cursor%column
                     call find_matching_bracket(pane%buffer, bracket_line, bracket_col, &

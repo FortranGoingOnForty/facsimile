@@ -5,9 +5,25 @@ module bracket_matching_module
     private
 
     public :: find_matching_bracket, is_opening_bracket, is_closing_bracket
-    public :: get_bracket_pair
+    public :: get_bracket_pair, is_bracket_char
 
 contains
+
+    !> Is this string a single bracket character? Takes any length, because
+    !> the callers ask about the character under the caret and there may not
+    !> be one: utf8_char_at returns a ZERO-LENGTH string for a column past
+    !> the end of the line -- the caret at end of line, or anywhere on an
+    !> empty line, both of them ordinary places to be. Handing that straight
+    !> to a character(len=1) dummy is a bounds violation that -O2 hides by
+    !> reading the byte after the allocation, and that any checked build
+    !> aborts on: pressing End used to kill a `make dev` binary outright.
+    logical function is_bracket_char(s)
+        character(len=*), intent(in) :: s
+
+        is_bracket_char = .false.
+        if (len(s) /= 1) return
+        is_bracket_char = is_opening_bracket(s) .or. is_closing_bracket(s)
+    end function is_bracket_char
 
     logical function is_opening_bracket(ch)
         character(len=1), intent(in) :: ch
