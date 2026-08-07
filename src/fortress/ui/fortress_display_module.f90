@@ -1,7 +1,12 @@
 ! UI display for Fortress navigator (simplified for fac)
 
 module fortress_display_module
-    use iso_fortran_env, only: output_unit
+    ! Everything here goes through the shared write buffer, not straight to
+    ! the unit. The rest of the editor batches a frame into one write; a
+    ! module that flushes on its own puts half a frame on the terminal
+    ! ahead of the other half, which is what made this window flicker as it
+    ! scrolled.
+    use terminal_io_module, only: terminal_write, terminal_flush
     use fortress_fs_module, only: MAX_PATH, MAX_FILES
     use utf8_module, only: clip_to_cells
     implicit none
@@ -74,8 +79,13 @@ contains
         if (present(first_draw)) do_clear = first_draw
         if (r0 /= 1 .or. c0 /= 1) do_clear = .false.
 
-        write(output_unit, '(a)', advance='no') ESC // "[?25l"
-        if (do_clear) write(output_unit, '(a)', advance='no') ESC // "[2J"
+        ! Hiding and showing the caret is the FRAME's job when this is a
+        ! window inside the editor -- doing it here as well means showing it
+        ! again halfway through a frame the renderer has not finished, which
+        ! is a flicker all of its own. The full-screen driver has no frame
+        ! around it, so it still owns the caret.
+        if (want_chrome) call terminal_write(ESC // "[?25l")
+        if (do_clear) call terminal_write(ESC // "[2J")
 
         if (want_chrome) then
             call move_to(r0, c0)
@@ -104,16 +114,16 @@ contains
             ! are dimmed but still visible -- dirs in blue, files in default.
             ! (The old DIM+GREY rendered as near-invisible dark-on-dark.)
             if (used > 0 .and. parent_idx == parent_selected) then
-                write(output_unit, '(a)', advance='no') BOLD // UNDERLINE // BLUE // shown // RESET
+                call terminal_write(BOLD // UNDERLINE // BLUE // shown // RESET)
             else if (used > 0 .and. parent_is_dir(parent_idx)) then
-                write(output_unit, '(a)', advance='no') DIM // BLUE // shown // RESET
+                call terminal_write(DIM // BLUE // shown // RESET)
             else if (used > 0) then
-                write(output_unit, '(a)', advance='no') DIM // shown // RESET
+                call terminal_write(DIM // shown // RESET)
             end if
             if (left_w - used > 0) &
-                write(output_unit, '(a)', advance='no') repeat(' ', left_w - used)
+                call terminal_write(repeat(' ', left_w - used))
 
-            write(output_unit, '(a)', advance='no') " " // char(226)//char(148)//char(130) // " "
+            call terminal_write(" " // char(226)//char(148)//char(130) // " ")
 
             ! === Current pane (right) ===
             current_name = ''
@@ -125,36 +135,38 @@ contains
             end if
             call clip_to_cells(trim(current_name), name_w, shown, used)
             if (used > 0 .and. current_idx == selected) then
-                write(output_unit, '(a)', advance='no') BOLD // UNDERLINE // WHITE // shown // RESET
+                call terminal_write(BOLD // UNDERLINE // WHITE // shown // RESET)
             else if (used > 0 .and. current_is_dir(current_idx)) then
-                write(output_unit, '(a)', advance='no') BLUE // shown // RESET
+                call terminal_write(BLUE // shown // RESET)
             else if (used > 0 .and. current_is_exec(current_idx)) then
-                write(output_unit, '(a)', advance='no') GREEN // shown // RESET
+                call terminal_write(GREEN // shown // RESET)
             else if (used > 0) then
-                write(output_unit, '(a)', advance='no') shown // RESET
+                call terminal_write(shown // RESET)
             end if
             ! Pad rather than ESC[K. Clear-to-end-of-line clears to the end of
             ! the TERMINAL line, which for a modal is the document beside the
             ! box -- the same defect that had ghost text erasing the pane next
             ! to it.
             if (name_w - used > 0) &
-                write(output_unit, '(a)', advance='no') repeat(' ', name_w - used)
+                call terminal_write(repeat(' ', name_w - used))
         end do
 
-        ! Footer
-        if (.not. want_chrome) then
-            write(output_unit, '(a)', advance='no') ESC // "[?25h"
-            flush(output_unit)
-            return
-        end if
+        ! Footer. As a window there is none, and nothing is pushed out here
+        ! either: the frame flushes once at the end, which is the whole point
+        ! -- a mid-frame flush puts the panes on the terminal before the box
+        ! around them, and scrolling shows the two arriving separately.
+        if (.not. want_chrome) return
         call move_to(r0 + r - 1, c0)
         call put_cells(DIM // "arrows:nav  enter:open  S-enter/^g:tab group  " // &
                        "^f:favorite  esc:quit" // RESET, &
                        "arrows:nav  enter:open  S-enter/^g:tab group  " // &
                        "^f:favorite  esc:quit", c)
 
-        write(output_unit, '(a)', advance='no') ESC // "[?25h"
-        flush(output_unit)
+        ! The full-screen driver has no frame to flush for it: it draws and
+        ! then blocks on a key, so anything still in the buffer would not
+        ! reach the terminal until the next keystroke.
+        call terminal_write(ESC // "[?25h")
+        call terminal_flush()
 
     contains
 
@@ -162,7 +174,7 @@ contains
             integer, intent(in) :: row, col
             character(len=32) :: seq
             write(seq, '(a,i0,a,i0,a)') ESC // "[", row, ";", col, "H"
-            write(output_unit, '(a)', advance='no') trim(seq)
+            call terminal_write(trim(seq))
         end subroutine move_to
 
         !> Write styled text and pad to `cells`. `plain` is the same text with
@@ -175,11 +187,11 @@ contains
 
             call clip_to_cells(plain, cells, cut, n)
             if (n >= len(plain)) then
-                write(output_unit, '(a)', advance='no') styled
+                call terminal_write(styled)
             else
-                write(output_unit, '(a)', advance='no') cut
+                call terminal_write(cut)
             end if
-            if (cells - n > 0) write(output_unit, '(a)', advance='no') repeat(' ', cells - n)
+            if (cells - n > 0) call terminal_write(repeat(' ', cells - n))
         end subroutine put_cells
 
     end subroutine draw_fortress_interface
