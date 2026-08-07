@@ -4833,107 +4833,128 @@ contains
         end if
     end subroutine yank_text
 
+    ! Alt+Up / Alt+Down move whole LINES, and when there is a selection they
+    ! move every line it touches, as one block, carrying the selection with
+    ! them -- so the same text stays selected and a second press continues
+    ! from where the first left off. They used to move the caret's line alone
+    ! no matter how much was selected, which pulled a line out of the middle
+    ! of the block while the highlight stayed painted where it was.
+    !
+    ! A block of N lines is moved by lifting the ONE line it passes over and
+    ! putting it down on the other side; N is irrelevant to the work done.
+    ! The surgery is by byte position (as in delete_lines) rather than the
+    ! delete_entire_line / insert_line_text dance, which had no answer for a
+    ! file whose last line carries no newline and spliced a blank line in.
+
     subroutine move_line_up(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
-        character(len=:), allocatable :: current_line, prev_line
-        integer :: saved_column, original_line, total_lines
+        character(len=:), allocatable :: above
+        integer :: first, last, line_count, start_pos, end_pos, ins
 
-        if (cursor%line <= 1) return
+        line_count = buffer_get_line_count(buffer)
+        call cursor_line_span(cursor, first, last)
+        first = max(1, min(first, line_count))
+        last = max(first, min(last, line_count))
+        if (first <= 1) return
 
-        ! Save state
-        saved_column = cursor%column
-        original_line = cursor%line
-        total_lines = buffer_get_line_count(buffer)
+        above = buffer_get_line(buffer, first - 1)
 
-        ! Get both lines
-        current_line = buffer_get_line(buffer, cursor%line)
-        prev_line = buffer_get_line(buffer, cursor%line - 1)
+        ! Lift the line above the block, newline and all. It is never the
+        ! last line of the file -- the block is below it -- so its newline is
+        ! always there to take.
+        start_pos = get_line_start_pos(buffer, first - 1)
+        end_pos = get_line_start_pos(buffer, first)
+        call buffer_delete(buffer, start_pos, end_pos - start_pos)
 
-        ! Delete current line entirely (including newline)
-        cursor%column = 1
-        call delete_entire_line(buffer, cursor)
-
-        ! Move to previous line (now current_line position after delete)
-        cursor%line = cursor%line - 1
-        cursor%column = 1
-
-        ! Delete previous line entirely (including newline)
-        call delete_entire_line(buffer, cursor)
-
-        ! Now insert current_line first, then prev_line
-        cursor%column = 1
-        call insert_line_text(buffer, cursor, current_line)
-        call buffer_insert_newline(buffer, cursor)
-
-        cursor%line = cursor%line + 1
-        cursor%column = 1
-        call insert_line_text(buffer, cursor, prev_line)
-        ! Add newline if we're not at the last line
-        if (original_line < total_lines) then
-            call buffer_insert_newline(buffer, cursor)
+        ! The block now sits at first-1 .. last-1. Put the lifted line down
+        ! just past it.
+        if (last <= buffer_get_line_count(buffer)) then
+            ins = get_line_start_pos(buffer, last)
+            call buffer_insert(buffer, ins, above // char(10))
+        else
+            ! The block now ends the file: append rather than push a line down
+            ins = get_buffer_content_size(buffer) + 1
+            call buffer_insert(buffer, ins, char(10) // above)
         end if
 
-        ! Restore cursor to moved line
-        cursor%line = cursor%line - 1
-        cursor%column = min(saved_column, utf8_char_count(current_line) + 1)
-        cursor%desired_column = cursor%column
+        call shift_cursor_lines(cursor, buffer, -1)
 
         buffer%modified = .true.
-        if (allocated(current_line)) deallocate(current_line)
-        if (allocated(prev_line)) deallocate(prev_line)
+        if (allocated(above)) deallocate(above)
     end subroutine move_line_up
 
     subroutine move_line_down(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
-        character(len=:), allocatable :: current_line, next_line
-        integer :: line_count, saved_column, original_line, total_lines
+        character(len=:), allocatable :: below
+        integer :: first, last, line_count, start_pos, end_pos, ins
 
         line_count = buffer_get_line_count(buffer)
-        if (cursor%line >= line_count) return
+        call cursor_line_span(cursor, first, last)
+        first = max(1, min(first, line_count))
+        last = max(first, min(last, line_count))
+        if (last >= line_count) return
 
-        ! Save state
-        saved_column = cursor%column
-        original_line = cursor%line
-        total_lines = line_count
+        below = buffer_get_line(buffer, last + 1)
 
-        ! Get both lines
-        current_line = buffer_get_line(buffer, cursor%line)
-        next_line = buffer_get_line(buffer, cursor%line + 1)
-
-        ! Delete current line entirely (including newline)
-        cursor%column = 1
-        call delete_entire_line(buffer, cursor)
-
-        ! Delete next line entirely (including newline)
-        ! After deleting current line, next line is now at cursor%line
-        cursor%column = 1
-        call delete_entire_line(buffer, cursor)
-
-        ! Now insert next_line first, then current_line
-        cursor%column = 1
-        call insert_line_text(buffer, cursor, next_line)
-        call buffer_insert_newline(buffer, cursor)
-
-        cursor%line = cursor%line + 1
-        cursor%column = 1
-        call insert_line_text(buffer, cursor, current_line)
-        ! Add newline if we're not at the last line
-        if (original_line + 1 < total_lines) then
-            call buffer_insert_newline(buffer, cursor)
+        if (last + 1 < line_count) then
+            start_pos = get_line_start_pos(buffer, last + 1)
+            end_pos = get_line_start_pos(buffer, last + 2)
+        else
+            ! The last line of the file has no newline of its own; take the
+            ! one that precedes it, or removing it leaves a blank line behind
+            start_pos = get_line_start_pos(buffer, last + 1) - 1
+            end_pos = get_buffer_content_size(buffer) + 1
         end if
+        call buffer_delete(buffer, start_pos, end_pos - start_pos)
 
-        ! Restore cursor position on moved line
-        ! Current line is now at cursor%line (which is original_line + 1)
-        ! So cursor is already on the moved line, just need to fix column
-        cursor%column = min(saved_column, utf8_char_count(current_line) + 1)
-        cursor%desired_column = cursor%column
+        ins = get_line_start_pos(buffer, first)
+        call buffer_insert(buffer, ins, below // char(10))
+
+        call shift_cursor_lines(cursor, buffer, 1)
 
         buffer%modified = .true.
-        if (allocated(current_line)) deallocate(current_line)
-        if (allocated(next_line)) deallocate(next_line)
+        if (allocated(below)) deallocate(below)
     end subroutine move_line_down
+
+    ! Carry the caret and the selection anchor along with the block. Both
+    ! endpoints move by the same amount, so the selection ends up over the
+    ! same characters it started on.
+    subroutine shift_cursor_lines(cursor, buffer, delta)
+        type(cursor_t), intent(inout) :: cursor
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(in) :: delta
+        integer :: line_count
+
+        line_count = buffer_get_line_count(buffer)
+        call shift_one(cursor%line, cursor%column)
+        cursor%desired_column = cursor%column
+        if (cursor%has_selection) &
+            call shift_one(cursor%selection_start_line, cursor%selection_start_col)
+
+    contains
+
+        subroutine shift_one(line, col)
+            integer, intent(inout) :: line, col
+            integer :: target
+
+            target = line + delta
+            if (target > line_count) then
+                ! A selection that ends at column 1 of the line after the
+                ! block has nowhere to land once the block reaches the end of
+                ! the file. Park it at the end of the last line instead of at
+                ! the start of it -- column 1 there would put the endpoint
+                ! INSIDE the block and shrink the selection by a line.
+                line = line_count
+                col = buffer_get_line_char_count(buffer, line) + 1
+            else
+                line = max(1, target)
+                col = max(1, min(col, buffer_get_line_char_count(buffer, line) + 1))
+            end if
+        end subroutine shift_one
+
+    end subroutine shift_cursor_lines
 
     subroutine duplicate_line_up(cursor, buffer)
         type(cursor_t), intent(inout) :: cursor
