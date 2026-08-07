@@ -36,6 +36,19 @@ module ai_engine_module
     integer, parameter :: BUCKET_WINDOW_MS = 2000
     integer, parameter :: CONNECT_TIMEOUT_MS = 500
     integer, parameter :: TOTAL_TIMEOUT_MS = 4000
+    !> The FIRST answer of a session may have to wait for the model to be
+    !> read into memory. Measured against ollama with qwen2.5-coder:1.5b that
+    !> is around ten seconds, where a warm answer is under one -- so the
+    !> steady-state budget guarantees the first request fails, and three of
+    !> those mark the backend down for good. The assistant was then off for
+    !> the whole session, which is exactly what "AI down and no completions,
+    !> ever" turned out to be. Nothing blocks on this: the request is a state
+    !> machine advanced one step per frame, so a longer budget costs patience
+    !> and nothing else.
+    integer, parameter :: WARMUP_TIMEOUT_MS = 30000
+    !> How long a backend marked down is left alone before it is given
+    !> another chance.
+    integer(int64), parameter :: RETRY_DOWN_AFTER_MS = 20000_int64
 
 contains
 
@@ -359,7 +372,16 @@ contains
         character(len=*), intent(in), optional :: filename
 
         if (.not. ai%enabled) return
-        if (ai%health == AI_HEALTH_DOWN .or. ai%health == AI_HEALTH_NO_FIM) return
+        ! NO_FIM is a fact about the model and does not change while it is
+        ! the configured one; DOWN is a guess about the moment, so it expires.
+        if (ai%health == AI_HEALTH_NO_FIM) return
+        if (ai%health == AI_HEALTH_DOWN) then
+            if (now_ms() < ai%retry_after_ms) return
+            ! Give it a clean slate, or the very next failure trips the
+            ! three-strike count again immediately.
+            ai%consecutive_failures = 0
+            ai%health = AI_HEALTH_UNKNOWN
+        end if
 
         ai%trigger_pending = .true.
         ai%trigger_ms = now_ms()
@@ -502,7 +524,7 @@ contains
         call ai_http_begin(ai%req, ai%addr, &
             ai_http_build_request('POST', '/api/generate', &
                                   ai%host // ':' // int_str(ai%port), body), &
-            CONNECT_TIMEOUT_MS, TOTAL_TIMEOUT_MS)
+            CONNECT_TIMEOUT_MS, request_budget_ms(ai))
 
         ai%in_flight = .true.
         ai%trigger_pending = .false.
@@ -539,6 +561,10 @@ contains
             ai%in_flight = .false.
             return
         end if
+
+        ! It spoke, so the model is loaded and every later request can be held
+        ! to the tight budget.
+        ai%ever_answered = .true.
 
         body = ai_http_take(ai%req)
         call ai_http_abort(ai%req)
@@ -612,6 +638,19 @@ contains
         rev = editor%tabs(editor%active_tab_index)%doc_revision
     end function current_doc_rev
 
+    !> How long to give this request. Generous until the backend has answered
+    !> once, because that answer may be gated on loading the model.
+    pure function request_budget_ms(ai) result(ms)
+        type(ai_state_t), intent(in) :: ai
+        integer :: ms
+
+        if (ai%ever_answered) then
+            ms = TOTAL_TIMEOUT_MS
+        else
+            ms = WARMUP_TIMEOUT_MS
+        end if
+    end function request_budget_ms
+
     subroutine note_failure(ai)
         type(ai_state_t), intent(inout) :: ai
 
@@ -619,6 +658,11 @@ contains
         if (ai%consecutive_failures >= 3) then
             ai%health = AI_HEALTH_DOWN
             ai%last_error = 'backend unreachable'
+            ! Down, not gone. A backend is marked down for a stretch and then
+            ! tried again; the mark used to be permanent, so a backend that
+            ! was merely busy for a moment stayed "down" until the editor was
+            ! restarted.
+            ai%retry_after_ms = now_ms() + RETRY_DOWN_AFTER_MS
         end if
     end subroutine note_failure
 

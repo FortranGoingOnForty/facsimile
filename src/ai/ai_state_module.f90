@@ -55,6 +55,16 @@ module ai_state_module
         integer :: health = AI_HEALTH_UNKNOWN
         character(len=:), allocatable :: last_error
         integer :: consecutive_failures = 0
+        !> Has the backend ever answered in this session? The first request
+        !> may have to wait for the model to be loaded into memory, which is
+        !> far slower than any later one and must not be judged by the same
+        !> stopwatch.
+        logical :: ever_answered = .false.
+        !> When a backend marked down may be tried again. Without this the
+        !> mark is permanent: three failures during a model load and the
+        !> assistant is off for the rest of the session, with nothing the
+        !> user can do but restart.
+        integer(int64) :: retry_after_ms = 0
 
         ! ---- pending trigger, recorded by the keystroke path ----
         logical :: trigger_pending = .false.
