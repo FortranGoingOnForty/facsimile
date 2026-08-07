@@ -42,6 +42,12 @@ jobs:
       - name: Windows branches still compile
         run: make check-windows
 
+      # A module that flushes on its own puts half a frame on the terminal
+      # ahead of the other half. Invisible to the pty tests -- pyte sees the
+      # finished screen either way -- so it is pinned here instead.
+      - name: Nothing draws past the frame buffer
+        run: make check-render
+
       - name: No compiler warnings
         run: |
           if grep -iE '(^|[^-])warning:' /tmp/build.log; then

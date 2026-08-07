@@ -363,6 +363,24 @@ test-lsp: lsp-modules
 WIN_CHECK_SRC = src/utils/platform_wrapper.c src/terminal/pty_wrapper.c src/ai/ai_http.c \
                 src/lsp/lsp_process_wrapper.c
 
+# One frame, one write. Every module draws through terminal_write, which
+# batches into a buffer the renderer flushes once at the end of a frame.
+# A module that writes to the unit itself puts half a frame on the terminal
+# ahead of the other half -- which is exactly how the fortress window came
+# to flicker as it scrolled (360 write() syscalls over ten scroll steps,
+# against 12 once it went through the buffer).
+check-render:
+	@printf 'Checking that nothing draws past the frame buffer... '
+	@bad=`grep -rln 'write(output_unit' src/ || true`; \
+	if [ -n "$$bad" ]; then \
+		echo; \
+		echo "  these write to the unit instead of terminal_write:"; \
+		for f in $$bad; do echo "    $$f"; done; \
+		echo "  (see the note above this target -- it causes visible flicker)"; \
+		exit 1; \
+	fi
+	@echo ok
+
 check-windows:
 	@echo "Syntax-checking the Windows branches..."
 	@for f in $(WIN_CHECK_SRC); do \
