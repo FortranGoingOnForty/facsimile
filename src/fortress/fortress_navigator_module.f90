@@ -54,6 +54,11 @@ module fortress_navigator_module
     ! because BOTH drivers need it -- the blocking loop kept these as locals,
     ! which is why the modal could not see them.
     character(len=MAX_PATH) :: current_dir = '', last_dir = '', last_parent = ''
+    ! Set when we ascend: the directory we came OUT of. The selection cannot
+    ! be resolved at the time the key is pressed, because the listing that
+    ! contains that directory has not been read yet -- so record it and let
+    ! the refresh put the selection on it.
+    character(len=MAX_PATH) :: pending_reveal = ''
 
     ! Fuzzy search state
     character(len=32) :: search_buffer = ''
@@ -95,6 +100,7 @@ contains
         cancelled = .false.
         last_dir = ""
         last_parent = ""
+        pending_reveal = ''
         first_draw = .true.
         need_redraw = .true.
         last_selected = -1
@@ -140,6 +146,10 @@ contains
                 ! Just update parent_dir for consistency
                 parent_dir = get_parent_path(current_dir)
             end if
+
+            ! Now that the listing exists, put the selection back where an
+            ! ascent asked for it.
+            call resolve_pending_reveal()
 
             ! Find current directory in parent listing
             parent_selected = find_in_parent(current_dir, parent_files, parent_count)
@@ -441,6 +451,7 @@ contains
         search_buffer = ''
         last_dir = ''
         last_parent = ''
+        pending_reveal = ''
 
         if (present(start_dir)) then
             if (len_trim(start_dir) > 0) then
@@ -484,6 +495,17 @@ contains
         fortress_as_group = g_ft_as_group
     end function fortress_as_group
 
+    !> Put the selection back on the directory we ascended out of, now that
+    !> the listing that contains it has actually been read. Must run before
+    !> the scroll is adjusted, or the view follows the old selection.
+    subroutine resolve_pending_reveal()
+        if (len_trim(pending_reveal) == 0) return
+        if (current_count > 0) &
+            selected = find_in_parent(pending_reveal, current_files, &
+                                      current_count)
+        pending_reveal = ''
+    end subroutine resolve_pending_reveal
+
     !> Bring the listings and the selection into agreement with current_dir.
     !> The blocking loop does this at the top of every iteration; the modal
     !> does it before drawing.
@@ -503,6 +525,7 @@ contains
             last_dir = current_dir
         end if
 
+        call resolve_pending_reveal()
         parent_selected = find_in_parent(current_dir, parent_files, parent_count)
         if (selected < 1) selected = 1
         if (selected > current_count) selected = current_count
@@ -668,7 +691,12 @@ contains
             case ('D')  ! Left arrow - go to parent
                 temp_dir = curr_dir
                 curr_dir = get_parent_path(curr_dir)
-                sel = find_in_parent(temp_dir, files, file_count)
+                ! Deliberately NOT resolved here. `files` still describes the
+                ! directory being left; the parent is not read until the
+                ! listings refresh. Searching the child's own listing for the
+                ! child's name never matches, and the fallback put the
+                ! selection on row 1 -- so backing out always lost your place.
+                if (curr_dir /= temp_dir) pending_reveal = temp_dir
                 search_len = 0; search_buffer = ''
         end select
     end subroutine handle_arrow_key
