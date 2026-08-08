@@ -965,12 +965,20 @@ contains
     end function start_lsp_for_file
 
     ! Start ALL LSP servers that match a file (multi-server support)
-    subroutine start_all_lsp_servers_for_file(manager, filename, server_indices, num_servers)
+    !> `root_path` is the directory the server should treat as the project.
+    !> Servers are keyed by (language, root), so a caller that passes a
+    !> different root gets a different server -- which is the point: one
+    !> server rooted above several projects indexes all of them, and answers
+    !> "where is this defined" with whichever copy it likes. A jump from one
+    !> tab group then landed in another.
+    subroutine start_all_lsp_servers_for_file(manager, filename, server_indices, &
+                                              num_servers, root_path)
         type(lsp_manager_t), intent(inout) :: manager
         character(len=*), intent(in) :: filename
         integer, allocatable, intent(out) :: server_indices(:)
         integer, intent(out) :: num_servers
-        character(len=:), allocatable :: language
+        character(len=*), intent(in), optional :: root_path
+        character(len=:), allocatable :: language, root
         integer :: i, idx
         integer :: temp_indices(20)  ! Max 20 servers per file
 
@@ -981,12 +989,20 @@ contains
         language = get_language_for_file(filename)
         if (language == "") return
 
-        ! Use manager's workspace_root (set during init, defaults to cwd)
+        ! Absent, the manager's own root: the startup directory, which is
+        ! right for a tab that belongs to no group.
+        if (present(root_path)) then
+            root = trim(root_path)
+        else
+            root = trim(manager%workspace_root)
+        end if
+        if (len_trim(root) == 0) root = trim(manager%workspace_root)
+
         ! Find ALL configs that match this language and start servers
         do i = 1, manager%num_configs
             if (manager%configs(i)%language == language) then
                 ! Start or get server for this config
-                idx = get_or_start_server_by_config(manager, i, trim(manager%workspace_root))
+                idx = get_or_start_server_by_config(manager, i, root)
                 if (idx > 0 .and. num_servers < 20) then
                     num_servers = num_servers + 1
                     temp_indices(num_servers) = idx

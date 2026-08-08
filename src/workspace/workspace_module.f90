@@ -5,6 +5,7 @@ module workspace_module
     use iso_fortran_env, only: int32
     use iso_c_binding, only: c_int
     use editor_state_module, only: editor_state_t, create_tab, sync_pane_to_editor
+    use editor_state_module, only: set_pending_group_root, clear_pending_group_root
     use editor_state_module, only: group_create, group_find, group_add_member, &
                                    prune_empty_groups
     use editor_state_module, only: active_pane_of
@@ -531,6 +532,32 @@ contains
         end do
     end subroutine attach_group
 
+    !> Announce where the group this tab is about to join lives, so the tab's
+    !> language server is rooted there rather than at the session's directory.
+    !> Restore creates the tab first and attaches it to the group after, so by
+    !> the time the group is known the server has already been chosen.
+    subroutine pending_root_for(editor, file_gid, from_file, now, n_map)
+        use editor_state_module, only: group_find, set_pending_group_root, &
+                                       clear_pending_group_root
+        type(editor_state_t), intent(in) :: editor
+        integer(int32), intent(in) :: file_gid, from_file(:), now(:)
+        integer, intent(in) :: n_map
+        integer :: k, gidx
+
+        call clear_pending_group_root()
+        if (file_gid <= 0) return
+        do k = 1, n_map
+            if (from_file(k) == file_gid) then
+                gidx = group_find(editor, now(k))
+                if (gidx > 0) then
+                    if (allocated(editor%groups(gidx)%dir_path)) &
+                        call set_pending_group_root(trim(editor%groups(gidx)%dir_path))
+                end if
+                return
+            end if
+        end do
+    end subroutine pending_root_for
+
     !> The integer value of a "key": N line.
     integer function json_int(line)
         character(len=*), intent(in) :: line
@@ -808,7 +835,10 @@ contains
                     ! Check if this is an untitled tab (in-memory only)
                     if (index(pane_filename, '[Untitled') == 1) then
                         ! Untitled tab - create without loading from file
+                        call pending_root_for(editor, tab_group_file_id, &
+                                              gid_from_file, gid_now, n_gid_map)
                         call create_tab(editor, trim(pane_filename), tab_ok)
+                        call clear_pending_group_root()
                         if (.not. tab_ok) cycle
                         tab_idx = editor%active_tab_index
                         call attach_group(editor, tab_idx, tab_group_file_id, &
@@ -870,7 +900,10 @@ contains
                         end if
 
                         ! Create tab
+                        call pending_root_for(editor, tab_group_file_id, &
+                                              gid_from_file, gid_now, n_gid_map)
                         call create_tab(editor, trim(full_path), tab_ok)
+                        call clear_pending_group_root()
                         if (.not. tab_ok) cycle
                         tab_idx = editor%active_tab_index
                         call attach_group(editor, tab_idx, tab_group_file_id, &

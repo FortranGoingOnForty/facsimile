@@ -9915,6 +9915,7 @@ contains
     !> is -- a tab belongs to exactly one group, so a file open elsewhere moves
     !> rather than being duplicated.
     subroutine finish_group_creation(editor, buffer)
+        use editor_state_module, only: set_pending_group_root, clear_pending_group_root
         use editor_state_module, only: group_create, group_add_member, &
                                        find_tab_by_path_public, defer_tab
         type(editor_state_t), intent(inout) :: editor
@@ -9940,6 +9941,13 @@ contains
         call group_create(editor, group_picker_dir(), group_picker_name(), gid)
         first_tab = 0
 
+        ! Say where this group lives before opening anything into it. The
+        ! tabs below are created BEFORE they join the group, so without this
+        ! they would take their language server from whichever group was
+        ! active a moment ago -- and a server rooted over both is exactly how
+        ! a definition jumped from one group into another.
+        call set_pending_group_root(group_picker_dir())
+
         do i = 1, n
             path = group_picker_path(i)
             if (len_trim(path) == 0) cycle
@@ -9954,6 +9962,7 @@ contains
                 if (first_tab == 0) first_tab = tab_idx
             end if
         end do
+        call clear_pending_group_root()
 
         ! Defer every member except the one we are about to land on. A group
         ! of forty files then costs one file read rather than forty; the rest

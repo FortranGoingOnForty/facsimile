@@ -52,6 +52,7 @@ module editor_state_module
     public :: reorder_tab, reorder_group_block, set_group_ordinal
     public :: bar_slot_to_index
     public :: tab_is_resident, hydrate_tab, defer_tab
+    public :: set_pending_group_root, clear_pending_group_root
     public :: switch_to_tab, &
         switch_to_tab_with_buffer, get_active_tab_index, close_tab
     public :: split_pane_vertical, split_pane_horizontal, close_pane, get_active_pane_indices
@@ -237,6 +238,15 @@ module editor_state_module
         character(len=256) :: timed_message = ''
         integer(int64) :: timed_message_ms = 0  ! timestamp when set
     end type editor_state_t
+
+    !> The directory of a group that is being built RIGHT NOW.
+    !>
+    !> A group is created, then its files are opened, then each tab joins it.
+    !> So at the moment a tab is created it is not in the group yet, and
+    !> asking which group is active gives the one the user was in before --
+    !> which would root the new group's servers at the old group's directory.
+    !> The flow that builds a group announces the directory here first.
+    character(len=:), allocatable :: g_pending_group_root
 
 contains
 
@@ -474,6 +484,15 @@ contains
         end do
         res = .true.
     end function tab_is_resident
+
+    subroutine set_pending_group_root(dir)
+        character(len=*), intent(in) :: dir
+        g_pending_group_root = trim(dir)
+    end subroutine set_pending_group_root
+
+    subroutine clear_pending_group_root()
+        if (allocated(g_pending_group_root)) deallocate(g_pending_group_root)
+    end subroutine clear_pending_group_root
 
     !> Read a deferred tab's file in, and tell the language server about it.
     subroutine hydrate_tab(editor, tab_idx, status)
@@ -1230,10 +1249,39 @@ contains
         temp_tabs(new_index)%active_pane_index = 1
         temp_tabs(new_index)%modified = .false.
 
-        ! Start ALL LSP servers for this file (multi-server support)
-        call start_all_lsp_servers_for_file(editor%lsp_manager, filename, &
-                                           temp_tabs(new_index)%lsp_server_indices, &
-                                           temp_tabs(new_index)%num_lsp_servers)
+        ! Start ALL LSP servers for this file (multi-server support), rooted
+        ! at the group this tab is joining.
+        !
+        ! Servers are keyed by (language, root), so this is what keeps two
+        ! groups apart. With one root for the whole editor, every C file in
+        ! the process shared a single clangd rooted at the startup directory:
+        ! its index spanned every group, and "go to definition" could answer
+        ! with a copy of the symbol from a group the user was not in. A jump
+        ! from doctree/ landing in keytab/ was that, not a stray include.
+        !
+        ! A tab with no group keeps the startup root, which is right -- it
+        ! belongs to no smaller project than the one the editor was opened on.
+        block
+            integer(int32) :: gid
+            integer :: gidx
+            gid = active_group_id(editor)
+            gidx = group_find(editor, gid)
+            if (allocated(g_pending_group_root)) then
+                call start_all_lsp_servers_for_file(editor%lsp_manager, filename, &
+                                                   temp_tabs(new_index)%lsp_server_indices, &
+                                                   temp_tabs(new_index)%num_lsp_servers, &
+                                                   g_pending_group_root)
+            else if (gidx > 0 .and. allocated(editor%groups(gidx)%dir_path)) then
+                call start_all_lsp_servers_for_file(editor%lsp_manager, filename, &
+                                                   temp_tabs(new_index)%lsp_server_indices, &
+                                                   temp_tabs(new_index)%num_lsp_servers, &
+                                                   trim(editor%groups(gidx)%dir_path))
+            else
+                call start_all_lsp_servers_for_file(editor%lsp_manager, filename, &
+                                                   temp_tabs(new_index)%lsp_server_indices, &
+                                                   temp_tabs(new_index)%num_lsp_servers)
+            end if
+        end block
 
         ! Initialize document sync for LSP if we have servers
         if (temp_tabs(new_index)%num_lsp_servers > 0) then
