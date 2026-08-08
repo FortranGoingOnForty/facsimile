@@ -4,6 +4,7 @@
 module main_lsp_callbacks
     use editor_state_module, only: editor_state_t
     use editor_state_module, only: active_pane_of
+    use command_handler_module, only: g_lsp_ui_changed
     implicit none
     private
     public :: bind_diagnostics_editor, handle_diagnostics
@@ -29,6 +30,14 @@ contains
         ! diagnostics from different servers stay separate (multi-LSP)
         call parse_diagnostics_from_params_with_server(cb_editor%diagnostics, &
             notification%params, server_index)
+
+        ! And say so, or the screen keeps showing the last set. Diagnostics
+        ! arrive on their own schedule, with no keystroke behind them, so
+        ! nothing else in the loop knows the frame is now wrong. Fix the
+        ! error under the caret and the message sat there until something
+        ! unrelated forced a redraw -- which read as "the server has not
+        ! noticed my edit" when the server had noticed and said so already.
+        g_lsp_ui_changed = .true.
     end subroutine handle_diagnostics
 
 end module main_lsp_callbacks

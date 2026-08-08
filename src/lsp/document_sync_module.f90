@@ -77,11 +77,19 @@ contains
 
         if (.not. sync%has_pending_changes) return
 
+        ! `force` says "do not wait for the debounce", NOT "do not flush".
+        ! It used to select between the two, so the main loop's periodic call
+        ! -- which passes .false. -- disabled the elapsed check instead of
+        ! asking for it, and the debounce never fired at all. Changes then
+        ! reached the server only when something else forced a flush, which
+        ! in practice meant a completion request: edit, do not type another
+        ! word character, and the server was still holding the old text.
+        ! That is a stale diagnostic, a stale hover and a stale definition,
+        ! and it is why the completion path had to force a flush of its own
+        ! before it could trust a position.
         should_flush = .false.
-        if (present(force)) then
-            should_flush = force
-        else
-            ! Check if enough time has elapsed
+        if (present(force)) should_flush = force
+        if (.not. should_flush) then
             current_time = get_current_time()
             elapsed = current_time - sync%last_change_time
             should_flush = (elapsed >= sync%sync_delay)
