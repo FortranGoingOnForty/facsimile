@@ -26,6 +26,7 @@ Requires: pip3 install pexpect pyte
 """
 
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -122,6 +123,19 @@ class Editor:
                 return row.index("╭"), row.index("╮")
         return None, None
 
+    def current_pane_col(self):
+        """First column of the CURRENT pane, 0-based.
+
+        The parent pane takes 30% of the interior, then three cells of
+        separator (" | "), then the current pane. Landing in the separator is
+        landing in neither, which is how the first version of the click test
+        managed to click a row and select nothing."""
+        l, r = self.box_cols()
+        if l is None:
+            return None
+        left_w = (r - l - 1) * 3 // 10
+        return l + 1 + left_w + 3
+
     def selection(self):
         """The highlighted entry in the CURRENT (right-hand) pane.
 
@@ -129,10 +143,10 @@ class Editor:
         never appear in screen.display -- comparing rendered text would call a
         moved selection 'no change'. The parent pane is the left 30% of the
         window's interior, so the current pane is everything right of that."""
-        l, r = self.box_cols()
-        if l is None:
+        split = self.current_pane_col()
+        if split is None:
             return None
-        split = l + 1 + (r - l - 1) * 3 // 10
+        r = self.box_cols()[1]
         for y in range(ROWS):
             cells = [self.screen.buffer[y][x] for x in range(split, min(r, COLS))]
             hit = "".join(c.data for c in cells if c.underscore and c.bold).strip()
@@ -276,6 +290,92 @@ class BigDir(Editor):
         self.child = pexpect.spawn(binary, [self.target], dimensions=(ROWS, COLS),
                                    env=env, cwd=self.work)
         self.drain(2.5)
+
+
+def sgr_click(row, col):
+    """An SGR mouse press and release at a 0-based screen cell (the wire
+    protocol is 1-based)."""
+    return ("\x1b[<0;%d;%dM" % (col + 1, row + 1),
+            "\x1b[<0;%d;%dm" % (col + 1, row + 1))
+
+
+def caret(s):
+    """'Ln 4, Col 7' from the status bar, or '' if it is not showing."""
+    m = re.search(r"Ln \d+, Col \d+", s.screen.display[-1])
+    return m.group(0) if m else ""
+
+
+def test_a_click_inside_the_window_picks_a_row(binary):
+    print("\nClicking a row selects it, and does not reach the document")
+    s = BigDir(binary)
+    try:
+        # Put the caret somewhere identifiable first, so "unchanged" means
+        # something more than "still at the top left".
+        s.send("\x1b[B\x1b[B\x1b[C\x1b[C\x1b[C", 0.6)
+        caret_before = caret(s)
+        check(caret_before == "Ln 3, Col 4",
+              "the caret starts somewhere identifiable", f"{caret_before!r}")
+
+        s.send(CTRL_O, 1.8)
+        check(s.has_box(), "the window opened", s.text()[:200])
+        start = s.selection()
+        check(start == "d00/", "starts at the top", f"{start!r}")
+
+        # Find the row showing d04 in the CURRENT pane, and click it. The
+        # region claim is what makes this reach the browser at all: without
+        # it the click found no region, fell through, and moved the caret in
+        # the document behind the window.
+        r = s.box_cols()[1]
+        split = s.current_pane_col()
+        target_row = None
+        for y in range(ROWS):
+            seg = s.screen.display[y][split:r]
+            if "d04/" in seg:
+                target_row = y
+                break
+        check(target_row is not None, "found the row for d04/", s.text()[:300])
+        if target_row is None:
+            return
+
+        press, release = sgr_click(target_row, split + 1)
+        s.send(press, 0.4)
+        s.send(release, 0.6)
+        check(wait_for_selection(s, "d04/"),
+              "the clicked row is now selected", f"{s.selection()!r}")
+        check(s.has_box(), "and the window is still open")
+
+        # The other half of the claim. With no region registered the click
+        # found nothing, fell through to the document underneath and moved
+        # the caret there -- through a window the user was looking at.
+        s.send("\x1b", 1.4)
+        check(not s.has_box(), "the window closed on Esc", s.text()[:200])
+        check(caret(s) == caret_before,
+              "and the click never reached the document behind it",
+              f"{caret_before!r} -> {caret(s)!r}")
+    finally:
+        s.close()
+
+
+def test_a_click_on_the_parent_pane_does_not_move_the_selection(binary):
+    print("\nA click on the left-hand pane is swallowed, not misread")
+    s = BigDir(binary)
+    try:
+        s.send(CTRL_O, 1.8)
+        for _ in range(3):
+            s.send(DOWN, 0.25)
+        before = s.selection()
+        check(before == "d03/", "moved down three", f"{before!r}")
+
+        l, r = s.box_cols()
+        press, release = sgr_click(l + 3, l + 2)   # inside the parent pane
+        s.send(press, 0.4)
+        s.send(release, 0.6)
+        check(s.selection() == before,
+              "the selection did not jump to an unrelated row",
+              f"{before!r} -> {s.selection()!r}")
+        check(s.has_box(), "and the window is still open")
+    finally:
+        s.close()
 
 
 def test_home_end_and_the_page_keys_move(binary):
@@ -423,7 +523,9 @@ def main():
                test_ascending_past_the_top_is_still_sane,
                test_the_full_screen_browser_does_it_too,
                test_home_end_and_the_page_keys_move,
-               test_the_page_keys_reach_the_full_screen_browser_too):
+               test_the_page_keys_reach_the_full_screen_browser_too,
+               test_a_click_inside_the_window_picks_a_row,
+               test_a_click_on_the_parent_pane_does_not_move_the_selection):
         try:
             fn(binary)
         except Exception as exc:              # noqa: BLE001

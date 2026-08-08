@@ -641,7 +641,7 @@ contains
     !> the box is swallowed so it cannot reach the document underneath.
     logical function fortress_click(row, col) result(claimed)
         integer, intent(in) :: row, col
-        integer :: idx
+        integer :: idx, vis, left_w
 
         claimed = .false.
         if (.not. g_ft_visible) return
@@ -649,9 +649,21 @@ contains
         if (col < g_ft_col0 .or. col > g_ft_col0 + g_ft_w - 1) return
         claimed = .true.
 
-        ! Rows inside the listing, below the two header rows the display
-        ! draws at the top of its area.
-        idx = (row - (g_ft_row0 + 1) - 2) + 1 + scroll_offset
+        ! Given the inner rect and told to draw no chrome, the display puts
+        ! visible row i at inner_row - 1 + i -- which is the box's own row0
+        ! plus i. The old arithmetic here subtracted two header rows that a
+        ! window does not have, so it would have picked the wrong entry; it
+        ! was never noticed because no click ever reached this function.
+        vis = row - g_ft_row0
+        if (vis < 1 .or. vis > g_ft_inner_h) return
+
+        ! Only the current pane. The left thirty per cent lists the parent's
+        ! siblings, and moving the selection in response to a click there
+        ! would point at an unrelated entry. Swallowed, not acted on.
+        left_w = ((g_ft_w - 2) * 3) / 10
+        if (col < g_ft_col0 + 1 + left_w + 3) return
+
+        idx = vis + scroll_offset
         if (idx >= 1 .and. idx <= current_count) selected = idx
     end function fortress_click
 
@@ -660,6 +672,7 @@ contains
     subroutine render_fortress(top_row, bottom_row, left_col, right_col)
         use modal_box_module, only: box_frame, box_inner_rect
         use fortress_display_module, only: draw_fortress_interface
+        use clickable_region_module, only: region_add, REGION_BLOCK
         integer, intent(in) :: top_row, bottom_row, left_col, right_col
         integer :: avail_h, avail_w, h, w, r0, c0
         integer :: ir, ic, ih, iw
@@ -682,6 +695,13 @@ contains
 
         call box_inner_rect(r0, c0, h, w, ir, ic, ih, iw)
         g_ft_inner_h = ih
+
+        ! Claim the rectangle, as the group dialog does. Without this a click
+        ! inside the window found no region, fell through to the document
+        ! underneath and moved the caret there -- and no click could ever
+        ! reach fortress_click, which was written for exactly this and was
+        ! never wired up.
+        call region_add(REGION_BLOCK, r0, r0 + h - 1, c0, c0 + w - 1)
 
         ! The display reserves three rows of its own (header, blank, footer).
         ! The frame carries the title and the key hints, so the display is

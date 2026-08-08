@@ -718,10 +718,6 @@ contains
                             ! tree; it is not now that a right-click on the tab
                             ! bar opens it, which would land a mouse user in a
                             ! box they cannot click.
-                            if (fortress_click(mrow, mcol)) then
-                                g_lsp_ui_changed = .true.
-                                return
-                            end if
                             if (group_picker_click(mrow, mcol)) then
                                 if (group_picker_result() == GP_CONFIRMED) then
                                     call finish_group_creation(editor, buffer)
@@ -730,8 +726,11 @@ contains
                             end if
                             return
                         case (REGION_BLOCK)
-                            ! A panel owns this cell. Swallow the click rather
-                            ! than letting it move the caret underneath.
+                            ! A panel owns this cell. Offer it to the file
+                            ! browser first -- it maps a row back to a list
+                            ! entry -- then swallow it either way, rather than
+                            ! letting it move the caret underneath.
+                            if (fortress_click(mrow, mcol)) g_lsp_ui_changed = .true.
                             return
                         end select
                     end if
