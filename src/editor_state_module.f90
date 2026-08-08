@@ -1352,18 +1352,29 @@ contains
         block
             integer(int32) :: gid
             integer :: gidx
-            gid = active_group_id(editor)
-            gidx = group_find(editor, gid)
+            character(len=:), allocatable :: group_root
+
             if (allocated(g_pending_group_root)) then
+                group_root = g_pending_group_root
+            else
+                ! Two separate tests, NOT `gidx > 0 .and. allocated(...)`:
+                ! Fortran does not short-circuit .and., so the compiler may
+                ! evaluate the right operand with gidx = 0 -- which under
+                ! -fcheck=bounds is a hard trap at startup, and under -O2 an
+                ! out-of-bounds read that happens to look like an answer.
+                gid = active_group_id(editor)
+                gidx = group_find(editor, gid)
+                if (gidx > 0) then
+                    if (allocated(editor%groups(gidx)%dir_path)) &
+                        group_root = trim(editor%groups(gidx)%dir_path)
+                end if
+            end if
+
+            if (allocated(group_root)) then
                 call start_all_lsp_servers_for_file(editor%lsp_manager, filename, &
                                                    temp_tabs(new_index)%lsp_server_indices, &
                                                    temp_tabs(new_index)%num_lsp_servers, &
-                                                   g_pending_group_root)
-            else if (gidx > 0 .and. allocated(editor%groups(gidx)%dir_path)) then
-                call start_all_lsp_servers_for_file(editor%lsp_manager, filename, &
-                                                   temp_tabs(new_index)%lsp_server_indices, &
-                                                   temp_tabs(new_index)%num_lsp_servers, &
-                                                   trim(editor%groups(gidx)%dir_path))
+                                                   group_root)
             else
                 call start_all_lsp_servers_for_file(editor%lsp_manager, filename, &
                                                    temp_tabs(new_index)%lsp_server_indices, &

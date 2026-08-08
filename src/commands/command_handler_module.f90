@@ -5622,16 +5622,21 @@ contains
             call get_active_pane_indices(editor, tab_idx, pane_idx)
             in_active_pane = .false.
 
-            if (tab_idx > 0 .and. pane_idx > 0 .and. allocated(editor%tabs(tab_idx)%panes)) then
-                associate(pane => editor%tabs(tab_idx)%panes(pane_idx))
-                    ! Check if mouse is still in the active pane
-                    if (row >= pane%screen_row .and. &
-                        row < pane%screen_row + pane%screen_height .and. &
-                        col >= pane%screen_col .and. &
-                        col < pane%screen_col + pane%screen_width) then
-                        in_active_pane = .true.
-                    end if
-                end associate
+            ! Nested, not fused with .and.: Fortran does not short-circuit, so
+            ! `tab_idx > 0 .and. allocated(editor%tabs(tab_idx)%panes)` may
+            ! subscript tabs(0) before the guard is ever consulted.
+            if (tab_idx > 0 .and. pane_idx > 0) then
+                if (allocated(editor%tabs(tab_idx)%panes)) then
+                    associate(pane => editor%tabs(tab_idx)%panes(pane_idx))
+                        ! Check if mouse is still in the active pane
+                        if (row >= pane%screen_row .and. &
+                            row < pane%screen_row + pane%screen_height .and. &
+                            col >= pane%screen_col .and. &
+                            col < pane%screen_col + pane%screen_width) then
+                            in_active_pane = .true.
+                        end if
+                    end associate
+                end if
             end if
 
             ! Only process drag if within active pane
@@ -5731,7 +5736,7 @@ contains
         integer :: line_count
         integer :: tab_idx, pane_idx, i
         integer :: pane_row, click_cells, vp_col
-        logical :: in_pane
+        logical :: in_pane, use_panes
 
         line_count = buffer_get_line_count(buffer)
         in_pane = .false.
@@ -5752,7 +5757,14 @@ contains
 
         ! Check if we're in a pane system
         call get_active_pane_indices(editor, tab_idx, pane_idx)
-        if (tab_idx > 0 .and. pane_idx > 0 .and. allocated(editor%tabs(tab_idx)%panes)) then
+        ! Decided in two steps rather than one fused .and.: Fortran does not
+        ! short-circuit, so testing allocated(editor%tabs(tab_idx)%panes) in
+        ! the same expression as tab_idx > 0 can subscript tabs(0).
+        use_panes = .false.
+        if (tab_idx > 0 .and. pane_idx > 0) then
+            if (allocated(editor%tabs(tab_idx)%panes)) use_panes = .true.
+        end if
+        if (use_panes) then
             ! Find which pane was clicked
             do i = 1, size(editor%tabs(tab_idx)%panes)
                 ! Check if click is within this pane's boundaries
