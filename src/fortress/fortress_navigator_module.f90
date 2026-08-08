@@ -59,6 +59,10 @@ module fortress_navigator_module
     ! contains that directory has not been read yet -- so record it and let
     ! the refresh put the selection on it.
     character(len=MAX_PATH) :: pending_reveal = ''
+    ! How many rows the list pane last had. A page key has to move by what
+    ! the user can see, and the two drivers size their pane differently, so
+    ! whichever drew last records it.
+    integer :: vis_h_last = 10
 
     ! Fuzzy search state
     character(len=32) :: search_buffer = ''
@@ -164,6 +168,7 @@ contains
             ! to the top: all siblings list from row 1 down, scrolling
             ! only if the current directory would fall below the fold
             ! (no centering margin) — matches reference fortress.
+            vis_h_last = max(1, rows - 4)
             call adjust_scroll(selected, scroll_offset, rows - 4)
             call adjust_parent_scroll(parent_selected, &
                 parent_scroll_offset, parent_count, rows - 4)
@@ -419,6 +424,22 @@ contains
                 ! 13 is Enter; modifier 2 is Shift (the encoding is 1 + bits).
                 if (c == iachar('u') .and. cp == 13 .and. mods == 2) then
                     kind = NAV_GROUP
+                else if (c == iachar('~')) then
+                    ! The tilde-terminated keys. Reported this way they used
+                    ! to be swallowed whole, so a long directory could only
+                    ! be walked one row at a time.
+                    select case (cp)
+                    case (1, 7)
+                        key = 'H'; kind = NAV_ARROW
+                    case (4, 8)
+                        key = 'F'; kind = NAV_ARROW
+                    case (5)
+                        key = 'P'; kind = NAV_ARROW
+                    case (6)
+                        key = 'N'; kind = NAV_ARROW
+                    case default
+                        kind = ESC_OTHER
+                    end select
                 else
                     kind = ESC_OTHER
                 end if
@@ -525,6 +546,7 @@ contains
             last_dir = current_dir
         end if
 
+        vis_h_last = max(1, vis_h)
         call resolve_pending_reveal()
         parent_selected = find_in_parent(current_dir, parent_files, parent_count)
         if (selected < 1) selected = 1
@@ -558,6 +580,18 @@ contains
                                   current_files, current_is_dir, current_count)
         case ('left')
             call handle_arrow_key('D', selected, current_dir, temp_dir, &
+                                  current_files, current_is_dir, current_count)
+        case ('home')
+            call handle_arrow_key('H', selected, current_dir, temp_dir, &
+                                  current_files, current_is_dir, current_count)
+        case ('end')
+            call handle_arrow_key('F', selected, current_dir, temp_dir, &
+                                  current_files, current_is_dir, current_count)
+        case ('pageup')
+            call handle_arrow_key('P', selected, current_dir, temp_dir, &
+                                  current_files, current_is_dir, current_count)
+        case ('pagedown')
+            call handle_arrow_key('N', selected, current_dir, temp_dir, &
                                   current_files, current_is_dir, current_count)
         case ('esc')
             g_ft_result = FT_CANCELLED
@@ -679,6 +713,20 @@ contains
 
             case ('B')  ! Down arrow
                 if (sel < file_count) sel = sel + 1
+
+            ! Home/End/PageUp/PageDown. A directory with a few hundred
+            ! entries was only reachable one row at a time.
+            case ('H')  ! Home
+                sel = 1
+
+            case ('F')  ! End
+                sel = max(1, file_count)
+
+            case ('P')  ! Page up
+                sel = max(1, sel - max(1, vis_h_last - 1))
+
+            case ('N')  ! Page down
+                sel = min(max(1, file_count), sel + max(1, vis_h_last - 1))
 
             case ('C')  ! Right arrow - enter directory
                 if (file_count > 0 .and. is_dir(sel)) then

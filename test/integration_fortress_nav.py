@@ -155,6 +155,27 @@ def walk_to(s, name, limit=20):
     return s.selection() == name
 
 
+def wait_for_selection(s, name, limit=6.0):
+    """Poll rather than sleep a fixed amount. A wrong selection is wrong
+    however long you wait, so this cannot mask the defect -- it only stops a
+    loaded machine from reporting a slow repaint as one."""
+    end = time.time() + limit
+    while time.time() < end:
+        if s.selection() == name:
+            return True
+        s.drain(0.3)
+    return s.selection() == name
+
+
+def wait_for_text(s, needle, limit=6.0):
+    end = time.time() + limit
+    while time.time() < end:
+        if needle in s.text():
+            return True
+        s.drain(0.3)
+    return needle in s.text()
+
+
 def test_left_returns_to_the_directory_you_left(binary):
     print("\nBacking out of a directory selects the one you backed out of")
     s = Editor(binary)
@@ -169,19 +190,17 @@ def test_left_returns_to_the_directory_you_left(binary):
         if s.selection() != target:
             return
 
-        s.send(RIGHT, 0.8)
-        inside = s.text()
-        check("inside_foxtrot" in inside,
-              "Right descended into it", inside[:300])
+        s.send(RIGHT, 0.5)
+        check(wait_for_text(s, "inside_foxtrot"),
+              "Right descended into it", s.text()[:300])
 
-        s.send(LEFT, 0.8)
+        s.send(LEFT, 0.5)
+        # The assertion. It used to be row 1 -- 'alpha/' -- every time.
+        ok = wait_for_selection(s, target)
         check("inside_foxtrot" not in s.text(),
               "Left came back out", s.text()[:300])
-        # The assertion. It used to be row 1 -- 'alpha/' -- every time.
-        got = s.selection()
-        check(got == target,
-              "and the selection is on the directory just left",
-              f"expected {target!r}, got {got!r}")
+        check(ok, "and the selection is on the directory just left",
+              f"expected {target!r}, got {s.selection()!r}")
     finally:
         s.close()
 
@@ -194,18 +213,18 @@ def test_it_survives_a_second_round_trip(binary):
         if not walk_to(s, "charlie/"):
             check(False, "walked onto charlie/", f"{s.selection()!r}")
             return
-        s.send(RIGHT, 0.8)
-        s.send(LEFT, 0.8)
-        check(s.selection() == "charlie/", "back on charlie/",
+        s.send(RIGHT, 0.5)
+        s.send(LEFT, 0.5)
+        check(wait_for_selection(s, "charlie/"), "back on charlie/",
               f"{s.selection()!r}")
         # Move on, descend somewhere else, and come back: the remembered
         # directory has to be the one just left, not the first one ever left.
         if not walk_to(s, "delta/"):
             check(False, "walked onto delta/", f"{s.selection()!r}")
             return
-        s.send(RIGHT, 0.8)
-        s.send(LEFT, 0.8)
-        check(s.selection() == "delta/",
+        s.send(RIGHT, 0.5)
+        s.send(LEFT, 0.5)
+        check(wait_for_selection(s, "delta/"),
               "and on delta/ after the second trip, not the earlier one",
               f"{s.selection()!r}")
     finally:
@@ -223,6 +242,99 @@ def test_ascending_past_the_top_is_still_sane(binary):
         check(s.has_box(), "and the window is still up", s.text()[:200])
         check(s.selection() is not None,
               "with something selected", f"{s.selection()!r}")
+    finally:
+        s.close()
+
+
+class BigDir(Editor):
+    """A directory with more entries than fit, so a page key has somewhere to
+    go. Home/End/PageUp/PageDown did nothing in either driver: Home and End
+    reached handle_arrow_key as 'H' and 'F' and matched no case, and the two
+    tilde-terminated page keys were swallowed by the escape parser as
+    unrecognised CSI. A few hundred entries were reachable one row at a
+    time."""
+
+    COUNT = 40
+
+    def __init__(self, binary):
+        self.home = tempfile.mkdtemp(prefix="fac_fb_home_")
+        os.makedirs(os.path.join(self.home, ".config", "fac"))
+        with open(os.path.join(self.home, ".config", "fac", "state.json"), "w") as f:
+            f.write('{"first_run_completed": true, "lsp_installer_seen": true,'
+                    ' "version": "1.0"}\n')
+        self.work = tempfile.mkdtemp(prefix="fac_fb_work_")
+        for i in range(self.COUNT):
+            os.makedirs(os.path.join(self.work, "d%02d" % i))
+        self.target = os.path.join(self.work, "zz_top.c")
+        with open(self.target, "w") as f:
+            f.writelines("int line%02d = %d;\n" % (i, i) for i in range(1, 20))
+        env = {**os.environ, "TERM": "xterm-256color", "HOME": self.home}
+        env.pop("XDG_CONFIG_HOME", None)
+        env.pop("FAC_SESSION", None)
+        self.screen = pyte.Screen(COLS, ROWS)
+        self.stream = pyte.Stream(self.screen)
+        self.child = pexpect.spawn(binary, [self.target], dimensions=(ROWS, COLS),
+                                   env=env, cwd=self.work)
+        self.drain(2.5)
+
+
+def test_home_end_and_the_page_keys_move(binary):
+    print("\nHome, End and the page keys move through a long listing")
+    s = BigDir(binary)
+    try:
+        s.send(CTRL_O, 1.8)
+        check(s.has_box(), "the window opened", s.text()[:200])
+        first = s.selection()
+        check(first == "d00/", "it starts at the top", f"{first!r}")
+
+        s.send("\x1b[F", 0.8)                 # End
+        # The last entry: directories sort before the file, so it is the file.
+        check(s.selection() == "zz_top.c",
+              "End reaches the bottom of the listing", f"{s.selection()!r}")
+
+        # Move off row 1 with arrows FIRST, so Home has something to undo.
+        # Reaching it from a selection that never left the top passes whether
+        # or not Home does anything at all.
+        s.send("\x1b[H", 0.8)                 # Home
+        for _ in range(5):
+            s.send(DOWN, 0.2)
+        check(s.selection() == "d05/", "arrows still step one row",
+              f"{s.selection()!r}")
+        s.send("\x1b[H", 0.8)                 # Home
+        check(s.selection() == "d00/", "Home comes back to the top",
+              f"{s.selection()!r}")
+
+        s.send("\x1b[6~", 0.8)                # PageDown
+        after = s.selection()
+        check(after not in ("d00/", "d01/", None),
+              "PageDown moves by more than a row", f"{after!r}")
+
+        # Likewise from the bottom, not from wherever PageDown left us.
+        s.send("\x1b[F", 0.6)
+        s.send("\x1b[5~", 0.8)                # PageUp
+        check(s.selection() not in ("zz_top.c", None),
+              "and PageUp moves back up", f"{s.selection()!r}")
+    finally:
+        s.close()
+
+
+def test_the_page_keys_reach_the_full_screen_browser_too(binary):
+    print("\nThe same keys work in the full-screen browser")
+    s = BigFullScreen(binary)
+    try:
+        check("FORTRESS" in s.text(), "the browser is up", s.text()[:200])
+        check(s.selection() == "d00/", "starts at the top", f"{s.selection()!r}")
+        s.send("\x1b[F", 0.8)
+        end_sel = s.selection()
+        check(end_sel not in ("d00/", None),
+              "End moved off the first row", f"{end_sel!r}")
+        # From the bottom, so Home is not asserted against a selection that
+        # never moved.
+        s.send("\x1b[H", 0.8)
+        check(s.selection() == "d00/", "Home came back", f"{s.selection()!r}")
+        s.send("\x1b[6~", 0.8)
+        check(s.selection() not in ("d00/", "d01/", None),
+              "PageDown moved by more than a row", f"{s.selection()!r}")
     finally:
         s.close()
 
@@ -261,6 +373,31 @@ class FullScreen(Editor):
         return -1, COLS
 
 
+class BigFullScreen(FullScreen):
+    """The long listing, in the blocking driver. The page keys had to be
+    taught to its own escape parser separately -- it does not go through the
+    editor's input layer."""
+
+    def __init__(self, binary):
+        self.home = tempfile.mkdtemp(prefix="fac_fbs_home_")
+        os.makedirs(os.path.join(self.home, ".config", "fac"))
+        with open(os.path.join(self.home, ".config", "fac", "state.json"), "w") as f:
+            f.write('{"first_run_completed": true, "lsp_installer_seen": true,'
+                    ' "version": "1.0"}\n')
+        self.work = tempfile.mkdtemp(prefix="fac_fbs_work_")
+        for i in range(BigDir.COUNT):
+            os.makedirs(os.path.join(self.work, "d%02d" % i))
+        env = {**os.environ, "TERM": "xterm-256color", "HOME": self.home}
+        env.pop("XDG_CONFIG_HOME", None)
+        env.pop("FAC_SESSION", None)
+        self.screen = pyte.Screen(COLS, ROWS)
+        self.stream = pyte.Stream(self.screen)
+        self.child = pexpect.spawn(binary, [], dimensions=(ROWS, COLS),
+                                   env=env, cwd=self.work)
+        self.drain(2.5)
+        self.send("b", 1.5)                   # welcome menu -> browse
+
+
 def test_the_full_screen_browser_does_it_too(binary):
     print("\nThe full-screen browser keeps your place the same way")
     s = FullScreen(binary)
@@ -270,10 +407,10 @@ def test_the_full_screen_browser_does_it_too(binary):
             check(False, "walked onto echo/", f"{s.selection()!r}")
             return
         check(True, "walked the selection onto a directory")
-        s.send(RIGHT, 0.8)
-        check("inside_echo" in s.text(), "Right descended", s.text()[:300])
-        s.send(LEFT, 0.8)
-        check(s.selection() == "echo/",
+        s.send(RIGHT, 0.5)
+        check(wait_for_text(s, "inside_echo"), "Right descended", s.text()[:300])
+        s.send(LEFT, 0.5)
+        check(wait_for_selection(s, "echo/"),
               "and Left came back onto it", f"{s.selection()!r}")
     finally:
         s.close()
@@ -284,7 +421,9 @@ def main():
     for fn in (test_left_returns_to_the_directory_you_left,
                test_it_survives_a_second_round_trip,
                test_ascending_past_the_top_is_still_sane,
-               test_the_full_screen_browser_does_it_too):
+               test_the_full_screen_browser_does_it_too,
+               test_home_end_and_the_page_keys_move,
+               test_the_page_keys_reach_the_full_screen_browser_too):
         try:
             fn(binary)
         except Exception as exc:              # noqa: BLE001
