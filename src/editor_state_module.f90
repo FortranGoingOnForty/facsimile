@@ -782,7 +782,95 @@ contains
         end do
         editor%tabs(tab_idx)%group_id = gid
         editor%tabs(tab_idx)%group_ordinal = max_ord + 1
+
+        call reroot_tab_servers(editor, tab_idx)
     end subroutine group_add_member
+
+    !> Move a tab to the language server rooted at its group, if it is not on
+    !> that one already.
+    !>
+    !> Servers are keyed by (language, root), and a tab picks its server when
+    !> it is created -- which is before it joins a group. The flows that build
+    !> a group say where it lives in advance, so their tabs start on the right
+    !> server. A tab that joins a group LATER has no such warning: it keeps
+    !> whichever server it was opened with, and one server rooted above two
+    !> projects answers "where is this defined" with either of them.
+    !>
+    !> A deferred tab is only re-pointed, not announced: it holds no text yet,
+    !> and hydrate_tab tells the server it is open when it reads the file.
+    subroutine reroot_tab_servers(editor, tab_idx)
+        use text_buffer_module, only: buffer_to_string
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: tab_idx
+        integer :: gidx, old_primary, srv, p
+        integer, allocatable :: new_indices(:)
+        integer :: new_count
+        character(len=:), allocatable :: root, content
+
+        if (editor%tabs(tab_idx)%num_lsp_servers < 1) return
+        if (.not. allocated(editor%tabs(tab_idx)%lsp_server_indices)) return
+        if (.not. allocated(editor%tabs(tab_idx)%filename)) return
+
+        gidx = group_find(editor, editor%tabs(tab_idx)%group_id)
+        if (gidx < 1) return
+        if (.not. allocated(editor%groups(gidx)%dir_path)) return
+        root = no_trailing_slash(trim(editor%groups(gidx)%dir_path))
+        if (len_trim(root) == 0) return
+
+        ! Already there? Then this is every ordinary case, and it costs one
+        ! string compare.
+        old_primary = editor%tabs(tab_idx)%lsp_server_indices(1)
+        if (old_primary >= 1 .and. old_primary <= editor%lsp_manager%num_servers) then
+            if (allocated(editor%lsp_manager%servers(old_primary)%root_path)) then
+                if (no_trailing_slash(trim( &
+                        editor%lsp_manager%servers(old_primary)%root_path)) == root) return
+            end if
+        end if
+
+        call start_all_lsp_servers_for_file(editor%lsp_manager, &
+                 editor%tabs(tab_idx)%filename, new_indices, new_count, root)
+        if (new_count < 1) return
+
+        editor%tabs(tab_idx)%lsp_server_indices = new_indices
+        editor%tabs(tab_idx)%num_lsp_servers = new_count
+
+        ! The new server has never heard of this file. Tell it, with the text
+        ! as it stands -- which may differ from disk, and disk is all it could
+        ! read for itself.
+        if (tab_is_resident(editor, tab_idx)) then
+            p = max(1, editor%tabs(tab_idx)%active_pane_index)
+            if (allocated(editor%tabs(tab_idx)%panes)) then
+                if (p <= size(editor%tabs(tab_idx)%panes)) then
+                    content = buffer_to_string(editor%tabs(tab_idx)%panes(p)%buffer)
+                    do srv = 1, new_count
+                        call notify_file_opened(editor%lsp_manager, new_indices(srv), &
+                                                editor%tabs(tab_idx)%filename, content)
+                    end do
+                end if
+            end if
+        end if
+
+        ! Point the document sync at the new primary, or edits would go on
+        ! being reported to the server this tab no longer uses.
+        call init_document_sync(editor%tabs(tab_idx)%document_sync, &
+                                'file://' // trim(editor%tabs(tab_idx)%filename), &
+                                new_indices(1))
+
+    contains
+
+        !> Two spellings of the same directory must not look like two roots:
+        !> that would start a second server for a group whose members are
+        !> already on the right one, which is a whole clangd for nothing.
+        pure function no_trailing_slash(p) result(q)
+            character(len=*), intent(in) :: p
+            character(len=:), allocatable :: q
+            q = trim(p)
+            do while (len(q) > 1 .and. q(len(q):len(q)) == '/')
+                q = q(1:len(q)-1)
+            end do
+        end function no_trailing_slash
+
+    end subroutine reroot_tab_servers
 
     !> Take a tab out of its group, compacting the remaining ordinals and
     !> dissolving the group if that was the last member.
