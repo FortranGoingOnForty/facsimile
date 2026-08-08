@@ -168,6 +168,13 @@ module command_handler_module
     public :: session_requests_tick
     public :: backup_tick, backup_configure
 
+    ! How a workspace edit turned out, for the message afterwards. A rename
+    ! reaches files that were never open, so "3 changes applied" says nothing
+    ! about whether it reached all of them -- and a rename that reached only
+    ! some is the one case the user most needs told about.
+    integer :: g_edit_files_touched = 0
+    integer :: g_edit_files_skipped = 0
+
     ! Flag to track if LSP modified the buffer (for immediate rendering)
     logical :: g_lsp_modified_buffer = .false.
     ! Flag to track if LSP changed UI panels (for immediate rendering)
@@ -11925,8 +11932,22 @@ contains
 
         if (changes_applied > 0) then
             block
-                character(len=64) :: msg
-                write(msg, '(A,I0,A)') 'Renamed symbol (', changes_applied, ' changes applied)'
+                character(len=128) :: msg
+                ! Name the files, not just the edits. A rename spans them, and
+                ! any that were missed matter more than the total -- a partly
+                ! applied rename leaves callers of a name that is gone, and
+                ! silence there reads as success.
+                if (g_edit_files_skipped > 0) then
+                    write(msg, '(A,I0,A,I0,A,I0,A)') 'Renamed symbol: ', &
+                        changes_applied, ' changes in ', g_edit_files_touched, &
+                        ' files, ', g_edit_files_skipped, ' NOT updated'
+                else if (g_edit_files_touched > 1) then
+                    write(msg, '(A,I0,A,I0,A)') 'Renamed symbol: ', &
+                        changes_applied, ' changes in ', g_edit_files_touched, ' files'
+                else
+                    write(msg, '(A,I0,A)') 'Renamed symbol (', changes_applied, &
+                        ' changes applied)'
+                end if
                 saved_editor_for_callback%timed_message = trim(msg)
             end block
         else if (index(saved_editor_for_callback%timed_message, 'Rename aborted') /= 1) then
@@ -12076,9 +12097,11 @@ contains
         type(json_value_t) :: edit_obj, doc_changes_arr, file_change_obj
         type(json_value_t) :: text_doc_obj, edits_arr
         character(len=:), allocatable :: uri
-        integer :: num_files, i
+        integer :: num_files, i, before_this_file
 
         changes_applied = 0
+        g_edit_files_touched = 0
+        g_edit_files_skipped = 0
 
         ! Parse the edit JSON
         edit_obj = json_parse(edit_json)
@@ -12100,7 +12123,10 @@ contains
                 ! Get edits array
                 if (json_has_key(file_change_obj, 'edits') .and. allocated(uri)) then
                     edits_arr = json_get_array(file_change_obj, 'edits')
+                    before_this_file = changes_applied
                     call apply_file_edits_obj(editor, uri, edits_arr, changes_applied)
+                    if (changes_applied > before_this_file) &
+                        g_edit_files_touched = g_edit_files_touched + 1
                     deallocate(uri)
                 end if
             end do
@@ -12123,9 +12149,12 @@ contains
                 if (associated(changes_obj%object_value)) then
                     do ci = 1, changes_obj%object_value%count
                         uri = changes_obj%object_value%pairs(ci)%key
+                        before_this_file = changes_applied
                         call apply_file_edits_obj(editor, uri, &
                             changes_obj%object_value%pairs(ci)%value, &
                             changes_applied)
+                        if (changes_applied > before_this_file) &
+                            g_edit_files_touched = g_edit_files_touched + 1
                     end do
                 end if
             end block
@@ -12149,6 +12178,9 @@ contains
                                json_get_object, json_get_string, json_get_number, json_has_key
         use text_buffer_module, only: buffer_to_string
         use lsp_server_manager_module, only: notify_file_changed
+        use editor_state_module, only: create_tab, find_tab_by_path_public, &
+                                       tab_is_resident, hydrate_tab, defer_tab, &
+                                       sync_pane_to_editor
         type(editor_state_t), intent(inout) :: editor
         character(len=*), intent(in) :: uri
         type(json_value_t), intent(in) :: edits_arr
@@ -12186,10 +12218,82 @@ contains
             end if
         end do
 
+        ! Not open. Open it: a rename covers a symbol wherever it occurs, and
+        ! which files happen to be on screen is not the user's answer to
+        ! "where is this used". Skipping them silently renamed the definition
+        ! and left every caller in another file calling a name that no longer
+        ! exists -- a rename that compiles to a broken tree.
+        !
+        ! The tab is opened but NOT switched to, and is left modified rather
+        ! than saved: the same shape as an edit made by hand, so ctrl-z undoes
+        ! it and ctrl-s is still the user's decision.
         if (tab_idx == 0) then
-            ! File not open - skip for now
-            if (allocated(filename)) deallocate(filename)
-            return
+            block
+                logical :: exists, made
+                integer :: saved_active, saved_pane, saved_modified_flag
+
+                inquire(file=filename, exist=exists)
+                if (.not. exists) then
+                    if (allocated(filename)) deallocate(filename)
+                    return
+                end if
+
+                ! create_tab is built to SWITCH to what it opens: it moves
+                ! active_tab_index and pulls the new pane's cursor, viewport
+                ! and modified flag into the editor's globals. Opening a file
+                ! in the background means putting all of that back, not just
+                ! the index -- leaving the globals describing the new tab
+                ! stamps them onto the old one at the next sync, which lost
+                ! the edit this rename had just made to it.
+                saved_active = editor%active_tab_index
+                saved_pane = 1
+                saved_modified_flag = 0
+                if (saved_active >= 1 .and. saved_active <= size(editor%tabs)) then
+                    saved_pane = max(1, editor%tabs(saved_active)%active_pane_index)
+                    if (editor%tabs(saved_active)%modified) saved_modified_flag = 1
+                end if
+                call create_tab(editor, filename, made)
+                if (.not. made) then
+                    ! At the tab cap. Say so rather than report a rename that
+                    ! only half happened.
+                    g_edit_files_skipped = g_edit_files_skipped + 1
+                    if (allocated(filename)) deallocate(filename)
+                    return
+                end if
+                tab_idx = find_tab_by_path_public(editor, filename)
+                editor%active_tab_index = saved_active
+                if (saved_active >= 1 .and. saved_active <= size(editor%tabs)) then
+                    call sync_pane_to_editor(editor, saved_active, saved_pane)
+                    editor%tabs(saved_active)%modified = (saved_modified_flag == 1)
+                end if
+                if (tab_idx == 0) then
+                    if (allocated(filename)) deallocate(filename)
+                    return
+                end if
+                ! create_tab makes the tab and an EMPTY buffer -- it never
+                ! reads the file, which the callers that switch to a tab do
+                ! for themselves. Left like that the edits below would be
+                ! checked against nothing, decide the server was describing
+                ! text the editor did not have, and refuse the whole file.
+                ! Dropping the empty buffer hands it to the hydrate path
+                ! below, which reads it AND tells the server it is open.
+                call defer_tab(editor, tab_idx)
+            end block
+        end if
+
+        ! A member of a tab group is deferred until it is looked at, and holds
+        ! no text until then. Reading one in that state finds an unallocated
+        ! buffer, so the edits have to wait for it to be read in.
+        if (.not. tab_is_resident(editor, tab_idx)) then
+            block
+                integer :: hydrate_status
+                call hydrate_tab(editor, tab_idx, hydrate_status)
+                if (hydrate_status /= 0 .or. .not. tab_is_resident(editor, tab_idx)) then
+                    g_edit_files_skipped = g_edit_files_skipped + 1
+                    if (allocated(filename)) deallocate(filename)
+                    return
+                end if
+            end block
         end if
 
         ! Get the active pane for this tab (panes contain the actual buffers)
@@ -12294,6 +12398,17 @@ contains
                     sl(k), sc(k), el(k), ec(k), trim(texts(k)))
                 changes_applied = changes_applied + 1
             end do
+
+            ! Mark it dirty here. The active tab gets an asterisk anyway,
+            ! because the loop re-checks the buffer it is showing; a tab the
+            ! edit reached in the background is never looked at, so without
+            ! this it carries a rename it does not admit to -- no asterisk to
+            ! notice, and save-all passes it by.
+            if (n > 0) then
+                editor%tabs(tab_idx)%modified = .true.
+                if (pane_idx >= 1 .and. pane_idx <= size(editor%tabs(tab_idx)%panes)) &
+                    editor%tabs(tab_idx)%panes(pane_idx)%buffer%modified = .true.
+            end if
         end block
 
         ! Sync the changed document back to all LSP servers
