@@ -66,7 +66,7 @@ module command_handler_module
     use fortress_navigator_module, only: open_fortress_navigator
     use fortress_navigator_module, only: fortress_show, fortress_hide, &
                                          is_fortress_visible, fortress_handle_key, &
-                                         fortress_click, fortress_result, &
+                                         fortress_click, fortress_wheel, fortress_result, &
                                          fortress_path, fortress_is_dir, &
                                          fortress_as_group, &
                                          FT_CONFIRMED, FT_CANCELLED
@@ -5670,10 +5670,21 @@ contains
             continue
 
         case('mouse-scroll-up')
-            call scroll_pane_at(editor, buffer, row, col, -3)
+            ! The browser window first. The wheel consults no clickable
+            ! region, so claiming the rectangle does not cover it, and a tick
+            ! over the window moved the document behind it.
+            if (fortress_wheel(row, col, -3)) then
+                g_lsp_ui_changed = .true.
+            else
+                call scroll_pane_at(editor, buffer, row, col, -3)
+            end if
 
         case('mouse-scroll-down')
-            call scroll_pane_at(editor, buffer, row, col, 3)
+            if (fortress_wheel(row, col, 3)) then
+                g_lsp_ui_changed = .true.
+            else
+                call scroll_pane_at(editor, buffer, row, col, 3)
+            end if
 
         case('mouse-alt')
             ! Alt+click - add or remove cursor

@@ -17,7 +17,7 @@ module fortress_navigator_module
     ! handler that claims or declines, a render, and a result the caller acts
     ! on. See is_group_picker_visible and friends.
     public :: fortress_show, fortress_hide, is_fortress_visible
-    public :: fortress_handle_key, render_fortress, fortress_click
+    public :: fortress_handle_key, render_fortress, fortress_click, fortress_wheel
     public :: fortress_result, fortress_path, fortress_is_dir, fortress_as_group
     public :: FT_PENDING, FT_CONFIRMED, FT_CANCELLED
 
@@ -666,6 +666,26 @@ contains
         idx = vis + scroll_offset
         if (idx >= 1 .and. idx <= current_count) selected = idx
     end function fortress_click
+
+    !> A wheel tick over the window. Without this it reached scroll_pane_at
+    !> and moved the DOCUMENT behind the window instead -- the wheel path
+    !> consults no region, so registering the rectangle does not cover it.
+    !>
+    !> It moves the selection rather than the view: the view offset is
+    !> recomputed from the selection on every sync, so scrolling it on its
+    !> own would be undone by the next frame.
+    logical function fortress_wheel(row, col, delta) result(claimed)
+        integer, intent(in) :: row, col, delta
+
+        claimed = .false.
+        if (.not. g_ft_visible) return
+        if (row < g_ft_row0 .or. row > g_ft_row0 + g_ft_h - 1) return
+        if (col < g_ft_col0 .or. col > g_ft_col0 + g_ft_w - 1) return
+        claimed = .true.
+
+        if (current_count < 1) return
+        selected = max(1, min(current_count, selected + delta))
+    end function fortress_wheel
 
     !> Draw the window. Centred and about seven tenths of the area given,
     !> clamped so it stays usable on a small terminal.

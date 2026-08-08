@@ -280,8 +280,12 @@ class BigDir(Editor):
         for i in range(self.COUNT):
             os.makedirs(os.path.join(self.work, "d%02d" % i))
         self.target = os.path.join(self.work, "zz_top.c")
+        # Longer than the screen. With a document that fits, the viewport
+        # cannot move and "the document did not scroll" is true whether or
+        # not the wheel reached it -- which is how the first version of the
+        # wheel test passed against the bug it was written for.
         with open(self.target, "w") as f:
-            f.writelines("int line%02d = %d;\n" % (i, i) for i in range(1, 20))
+            f.writelines("int line%03d = %d;\n" % (i, i) for i in range(1, 201))
         env = {**os.environ, "TERM": "xterm-256color", "HOME": self.home}
         env.pop("XDG_CONFIG_HOME", None)
         env.pop("FAC_SESSION", None)
@@ -351,6 +355,53 @@ def test_a_click_inside_the_window_picks_a_row(binary):
         check(not s.has_box(), "the window closed on Esc", s.text()[:200])
         check(caret(s) == caret_before,
               "and the click never reached the document behind it",
+              f"{caret_before!r} -> {caret(s)!r}")
+    finally:
+        s.close()
+
+
+def test_the_wheel_moves_the_list_not_the_document(binary):
+    print("\nThe wheel over the window moves the list, not the document behind")
+    s = BigDir(binary)
+    try:
+        s.send("\x1b[B\x1b[B", 0.6)
+        caret_before = caret(s)
+        doc_before = s.text()
+
+        s.send(CTRL_O, 1.8)
+        check(s.has_box(), "the window opened", s.text()[:200])
+        check(s.selection() == "d00/", "starts at the top", f"{s.selection()!r}")
+
+        # A wheel tick consults no clickable region, so the rectangle claim
+        # that fixed clicks does nothing for it: this used to scroll the
+        # document underneath while the user was looking at the browser.
+        # Screen row 1 sits above the centred window, so the document line
+        # there stays legible while the browser is up -- and it is the line
+        # that moves if a wheel tick reaches the document.
+        row1_before = s.screen.display[1][:30]
+        row = s.box_cols()[0]
+        col = s.current_pane_col() + 1
+        for _ in range(3):
+            s.send("\x1b[<65;%d;%dM" % (col + 1, row + 4), 0.4)   # wheel down
+        moved = s.selection()
+        check(moved not in ("d00/", None), "the selection moved down",
+              f"{moved!r}")
+        # Checked HERE, not after winding back: three ticks down and three up
+        # leaves the document where it started whether or not the wheel ever
+        # reached it, which is a test that cannot fail.
+        check(s.screen.display[1][:30] == row1_before,
+              "and the document behind did not scroll",
+              f"{row1_before!r} -> {s.screen.display[1][:30]!r}")
+
+        for _ in range(6):
+            s.send("\x1b[<64;%d;%dM" % (col + 1, row + 4), 0.3)   # wheel up
+        check(wait_for_selection(s, "d00/"),
+              "and back up to the top", f"{s.selection()!r}")
+
+        s.send("\x1b", 1.4)
+        check(not s.has_box(), "the window closed", s.text()[:200])
+        check(caret(s) == caret_before,
+              "the caret behind the window never moved",
               f"{caret_before!r} -> {caret(s)!r}")
     finally:
         s.close()
@@ -525,6 +576,7 @@ def main():
                test_home_end_and_the_page_keys_move,
                test_the_page_keys_reach_the_full_screen_browser_too,
                test_a_click_inside_the_window_picks_a_row,
+               test_the_wheel_moves_the_list_not_the_document,
                test_a_click_on_the_parent_pane_does_not_move_the_selection):
         try:
             fn(binary)
