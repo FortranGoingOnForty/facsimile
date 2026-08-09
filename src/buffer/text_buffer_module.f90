@@ -100,9 +100,18 @@ contains
         gap_size = buffer%gap_end - buffer%gap_start
 
         if (position < buffer%gap_start) then
-            ! Move gap left - copy character by character to avoid allocation issues
+            ! Move gap left - copy character by character to avoid allocation issues.
+            !
+            ! BACKWARD, and it matters. The text moves RIGHT by exactly the
+            ! gap size, so source and destination overlap whenever the gap is
+            ! smaller than the distance moved -- which is the ordinary state
+            ! of a buffer once you have typed a few thousand characters.
+            ! Copying forward then reads bytes it has already overwritten and
+            ! smears a ragged block of earlier text over later text: edit near
+            ! the end, scroll up, edit again, and a chunk from the top of the
+            ! document lands in the middle of a section further down.
             move_size = buffer%gap_start - position
-            do i = 1, move_size
+            do i = move_size, 1, -1
                 ch = buffer%data(position + i - 1:position + i - 1)
                 buffer%data(buffer%gap_end - move_size + i - 1:buffer%gap_end - move_size + i - 1) = ch
             end do
