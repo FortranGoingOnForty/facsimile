@@ -107,11 +107,23 @@ class Session:
         self.child.send(d)
         self.drain(w)
 
-    def type_bulk(self, text, chunk=64):
-        """Typing is the point: every character eats one byte of the gap."""
+    def type_bulk(self, text, chunk=8):
+        """Typing is the point: every character eats one byte of the gap.
+
+        Paced deliberately. Driving the pty faster than the editor reads
+        DROPS input silently -- 64 characters per 100ms loses about half --
+        and a test that lost half its keystrokes would draw the wrong
+        conclusion rather than fail honestly. 8 per 50ms is comfortably
+        under the threshold even with a full suite running alongside.
+        caret_col() below is the check that it really all arrived."""
         for i in range(0, len(text), chunk):
             self.child.send(text[i:i + chunk])
-            self.drain(0.12)
+            self.drain(0.05)
+
+    def caret_col(self):
+        import re
+        m = re.search(r"Ln (\d+), Col (\d+)", self.screen.display[-1])
+        return int(m.group(2)) if m else -1
 
     def disk(self):
         return open(self.path).read()
@@ -153,6 +165,9 @@ def test_a_long_session_then_an_edit_near_the_top(binary):
         s.send(CTRL_END, 0.5)
         s.type_bulk("z" * 2000)
         s.drain(1.5)
+        check(s.caret_col() == 2001,
+              "every keystroke arrived (a dropped one invalidates the rest)",
+              f"caret column {s.caret_col()}, expected 2001")
 
         # The ordinary act of scrolling back up to fix something.
         s.send(CTRL_HOME, 0.5)
@@ -185,6 +200,8 @@ def test_the_same_with_the_edit_in_the_middle(binary):
         s.send(CTRL_END, 0.5)
         s.type_bulk("z" * 2000)
         s.drain(1.5)
+        check(s.caret_col() == 2001, "every keystroke arrived",
+              f"caret column {s.caret_col()}, expected 2001")
 
         s.send(CTRL_HOME, 0.5)
         for _ in range(29):                     # line 30
