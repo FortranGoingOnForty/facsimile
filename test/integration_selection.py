@@ -192,6 +192,39 @@ def test_left_and_right_land_on_the_ends(binary):
         s.close()
 
 
+def test_a_key_that_names_a_destination_goes_there(binary):
+    """Collapse-and-stop is for the arrows, not for a jump.
+
+    ctrl-home means the top of the document. It was lumped in with the
+    arrows, so with a selection live it collapsed onto the selection edge
+    and went nowhere -- and since nothing looked broken on screen, the
+    damage came later: keys pressed after it counted from the wrong line,
+    and text was typed into the wrong part of the file."""
+    s = Session(binary)
+    try:
+        # Start well below the top. Selecting from line 1 would collapse TO
+        # line 1, which is also the right answer -- the assertion would pass
+        # whether or not ctrl-home did anything.
+        for _ in range(5):
+            s.send(DOWN, 0.15)
+        for _ in range(3):
+            s.send(SHIFT_DOWN, 0.25)
+        s.send(CTRL_HOME, 0.7)
+        check(s.pos() == (1, 1),
+              "ctrl-home reaches the top even with a selection live", s.pos())
+
+        # And the mirror, from a backwards selection.
+        for _ in range(4):
+            s.send(DOWN, 0.15)
+        for _ in range(2):
+            s.send(SHIFT_UP, 0.25)
+        s.send(CTRL_HOME, 0.7)
+        check(s.pos() == (1, 1),
+              "and from a selection made upwards", s.pos())
+    finally:
+        s.close()
+
+
 def test_the_next_press_moves_normally(binary):
     """Collapsing consumes one press; the one after it moves."""
     s = Session(binary)
@@ -327,6 +360,7 @@ def main():
                test_up_returns_to_the_start_of_the_selection,
                test_left_and_right_land_on_the_ends,
                test_the_next_press_moves_normally,
+               test_a_key_that_names_a_destination_goes_there,
                test_shift_still_extends,
                test_typing_over_a_selection_is_unaffected):
         try:

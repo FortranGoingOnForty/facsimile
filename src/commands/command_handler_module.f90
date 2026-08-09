@@ -10257,7 +10257,7 @@ contains
         character(len=*), intent(in) :: key_str
         logical, intent(out) :: handled
         integer(int32) :: s_line, s_col, e_line, e_col
-        logical :: backward
+        logical :: backward, collapse_only
         integer :: c
 
         handled = .false.
@@ -10270,11 +10270,27 @@ contains
         if (c < 1 .or. c > size(editor%cursors)) return
         if (.not. editor%cursors(c)%has_selection) return
 
+        ! Collapse-and-stop is right for a SINGLE-STEP arrow, where landing on
+        ! the end of the selection is itself the useful thing. It is wrong for
+        ! everything that names a destination: ctrl-home means the top of the
+        ! document, Home means the start of the line, PageUp means a page.
+        ! Swallowing those left the caret sitting on the selection edge, so
+        ! ctrl-home with a selection did nothing at all -- and a subsequent
+        ! run of Down keys then started from the wrong line and typed into the
+        ! wrong part of the file.
         select case (trim(key_str))
-        case ('left', 'up', 'home', 'pageup', 'ctrl-left', 'alt-left', 'ctrl-home')
+        case ('left', 'up')
             backward = .true.
-        case ('right', 'down', 'end', 'pagedown', 'ctrl-right', 'alt-right', 'ctrl-end')
+            collapse_only = .true.
+        case ('right', 'down')
             backward = .false.
+            collapse_only = .true.
+        case ('home', 'pageup', 'ctrl-left', 'alt-left', 'ctrl-home')
+            backward = .true.
+            collapse_only = .false.
+        case ('end', 'pagedown', 'ctrl-right', 'alt-right', 'ctrl-end')
+            backward = .false.
+            collapse_only = .false.
         case default
             return                      ! not a plain move; leave it alone
         end select
@@ -10290,6 +10306,13 @@ contains
         end if
 
         editor%cursors(c)%has_selection = .false.
+
+        ! A key that names a destination just loses the selection and then
+        ! does what it always does, from wherever the caret already is.
+        if (.not. collapse_only) then
+            handled = .false.
+            return
+        end if
 
         ! Collapse only -- never also move. The first press after selecting
         ! puts the caret on an end and stops there; the next one moves from it.
