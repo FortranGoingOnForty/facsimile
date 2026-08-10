@@ -2613,8 +2613,16 @@ contains
                 end if
             end block
 
-        case('shift-alt-f')
-            ! Format document
+        case('alt-shift-f', 'shift-alt-f')
+            ! Format document.
+            !
+            ! 'alt-shift-f' is the spelling the input layer actually produces:
+            ! modifier_prefix and decode_csi_u both emit alt- before shift-,
+            ! and every other chord in this file is named that way
+            ! ('alt-shift-left', 'alt-shift-j', ...). 'shift-alt-f' alone was
+            ! never reachable, so formatting could not be invoked at all.
+            ! The old spelling is kept so the binding survives whichever order
+            ! a future input path chooses.
             block
                 integer :: format_server
                 format_server = get_lsp_server_for_cap(editor, CAP_FORMATTING)

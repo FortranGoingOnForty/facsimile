@@ -169,6 +169,30 @@ contains
         end block
         call json_add_object(capabilities, "workspace", workspace)
 
+        ! General capabilities.
+        !
+        ! Declare the position encoding instead of relying on the default.
+        ! Every column this client sends and receives is converted through
+        ! utf8_char_col_to_utf16 / utf16_to_utf8_char_col, so UTF-16 code
+        ! units are what our arithmetic actually means. UTF-16 is also the
+        ! protocol default, which is why this worked while we said nothing --
+        ! but "correct because nobody wrote the field down" is one server
+        ! preference away from silently mis-placing every diagnostic past a
+        ! multi-byte character. Saying it out loud costs one object and makes
+        ! the agreement explicit on the wire.
+        !
+        ! Offer UTF-16 alone. A server picks the first encoding it supports
+        ! from this list, so adding utf-8 or utf-32 as a "fallback" would
+        ! invite exactly the encoding this client cannot count in.
+        block
+            type(json_value_t) :: general, encodings
+            general = json_create_object()
+            encodings = json_create_array()
+            call json_array_add_element(encodings, json_create_string("utf-16"))
+            call json_add_array(general, "positionEncodings", encodings)
+            call json_add_object(capabilities, "general", general)
+        end block
+
         call json_add_object(params, "capabilities", capabilities)
 
         msg%params = params

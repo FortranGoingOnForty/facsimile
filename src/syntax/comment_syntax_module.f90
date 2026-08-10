@@ -77,6 +77,14 @@ contains
             syn%block_start = '/*'
             syn%block_end = '*/'
 
+        ! ---- Wolf: // only, no block form ----
+        ! Kept out of the C-family list above on purpose. Wolf has no block
+        ! comment at all, so a '/*' here is two operator tokens; handing the
+        ! toggle a block form it could fall back to would let it write a
+        ! comment the compiler does not recognise.
+        case('.lu', '.wolfi')
+            syn%line = '//'
+
         ! ---- Hash-comment languages ----
         case('.py', '.pyw', '.pyi', '.rb', '.rbw', '.gemspec', '.pl', '.pm', &
              '.t', '.raku', '.rakumod', '.sh', '.bash', '.zsh', '.ksh', &

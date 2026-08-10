@@ -474,6 +474,8 @@ contains
                 language_id = "shellscript"
             case('.md', '.markdown')
                 language_id = "markdown"
+            case('.lu', '.wolfi')
+                language_id = "wolf"
             case default
                 language_id = "text"
             end select

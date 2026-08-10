@@ -133,6 +133,8 @@ contains
                 call load_cpp_syntax(highlighter)
             case('.rs')
                 call load_rust_syntax(highlighter)
+            case('.lu', '.wolfi')
+                call load_wolf_syntax(highlighter)
             case('.go')
                 call load_go_syntax(highlighter)
             case('.js', '.jsx', '.mjs')
@@ -878,6 +880,65 @@ contains
 
         highlighter%enabled = .true.
     end subroutine load_rust_syntax
+
+    ! Wolf. The keyword list is the closed reserved set from the language's
+    ! own grammar -- all 50 of them, no more and no less. Contextual keywords
+    ! (c, rc, pool, from, timeout, noalias, pkg, reg, self) are deliberately
+    ! absent: each is an ordinary identifier everywhere except one position,
+    ! and a table that cannot see position would mis-colour them far more
+    ! often than not.
+    subroutine load_wolf_syntax(highlighter)
+        type(syntax_highlighter_t), intent(inout) :: highlighter
+
+        highlighter%current_lang%name = "wolf"
+        highlighter%current_lang%case_sensitive = .true.
+
+        ! Keywords
+        allocate(highlighter%current_lang%keywords(50))
+        highlighter%current_lang%keywords = [ &
+            "as      ", "asm     ", "assume  ", "borrow  ", "break   ", &
+            "comptime", "const   ", "continue", "copy    ", "defer   ", &
+            "distinct", "dyn     ", "else    ", "enum    ", "errdefer", &
+            "export  ", "extern  ", "false   ", "fn      ", "for     ", &
+            "freeze  ", "handle  ", "if      ", "impl    ", "import  ", &
+            "in      ", "let     ", "loop    ", "match   ", "move    ", &
+            "mut     ", "proc    ", "pub     ", "region  ", "return  ", &
+            "scope   ", "select  ", "shared  ", "spawn   ", "struct  ", &
+            "take    ", "trait   ", "true    ", "type    ", "unsafe  ", &
+            "use     ", "var     ", "weak    ", "when    ", "while   " &
+        ]
+
+        ! Types. Small on purpose: the language has no fixed-width scalar
+        ! inventory yet, so i32/u64/f64 are NOT types here. Inventing them
+        ! would teach a user a language that does not exist.
+        allocate(highlighter%current_lang%types(4))
+        highlighter%current_lang%types = [ &
+            "bool", "int ", "str ", "Self" &
+        ]
+
+        ! Line comments only -- wolf has no block comment form, so a '/*' is
+        ! two operator tokens and comment_start/comment_end stay empty.
+        highlighter%current_lang%comment_single = "//"
+
+        ! Triple quote FIRST: process_string takes the first delimiter that
+        ! matches, and only a delimiter of length >= 3 turns on multiline
+        ! mode. Listing '"' first would make the block-string form unreachable.
+        allocate(highlighter%current_lang%string_delimiters(2))
+        highlighter%current_lang%string_delimiters = ['""" ', '"   ']
+
+        allocate(highlighter%current_lang%operators(37))
+        highlighter%current_lang%operators = [ &
+            "<=> ", "<<= ", ">>= ", "..= ", "==  ", "!=  ", &
+            "<=  ", ">=  ", "&&  ", "||  ", "<<  ", ">>  ", &
+            "..  ", "->  ", "=>  ", "+=  ", "-=  ", "*=  ", &
+            "/=  ", "%=  ", "&=  ", "|=  ", "^=  ", "+   ", &
+            "-   ", "*   ", "/   ", "%   ", "&   ", "|   ", &
+            "^   ", "!   ", "<   ", ">   ", "=   ", "?   ", &
+            "@   " &
+        ]
+
+        highlighter%enabled = .true.
+    end subroutine load_wolf_syntax
 
     ! Go language support
     subroutine load_go_syntax(highlighter)

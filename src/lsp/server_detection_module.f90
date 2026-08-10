@@ -21,9 +21,14 @@ module server_detection_module
 
 contains
 
+    ! MUST equal the number of slots init_known_servers fills. The two are
+    ! maintained by hand and nothing checks them against each other: this
+    ! count sizes the array, and init_known_servers writes into it through an
+    ! assumed-shape dummy that never consults size(). Adding a server without
+    ! bumping this number is an out-of-bounds write, not a missing row.
     function get_known_servers_count() result(count)
         integer :: count
-        count = 20  ! Number of servers we know about
+        count = 21  ! Number of servers we know about
     end function get_known_servers_count
 
     subroutine detect_all_servers(servers, num_servers)
@@ -216,6 +221,17 @@ contains
         servers(i)%install_cmd = 'pipx install fortls'
         servers(i)%description = 'Fortran language server'
         servers(i)%check_cmd = 'fortls'
+        i = i + 1
+
+        ! Wolf - the language server is a subcommand of the compiler, so there
+        ! is nothing separate to install and no package to name. A leading '#'
+        ! routes the panel to its manual-info dialog instead of running the
+        ! string through a shell.
+        servers(i)%name = 'wolf'
+        servers(i)%language = 'Wolf'
+        servers(i)%install_cmd = '# Install the wolf toolchain; `wolf lsp` ships with it'
+        servers(i)%description = 'Wolf compiler and language server'
+        servers(i)%check_cmd = 'wolf'
     end subroutine init_known_servers
 
     function check_server_installed(cmd_name) result(installed)

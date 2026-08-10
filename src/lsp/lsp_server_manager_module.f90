@@ -334,6 +334,19 @@ contains
         caps(CAP_CODE_ACTIONS) = .true.
         call add_config(manager, "fortran", "fortls", "fortls", "*.f90,*.f95,*.f03,*.f08", caps)
 
+        ! Wolf - the compiler is the language server, so `wolf lsp` is a
+        ! subcommand of the toolchain rather than a separate download.
+        ! Only the features the server actually implements are enabled here:
+        ! these flags drive OUR request routing, not the server's advertised
+        ! capabilities, so an optimistic entry sends requests that come back
+        ! MethodNotFound and read to a user as a broken server.
+        caps = .false.
+        caps(CAP_HOVER) = .true.
+        caps(CAP_FORMATTING) = .true.
+        caps(CAP_DOCUMENT_SYMBOLS) = .true.
+        caps(CAP_CODE_ACTIONS) = .true.
+        call add_config(manager, "wolf", "wolf", "wolf lsp", "*.lu,*.wolfi", caps)
+
         ! TODO: Load from config file
     end subroutine load_default_configs
 
@@ -942,6 +955,8 @@ contains
             language = "ruby"
         case('.lua')
             language = "lua"
+        case('.lu', '.wolfi')
+            language = "wolf"
         case default
             language = ""
         end select
@@ -1189,16 +1204,12 @@ contains
         integer, intent(in), optional :: version
         type(lsp_message_t) :: msg
         integer :: doc_version
-        integer :: debug_unit
 
-        ! Debug logging
-        open(newunit=debug_unit, file='/tmp/fac_didchange_debug.log', status='unknown', &
-             position='append', action='write')
-        write(debug_unit, '(A,I2,A)') 'notify_file_changed called for server ', server_index, ':'
-        write(debug_unit, '(A,A)') '  URI: ', trim(filename)
-        write(debug_unit, '(A,I8)') '  Content length: ', len(content)
-        write(debug_unit, '(A)') '---'
-        close(debug_unit)
+        ! (Removed: an unconditional append to a hardcoded /tmp path. It ran
+        ! before the guards below, so it opened, wrote four records and closed
+        ! a file on every debounced buffer flush -- for invalid and
+        ! uninitialised servers too -- on the hottest path this module has.
+        ! It also assumed a POSIX /tmp, which the Windows build does not have.)
 
         if (server_index < 1 .or. server_index > manager%num_servers) return
         if (.not. manager%servers(server_index)%initialized) return
