@@ -108,7 +108,7 @@ contains
         n_lines = n_lines + 13 + 2  ! EDITING
         n_lines = n_lines + 4 + 2   ! CLIPBOARD
         n_lines = n_lines + 3 + 2   ! LINES
-        n_lines = n_lines + 9 + 2   ! SEARCH & REPLACE
+        n_lines = n_lines + 17 + 2  ! SEARCH & REPLACE (find bar keys)
         n_lines = n_lines + 5 + 2   ! MULTIPLE CURSORS (increased from 4)
         n_lines = n_lines + 9 + 2   ! SPECIAL (added the two terminal resize lines)
         n_lines = n_lines + 7 + 2   ! TABS
@@ -189,14 +189,21 @@ contains
 
         ! SEARCH & REPLACE
         lines(i) = "SEARCH & REPLACE"; i = i + 1
-        lines(i) = "  ctrl-f              search forward"; i = i + 1
+        lines(i) = "  ctrl-f              find bar (seeded with the word under the caret)"; i = i + 1
         lines(i) = "  ctrl-r              find and replace"; i = i + 1
-        lines(i) = "  n                   next match (after ctrl-f)"; i = i + 1
-        lines(i) = "  N                   previous match (after ctrl-f)"; i = i + 1
         lines(i) = "  ctrl-d              select word & find next match"; i = i + 1
+        lines(i) = "  n / N               next / previous match (after the bar closes)"; i = i + 1
         lines(i) = "  esc                 exit match mode / clear selections"; i = i + 1
-        lines(i) = "  alt-c (in search)   toggle case sensitive"; i = i + 1
-        lines(i) = "  alt-w (in search)   toggle whole word match"; i = i + 1
+        lines(i) = ""; i = i + 1
+        lines(i) = "  IN THE FIND BAR"; i = i + 1
+        lines(i) = "  down right pgdn     next match (also enter, tab, space)"; i = i + 1
+        lines(i) = "  up left pgup        previous match (also shift-enter/tab/space)"; i = i + 1
+        lines(i) = "  home / end          first / last match"; i = i + 1
+        lines(i) = "  alt-up/down         previous searches"; i = i + 1
+        lines(i) = "  alt-c / alt-w       toggle case sensitive / whole word"; i = i + 1
+        lines(i) = "  alt-r / alt-s       toggle regex / search in selection"; i = i + 1
+        lines(i) = "  ctrl-r / ctrl-a     replace this match / replace all"; i = i + 1
+        lines(i) = "  ctrl-f / esc        close the bar / end the search"; i = i + 1
         lines(i) = ""; i = i + 1
 
         ! MULTIPLE CURSORS

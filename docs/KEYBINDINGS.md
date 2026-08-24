@@ -67,22 +67,40 @@ Complete keyboard shortcut reference for `fac` editor.
 
 ## 🔎 Search & Replace
 
+`Ctrl+F` opens the **find bar**. If the caret is on a word, that word is
+already in it and every occurrence is lit — the one you are on in orange, the
+rest in yellow. The bar stays up while you walk between them.
+
 | Keybinding | Command | Description |
 |------------|---------|-------------|
-| `Ctrl+F` | Search | Open unified search/replace prompt |
-| `Ctrl+H` | Replace | Open unified search/replace (same as Ctrl+F) |
+| `Ctrl+F` | Find | Open the find bar, seeded from the word under the caret |
 | `Ctrl+G` | Go to Line | Jump to specific line number |
-| **In Search Mode:** | | |
-| `n` or `Ctrl+N` | Next Match | Jump to next search result |
-| `N` or `Ctrl+P` | Previous Match | Jump to previous search result |
-| `r` | Replace One | Replace current match |
-| `a` | Replace All | Replace all matches |
-| `Ctrl+R` | Toggle Regex | Enable/disable regex search |
-| `Ctrl+C` | Toggle Case | Toggle case-sensitive search |
-| `Ctrl+W` | Toggle Whole Word | Toggle whole-word matching |
-| `Alt+S` | Search in Selection | Limit search to selected text |
-| `↑` / `↓` | History | Navigate search history |
-| `Esc` | Exit Search | Close search prompt |
+| **In the find bar:** | | |
+| `↓` `→` `PgDn` `Enter` `Tab` `Space` | Next Match | Step forward |
+| `↑` `←` `PgUp` `Shift+Enter` `Shift+Tab` `Shift+Space` | Previous Match | Step back |
+| `Home` / `End` | First / Last | Jump to the first or last match |
+| any character | Edit | Replace the seeded pattern and search live as you type |
+| `Alt+↑` / `Alt+↓` | History | Walk previous searches |
+| `Alt+C` | Toggle Case | Case-sensitive matching |
+| `Alt+W` | Toggle Whole Word | Whole-word matching |
+| `Alt+R` | Toggle Regex | POSIX regex matching |
+| `Alt+S` | Search in Selection | Confine the search to the selection |
+| `Ctrl+R` | Replace One | Replace the current match and step on |
+| `Ctrl+A` | Replace All | Replace every match |
+| `Ctrl+F` | Close | Put the bar away, leaving the matches lit for `n` / `N` |
+| `Esc` | End Search | Close the bar and clear the highlights |
+| **After the bar is closed with `Ctrl+F`:** | | |
+| `n` / `N` | Next / Previous | Keep walking the matches |
+| `Ctrl+D` | Select Word & Find | Select the word and jump to its next match |
+
+Two keys mean something to both the text field and the match list. The rule
+is the same for both: **while you are typing, `Space` and `Tab` belong to the
+field; the moment you navigate, they belong to the matches.** Opening the bar
+on a word does not count as typing, so every navigation key is live
+immediately.
+
+`Shift+Enter` and `Shift+Space` need a terminal that speaks CSI-u (kitty,
+foot, WezTerm, recent Ghostty); everything else in the table works anywhere.
 
 ---
 
@@ -217,14 +235,11 @@ When any panel is open (Diagnostics, References, Symbols, etc.):
 
 ## ⚙️ Special Modes
 
-### Search/Replace Mode
-Active when `Ctrl+F` (search) or `Ctrl+R` (replace) is pressed:
-- `n` - Next match
-- `N` - Previous match
-- `Alt+C` - Toggle case sensitive
-- `Alt+W` - Toggle whole word match
-- `↑` / `↓` - Navigate search history
-- `Esc` - Exit search mode
+### Find Bar
+Active when `Ctrl+F` is pressed. See the Search & Replace section above for
+the full key list. In short: arrows, page keys, `Enter`, `Tab` and `Space`
+step through the matches; add `Shift` to go back; typing edits the pattern
+and re-searches live; `Ctrl+F` or `Esc` puts it away.
 
 ### Fuss (File Tree) Mode
 Active when `Ctrl+B` or `F3` is pressed:
