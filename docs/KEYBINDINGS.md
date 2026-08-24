@@ -1,71 +1,83 @@
-# fac Keybindings Reference
+# fac keybindings
 
-Complete keyboard shortcut reference for `fac` editor.
+Every key `fac` binds, and the reasoning behind the ones that look strange.
+Where two chords do the same thing, the `Alt` one is the one that survives
+contact with a real terminal — see [Tips](#tips) for why.
 
----
+`F1` inside the editor shows a shorter version of this list.
 
-## 🔍 LSP Features
-
-| Keybinding | Command | Description |
-|------------|---------|-------------|
-| `F12` or `Ctrl+\` or `Alt+G` | Go to Definition | Jump to where a symbol is defined |
-| `Shift+F12` or `Alt+R` | Find References | Find all usages of a symbol |
-| `F2` or `Alt+N` | Rename Symbol | Rename symbol across entire project |
-| `F10` or `Alt+.` | Code Actions | Quick fixes and refactorings |
-| `F8` or `Alt+E` | Diagnostics Panel | Show all errors and warnings |
-| `F4` or `Alt+O` | Document Symbols | Navigate symbols in current file |
-| `F6` or `Alt+P` | Workspace Symbols | Search symbols across all files |
-| `Ctrl+P` | Command Palette | Search and execute any command |
-| `F5` or `Alt+T` | Integrated Terminal | Toggle the terminal panel |
-| `Ctrl+Shift+Up` / `Down` | Resize Terminal | Taller / shorter — **only while the terminal has focus** |
-| `Ctrl+Shift+M` | Maximize Terminal | Fill the screen, or go back to the previous height |
-| `Shift+Alt+F` | Format Document | Auto-format current file |
-| `Alt+,` | Jump Back | Return to previous location (jump stack) |
-
----
-
-## 📁 File Operations
+## Navigation
 
 | Keybinding | Command | Description |
 |------------|---------|-------------|
-| `Ctrl+S` | Save | Save current file. Caps lock and a held Shift make no difference — a chord's letter case is ignored |
-| `Ctrl+Shift+S` | Save All | Write every modified tab |
-| `Ctrl+Q` | Quit | Exit editor (prompts if unsaved) |
-| `Ctrl+O` | Open File | Open file browser (Fortress mode) |
-| `Ctrl+N` | New File | Create new untitled buffer |
-| `Ctrl+T` | New Tab | Create new empty tab |
+| `↑` `↓` `←` `→` | Move Cursor | Move cursor one character/line |
+| `Alt+↑` | Move Line Up | Move current line up |
+| `Alt+↓` | Move Line Down | Move current line down |
+| `Home` or `Ctrl+A` | Line Start | Jump to beginning of line (smart toggle) |
+| `End` or `Ctrl+E` | Line End | Jump to end of line |
+| `Ctrl+Home` | File Start | Jump to beginning of file |
+| `Ctrl+End` | File End | Jump to end of file |
+| `Alt+←` / `Alt+→` | Word Jump | Move cursor by word (`Ctrl+←` / `Ctrl+→` and `Alt+B` / `Alt+F` do the same) |
+| `Alt+Shift+↑` / `Alt+Shift+↓` | Duplicate Line | Copy the line up or down |
+| `Alt+,` | Jump Back | Return to the previous location on the jump stack |
+| `Page Up` / `Page Down` | Page Scroll | Move up/down one screen |
+| `Alt+[` / `Alt+]` | Match Bracket | Jump to matching bracket/paren |
 
 ---
 
-## 📝 Editing
+## Editing
 
 | Keybinding | Command | Description |
 |------------|---------|-------------|
-| `Ctrl+D` | Select Next Match | Add cursor at next occurrence of selection |
 | `Ctrl+Z` | Undo | Undo last change |
 | `Ctrl+Shift+Z` or `Ctrl+]` | Redo | Redo last undone change |
-| `Ctrl+Y` | Yank | Paste from the Emacs-style yank stack (not redo) |
-| `Ctrl+X` | Cut | Cut selection, or the whole line when nothing is selected |
-| `Ctrl+C` | Copy | Copy selection, or the whole line when nothing is selected |
-| `Ctrl+V` | Paste | Paste from clipboard |
-| `Alt+A` | Select All | Select entire file |
 | `Shift+F10` or `Alt+Z` | Context Menu | Open the context menu at the caret (right-click opens it at the pointer) |
 | `Tab` | Indent | Advance to the next tab stop. On a line holding only whitespace it jumps straight to the indentation the line belongs at, judged from the block above — so getting back into a nested block is one press, not four |
 | `Backspace` (in leading whitespace) | Unindent | Removes a whole indent level at a time rather than one space |
-| `Tab` | Accept Suggestion | Accept the whole inline suggestion (when one is offered) |
-| `Ctrl+Right` | Accept One Word | Accept a single word of an inline suggestion, keeping the rest offered |
-| `Alt+Right` | Accept One Line | Accept one line of a multi-line suggestion, keeping the rest offered |
-| `Alt+I` / `Alt+Shift+I` | Toggle AI Completion | Turn inline completion on or off. Off is instant; on probes the backend and reports what it found |
-| `Alt+\` | Deep Completion | Request a large block from the deep model (see docs/AI_COMPLETION.md) |
 | `Ctrl+/` | Toggle Line Comment | Comment/uncomment the cursor's lines or the selection |
 | `Ctrl+Shift+K` | Delete Line | Delete the cursor's lines outright — nothing is copied or yanked (needs a terminal supporting the kitty keyboard protocol; otherwise use the command palette) |
 | `Alt+Backspace` | Delete Word | Delete word backward; at column 1 it deletes the line break, so blank lines are eaten one press at a time |
 | `Backspace` | Delete Char | Delete character backward |
 | `Delete` | Delete Forward | Delete character forward |
+| `Alt+D` or `Alt+Delete` | Delete Word Forward | Delete the word after the caret |
+| `Ctrl+K` / `Ctrl+U` | Kill Line | Cut forward to end of line / back to line start, onto the yank stack |
+| `Alt+Shift+J` | Join Lines | Pull the next line onto this one |
+| `Alt+'` | Cycle Quotes | Rotate the quoting around the caret: `"` → `'` → `` ` `` → `"` |
+| `Alt+Shift+'` | Unwrap | Remove the surrounding brackets or quotes |
+| `Shift+Tab` | Dedent | Dedent the selection, or the current line |
+| `Ctrl+Shift+S` | Save All | Write every modified tab |
+
+### Inline completion
+
+Off until you turn it on. See [AI_COMPLETION.md](AI_COMPLETION.md).
+
+| Keybinding | Command | Description |
+|------------|---------|-------------|
+| `Alt+I` / `Alt+Shift+I` | Toggle | Turn inline completion on or off. Off is instant; on probes the backend and reports what it found |
+| `Tab` | Accept | Take the whole suggestion |
+| `Ctrl+→` | Accept One Word | Take a single word, keeping the rest offered |
+| `Alt+→` | Accept One Line | Take one line of a multi-line suggestion, keeping the rest |
+| `Alt+\` | Deep Completion | Ask the large model for a bigger block |
+
+Any other key dismisses the suggestion.
 
 ---
 
-## 🔎 Search & Replace
+## Selection
+
+| Keybinding | Command | Description |
+|------------|---------|-------------|
+| `Shift+↑↓←→` | Select | Extend selection with arrow keys |
+| `Shift+Home` / `Shift+End` | Select to Line Edge | Select to the start or end of the line (`Ctrl+Shift+A` / `Ctrl+Shift+E` do the same) |
+| `Shift+PageUp` / `Shift+PageDown` | Select by Page | Extend the selection a screen at a time |
+| `Alt+Shift+←` / `Alt+Shift+→` | Select by Word | Extend the selection a word at a time (`Ctrl+Shift+←` / `→` do the same) |
+| `Alt+A` | Select All | Select entire file (`Ctrl+A` is Line Start) |
+| `Ctrl+D` | Select Next | Add cursor at next match of selection |
+| `Esc` | Clear Selection | Deselect and return to single cursor |
+
+---
+
+## Search & Replace
 
 `Ctrl+F` opens the **find bar**. If the caret is on a word, that word is
 already in it and every occurrence is lit — the one you are on in orange, the
@@ -104,102 +116,25 @@ foot, WezTerm, recent Ghostty); everything else in the table works anywhere.
 
 ---
 
-## 🗂️ Tabs & Windows
-
-| Keybinding | Command | Description |
-|------------|---------|-------------|
-| `Ctrl+T` | New Tab | Create new empty tab |
-| `Ctrl+W` | Close Tab/Pane | Close current pane (then tab if last pane) |
-| `Ctrl+PageDown` or `Ctrl+Alt+Right` | Next Tab | Switch to next tab |
-| `Ctrl+PageUp` or `Ctrl+Alt+Left` | Previous Tab | Switch to previous tab |
-| `Alt+1` to `Alt+9` (or `Ctrl+1` to `Ctrl+9`) | Jump to Tab | Switch to that tab. `Alt+0` is tab 10 |
-| ...then another digit | Extend the Jump | Within half a second a further digit extends the number, so `Alt+1` `5` reaches tab 15. If the first digit landed on a tab inside a group, the digit picks that group's Nth member instead — the status bar says which of the two is on offer |
-| `Alt+V` | Split Vertical | Split current pane vertically |
-| `Alt+S` | Split Horizontal | Split current pane horizontally |
-| `Alt+Q` | Close Pane | Close current pane only |
-| `Alt+H` or `Ctrl+Shift+Left` | Navigate Left | Move to pane on the left |
-| `Alt+L` or `Ctrl+Shift+Right` | Navigate Right | Move to pane on the right |
-| `Alt+K` or `Ctrl+Shift+Up` | Navigate Up | Move to pane above. While the terminal panel has focus this resizes it instead — pane navigation would have nowhere to go |
-| `Alt+J` or `Ctrl+Shift+Down` | Navigate Down | Move to pane below. Same exception as above |
-
----
-
-## 🧭 Navigation
-
-| Keybinding | Command | Description |
-|------------|---------|-------------|
-| `↑` `↓` `←` `→` | Move Cursor | Move cursor one character/line |
-| `Alt+↑` | Move Line Up | Move current line up |
-| `Alt+↓` | Move Line Down | Move current line down |
-| `Home` or `Ctrl+A` | Line Start | Jump to beginning of line (smart toggle) |
-| `End` or `Ctrl+E` | Line End | Jump to end of line |
-| `Ctrl+Home` | File Start | Jump to beginning of file |
-| `Ctrl+End` | File End | Jump to end of file |
-| `Alt+←` / `Alt+→` | Word Jump | Move cursor by word |
-| `Page Up` / `Page Down` | Page Scroll | Move up/down one screen |
-| `Alt+[` / `Alt+]` | Match Bracket | Jump to matching bracket/paren |
-
----
-
-## ✂️ Selection
-
-| Keybinding | Command | Description |
-|------------|---------|-------------|
-| `Shift+↑↓←→` | Select | Extend selection with arrow keys |
-| `Ctrl+Shift+Home` | Select to Start | Select from cursor to file start |
-| `Ctrl+Shift+End` | Select to End | Select from cursor to file end |
-| `Alt+A` | Select All | Select entire file (`Ctrl+A` is Line Start) |
-| `Ctrl+D` | Select Next | Add cursor at next match of selection |
-| `Esc` | Clear Selection | Deselect and return to single cursor |
-
----
-
-## 🎨 Command & Utility
-
-| Keybinding | Command | Description |
-|------------|---------|-------------|
-| `Ctrl+P` | Command Palette | Search and execute any command |
-| `F5` or `Alt+T` | Integrated Terminal | Toggle the terminal panel |
-| `Ctrl+Shift+Up` / `Down` | Resize Terminal | Taller / shorter — **only while the terminal has focus** |
-| `Ctrl+Shift+M` | Maximize Terminal | Fill the screen, or go back to the previous height |
-| `Ctrl+?` or `F1` | Help | Show help screen (`Ctrl+?` needs a terminal that supports the kitty keyboard protocol; `F1` always works) |
-| `Ctrl+B` or `F3` | File Tree | Toggle file explorer (Fuss mode) |
-| `Ctrl+L` | Redraw Screen | Clear and redraw the screen |
-| `Esc` | Cancel/Close | Close panels, cancel operations. In the terminal panel it closes the panel only from a bare shell prompt — with text on the line, or inside a full-screen program, the shell gets it |
-
----
-
-## 📋 Clipboard & Yank Stack
+## Clipboard & Yank Stack
 
 | Keybinding | Command | Description |
 |------------|---------|-------------|
 | `Ctrl+X` | Cut | Cut selection and add to yank stack |
 | `Ctrl+C` | Copy | Copy selection to clipboard |
 | `Ctrl+V` | Paste | Paste from clipboard |
-| `Ctrl+Shift+V` | Yank Cycle | Cycle through clipboard history |
+| `Ctrl+K` | Kill Line Forward | Cut from the caret to end of line, onto the yank stack |
+| `Ctrl+U` | Kill Line Backward | Cut from line start to the caret, onto the yank stack |
+| `Ctrl+Y` | Yank | Paste the top of the yank stack |
 
 ---
 
-## 🌲 File Tree (Fuss Mode)
-
-| Keybinding | Command | Description |
-|------------|---------|-------------|
-| `Ctrl+B` or `F3` | Toggle Tree | Show/hide file tree |
-| **In Tree:** | | |
-| `j` `k` or `↑` `↓` | Navigate | Move to previous/next sibling |
-| `→` / `←` | Enter/Exit | Enter directory or exit to parent |
-| `Enter` or `o` | Open | Open file in editor |
-| `Space` | Toggle Expand | Expand/collapse directory |
-| `?` | Show Hints | Display fuss mode keybindings |
-| `Esc` | Close Tree | Hide file tree |
-
----
-
-## 🎯 Multiple Cursors
+## Multiple Cursors
 
 | Keybinding | Command | Description |
 |------------|---------|-------------|
 | `Ctrl+D` | Select Word & Next | Select word under cursor, add cursor at next match |
+| `Alt+C` | Match Case | Toggle case sensitivity for `Ctrl+D` matching |
 | `Alt+Click` | Add/Remove Cursor | Add or remove cursor at mouse position |
 | *(see the Mouse section below for the rest)* | | |
 | `Ctrl+Alt+↑` | Add Cursor Above | Add cursor on line above |
@@ -220,142 +155,56 @@ of them claims. `Alt+Click` avoids the question entirely.
 
 ---
 
-## 📦 Panel Navigation
-
-When any panel is open (Diagnostics, References, Symbols, etc.):
+## File Operations
 
 | Keybinding | Command | Description |
 |------------|---------|-------------|
-| `↑` `↓` or `j` `k` | Navigate Items | Move selection up/down |
-| `Enter` | Select/Jump | Jump to selected item |
-| `Esc` | Close Panel | Close the panel |
-| Type characters | Filter/Search | Narrow down results (in symbols panels) |
+| `Ctrl+S` | Save | Save current file. Caps lock and a held Shift make no difference — a chord's letter case is ignored |
+| `Ctrl+Shift+S` | Save All | Write every modified tab |
+| `Ctrl+Q` | Quit | Exit editor (prompts if unsaved) |
+| `Ctrl+O` | Open File | Open file browser (Fortress mode) |
+| `Ctrl+T` | New Tab | Create new empty tab |
 
 ---
 
-## ⚙️ Special Modes
+## Tabs & Windows
 
-### Find Bar
-Active when `Ctrl+F` is pressed. See the Search & Replace section above for
-the full key list. In short: arrows, page keys, `Enter`, `Tab` and `Space`
-step through the matches; add `Shift` to go back; typing edits the pattern
-and re-searches live; `Ctrl+F` or `Esc` puts it away.
-
-### Fuss (File Tree) Mode
-Active when `Ctrl+B` or `F3` is pressed:
-- `j` / `k` - Move to previous/next sibling
-- `→` / `←` - Enter directory / exit to parent
-- `Enter` or `o` - Open file
-- `Space` - Toggle expand/collapse
-- `?` - Show hints
-- `Esc` - Exit Fuss mode
-
-**Git operations in Fuss mode:**
-- `a` - Stage file
-- `u` - Unstage file
-- `d` - Diff file
-- `m` - Commit with message
-- `p` - Push to remote
-- `f` - Fetch from remote
-- `l` - Pull from remote
-- `t` - Create and push tag
+| Keybinding | Command | Description |
+|------------|---------|-------------|
+| `Ctrl+T` | New Tab | Create new empty tab |
+| `Ctrl+W` | Close Tab | Close the current tab, prompting if it has unsaved changes. `Alt+Q` is the one that closes a single pane |
+| `Ctrl+PageDown` or `Ctrl+Alt+Right` | Next Tab | Switch to next tab |
+| `Ctrl+PageUp` or `Ctrl+Alt+Left` | Previous Tab | Switch to previous tab |
+| `Alt+1` to `Alt+9` (or `Ctrl+1` to `Ctrl+9`) | Jump to Tab | Switch to that tab. `Alt+0` is tab 10 |
+| ...then another digit | Extend the Jump | Within half a second a further digit extends the number, so `Alt+1` `5` reaches tab 15. If the first digit landed on a tab inside a group, the digit picks that group's Nth member instead — the status bar says which of the two is on offer |
+| `Alt+V` | Split Vertical | Split current pane vertically |
+| `Alt+S` | Split Horizontal | Split current pane horizontally |
+| `Alt+Q` | Close Pane | Close current pane only |
+| `Alt+H` | Navigate Left | Move to pane on the left. No `Ctrl+Shift+Left` alias — that extends the selection by a word |
+| `Alt+L` | Navigate Right | Move to pane on the right. Likewise |
+| `Alt+K` or `Ctrl+Shift+Up` | Navigate Up | Move to pane above. While the terminal panel has focus this resizes it instead — pane navigation would have nowhere to go |
+| `Alt+J` or `Ctrl+Shift+Down` | Navigate Down | Move to pane below. Same exception as above |
 
 ---
 
-## 💡 Tips
+## File Tree (Fuss Mode)
 
-### Keybinding Conflicts
-- Some keybindings may conflict with terminal emulator shortcuts
-- If a key doesn't work, check your terminal's keyboard settings
-- Common conflicts: F-keys (media controls), `Ctrl+W` (close terminal tab)
-- All LSP features have Alt+key alternatives that work better in terminals
-
-### Terminal Compatibility
-Most terminal emulators don't pass Ctrl+Shift combinations reliably. That's why `fac` uses Alt+key alternatives:
-- `Alt+E` instead of Ctrl+Shift+D for diagnostics
-- `Alt+O` instead of Ctrl+Shift+O for document symbols
-- `Alt+P` instead of Ctrl+Shift+T for workspace symbols
-- `Alt+R` instead of Ctrl+Shift+R for references
-| `Ctrl+Shift+C` | Copy the terminal selection (Ctrl+C is SIGINT to the shell) |
-| `Ctrl+Shift+V` | Paste the clipboard into the terminal |
-
-
-### Discovering Commands
-- Use `Ctrl+P` (Command Palette) to see all available commands
-- Press `Ctrl+?` or `F1` to see the help screen
-
-### Vim Users
-Some vim-style keybindings work:
-- `j` / `k` - Up/down in panels and file tree
-- `Alt+H/J/K/L` - Navigate between panes
-- `o` - Open file in file tree
-- Navigation in Fuss mode is sibling-based like vim's file explorers
+| Keybinding | Command | Description |
+|------------|---------|-------------|
+| `Ctrl+B` or `F3` | Toggle Tree | Show/hide file tree |
+| **In Tree:** | | |
+| `↑` / `↓` | Navigate | Move to the previous or next VISIBLE row, whatever its depth — not to the next sibling |
+| `→` | Enter | Descend into a directory, expanding it first if needed |
+| `←` | Exit | Collapse an open directory, or go out to the parent |
+| `Enter` | Open | Open the file in a new tab |
+| `Alt+V` / `Alt+S` | Open in Split | Open the file in a vertical or horizontal split |
+| `Space` | Toggle Expand | Expand or collapse a directory (scanned lazily, on first open) |
+| letters | Fuzzy Search | Typing filters the tree. This is why `j`/`k` do not navigate — they are search input |
+| `.` | Toggle Hidden | Show or hide dotfiles and gitignored entries |
+| `Ctrl+/` | Hints | Expand or collapse the hint line |
+| `Esc` | Close Tree | Hide file tree |
 
 ---
-
-## 🚀 Most Useful Combos
-
-**Exploring code:**
-1. `F6` or `Alt+P` - Find any symbol in project
-2. `F12` or `Alt+G` - Jump to definition
-3. `Shift+F12` or `Alt+R` - See all usages
-4. `Alt+,` - Jump back
-
-**Fixing errors:**
-1. `F8` or `Alt+E` - See all errors
-2. Navigate to error line
-3. `F10` or `Alt+.` - Apply quick fix
-4. `Ctrl+S` - Save
-
-**Refactoring:**
-1. `Shift+F12` or `Alt+R` - See all references
-2. `F2` or `Alt+N` - Rename everywhere
-3. `Shift+Alt+F` - Format code
-4. `Ctrl+S` - Save
-
-**Working with multiple files:**
-1. `Ctrl+B` or `F3` - Browse file tree
-2. `Enter` - Open in new tab
-3. `Ctrl+PageDown/Up` - Switch between tabs
-4. `Alt+V` / `Alt+S` - Split panes vertical/horizontal
-5. `Alt+H/J/K/L` - Navigate panes
-
----
-
-## Mouse
-
-| Gesture | Action |
-|---------|--------|
-| Click | Position the cursor. With the file tree open this also closes it and takes focus, since the tree owns the keyboard while it is up |
-| Drag | Select text. Left button only — a right- or middle-drag does nothing |
-| Drag the terminal's top edge | Resize the panel. The separator bar carries a `⇕` marker to say it can be grabbed |
-| `Alt+Click` | Add or remove a cursor |
-| Right-click | Context menu at the pointer. Any modifier held still counts |
-| `Ctrl+Click` | The same menu, for a one-button pointer |
-| `Shift+F10` or `Alt+Z` | The same menu at the caret |
-| Wheel | Scrolls whatever is under the pointer: the pane, an inactive pane, or the terminal panel's scrollback. Over the tab bar or status bar it does nothing |
-| Click a tab | Switch to it |
-| Click a tree row | Open a file, or expand a directory |
-| Right-click a tree row | Open in a split, or stage / unstage / diff |
-| Click the `»` / `«` chevron | Toggle the file tree. Bottom-left corner; it points the way the tree will move |
-
-Right-clicking **inside a selection** keeps that selection, so Cut and Copy act
-on it. Right-clicking anywhere else moves the caret there first, as most
-editors do.
-
-The context menu greys out what cannot work rather than hiding it: Go to
-Definition and Find References are dim without a language server, and a tree
-row's git actions are dim outside a repository or when the file's status makes
-them meaningless. Cut and Copy are never dim — with no selection they act on
-the whole line, and the label says so.
-
-`F10` is frequently claimed by the terminal or desktop for its own menubar,
-which is why `Alt+Z` exists. `python3 tools/keycap.py` shows what your terminal
-actually delivers.
-
----
-
-For detailed feature explanations, see [LSP_GUIDE.md](LSP_GUIDE.md)
 
 ## Tab groups
 
@@ -397,3 +246,170 @@ off the entry, or on down into the document.
 Set `"tabs.group_hover_preview": false` in `settings.json` to turn that off; the
 pinned member row still works, and it stops the editor asking the terminal to
 report every pointer movement.
+
+---
+
+## Command & Utility
+
+| Keybinding | Command | Description |
+|------------|---------|-------------|
+| `Ctrl+P` | Command Palette | Search and execute any command |
+| `F5` or `Alt+T` | Integrated Terminal | Toggle the terminal panel |
+| `Ctrl+Shift+Up` / `Down` | Resize Terminal | Taller / shorter — **only while the terminal has focus** |
+| `Ctrl+Shift+M` | Maximize Terminal | Fill the screen, or go back to the previous height |
+| `Ctrl+?` or `F1` | Help | Show help screen (`Ctrl+?` needs a terminal that supports the kitty keyboard protocol; `F1` always works) |
+| `Ctrl+B` or `F3` | File Tree | Toggle file explorer (Fuss mode) |
+| `Ctrl+L` | Redraw Screen | Clear and redraw the screen |
+| `Esc` | Cancel/Close | Close panels, cancel operations. In the terminal panel it closes the panel only from a bare shell prompt — with text on the line, or inside a full-screen program, the shell gets it |
+
+---
+
+## LSP Features
+
+| Keybinding | Command | Description |
+|------------|---------|-------------|
+| `F12` or `Ctrl+\` or `Alt+G` | Go to Definition | Jump to where a symbol is defined |
+| `Shift+F12` or `Alt+R` | Find References | Find all usages of a symbol |
+| `F2` or `Alt+N` | Rename Symbol | Rename symbol across entire project |
+| `F10` or `Alt+.` | Code Actions | Quick fixes and refactorings |
+| `F8` or `Alt+E` | Diagnostics Panel | Show all errors and warnings |
+| `F4` or `Alt+O` | Document Symbols | Navigate symbols in current file |
+| `F6` or `Alt+P` | Workspace Symbols | Search symbols across all files |
+| `Shift+Alt+F` | Format Document | Auto-format current file |
+| `Ctrl+Space` | Completion | Ask the server for completions here |
+| `Ctrl+H` | Hover | Show type and documentation for the symbol under the caret |
+| `Alt+M` | Server Manager | Open the language-server installer panel |
+| `Alt+,` | Jump Back | Return to previous location (jump stack) |
+
+---
+
+## Panel Navigation
+
+When any panel is open (Diagnostics, References, Symbols, etc.):
+
+| Keybinding | Command | Description |
+|------------|---------|-------------|
+| `↑` `↓` or `j` `k` | Navigate Items | Move selection up/down |
+| `Enter` | Select/Jump | Jump to selected item |
+| `Esc` | Close Panel | Close the panel |
+| Type characters | Filter/Search | Narrow down results (in symbols panels) |
+
+---
+
+## Special Modes
+
+### Find Bar
+Active when `Ctrl+F` is pressed. See the Search & Replace section above for
+the full key list. In short: arrows, page keys, `Enter`, `Tab` and `Space`
+step through the matches; add `Shift` to go back; typing edits the pattern
+and re-searches live; `Ctrl+F` or `Esc` puts it away.
+
+### Fuss (File Tree) Mode
+Active when `Ctrl+B` or `F3` is pressed. See the File Tree section above for
+the keys. In short: arrows move and descend, `Enter` opens, `Space` expands,
+typing filters, and everything git is behind `Ctrl+G`.
+
+**Git operations in the tree** — all behind a `Ctrl+G` prefix, pressed first.
+Bare letters are fuzzy-search input, so the prefix is what keeps both usable:
+
+- `Ctrl+G` `a` - Stage file
+- `Ctrl+G` `u` - Unstage file
+- `Ctrl+G` `d` - Diff file
+- `Ctrl+G` `m` - Commit with message
+- `Ctrl+G` `p` - Push to remote
+- `Ctrl+G` `f` - Fetch from remote
+- `Ctrl+G` `l` - Pull from remote
+- `Ctrl+G` `t` - Create and push tag
+
+`Esc` cancels the prefix if you change your mind. Right-clicking a tree row
+offers the same actions without it.
+
+---
+
+## Mouse
+
+| Gesture | Action |
+|---------|--------|
+| Click | Position the cursor. With the file tree open this also closes it and takes focus, since the tree owns the keyboard while it is up |
+| Drag | Select text. Left button only — a right- or middle-drag does nothing |
+| Drag the terminal's top edge | Resize the panel. The separator bar carries a `⇕` marker to say it can be grabbed |
+| `Alt+Click` | Add or remove a cursor |
+| Right-click | Context menu at the pointer. Any modifier held still counts |
+| `Ctrl+Click` | The same menu, for a one-button pointer |
+| `Shift+F10` or `Alt+Z` | The same menu at the caret |
+| Wheel | Scrolls whatever is under the pointer: the pane, an inactive pane, or the terminal panel's scrollback. Over the tab bar or status bar it does nothing |
+| Click a tab | Switch to it |
+| Click a tree row | Open a file, or expand a directory |
+| Right-click a tree row | Open in a split, or stage / unstage / diff |
+| Click the `»` / `«` chevron | Toggle the file tree. Bottom-left corner; it points the way the tree will move |
+
+Right-clicking **inside a selection** keeps that selection, so Cut and Copy act
+on it. Right-clicking anywhere else moves the caret there first, as most
+editors do.
+
+The context menu greys out what cannot work rather than hiding it: Go to
+Definition and Find References are dim without a language server, and a tree
+row's git actions are dim outside a repository or when the file's status makes
+them meaningless. Cut and Copy are never dim — with no selection they act on
+the whole line, and the label says so.
+
+`F10` is frequently claimed by the terminal or desktop for its own menubar,
+which is why `Alt+Z` exists. `python3 tools/keycap.py` shows what your terminal
+actually delivers.
+
+---
+
+For detailed feature explanations, see [LSP_GUIDE.md](LSP_GUIDE.md)
+
+---
+
+## Doing things
+
+**Reading unfamiliar code.** `Alt+P` finds any symbol in the project, `Alt+G`
+jumps to where it is defined, `Alt+R` shows everywhere it is used, and `Alt+,`
+walks back out along the trail you came in on.
+
+**Working through errors.** `Alt+E` lists every diagnostic in the file;
+`Enter` on one jumps there; `Alt+.` offers whatever fixes the server has.
+
+**Renaming something.** `Alt+R` first, to see what you are about to change.
+`Alt+N` then renames it across the project in one edit, which the undo stack
+treats as one step.
+
+**Several files at once.** `Ctrl+B` for the tree, `Enter` to open, `Alt+V` or
+`Alt+S` to split, `Alt+H/J/K/L` between panes. For more than a handful, open
+the directory as a tab group instead — `Enter` on it in the tree — and the
+whole set travels as one tab-bar entry.
+
+---
+
+## Tips
+
+### When a key does nothing
+
+It is usually not the editor. A terminal emulator, a multiplexer or the desktop
+can all take a chord before any program sees it, and none of them says so.
+`python3 tools/keycap.py` prints what your terminal actually delivers, which
+answers the question directly.
+
+The usual suspects: F-keys claimed for media or menubars, `Ctrl+W` closing a
+terminal tab, tmux eating `Ctrl+A` as its prefix, and window managers taking
+`Ctrl+Alt+Arrow` and `Super+Arrow`.
+
+Every F-key command has an `Alt` alternative for this reason — `Alt+G` for
+`F12`, `Alt+E` for `F8`, `Alt+N` for `F2`, and so on down the LSP table. Where
+two chords do the same thing in this document, the `Alt` one is the one that
+works everywhere.
+
+### Discovering commands
+- `Ctrl+P` opens the command palette, which lists everything the editor can do
+- `Ctrl+?` or `F1` shows the help screen
+
+### Vim-flavoured keys
+- `Alt+H` / `Alt+J` / `Alt+K` / `Alt+L` move between panes
+- `j` / `k` move the selection in panels (diagnostics, references, symbols)
+
+In the FILE TREE `j` and `k` are search input, not motion — typing filters the
+tree. Use the arrows there.
+
+---

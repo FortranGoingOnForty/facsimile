@@ -1,320 +1,187 @@
 # facsimile
 (noun) : something clever, trevor
 
-Terminal text editor written in Fortran. VSCode-style keybindings.
-
-## Build
-
-### Using Make (Recommended)
-The Makefile provides optimized, platform-specific builds:
-- **macOS arm64**: Uses flang-new for better apple silicon support
-- **macOS Intel/Linux**: Uses gfortran with standard optimization flags
+A terminal text editor written in modern Fortran. It keeps VSCode's keys where
+a terminal can express them, and says so plainly where it can't.
 
 ```bash
-make
-./fac [filename]
+fac                 # welcome menu: recent workspaces and files
+fac notes.md        # open a file
+fac src/parser      # open a directory as a workspace
 ```
 
-### Using fpm (Development)
+## Why
+
+Fortran is a language people assume you write numerical kernels in and nothing
+else. `fac` is the argument that the assumption is about the ecosystem rather
+than the language. Everything above the system call is Fortran: the gap buffer,
+the ANSI renderer, the JSON parser that talks to language servers, the syntax
+highlighter. C appears only where an `iso_c_binding` shim is the only way
+through — `termios`, `forkpty`, POSIX regex, the pipes to an LSP process.
+
+The practical goal is narrower: an editor that starts instantly, holds a whole
+project without a config file, and doesn't need a plugin to open a second file.
+
+## Install
+
 ```bash
-fpm build
-./build/gfortran_*/app/fac [filename]
-or 
-fpm run -- [filename]
+# Homebrew
+brew install FortranGoingOnForty/tap/facsimile
+
+# Arch (AUR)
+yay -S facsimile
 ```
 
-## Keybindings
+Or take a tarball for Linux, macOS or Windows from
+[Releases](https://github.com/FortranGoingOnForty/facsimile/releases).
 
-### Navigation
-- `arrows` - move cursor
-- `ctrl-a` / `home` - smart home (toggle between first non-whitespace and column 1)
-- `ctrl-e` / `end` - end of line
-- `alt-left/right` - jump by word/punctuation group
-- `pageup/pagedown` - page scroll
-- `alt-[` / `alt-]` - jump to matching bracket
+### From source
 
-### Mouse
+Needs gfortran and a C compiler. The Makefile picks the toolchain per platform
+— gfortran-15 or flang-new from Homebrew on Apple silicon, plain gfortran
+elsewhere.
 
-- `click` - position the cursor; with the file tree open this also takes focus
-  and closes the tree, since the tree owns the keyboard while it is up
-- `drag` - select text (left button only)
-- `alt-click` - add or remove a cursor
-- `right-click` (or `ctrl-click`, for a one-button pointer) - context menu at
-  the pointer; in a split document it also offers Close Pane, which closes the
-  pane you clicked; `shift-f10` or `alt-z` opens the same menu at the caret.
-  Right-clicking inside a selection keeps it, so Cut and Copy act on the
-  selection rather than the line
-- `wheel` - scrolls whatever is under the pointer: the pane, an inactive pane,
-  or the terminal panel's scrollback. Over the tab bar or status bar it does
-  nothing rather than moving a document you are not pointing at
-- **drag a tab** along the bar to reorder it. A ghost follows the pointer and
-  the bar shows where it will land; release to commit, release anywhere else
-  to snap back. Holding over a `<`/`>` chevron scrolls the bar, so a tab can
-  be carried off-screen. Picking a tab up does not open it — only a click does
-- drag a tab off the bar and into the document to make a **split**: near the
-  left, right or bottom quarter of the pane a band shows the shape the new
-  pane will take, and releasing puts the file there and takes it off the tab
-  bar. Save it first if it has unsaved changes
-- drag a tab GROUP entry and its members travel with it. Drag a member off the
-  member row onto the bar to take it out of the group, or hold a tab over a
-  group for a moment to open its members and drop it in. Resting on a group
-  holds the bar still and lights the entry up, so it can actually be pointed
-  at; sweeping past one leaves it alone. Once its members are showing, moving
-  down among them shows exactly where the tab will land. Moving a file from
-  one group to another is one continuous drag: pick it up, rest on the other
-  group until its members appear, drop
-- click a `[n: name]` tab to switch to it; right-click one for Close Tab,
-  Close Other Tabs, Copy Path and Remove from Group. These act on the tab you
-  clicked, not the one you are looking at
-- right-click a tab GROUP entry for Edit, Rename and Dissolve
-- click a file tree row to open it, a directory row to expand it; right-click a
-  row for open-in-split and the git actions (stage, unstage, diff) that
-  otherwise hide behind the `ctrl-g` prefix
-- click the `»`/`«` chevron in the bottom-left corner to toggle the file tree;
-  it points the way the tree will move (`ctrl-b` still does the same)
+```bash
+make            # -> ./fac
+make dev        # warnings and runtime checks
+make debug      # -O0 with backtraces
+make info       # what it detected
+```
 
-### Selection
-- `shift-arrows` - character selection
-- `shift-alt-left/right` - word selection
-- `shift-ctrl-a/e` - select to line start/end
-- `shift-home/end` - select to line boundaries
-- `shift-pageup/pagedown` - page selection
-- `alt-a` - select all
-- `esc` - clear selection / exit multi-cursor mode
+There is also an fpm build (`fpm run -- file.txt`), used by the test suite.
+`make` is the release path.
 
-### Editing
-- `backspace` / `ctrl-h` - delete backward
-- `delete` - delete forward
-- `tab` - indent to the next tab stop, or indent the selection (a hard tab in Makefiles, where spaces are a syntax error)
-  - on a line holding only whitespace it jumps straight to where the line belongs, read from the block above, so re-entering a nested block is one press
-- `backspace` in leading whitespace - removes a whole indent level, not one space
-- `shift-tab` - dedent selection or current line
-- `ctrl-/` - toggle line comment (indent-aware; comments whole lines for a partial selection)
-- `ctrl-k` - kill line forward (yank stack)
-- `ctrl-shift-k` - delete line outright (no clipboard, no yank stack)
-- `ctrl-u` - kill line backward (yank stack)
-- `ctrl-y` - yank from stack
-- `ctrl-w` / `alt-backspace` - delete word backward (at column 1 it takes the line break, so it eats blank lines)
-- `alt-d` / `alt-delete` / `fn-alt-backspace` - delete word forward
-- `ctrl-t` - transpose characters
-- `ctrl-j` - join lines
+## What you get
 
-### Clipboard
-- `ctrl-x` - cut line/selection
-- `ctrl-c` - copy line/selection
-- `ctrl-v` - paste
+**Workspaces.** Open a directory and `fac` remembers it: which files were open,
+where each caret was, how the panes were split, whether the tree was showing.
+It comes back that way. State lives in `.fac/workspace.json` at the workspace
+root — not in a dotfile in your home directory deciding things for every
+project at once.
 
-### Lines
-- `alt-up/down` - move line up/down
-- `alt-shift-up/down` - duplicate line up/down
+**Tab groups.** A sub-workspace inside a workspace. Press `enter` on a
+directory in the file tree, tick the files you want, and they collapse into one
+tab-bar entry — `src/ (4)` — with their own row while you are inside it.
+Members are read from disk the first time you look at them, so a forty-file
+group costs one file read rather than forty.
 
-### Multiple Cursors
-- `ctrl-d` - select next match (creates selections + cursors)
-- `alt-click` - add/remove cursor at position
-- `ctrl-alt-up` / `ctrl-alt-down` - add cursor on the line above / below
-- `super-up` / `super-down` or `ctrl-shift-alt-up` / `down` - the same
-- `esc` - exit multi-cursor mode (keep active cursor only)
+**Panes.** `alt-v` and `alt-s` split the view; each pane keeps its own viewport
+and caret over the same buffer. Drag a tab off the bar into a pane's left,
+right or bottom quarter to split the file into place — a band shows the shape
+before you let go.
 
-Three chords for one command because most desktops claim the first two:
-`ctrl+alt+arrows` switches workspace on GNOME and KDE, and `super+arrows` tiles
-the window. `ctrl+shift+alt+arrows` is the one neither of them wants.
+**An integrated terminal** (`f5`) that knows it is inside an editor. Typing
+`fac notes.md` at its prompt opens a tab in the session you are already in,
+rather than starting a second editor inside the first.
 
-### Search
-- `ctrl-f` - find bar, seeded with the word under the caret
-- `ctrl-r` - find and replace
+**Language servers**, detected and installed per language, with go-to-
+definition, references, project-wide rename, diagnostics, code actions and
+document formatting. See [docs/LSP_GUIDE.md](docs/LSP_GUIDE.md).
+
+**A git-aware file tree** (`ctrl-b`) showing staged, modified and untracked
+status inline, with stage, unstage, commit, push and pull behind a `ctrl-g`
+prefix — single letters stay free for fuzzy search.
+
+**Inline AI completion** from a local model, off until you turn it on with
+`alt-i`. Nothing runs, connects or leaves your machine before that. See
+[docs/AI_COMPLETION.md](docs/AI_COMPLETION.md).
+
+## Keys
+
+The full list is `F1` inside the editor, or
+[docs/KEYBINDINGS.md](docs/KEYBINDINGS.md). Enough to get moving:
+
+| | |
+|---|---|
+| `ctrl-s` / `ctrl-q` | save / quit |
+| `ctrl-o` / `ctrl-b` | file browser / file tree |
+| `ctrl-p` | command palette |
+| `ctrl-f` | find |
+| `ctrl-g` | go to line:column |
+| `ctrl-z` / `ctrl-]` | undo / redo |
+| `alt-v` / `alt-s` | split vertically / horizontally |
+| `ctrl-t` / `ctrl-w` | new tab / close tab |
+| `alt-1` … `alt-9` | jump to a tab |
+| `f12` / `shift-f12` / `f2` | go to definition / references / rename |
+| `f1` | everything else |
+
+### Find
 
 `ctrl-f` on a word searches for that word without your typing it, lights every
 occurrence, and draws the one you are on differently from the rest. The bar
 stays up while you walk them: arrows, page keys, `enter`, `tab` and `space`
-step forward, add `shift` to step back, `home`/`end` are the first and last.
-Typing replaces the seeded word and re-searches live. A second `ctrl-f` puts
-the bar away and leaves the matches lit for `n`/`N`; `esc` ends the search.
+step forward, add `shift` to step back, `home` and `end` are the first and
+last. Typing replaces the seeded word and re-searches as you go. A second
+`ctrl-f` puts the bar away and leaves the matches lit for `n`/`N`; `esc` ends
+the search.
 
-### Special
-- `alt-'` - cycle quotes: " → ' → ` → "
-- `alt-shift-'` - remove surrounding brackets/quotes
-- `ctrl-z` - undo
-- `ctrl-]` / `ctrl-shift-z` - redo (use ctrl-] if terminal intercepts ctrl-shift-z)
-- `ctrl-l` - clear/redraw screen
+### Multiple cursors
 
-### File
-- `ctrl-s` - save
-- `ctrl-q` - quit
-- `ctrl-b` - toggle file tree (fuss mode)
+`ctrl-d` takes the next match, `alt-click` adds one anywhere, and
+`ctrl-alt-up`/`down` adds one on the line above or below. That last one has two
+aliases — `super-up`/`down` and `ctrl-shift-alt-up`/`down` — because GNOME and
+KDE take `ctrl+alt+arrows` for workspace switching and `super+arrows` for
+window tiling, and never pass them on. The three-modifier chord is the one
+neither desktop wants.
 
-### Tab Management
-- `ctrl-t` - create new tab
-- `ctrl-pageup` / `ctrl-pagedown` - previous / next tab
-- `alt-1` .. `alt-9` - jump to a tab by number (`alt-0` is tab 10)
-  - a further digit within half a second extends it: `alt-1` then `5` goes to tab 15
-  - if the first digit lands on a tab inside a group, the next digit picks that
-    group's Nth member instead; the status bar says which it will be
+### Mouse
 
-### Integrated Terminal
-- `f5` / `alt-t` - toggle the terminal panel
-- `ctrl-shift-up` / `ctrl-shift-down` - taller / shorter, while the terminal has focus
-- `ctrl-shift-m` - maximize, or go back to the previous height
-- drag the separator bar (marked `⇕`) to resize it with the mouse
+Click to place the caret, drag to select, `alt-click` for another cursor,
+right-click for a context menu at the pointer. The wheel scrolls whatever is
+under it — the active pane, an inactive one, the terminal's scrollback — and
+does nothing over the tab bar, rather than moving a document you are not
+pointing at.
 
-The height is kept as a fraction of the screen, so the panel holds its
-proportion when the window is resized, and it is remembered per workspace.
-Set `"terminal.height_percent"` in `settings.json` to change where it starts.
+Tabs drag along the bar to reorder, into a pane to split, or onto a group to
+join it. Right-clicking inside a selection keeps the selection, so Cut and Copy
+act on it rather than on the line.
 
-`fac` typed at the panel's prompt opens in the session you are already in,
-rather than starting a second editor inside the first:
+Full detail in [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md#mouse).
 
-```
-$ fac notes.md      # opens as a tab here
-$ fac src/parser    # opens as a tab group here
-```
+## Terminals
 
-A directory means something different in the panel than outside it. From a
-normal shell `fac src/parser` opens that directory as a whole new workspace,
-which is unchanged; from the panel you already have a workspace, so it opens
-the group dialog instead. Focus moves out of the terminal either way. Pass
-`-w` to opt out and get a separate editor.
+Some chords never reach a terminal program at all, and it is the terminal or
+the desktop eating them, not `fac`:
 
-### Tab Groups
-Open a directory as a sub-workspace: press `enter` on a directory in the file
-tree and tick the files you want. The group appears in the tab bar as
-`src/ (4)`, and its members get their own row while you are inside it.
+| Chord | Who takes it | Use instead |
+|---|---|---|
+| `ctrl-a` | tmux and screen, as their prefix | `home` |
+| `ctrl-shift-z` | WezTerm, in multi-pane mode | `ctrl-]` |
+| `f2` | GNOME, KDE and most tiling WMs, for "rename" | `alt-n` |
+| `f10` | terminal and desktop menubars | `alt-z` |
+| `ctrl-'` | most terminals send a plain apostrophe | `alt-'` |
 
-**Right-click a group entry** for Edit, Rename and Dissolve. Editing reopens
-the same dialog with the current members already ticked, so ticking another
-file adds it and unticking one closes its tab — with the usual save prompt if
-it has unsaved changes, which the dialog marks with a `•` beforehand. The
-dialog opens on the group's own directory, or on wherever most of its members
-live, and `..` still walks anywhere: ticks are kept by path, so a group can
-span directories. Dissolve breaks the group up and leaves every member open.
-The same three are in the command palette as `Edit/Rename/Dissolve Tab Group`.
+`python3 tools/keycap.py` shows what your terminal actually delivers for a
+given key, which settles the question faster than guessing does.
 
-- `super+ctrl+left` / `right` - previous / next file; steps through a group's members, and off the end of one leaves it
-- `super+ctrl+down` / `up` - enter a group / leave it from any member in one press
-- `ctrl-pageup` / `ctrl-pagedown` or `alt-ctrl-left` / `right` - the same, for terminals that do not report Super
+`ctrl-/` and `ctrl-?` are the same byte (0x1F) under the legacy encoding, so
+`fac` asks for the kitty keyboard protocol at startup to tell them apart. Where
+that is declined — including inside tmux without `set -g extended-keys on` —
+`ctrl-/` toggles a comment and `F1` opens help.
 
-Left/right is one continuous line through every open file, so it always gets you
-out of a group even if your window manager eats the Super bindings.
+To get `ctrl-shift-z` back in WezTerm:
 
-Hovering a group previews its members without moving your text, and the preview
-stays while the pointer is over the group's own area, so you can move down into
-the members rather than watching them vanish as you reach for them. Group members
-are read from disk the first time you look at them, so a forty-file group costs
-one file read, not forty. Groups are saved in `workspace.json` and come back on
-restart. See [docs/KEYBINDINGS.md](docs/KEYBINDINGS.md#tab-groups) for detail.
-
-### Pane Management
-Split your view into multiple panes for side-by-side editing of the same file.
-
-**Creating Panes:**
-- `alt-v` - split pane vertically (creates pane to the right)
-- `alt-s` - split pane horizontally (creates pane below)
-
-**Navigating Panes:**
-- `alt-h` / `ctrl-shift-left` - move to left pane
-- `alt-l` / `ctrl-shift-right` - move to right pane
-- `alt-k` / `ctrl-shift-up` - move to pane above
-- `alt-j` / `ctrl-shift-down` - move to pane below
-
-**Managing Panes:**
-- `alt-q` - close current pane only
-- `ctrl-w` - close current pane (closes tab when last pane)
-
-**Features:**
-- Each pane has independent viewport and cursor
-- Line numbers display in all panes
-- Active pane shows with visible cursor
-- Inactive panes have subtle dark background
-- Minimum pane size enforced (20 columns)
-
-### File Tree (Fuss Mode)
-When in fuss mode (ctrl-b), you get a split view with a git-aware file tree on the left (30%) and editor on the right (70%).
-
-**Navigation:**
-- `↑` / `↓` - move to the previous/next visible row, whatever its depth
-- `→` - descend into a directory (expanding it first if needed)
-- `←` - collapse an open directory, or go back out to the parent
-
-**Opening Files:**
-- `enter` or `o` - open file in new tab
-
-**Display Options:**
-- `.` - toggle hiding dotfiles and gitignored files
-  - When enabled, both dotfiles and gitignored files are hidden from view
-  - Directories containing only hidden files are greyed out but remain visible
-  - Uses `git check-ignore` to detect gitignored files
-
-**Git Operations:**
-- `a` - stage file (git add)
-- `u` - unstage file (git restore --staged)
-
-**Status Indicators:**
-- Green `↑` - staged changes
-- Red `✗` - modified tracked files
-- Gray `✗` - untracked files
-
-**Memory:**
-- closing and reopening the tree keeps the directories you had open, and
-  whether hidden files were showing
-- folders holding an open file are opened up to, even hidden or gitignored
-  ones; everything else hidden stays hidden. Open tabs are saved with the
-  workspace, so this survives a restart
-
-**Exit:**
-- `esc` - exit fuss mode back to editor
-- `ctrl-b` - toggle fuss mode off
-
-### AI inline completion (opt-in)
-
-Complete code inline from a local model, shown as dim shadow text. Reads the
-comment above the caret and the code on both sides of it, so it completes
-intent rather than matching identifiers that already exist.
-
-**Off by default** — nothing runs, connects, or leaves your machine until you
-turn it on with `alt-i` (or `ctrl-p` → *AI: Toggle Inline Completion*).
-`alt-i` is also the quick off switch — instant, and it clears anything on screen.
-
-- `tab` - accept the suggestion
-- `right` - accept, at end of line
-- `ctrl-right` / `alt-right` - accept one word / one line
-- `alt-\` - deep completion here (bigger model, longer budget)
-- any other key dismisses it
-
-Reaching a *remote* model is a second, separate opt-in, and shows a permanent
-`[AI->host]` badge in the status bar while active.
-
-See **[docs/AI_COMPLETION.md](docs/AI_COMPLETION.md)** for setup, settings and
-troubleshooting.
-
-### Help
-- `ctrl-?` (ctrl-shift-/) or `F1` - show keybindings
-
-`ctrl-/` and `ctrl-?` are the same byte (0x1F) in the legacy terminal
-encoding, so `fac` negotiates the kitty keyboard protocol at startup to tell
-them apart. In terminals that decline it (and inside `tmux` without
-`set -g extended-keys on`), `ctrl-/` toggles a comment and `F1` opens help.
-
-## Terminal Compatibility Notes
-
-Some keybindings may be intercepted by your terminal emulator:
-- **Ctrl+A**: Often intercepted by tmux/screen (use `Home` instead)
-- **Ctrl+Shift+Z**: Intercepted by WezTerm in multi-pane mode (use `Ctrl+]` instead)
-- **Ctrl+'**: Most terminals send plain apostrophe (use `Alt+'` instead)
-- **Ctrl+Alt+Backspace**: Most terminals send alt-backspace (use `Alt+Shift+'` instead)
-- **F2**: Frequently grabbed by the window manager or desktop shell (GNOME, KDE and
-  several tiling WMs bind it for "rename"), so no program ever sees it — use
-  `Alt+N` for rename symbol instead. `python3 tools/keycap.py` shows whether a key
-  reaches the terminal at all.
-
-For WezTerm users, add to `~/.wezterm.lua` to enable Ctrl+Shift+Z:
 ```lua
 config.keys = {
   { key = 'Z', mods = 'CTRL|SHIFT', action = wezterm.action.DisableDefaultAssignment },
 }
 ```
 
-## Implementation
+## Under it
 
-Gap buffer for text storage. Pure Fortran with ANSI escape sequences.
+A gap buffer for the text, ANSI escape sequences for the screen, and small C
+wrappers where POSIX has no Fortran interface: raw mode, the pseudoterminal
+behind the integrated terminal, POSIX regex, and the pipes to language server
+subprocesses. Cursor positions are UTF-8 character indices throughout,
+converted to bytes only where a C interface demands it.
+
+## Docs
+
+- [KEYBINDINGS.md](docs/KEYBINDINGS.md) — every key, and why some are odd
+- [LSP_GUIDE.md](docs/LSP_GUIDE.md) — language servers
+- [AI_COMPLETION.md](docs/AI_COMPLETION.md) — inline completion setup
+- [WORKSPACE_QUICKSTART.md](docs/WORKSPACE_QUICKSTART.md) — workspaces and the fortress
+- [config_spec.md](docs/config_spec.md) — settings reference
 
 ## License
 
