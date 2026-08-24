@@ -29,7 +29,9 @@ module renderer_module
     use references_panel_module, only: render_references_panel
     use code_actions_panel_module, only: render_code_actions_panel
     use symbols_panel_module, only: render_symbols_panel
-    use unified_search_module, only: get_matches_on_line, search_mode_active
+    use unified_search_module, only: get_matches_on_line, search_mode_active, &
+                                     active_match_span, render_search_panel, &
+                                     is_search_panel_visible
     use lsp_server_installer_panel_module, only: render_lsp_server_installer_panel, &
                                                   is_lsp_server_installer_panel_visible
     use terminal_panel_module, only: is_terminal_panel_visible, &
@@ -702,6 +704,11 @@ contains
         call render_split_preview(editor)
         call render_drag_ghost(editor)
 
+        ! The find bar replaces the status line while it is up, so it has to
+        ! come after render_status_bar -- and it leaves the caret in its own
+        ! field, so it has to come after the caret renderers too.
+        if (is_search_panel_visible()) call render_search_panel(editor)
+
         ! This runs last in every frame, and render_screen's panes branch
         ! returns straight after it without flushing -- so anything drawn
         ! above would sit in the write buffer until some later frame happened
@@ -938,6 +945,8 @@ contains
         integer :: search_matches(2, 50)  ! Up to 50 matches per line (start, end pairs)
         integer :: num_search_matches, match_idx
         integer :: line_byte_len
+        logical :: has_active_match, is_active_match
+        integer :: active_sbyte, active_ebyte
 
         line = buffer_get_line(buffer, line_num)
         line_byte_len = len(line)
@@ -949,6 +958,11 @@ contains
         else
             num_search_matches = 0
         end if
+
+        ! Which of them, if any, is the one the caret is on. Without this
+        ! every match looks the same and walking a search tells you nothing
+        ! about where you are in it.
+        has_active_match = active_match_span(line_num, active_sbyte, active_ebyte)
 
         ! Get syntax tokens for this line (tokens use byte indices)
         if (syntax_highlighter%enabled) then
@@ -1051,6 +1065,7 @@ contains
 
             ! Check if this position is part of a search match (search uses byte indices)
             is_search_match = .false.
+            is_active_match = .false.
             if (byte_pos > 0) then
                 do match_idx = 1, num_search_matches
                     if (byte_pos >= search_matches(1, match_idx) .and. byte_pos <= search_matches(2, match_idx)) then
@@ -1058,6 +1073,9 @@ contains
                         exit
                     end if
                 end do
+                if (has_active_match) then
+                    if (byte_pos >= active_sbyte .and. byte_pos <= active_ebyte) is_active_match = .true.
+                end if
             end if
 
             ! Find which token this column belongs to (tokens use byte indices)
@@ -1072,8 +1090,15 @@ contains
             end if
 
             ! Determine this character's style (priority order preserved)
-            if (in_selection) then
-                ! Selected text: reverse video (highest priority)
+            if (is_active_match) then
+                ! The match the caret is on, above even the selection --
+                ! which it IS, so reverse video here would make the current
+                ! match indistinguishable from any other selected text.
+                ! Bold black on orange reads at a glance against the plain
+                ! yellow of the rest.
+                style = char(27) // '[1m' // char(27) // '[30m' // char(27) // '[48;5;208m'
+            else if (in_selection) then
+                ! Selected text: reverse video
                 style = char(27) // '[7m'
             else if (is_bracket_match) then
                 ! Matching brackets: cyan background

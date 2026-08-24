@@ -8,11 +8,15 @@ module unified_search_module
     implicit none
     private
 
-    public :: show_unified_search_prompt
     public :: current_search_pattern, clear_search_pattern, exit_search_mode
     public :: find_next_match, find_prev_match, center_viewport_on_cursor
     public :: get_matches_on_line, search_mode_active
     public :: search_forward, search_backward
+
+    ! The find bar, as a panel the main loop drives (see below)
+    public :: search_panel_show, search_panel_hide, is_search_panel_visible
+    public :: search_panel_handle_key, render_search_panel
+    public :: active_match_span
 
     ! Column conventions: cursor_t columns are 1-based UTF-8 CHARACTER
     ! indices, while the search internals (index(), POSIX regex) work on
@@ -42,12 +46,6 @@ module unified_search_module
     ! Active search mode - persists after first search
     logical :: search_mode_active = .false.
 
-    ! Track last search parameters to detect changes
-    character(len=:), allocatable :: last_search_pattern
-    logical :: last_case_sensitive = .false.
-    logical :: last_whole_word = .false.
-    logical :: last_use_regex = .false.
-
     ! Field focus (1 = find, 2 = replace)
     integer :: active_field = 1
 
@@ -57,6 +55,44 @@ module unified_search_module
     integer :: history_count = 0
     integer :: history_index = 0  ! Current position when navigating history
 
+    ! ---- Find bar state -------------------------------------------------
+    ! Ctrl-F used to run its own blocking read loop, so nothing could
+    ! re-render while it was up and the matches it lit only became visible
+    ! after it exited. It is now state plus a key handler plus a render, on
+    ! the same footing as the group dialog -- which is what lets every match
+    ! stay lit while you walk between them.
+    logical :: panel_visible = .false.
+
+    ! True while the last key typed into the bar was a character or a
+    ! backspace. It decides who owns the two keys that mean something to
+    ! both the field and the matches: while you are composing, SPACE and TAB
+    ! belong to the field; the moment you navigate, they belong to the
+    ! matches. Seeding from the word under the caret opens the bar NOT
+    ! composing, so every navigation key is live immediately.
+    logical :: composing = .false.
+
+    ! The seeded pattern behaves like selected text: it is there to
+    ! search with, and the first character typed replaces it rather
+    ! than extending it.
+    logical :: seed_fresh = .false.
+
+    character(len=256) :: panel_find = ' '
+    character(len=256) :: panel_replace = ' '
+    integer :: panel_find_len = 0
+    integer :: panel_replace_len = 0
+
+    ! Where an edit to the pattern restarts its search from, so that typing
+    ! narrows the match set from one fixed point instead of chasing the
+    ! caret forward one match per keystroke.
+    integer :: anchor_line = 1
+    integer :: anchor_col = 0
+
+    ! The match the caret is on, in BYTE columns on its own line. The
+    ! renderer paints this one differently from the rest; 0 means none.
+    integer :: active_match_line = 0
+    integer :: active_match_sbyte = 0
+    integer :: active_match_ebyte = 0
+
     ! Search in selection mode
     logical :: search_in_selection = .false.
     integer :: selection_start_line = 1
@@ -65,449 +101,6 @@ module unified_search_module
     integer :: selection_end_col = 1
 
 contains
-
-    subroutine show_unified_search_prompt(editor, buffer)
-        type(editor_state_t), intent(inout) :: editor
-        type(buffer_t), intent(inout) :: buffer
-        character(len=256) :: find_buffer, replace_buffer
-        character(len=256) :: prompt
-        integer :: find_pos, replace_pos, ch
-        integer :: temp_line, temp_col
-        logical :: in_alt_sequence
-
-        ! Initialize
-        find_buffer = ''
-        replace_buffer = ''
-        find_pos = 0
-        replace_pos = 0
-        active_field = 1  ! Start with find field
-        in_alt_sequence = .false.
-
-        ! Check if there's an active selection for search-in-selection mode
-        if (editor%cursors(editor%active_cursor)%has_selection) then
-            search_in_selection = .true.
-            selection_start_line = editor%cursors(editor%active_cursor)%selection_start_line
-            selection_start_col = editor%cursors(editor%active_cursor)%selection_start_col
-            selection_end_line = editor%cursors(editor%active_cursor)%line
-            selection_end_col = editor%cursors(editor%active_cursor)%column
-            ! Ensure start comes before end
-            if (selection_start_line > selection_end_line .or. &
-                (selection_start_line == selection_end_line .and. selection_start_col > selection_end_col)) then
-                ! Swap
-                temp_line = selection_start_line
-                temp_col = selection_start_col
-                selection_start_line = selection_end_line
-                selection_start_col = selection_end_col
-                selection_end_line = temp_line
-                selection_end_col = temp_col
-            end if
-            ! Bounds are compared against byte match positions
-            selection_start_col = line_byte_col(buffer, selection_start_line, selection_start_col)
-            selection_end_col = line_byte_col(buffer, selection_end_line, selection_end_col)
-        else
-            search_in_selection = .false.
-        end if
-
-        ! If we have existing patterns, load them
-        if (allocated(current_search_pattern)) then
-            find_buffer = current_search_pattern
-            find_pos = len(current_search_pattern)
-        end if
-        if (allocated(current_replace_text)) then
-            replace_buffer = current_replace_text
-            replace_pos = len(current_replace_text)
-        end if
-
-        ! Build and display prompt
-        call build_unified_prompt(prompt, find_buffer, find_pos, replace_buffer, replace_pos)
-        call display_prompt(editor, prompt, find_pos, replace_pos)
-
-        ! Input loop
-        do
-            ch = terminal_read_char()
-
-            if (ch == -1) then
-                cycle
-            else if (ch == 27) then  ! ESC or Alt sequence
-                in_alt_sequence = .true.
-                ch = terminal_read_char()
-
-                if (ch == -1 .or. ch == 27) then
-                    ! Standalone ESC - exit search mode
-                    search_mode_active = .false.
-                    exit
-                else if (ch == iachar('[')) then
-                    ! Arrow keys or mouse events
-                    ch = terminal_read_char()
-                    if (ch == iachar('<')) then
-                        ! Mouse event - consume until 'M' or 'm'
-                        do
-                            ch = terminal_read_char()
-                            if (ch == iachar('M') .or. ch == iachar('m') .or. ch == -1) exit
-                        end do
-                        in_alt_sequence = .false.
-                        cycle
-                    else if (ch == iachar('A')) then
-                        ! Up arrow - navigate history backward (older)
-                        if (active_field == 1) then  ! Only in find field
-                            call navigate_history_up(find_buffer, find_pos)
-                            call build_unified_prompt(prompt, find_buffer, find_pos, replace_buffer, replace_pos)
-                            call display_prompt(editor, prompt, find_pos, replace_pos)
-                        end if
-                    else if (ch == iachar('B')) then
-                        ! Down arrow - navigate history forward (newer)
-                        if (active_field == 1) then  ! Only in find field
-                            call navigate_history_down(find_buffer, find_pos)
-                            call build_unified_prompt(prompt, find_buffer, find_pos, replace_buffer, replace_pos)
-                            call display_prompt(editor, prompt, find_pos, replace_pos)
-                        end if
-                    end if
-                    ! Not a mouse event, fall through
-                    in_alt_sequence = .false.
-                    cycle
-                else if (ch == iachar('c') .or. ch == iachar('C')) then
-                    ! Alt+C - toggle case sensitive
-                    case_sensitive = .not. case_sensitive
-                    call build_unified_prompt(prompt, find_buffer, find_pos, replace_buffer, replace_pos)
-                    call display_prompt(editor, prompt, find_pos, replace_pos)
-                    in_alt_sequence = .false.
-                else if (ch == iachar('w') .or. ch == iachar('W')) then
-                    ! Alt+W - toggle whole word
-                    whole_word = .not. whole_word
-                    call build_unified_prompt(prompt, find_buffer, find_pos, replace_buffer, replace_pos)
-                    call display_prompt(editor, prompt, find_pos, replace_pos)
-                    in_alt_sequence = .false.
-                else if (ch == iachar('r') .or. ch == iachar('R')) then
-                    ! Alt+R - toggle regex mode
-                    use_regex = .not. use_regex
-                    call build_unified_prompt(prompt, find_buffer, find_pos, replace_buffer, replace_pos)
-                    call display_prompt(editor, prompt, find_pos, replace_pos)
-                    in_alt_sequence = .false.
-                else if (ch == iachar('s') .or. ch == iachar('S')) then
-                    ! Alt+S - toggle search in selection
-                    search_in_selection = .not. search_in_selection
-                    call build_unified_prompt(prompt, find_buffer, find_pos, replace_buffer, replace_pos)
-                    call display_prompt(editor, prompt, find_pos, replace_pos)
-                    in_alt_sequence = .false.
-                else
-                    in_alt_sequence = .false.
-                end if
-            else if (ch == 9) then  ! Tab - switch fields
-                if (active_field == 1) then
-                    active_field = 2
-                else
-                    active_field = 1
-                end if
-                call build_unified_prompt(prompt, find_buffer, find_pos, replace_buffer, replace_pos)
-                call display_prompt(editor, prompt, find_pos, replace_pos)
-            else if (ch == 6) then  ! Ctrl+F - find next
-                if (find_pos > 0) then
-                    ! Save search pattern
-                    if (allocated(current_search_pattern)) deallocate(current_search_pattern)
-                    allocate(character(len=find_pos) :: current_search_pattern)
-                    current_search_pattern = find_buffer(1:find_pos)
-
-                    ! Add to search history
-                    call add_to_search_history(current_search_pattern)
-
-                    ! Check if search parameters changed - if so, reset search mode
-                    if (search_mode_active) then
-                        if (.not. allocated(last_search_pattern) .or. &
-                            current_search_pattern /= last_search_pattern .or. &
-                            case_sensitive .neqv. last_case_sensitive .or. &
-                            whole_word .neqv. last_whole_word .or. &
-                            use_regex .neqv. last_use_regex) then
-                            ! Parameters changed - treat as new search
-                            search_mode_active = .false.
-                        end if
-                    end if
-
-                    if (.not. search_mode_active) then
-                        ! First search - count and find
-                        search_mode_active = .true.
-                        call count_all_matches(buffer, current_search_pattern)
-                        call perform_search(editor, buffer, current_search_pattern)
-
-                        ! Save current parameters
-                        if (allocated(last_search_pattern)) deallocate(last_search_pattern)
-                        allocate(character(len=len(current_search_pattern)) :: last_search_pattern)
-                        last_search_pattern = current_search_pattern
-                        last_case_sensitive = case_sensitive
-                        last_whole_word = whole_word
-                        last_use_regex = use_regex
-                    else
-                        ! Cycle to next match
-                        call search_forward(editor, buffer)
-                    end if
-
-                    ! Note: Screen re-rendering happens in command_handler after search exits
-                    ! The match highlighting and cursor position will be visible after exiting search
-
-                    ! Update prompt with match count
-                    call build_unified_prompt(prompt, find_buffer, find_pos, replace_buffer, replace_pos)
-                    call display_prompt(editor, prompt, find_pos, replace_pos)
-                end if
-            else if (ch == 18) then  ! Ctrl+R - replace current and advance
-                if (find_pos > 0 .and. replace_pos >= 0) then
-                    ! Save patterns
-                    if (allocated(current_search_pattern)) deallocate(current_search_pattern)
-                    if (allocated(current_replace_text)) deallocate(current_replace_text)
-                    allocate(character(len=find_pos) :: current_search_pattern)
-                    allocate(character(len=replace_pos) :: current_replace_text)
-                    current_search_pattern = find_buffer(1:find_pos)
-                    current_replace_text = replace_buffer(1:replace_pos)
-
-                    ! Perform replacement
-                    call replace_current_and_advance(editor, buffer)
-
-                    ! Clear old prompt and re-render everything
-                    call terminal_move_cursor(editor%screen_rows, 1)
-                    call terminal_write(repeat(' ', editor%screen_cols))
-
-                    ! Update prompt with new match count
-                    call build_unified_prompt(prompt, find_buffer, find_pos, replace_buffer, replace_pos)
-                    call display_prompt(editor, prompt, find_pos, replace_pos)
-                end if
-            else if (ch == 1) then  ! Ctrl+A - replace all
-                if (find_pos > 0 .and. replace_pos >= 0) then
-                    ! Save patterns
-                    if (allocated(current_search_pattern)) deallocate(current_search_pattern)
-                    if (allocated(current_replace_text)) deallocate(current_replace_text)
-                    allocate(character(len=find_pos) :: current_search_pattern)
-                    allocate(character(len=replace_pos) :: current_replace_text)
-                    current_search_pattern = find_buffer(1:find_pos)
-                    current_replace_text = replace_buffer(1:replace_pos)
-
-                    call replace_all_matches(editor, buffer)
-
-                    ! Exit after replace all
-                    search_mode_active = .false.
-                    exit
-                end if
-            else if (ch == 13 .or. ch == 10) then  ! Enter - find first match and exit
-                ! If we have a search pattern, perform search first if needed
-                if (find_pos > 0) then
-                    ! Save search pattern
-                    if (allocated(current_search_pattern)) deallocate(current_search_pattern)
-                    allocate(character(len=find_pos) :: current_search_pattern)
-                    current_search_pattern = find_buffer(1:find_pos)
-
-                    ! Add to search history
-                    call add_to_search_history(current_search_pattern)
-
-                    ! If no selection yet (haven't searched), perform the search
-                    if (.not. editor%cursors(editor%active_cursor)%has_selection) then
-                        search_mode_active = .true.
-                        call count_all_matches(buffer, current_search_pattern)
-                        call perform_search(editor, buffer, current_search_pattern)
-
-                        ! Save current parameters
-                        if (allocated(last_search_pattern)) deallocate(last_search_pattern)
-                        allocate(character(len=len(current_search_pattern)) :: last_search_pattern)
-                        last_search_pattern = current_search_pattern
-                        last_case_sensitive = case_sensitive
-                        last_whole_word = whole_word
-                        last_use_regex = use_regex
-                    end if
-                end if
-
-                ! Move cursor to START of match (not end)
-                if (editor%cursors(editor%active_cursor)%has_selection) then
-                    editor%cursors(editor%active_cursor)%line = &
-                        editor%cursors(editor%active_cursor)%selection_start_line
-                    editor%cursors(editor%active_cursor)%column = &
-                        editor%cursors(editor%active_cursor)%selection_start_col
-                    editor%cursors(editor%active_cursor)%desired_column = &
-                        editor%cursors(editor%active_cursor)%selection_start_col
-                    ! Clear selection so cursor is at start, not selecting
-                    editor%cursors(editor%active_cursor)%has_selection = .false.
-                    ! Sync cursor back to pane (important for pane system!)
-                    call sync_editor_to_pane(editor)
-                end if
-                exit
-            else if (ch == 127 .or. ch == 8) then  ! Backspace
-                if (active_field == 1 .and. find_pos > 0) then
-                    find_pos = find_pos - 1
-                else if (active_field == 2 .and. replace_pos > 0) then
-                    replace_pos = replace_pos - 1
-                end if
-                call build_unified_prompt(prompt, find_buffer, find_pos, replace_buffer, replace_pos)
-                call display_prompt(editor, prompt, find_pos, replace_pos)
-            else if (ch >= 32 .and. ch <= 126) then  ! Printable characters
-                if (active_field == 1 .and. find_pos < 256) then
-                    find_pos = find_pos + 1
-                    find_buffer(find_pos:find_pos) = char(ch)
-                else if (active_field == 2 .and. replace_pos < 256) then
-                    replace_pos = replace_pos + 1
-                    replace_buffer(replace_pos:replace_pos) = char(ch)
-                end if
-                call build_unified_prompt(prompt, find_buffer, find_pos, replace_buffer, replace_pos)
-                call display_prompt(editor, prompt, find_pos, replace_pos)
-            end if
-        end do
-
-        ! Clean up - clear the prompt line
-        call terminal_move_cursor(editor%screen_rows, 1)
-        call terminal_write(repeat(' ', editor%screen_cols))
-        ! Don't hide cursor - let the main render loop handle cursor display
-    end subroutine show_unified_search_prompt
-
-    subroutine build_unified_prompt(prompt, find_text, find_len, replace_text, replace_len)
-        character(len=*), intent(out) :: prompt
-        character(len=*), intent(in) :: find_text, replace_text
-        integer, intent(in) :: find_len, replace_len
-        character(len=64) :: options, count_str
-        character(len=25) :: find_field, replace_field
-        character(len=1) :: esc = char(27)
-        integer :: i
-        integer, parameter :: FIELD_WIDTH = 20  ! Reduced from 30 for narrower terminals
-
-        ! Build options string with all three toggles
-        options = ''
-        if (case_sensitive) then
-            options = trim(options) // '[Cc]'
-        else
-            options = trim(options) // '[cc]'
-        end if
-        if (whole_word) then
-            options = trim(options) // '[Ww]'
-        else
-            options = trim(options) // '[ww]'
-        end if
-        if (use_regex) then
-            options = trim(options) // '[Rr]'
-        else
-            options = trim(options) // '[rr]'
-        end if
-        if (search_in_selection) then
-            options = trim(options) // '[Ss]'
-        else
-            options = trim(options) // '[ss]'
-        end if
-
-        ! Add match count if available
-        if (allocated(current_search_pattern) .and. total_matches > 0) then
-            write(count_str, '(A,I0,A,I0,A)') ' (', current_match_index, '/', total_matches, ')'
-            options = trim(options) // trim(count_str)
-        end if
-
-        ! Build fixed-width fields with padding (20 chars each for compact display)
-        find_field = find_text(1:min(find_len, FIELD_WIDTH))
-        do i = find_len + 1, FIELD_WIDTH
-            find_field(i:i) = ' '
-        end do
-
-        replace_field = replace_text(1:min(replace_len, FIELD_WIDTH))
-        do i = replace_len + 1, FIELD_WIDTH
-            replace_field(i:i) = ' '
-        end do
-
-        ! Build unified prompt with reverse video highlighting for active field
-        if (active_field == 1) then
-            ! Find field active (reverse video)
-            write(prompt, '(9A)') &
-                esc, '[7m[f]:', find_field, esc, '[27m /[r]:', &
-                replace_field, ' ', trim(options), ' RET:go ESC:exit'
-        else
-            ! Replace field active (reverse video)
-            write(prompt, '(10A)') &
-                '[f]:', find_field, ' ', esc, '[7m/[r]:', &
-                replace_field, esc, '[27m ', trim(options), ' RET:go ESC:exit'
-        end if
-    end subroutine build_unified_prompt
-
-    subroutine display_prompt(editor, prompt, find_len, replace_len)
-        type(editor_state_t), intent(in) :: editor
-        character(len=*), intent(in) :: prompt
-        integer, intent(in) :: find_len, replace_len
-        integer :: cursor_pos
-
-        ! Hide cursor during redraw to prevent flicker
-        call terminal_hide_cursor()
-
-        ! Clear the entire status line
-        call terminal_move_cursor(editor%screen_rows, 1)
-        call terminal_write(repeat(' ', editor%screen_cols))
-
-        ! Move back to start and write prompt
-        call terminal_move_cursor(editor%screen_rows, 1)
-        call terminal_write(trim(prompt))
-
-        ! Calculate cursor position within the active field
-        ! Account for escape sequences which don't take screen space
-        ! Compact layout: "[f]: <20 chars> /[r]: <20 chars> ..."
-        if (active_field == 1) then
-            ! Cursor in find field: "[f]:" = 4 visible chars
-            cursor_pos = 4 + find_len + 1
-        else
-            ! Cursor in replace field
-            ! "[f]:" (4) + field (20) + " /[r]:" (6)
-            cursor_pos = 4 + 20 + 6 + replace_len + 1
-        end if
-
-        ! Position cursor and show it
-        call terminal_move_cursor(editor%screen_rows, cursor_pos)
-        call terminal_show_cursor()
-    end subroutine display_prompt
-
-    subroutine perform_search(editor, buffer, pattern)
-        type(editor_state_t), intent(inout) :: editor
-        type(buffer_t), intent(inout) :: buffer
-        character(len=*), intent(in) :: pattern
-        logical :: found
-        integer :: found_line, found_col
-        integer :: match_len, start_char, end_char
-
-        ! Compile regex if in regex mode
-        if (use_regex) then
-            ! Free old regex if any
-            if (compiled_regex_id >= 0) then
-                call regex_free(compiled_regex_id)
-            end if
-            ! Compile new pattern
-            compiled_regex_id = regex_compile(pattern, case_sensitive)
-            if (compiled_regex_id < 0) then
-                ! Regex compilation failed - could show error, for now just skip
-                return
-            end if
-        end if
-
-        call find_next_match(buffer, pattern, &
-                            editor%cursors(editor%active_cursor)%line, &
-                            line_byte_col(buffer, editor%cursors(editor%active_cursor)%line, &
-                                          editor%cursors(editor%active_cursor)%column), &
-                            found, found_line, found_col)
-
-        if (found) then
-            ! For regex, use the match length from last search
-            ! For normal search, use pattern length (both in bytes)
-            if (use_regex .and. last_match_length > 0) then
-                match_len = last_match_length
-            else
-                match_len = len(pattern)
-            end if
-            start_char = line_char_col(buffer, found_line, found_col)
-            end_char = line_char_col(buffer, found_line, found_col + match_len)
-
-            editor%cursors(editor%active_cursor)%line = found_line
-            editor%cursors(editor%active_cursor)%desired_column = start_char
-
-            ! Create selection spanning the match
-            editor%cursors(editor%active_cursor)%has_selection = .true.
-            editor%cursors(editor%active_cursor)%selection_start_line = found_line
-            editor%cursors(editor%active_cursor)%selection_start_col = start_char
-            editor%cursors(editor%active_cursor)%column = end_char
-
-            last_search_line = found_line
-            last_search_col = found_col
-
-            ! Center viewport on the found match FIRST
-            call center_viewport_on_cursor(editor)
-
-            ! THEN sync cursor and viewport to pane so rendering shows updated state
-            call sync_editor_to_pane(editor)
-        end if
-    end subroutine perform_search
 
     subroutine search_forward(editor, buffer)
         type(editor_state_t), intent(inout) :: editor
@@ -589,17 +182,75 @@ contains
         last_search_line = found_line
         last_search_col = found_col
 
-        ! Center viewport on the found match FIRST
-        call center_viewport_on_cursor(editor)
+        ! Remember which match this is, in bytes, so the renderer can paint
+        ! it differently from the others.
+        active_match_line = found_line
+        active_match_sbyte = found_col
+        active_match_ebyte = found_col + match_len - 1
+
+        ! Scroll only if the match is off screen. Re-centring on every jump
+        ! throws the page around while you step between two matches you can
+        ! already both see, which is most of what walking a search is.
+        call reveal_match_in_viewport(editor, found_line)
 
         ! THEN sync cursor and viewport to pane
         call sync_editor_to_pane(editor)
     end subroutine select_found_match
 
+    subroutine clear_active_match()
+        active_match_line = 0
+        active_match_sbyte = 0
+        active_match_ebyte = 0
+    end subroutine clear_active_match
+
+    !> The active match's byte span on `line_num`, for the renderer.
+    function active_match_span(line_num, sbyte, ebyte) result(is_active_line)
+        integer, intent(in) :: line_num
+        integer, intent(out) :: sbyte, ebyte
+        logical :: is_active_line
+
+        sbyte = active_match_sbyte
+        ebyte = active_match_ebyte
+        is_active_line = search_mode_active .and. active_match_line == line_num &
+                         .and. active_match_sbyte > 0
+    end function active_match_span
+
+    !> Bring `line_num` into view, but leave the page alone if it is already
+    !> there. The height is the ACTIVE PANE's when panes are in play: the
+    !> screen height would overstate a split pane and leave a match just off
+    !> its bottom edge sitting there unscrolled.
+    subroutine reveal_match_in_viewport(editor, line_num)
+        type(editor_state_t), intent(inout) :: editor
+        integer, intent(in) :: line_num
+        integer :: vh, top, t, p
+
+        vh = max(1, editor%screen_rows - 2)
+        top = editor%viewport_line
+        t = editor%active_tab_index
+        if (t >= 1 .and. t <= size(editor%tabs)) then
+            if (allocated(editor%tabs(t)%panes)) then
+                p = editor%tabs(t)%active_pane_index
+                if (p >= 1 .and. p <= size(editor%tabs(t)%panes)) then
+                    vh = max(1, editor%tabs(t)%panes(p)%screen_height)
+                    ! The pane's own viewport is the truth once panes exist;
+                    ! editor%viewport_line can lag behind a wheel scroll.
+                    top = editor%tabs(t)%panes(p)%viewport_line
+                    editor%viewport_line = top
+                end if
+            end if
+        end if
+
+        if (line_num < top .or. line_num > top + vh - 1) then
+            editor%viewport_line = max(1, line_num - vh / 2)
+        end if
+    end subroutine reveal_match_in_viewport
+
     ! Leave search mode (dismiss match highlights, release n/N navigation)
     ! but keep the pattern so the prompt can prefill it next time
     subroutine exit_search_mode()
         search_mode_active = .false.
+        panel_visible = .false.
+        call clear_active_match()
     end subroutine exit_search_mode
 
     subroutine replace_current_and_advance(editor, buffer)
@@ -871,15 +522,11 @@ contains
     subroutine clear_search_pattern()
         if (allocated(current_search_pattern)) deallocate(current_search_pattern)
         if (allocated(current_replace_text)) deallocate(current_replace_text)
-        if (allocated(last_search_pattern)) deallocate(last_search_pattern)
         search_mode_active = .false.
+        panel_visible = .false.
+        call clear_active_match()
         last_search_line = 1
         last_search_col = 1
-
-        ! Reset search parameter tracking
-        last_case_sensitive = .false.
-        last_whole_word = .false.
-        last_use_regex = .false.
 
         ! Free compiled regex if any
         if (compiled_regex_id >= 0) then
@@ -1426,5 +1073,549 @@ contains
             end if
         end do
     end subroutine get_matches_on_line
+
+    !=====================================================================
+    ! The find bar
+    !
+    ! Every key here follows one rule for the two keys that mean something
+    ! to both the field and the match list: WHILE COMPOSING (the last key
+    ! was a character or a backspace) space and tab belong to the field; the
+    ! moment you navigate they belong to the matches. Opening the bar on a
+    ! word seeds the field and does NOT count as composing, so the whole
+    ! navigation set is live on the first keypress.
+    !=====================================================================
+
+    logical function is_search_panel_visible()
+        is_search_panel_visible = panel_visible
+    end function is_search_panel_visible
+
+    !> Open the bar, seeded from what the caret is on.
+    subroutine search_panel_show(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=:), allocatable :: seed
+        integer :: c, sline, scol, eline, ecol, tl, tc
+        integer :: seed_line, seed_byte
+
+        c = editor%active_cursor
+        active_field = 1
+        composing = .false.
+
+        ! A selection drawn across LINES is a region to confine the search
+        ! to. A selection inside one line is a word you want to hunt for --
+        ! confining the hunt to it would find exactly one match, which is
+        ! never what Ctrl-F on a word means.
+        search_in_selection = .false.
+        if (editor%cursors(c)%has_selection) then
+            sline = editor%cursors(c)%selection_start_line
+            scol = editor%cursors(c)%selection_start_col
+            eline = editor%cursors(c)%line
+            ecol = editor%cursors(c)%column
+            if (sline > eline .or. (sline == eline .and. scol > ecol)) then
+                tl = sline
+                tc = scol
+                sline = eline
+                scol = ecol
+                eline = tl
+                ecol = tc
+            end if
+            if (eline > sline) then
+                search_in_selection = .true.
+                selection_start_line = sline
+                selection_end_line = eline
+                selection_start_col = line_byte_col(buffer, sline, scol)
+                selection_end_col = line_byte_col(buffer, eline, ecol)
+            end if
+        end if
+
+        seed = seed_text(editor, buffer, seed_line, seed_byte)
+
+        if (len(seed) > 0) then
+            panel_find = ' '
+            panel_find_len = min(len(seed), len(panel_find))
+            panel_find(1:panel_find_len) = seed(1:panel_find_len)
+            seed_fresh = .true.
+            ! Anchor one byte BEFORE the seed so the very thing under the
+            ! caret is match 1. find_next_match starts at start_col + 1, so
+            ! anchoring at the caret itself would skip the word it named.
+            anchor_line = seed_line
+            anchor_col = max(0, seed_byte - 1)
+        else
+            ! Nothing under the caret: keep whatever was searched for last,
+            ! and hunt forward from where the caret actually is.
+            if (allocated(current_search_pattern)) then
+                panel_find = ' '
+                panel_find_len = min(len(current_search_pattern), len(panel_find))
+                panel_find(1:panel_find_len) = current_search_pattern(1:panel_find_len)
+                seed_fresh = .true.
+            else
+                panel_find = ' '
+                panel_find_len = 0
+                seed_fresh = .false.
+                composing = .true.
+            end if
+            anchor_line = editor%cursors(c)%line
+            anchor_col = max(0, line_byte_col(buffer, editor%cursors(c)%line, &
+                                              editor%cursors(c)%column) - 1)
+        end if
+
+        if (allocated(current_replace_text)) then
+            panel_replace = ' '
+            panel_replace_len = min(len(current_replace_text), len(panel_replace))
+            if (panel_replace_len > 0) &
+                panel_replace(1:panel_replace_len) = current_replace_text(1:panel_replace_len)
+        else
+            panel_replace = ' '
+            panel_replace_len = 0
+        end if
+
+        panel_visible = .true.
+        call apply_pattern(editor, buffer)
+    end subroutine search_panel_show
+
+    !> Close the bar. `keep_highlights` distinguishes the two ways out:
+    !> Ctrl-F puts the bar away but leaves the search live, so the matches
+    !> stay lit and n/N keep walking them; ESC ends the search outright.
+    subroutine search_panel_hide(keep_highlights)
+        logical, intent(in) :: keep_highlights
+
+        if (.not. panel_visible) return
+        panel_visible = .false.
+        composing = .false.
+        seed_fresh = .false.
+        if (panel_find_len > 0) call add_to_search_history(panel_find(1:panel_find_len))
+        if (.not. keep_highlights) then
+            search_mode_active = .false.
+            call clear_active_match()
+        end if
+    end subroutine search_panel_hide
+
+    !> The text Ctrl-F should start from: a one-line selection verbatim,
+    !> otherwise the word the caret sits on. Returns '' when the caret is on
+    !> whitespace or past the end of the line, with the byte column the seed
+    !> starts at so the caller can anchor the search on it.
+    function seed_text(editor, buffer, seed_line, seed_byte) result(seed)
+        type(editor_state_t), intent(in) :: editor
+        type(buffer_t), intent(in) :: buffer
+        integer, intent(out) :: seed_line, seed_byte
+        character(len=:), allocatable :: seed, line
+        integer :: c, sb, eb, wstart, wend, bpos
+        integer :: sline, scol, eline, ecol
+
+        seed = ''
+        c = editor%active_cursor
+        seed_line = editor%cursors(c)%line
+        seed_byte = 1
+
+        if (editor%cursors(c)%has_selection) then
+            sline = editor%cursors(c)%selection_start_line
+            scol = editor%cursors(c)%selection_start_col
+            eline = editor%cursors(c)%line
+            ecol = editor%cursors(c)%column
+            if (sline == eline) then
+                if (scol > ecol) then
+                    bpos = scol
+                    scol = ecol
+                    ecol = bpos
+                end if
+                line = buffer_get_line(buffer, sline)
+                sb = line_byte_col(buffer, sline, scol)
+                eb = line_byte_col(buffer, sline, ecol) - 1
+                if (eb >= sb .and. sb >= 1 .and. eb <= len(line)) then
+                    seed = line(sb:eb)
+                    seed_line = sline
+                    seed_byte = sb
+                end if
+                return
+            end if
+            ! A multi-line selection is the region, not the needle.
+            return
+        end if
+
+        line = buffer_get_line(buffer, seed_line)
+        bpos = utf8_char_to_byte_index(line, editor%cursors(c)%column)
+        if (bpos == 0) return
+        if (bpos > len(line)) return
+        call word_bounds(line, bpos, wstart, wend)
+        if (wstart > 0 .and. wend >= wstart) then
+            seed = line(wstart:wend)
+            seed_byte = wstart
+        end if
+    end function seed_text
+
+    !> Byte extent of the word containing byte `pos`, or 0,0 if that byte is
+    !> not a word character.
+    subroutine word_bounds(line, pos, word_start, word_end)
+        character(len=*), intent(in) :: line
+        integer, intent(in) :: pos
+        integer, intent(out) :: word_start, word_end
+        integer :: i
+
+        word_start = 0
+        word_end = 0
+        if (pos < 1 .or. pos > len(line)) return
+        if (.not. is_word_char(line(pos:pos))) return
+
+        word_start = pos
+        do i = pos - 1, 1, -1
+            if (.not. is_word_char(line(i:i))) exit
+            word_start = i
+        end do
+        word_end = pos
+        do i = pos + 1, len(line)
+            if (.not. is_word_char(line(i:i))) exit
+            word_end = i
+        end do
+    end subroutine word_bounds
+
+    !> Re-run the search for whatever the find field now holds, from the
+    !> anchor rather than from the caret: typing a pattern one letter at a
+    !> time would otherwise walk the caret forward one match per keystroke.
+    subroutine apply_pattern(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        logical :: found
+        integer :: fl, fc
+
+        if (panel_find_len == 0) then
+            search_mode_active = .false.
+            total_matches = 0
+            current_match_index = 0
+            call clear_active_match()
+            if (allocated(current_search_pattern)) deallocate(current_search_pattern)
+            return
+        end if
+
+        if (allocated(current_search_pattern)) deallocate(current_search_pattern)
+        current_search_pattern = panel_find(1:panel_find_len)
+
+        if (use_regex) then
+            if (compiled_regex_id >= 0) then
+                call regex_free(compiled_regex_id)
+                compiled_regex_id = -1
+            end if
+            compiled_regex_id = regex_compile(current_search_pattern, case_sensitive)
+            if (compiled_regex_id < 0) then
+                ! An unfinished pattern -- "[a" while still typing -- is the
+                ! normal case, not an error worth a message.
+                search_mode_active = .false.
+                total_matches = 0
+                current_match_index = 0
+                call clear_active_match()
+                return
+            end if
+        end if
+
+        search_mode_active = .true.
+        call count_all_matches(buffer, current_search_pattern)
+        if (total_matches == 0) then
+            call clear_active_match()
+            return
+        end if
+
+        call find_next_match(buffer, current_search_pattern, anchor_line, anchor_col, &
+                             found, fl, fc)
+        if (found) then
+            call select_found_match(editor, buffer, fl, fc)
+        else
+            call clear_active_match()
+        end if
+    end subroutine apply_pattern
+
+    !> One step through the match list, keeping the bar up.
+    subroutine panel_step(editor, buffer, forward)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        logical, intent(in) :: forward
+
+        composing = .false.
+        seed_fresh = .false.
+        if (.not. search_mode_active) return
+        if (.not. allocated(current_search_pattern)) return
+        if (total_matches == 0) return
+
+        if (forward) then
+            call search_forward(editor, buffer)
+        else
+            call search_backward(editor, buffer)
+        end if
+    end subroutine panel_step
+
+    !> Home/End: the first and last match in the file.
+    subroutine panel_edge(editor, buffer, first)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        logical, intent(in) :: first
+        logical :: found
+        integer :: fl, fc
+
+        composing = .false.
+        seed_fresh = .false.
+        if (.not. search_mode_active) return
+        if (.not. allocated(current_search_pattern)) return
+        if (total_matches == 0) return
+
+        if (first) then
+            call find_next_match(buffer, current_search_pattern, 1, 0, found, fl, fc)
+        else
+            call find_prev_match(buffer, current_search_pattern, &
+                                 buffer_get_line_count(buffer), huge(1), found, fl, fc)
+        end if
+        if (found) call select_found_match(editor, buffer, fl, fc)
+    end subroutine panel_edge
+
+    subroutine field_insert(ch)
+        character(len=1), intent(in) :: ch
+
+        ! The seeded pattern behaves like selected text: the first character
+        ! typed replaces it rather than extending it.
+        if (seed_fresh) then
+            panel_find = ' '
+            panel_find_len = 0
+            seed_fresh = .false.
+        end if
+        composing = .true.
+        if (active_field == 1) then
+            if (panel_find_len >= len(panel_find)) return
+            panel_find_len = panel_find_len + 1
+            panel_find(panel_find_len:panel_find_len) = ch
+        else
+            if (panel_replace_len >= len(panel_replace)) return
+            panel_replace_len = panel_replace_len + 1
+            panel_replace(panel_replace_len:panel_replace_len) = ch
+        end if
+    end subroutine field_insert
+
+    subroutine field_backspace()
+        if (seed_fresh .and. active_field == 1) then
+            panel_find = ' '
+            panel_find_len = 0
+            seed_fresh = .false.
+            composing = .true.
+            return
+        end if
+        composing = .true.
+        if (active_field == 1) then
+            if (panel_find_len > 0) panel_find_len = panel_find_len - 1
+        else
+            if (panel_replace_len > 0) panel_replace_len = panel_replace_len - 1
+        end if
+    end subroutine field_backspace
+
+    function search_panel_handle_key(key, editor, buffer) result(handled)
+        character(len=*), intent(in) :: key
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        logical :: handled
+        logical :: is_space
+        integer :: c
+
+        handled = .false.
+        if (.not. panel_visible) return
+        handled = .true.
+
+        ! trim() turns a space into '', so select case cannot see it. Same
+        ! trap that once stopped the command palette typing a space.
+        is_space = .false.
+        if (len(key) >= 1) is_space = (len_trim(key) == 0 .and. key(1:1) == ' ')
+
+        if (is_space) then
+            if (composing) then
+                call field_insert(' ')
+                if (active_field == 1) call apply_pattern(editor, buffer)
+            else
+                call panel_step(editor, buffer, .true.)
+            end if
+            return
+        end if
+
+        select case (trim(key))
+        case ('esc')
+            call search_panel_hide(.false.)
+
+        case ('ctrl-f')
+            call search_panel_hide(.true.)
+
+        case ('down', 'right', 'pagedown', 'enter')
+            call panel_step(editor, buffer, .true.)
+
+        case ('up', 'left', 'pageup')
+            call panel_step(editor, buffer, .false.)
+
+        ! Shift reverses whatever the key would have done, so every one of
+        ! them is prev -- including the two that only exist on terminals
+        ! speaking CSI-u, shift-enter and shift-space.
+        case ('shift-down', 'shift-right', 'shift-pagedown', 'shift-enter', &
+              'shift-up', 'shift-left', 'shift-pageup', 'shift-tab', 'shift-space')
+            call panel_step(editor, buffer, .false.)
+
+        case ('tab')
+            if (composing) then
+                active_field = 3 - active_field
+            else
+                call panel_step(editor, buffer, .true.)
+            end if
+
+        case ('home')
+            call panel_edge(editor, buffer, .true.)
+
+        case ('end')
+            call panel_edge(editor, buffer, .false.)
+
+        case ('backspace')
+            call field_backspace()
+            if (active_field == 1) call apply_pattern(editor, buffer)
+
+        ! History moved off up/down, which now walk matches.
+        case ('alt-up')
+            if (active_field == 1) then
+                call navigate_history_up(panel_find, panel_find_len)
+                seed_fresh = .false.
+                call apply_pattern(editor, buffer)
+            end if
+
+        case ('alt-down')
+            if (active_field == 1) then
+                call navigate_history_down(panel_find, panel_find_len)
+                seed_fresh = .false.
+                call apply_pattern(editor, buffer)
+            end if
+
+        case ('alt-c')
+            case_sensitive = .not. case_sensitive
+            call apply_pattern(editor, buffer)
+
+        case ('alt-w')
+            whole_word = .not. whole_word
+            call apply_pattern(editor, buffer)
+
+        case ('alt-r')
+            use_regex = .not. use_regex
+            call apply_pattern(editor, buffer)
+
+        case ('alt-s')
+            search_in_selection = .not. search_in_selection
+            call apply_pattern(editor, buffer)
+
+        case ('ctrl-r')
+            if (panel_find_len > 0) then
+                if (allocated(current_replace_text)) deallocate(current_replace_text)
+                current_replace_text = panel_replace(1:panel_replace_len)
+                call replace_current_and_advance(editor, buffer)
+                call panel_step(editor, buffer, .true.)
+            end if
+
+        case ('ctrl-a')
+            if (panel_find_len > 0) then
+                if (allocated(current_replace_text)) deallocate(current_replace_text)
+                current_replace_text = panel_replace(1:panel_replace_len)
+                call replace_all_matches(editor, buffer)
+                call count_all_matches(buffer, current_search_pattern)
+                call clear_active_match()
+                call sync_editor_to_pane(editor)
+            end if
+
+        case default
+            if (len_trim(key) == 1) then
+                c = iachar(key(1:1))
+                if (c >= 32 .and. c < 127) then
+                    call field_insert(key(1:1))
+                    if (active_field == 1) call apply_pattern(editor, buffer)
+                    return
+                end if
+            end if
+            ! Everything else -- Ctrl chords, function keys, Alt keys the bar
+            ! has no meaning for -- belongs to the editor. A bar that
+            ! swallowed them would make Ctrl-S look broken while it was up.
+            handled = .false.
+        end select
+    end function search_panel_handle_key
+
+    !> Draw the bar over the status line, and leave the caret in the field.
+    !> Called last in the frame, so it sits on top of the status bar it
+    !> replaces.
+    subroutine render_search_panel(editor)
+        type(editor_state_t), intent(in) :: editor
+        character(len=:), allocatable :: head, field, tail, flags
+        character(len=48) :: num
+        integer :: w, fw, caret_col, tail_room, shown
+
+        if (.not. panel_visible) return
+        w = editor%screen_cols
+        if (w < 20) return
+
+        if (active_field == 1) then
+            head = ' find '
+        else
+            head = ' repl '
+        end if
+
+        ! The field shows its TAIL when the pattern outgrows it: what you
+        ! just typed is what you need to see.
+        fw = max(10, min(28, w / 3))
+        if (active_field == 1) then
+            shown = panel_find_len
+            if (shown > fw) then
+                field = panel_find(shown - fw + 1:shown)
+            else
+                field = panel_find(1:shown) // repeat(' ', fw - shown)
+            end if
+        else
+            shown = panel_replace_len
+            if (shown > fw) then
+                field = panel_replace(shown - fw + 1:shown)
+            else
+                field = panel_replace(1:shown) // repeat(' ', fw - shown)
+            end if
+        end if
+
+        flags = ''
+        if (case_sensitive) flags = trim(flags) // ' Aa'
+        if (whole_word) flags = trim(flags) // ' W'
+        if (use_regex) flags = trim(flags) // ' .*'
+        if (search_in_selection) flags = trim(flags) // ' sel'
+
+        if (panel_find_len == 0) then
+            tail = '  type to search'
+        else if (.not. search_mode_active) then
+            tail = '  bad pattern'
+        else if (total_matches == 0) then
+            tail = '  no matches'
+        else
+            write(num, '(a,i0,a,i0,a)') '  ', current_match_index, ' of ', total_matches
+            tail = trim(num)
+        end if
+        if (len_trim(flags) > 0) tail = tail // '  [' // trim(adjustl(flags)) // ']'
+
+        ! Hints are the first thing to go on a narrow terminal.
+        tail_room = w - len(head) - fw - len(tail)
+        if (tail_room >= 44) then
+            tail = tail // '   arrows/enter next  shift prev  esc close'
+        else if (tail_room >= 22) then
+            tail = tail // '   enter next  esc close'
+        end if
+        if (len(tail) > max(0, w - len(head) - fw)) then
+            tail = tail(1:max(0, w - len(head) - fw))
+        end if
+
+        call terminal_hide_cursor()
+        call terminal_move_cursor(editor%screen_rows, 1)
+        ! Reverse video for the bar, normal video for the field, so the
+        ! field reads as a box you are typing into rather than more bar.
+        call terminal_write(char(27) // '[0m' // char(27) // '[7m' // head)
+        call terminal_write(char(27) // '[27m')
+        if (seed_fresh) call terminal_write(char(27) // '[4m')
+        call terminal_write(field)
+        call terminal_write(char(27) // '[0m' // char(27) // '[7m')
+        call terminal_write(tail)
+        caret_col = w - len(head) - fw - len(tail)
+        if (caret_col > 0) call terminal_write(repeat(' ', caret_col))
+        call terminal_write(char(27) // '[0m')
+
+        ! The caret marks where the next character lands.
+        caret_col = len(head) + min(shown, fw) + 1
+        call terminal_move_cursor(editor%screen_rows, min(caret_col, w))
+        call terminal_show_cursor()
+    end subroutine render_search_panel
 
 end module unified_search_module

@@ -38,9 +38,10 @@ module command_handler_module
     use help_display_module, only: show_help
     use goto_prompt_module, only: show_goto_prompt
     use replace_prompt_module, only: show_replace_prompt
-    use unified_search_module, only: show_unified_search_prompt, current_search_pattern, &
+    use unified_search_module, only: current_search_pattern, &
                                       search_forward, search_backward, search_mode_active, &
-                                      exit_search_mode
+                                      exit_search_mode, search_panel_show, search_panel_hide, &
+                                      is_search_panel_visible, search_panel_handle_key
     use undo_stack_module
     use terminal_io_module, only: terminal_move_cursor, terminal_write, terminal_clear_screen, terminal_flush
     use terminal_panel_module, only: toggle_terminal_panel, &
@@ -1006,6 +1007,22 @@ contains
                         ! Or the next NEW group would silently edit this one.
                         g_editing_gid = 0
                     end if
+                    g_lsp_ui_changed = .true.
+                    return
+                end if
+            end if
+        end if
+
+        ! The find bar owns the keyboard on the same terms, with one
+        ! difference: it DECLINES what it has no meaning for, rather than
+        ! swallowing it. It is a one-line bar, not a window over the
+        ! document, so Ctrl-S and the rest have to keep working underneath.
+        if (is_search_panel_visible()) then
+            if (trim(key_str) /= 'ctrl-q') then
+                ! NOT trim(): trim(' ') is empty, and space steps to the
+                ! next match.
+                if (search_panel_handle_key(key_str, editor, buffer)) then
+                    call sync_editor_to_pane(editor)
                     g_lsp_ui_changed = .true.
                     return
                 end if
@@ -2900,8 +2917,10 @@ contains
 
         ! Search commands
         case('ctrl-f')
-            ! Unified search and replace (Ctrl+F)
-            call show_unified_search_prompt(editor, buffer)
+            ! The find bar. It seeds itself from the word under the caret and
+            ! stays up while you walk the matches; the bar itself handles the
+            ! second Ctrl-F that puts it away.
+            call search_panel_show(editor, buffer)
             call update_viewport(editor)
 
         case('ctrl-r')
