@@ -41,7 +41,8 @@ module command_handler_module
     use unified_search_module, only: current_search_pattern, &
                                       search_forward, search_backward, search_mode_active, &
                                       exit_search_mode, search_panel_show, search_panel_hide, &
-                                      is_search_panel_visible, search_panel_handle_key
+                                      is_search_panel_visible, search_panel_handle_key, &
+                                      search_panel_key_edits
     use undo_stack_module
     use terminal_io_module, only: terminal_move_cursor, terminal_write, terminal_clear_screen, terminal_flush
     use terminal_panel_module, only: toggle_terminal_panel, &
@@ -1019,13 +1020,25 @@ contains
         ! document, so Ctrl-S and the rest have to keep working underneath.
         if (is_search_panel_visible()) then
             if (trim(key_str) /= 'ctrl-q') then
-                ! NOT trim(): trim(' ') is empty, and space steps to the
-                ! next match.
-                if (search_panel_handle_key(key_str, editor, buffer)) then
-                    call sync_editor_to_pane(editor)
-                    g_lsp_ui_changed = .true.
-                    return
-                end if
+                block
+                    logical :: bar_edits
+                    ! Replacing from the bar is an edit like any other and
+                    ! owes an undo entry -- and the baseline it undoes to is
+                    ! the text as it stands NOW, so it has to be taken before
+                    ! the key is dispatched. EDIT_STRUCTURAL never merges
+                    ! with a neighbouring run, so a replace-all is one step.
+                    bar_edits = search_panel_key_edits(key_str)
+                    if (bar_edits) call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
+                    ! NOT trim(): trim(' ') is empty, and space steps to the
+                    ! next match.
+                    if (search_panel_handle_key(key_str, editor, buffer)) then
+                        call sync_editor_to_pane(editor)
+                        if (bar_edits) &
+                            call after_document_edit(editor, buffer, key_str, .false.)
+                        g_lsp_ui_changed = .true.
+                        return
+                    end if
+                end block
             end if
         end if
 
@@ -3067,45 +3080,69 @@ contains
         ! auto-close parked in front of it, so stop offering to step over it.
         if (.not. is_text_insert) call clear_pending_closers()
 
-        ! Whether the file is dirty is a fact about its TEXT, not a latch.
-        ! Undoing an edit back to the original used to leave the asterisk on
-        ! for a file identical to the one on disk.
-        if (is_edit_action .or. trim(key_str) == 'ctrl-z' .or. &
-            trim(key_str) == 'ctrl-y' .or. trim(key_str) == 'ctrl-]' .or. &
-            trim(key_str) == 'ctrl-shift-z') then
-            if (allocated(editor%tabs) .and. editor%active_tab_index > 0) then
-                call refresh_tab_modified(editor, editor%active_tab_index, buffer)
-                ! The buffer carries the same claim and the main loop copies it
-                ! straight onto the tab each turn, so correcting only the tab
-                ! is undone a moment later. buffer%modified is the latch that
-                ! actually has to stop latching.
-                if (editor%active_tab_index <= size(editor%tabs)) then
-                    if (editor%tabs(editor%active_tab_index)%saved_sig /= -1_int64) &
-                        buffer%modified = editor%tabs(editor%active_tab_index)%modified
-                end if
-            end if
+        if (is_edit_action) then
+            call after_document_edit(editor, buffer, key_str, ghost_extended)
+        else
+            last_action_was_edit = .false.
+            ! Undo and redo change the text without being edits themselves,
+            ! so they still owe the dirty flag a recount.
+            if (trim(key_str) == 'ctrl-z' .or. trim(key_str) == 'ctrl-y' .or. &
+                trim(key_str) == 'ctrl-]' .or. trim(key_str) == 'ctrl-shift-z') &
+                call refresh_modified_flag(editor, buffer)
         end if
+    end subroutine handle_key_command
+
+    !> Whether the file is dirty is a fact about its TEXT, not a latch.
+    !> Undoing an edit back to the original used to leave the asterisk on for
+    !> a file identical to the one on disk.
+    subroutine refresh_modified_flag(editor, buffer)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+
+        if (.not. allocated(editor%tabs)) return
+        if (editor%active_tab_index <= 0) return
+        call refresh_tab_modified(editor, editor%active_tab_index, buffer)
+        ! The buffer carries the same claim and the main loop copies it
+        ! straight onto the tab each turn, so correcting only the tab is
+        ! undone a moment later. buffer%modified is the latch that actually
+        ! has to stop latching.
+        if (editor%active_tab_index <= size(editor%tabs)) then
+            if (editor%tabs(editor%active_tab_index)%saved_sig /= -1_int64) &
+                buffer%modified = editor%tabs(editor%active_tab_index)%modified
+        end if
+    end subroutine refresh_modified_flag
+
+    !> Everything owed once a keystroke has changed the document, wherever
+    !> that keystroke was handled.
+    !>
+    !> Extracted so the find bar's replace keys go through the same path as
+    !> an ordinary edit rather than a hand-copied subset of it. They returned
+    !> straight out of the modal dispatch above, which is how replacing from
+    !> the bar came to push no undo entry, tell no language server, and never
+    !> reset the autosave clock.
+    subroutine after_document_edit(editor, buffer, key_str, ghost_extended)
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        character(len=*), intent(in) :: key_str
+        logical, intent(in) :: ghost_extended
+
+        call refresh_modified_flag(editor, buffer)
 
         ! When the buffer last changed, for the autosave idle test. Taken
         ! here because this is where an edit is already identified; polling
         ! for it would cost a signature every loop.
-        if (is_edit_action) g_last_edit_ms = now_ms()
+        g_last_edit_ms = now_ms()
+        last_action_was_edit = .true.
 
-        ! Update edit action state
-        last_action_was_edit = is_edit_action
-
-        ! Notify LSP of document changes if buffer was modified
-        if (is_edit_action) then
-            ! Bumped here rather than in notify_buffer_change, which returns
-            ! early for files with no language server -- the revision has to
-            ! track every edit, not just the ones LSP hears about.
-            call bump_doc_revision(editor)
-            call notify_buffer_change(editor, buffer)
-            ! Recompute the ghost suggestion after the LSP sync so a
-            ! completion request sees the up-to-date document
-            call update_ghost_suggestion(editor, buffer, key_str, ghost_extended)
-        end if
-    end subroutine handle_key_command
+        ! Bumped here rather than in notify_buffer_change, which returns
+        ! early for files with no language server -- the revision has to
+        ! track every edit, not just the ones LSP hears about.
+        call bump_doc_revision(editor)
+        call notify_buffer_change(editor, buffer)
+        ! Recompute the ghost suggestion after the LSP sync so a completion
+        ! request sees the up-to-date document
+        call update_ghost_suggestion(editor, buffer, key_str, ghost_extended)
+    end subroutine after_document_edit
 
     !> The character column on `target_text` that sits under the caret's goal,
     !> where the goal is held in DISPLAY CELLS rather than characters.

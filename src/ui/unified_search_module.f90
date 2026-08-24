@@ -16,6 +16,7 @@ module unified_search_module
     ! The find bar, as a panel the main loop drives (see below)
     public :: search_panel_show, search_panel_hide, is_search_panel_visible
     public :: search_panel_handle_key, render_search_panel
+    public :: search_panel_key_edits
     public :: active_match_span
 
     ! Column conventions: cursor_t columns are 1-based UTF-8 CHARACTER
@@ -1328,8 +1329,10 @@ contains
         type(buffer_t), intent(inout) :: buffer
         logical, intent(in) :: forward
 
+        ! Navigating ends the composing run, but leaves the seed
+        ! replaceable: walking the matches is not a decision to keep the
+        ! word, so typing after it should still start a fresh pattern.
         composing = .false.
-        seed_fresh = .false.
         if (.not. search_mode_active) return
         if (.not. allocated(current_search_pattern)) return
         if (total_matches == 0) return
@@ -1350,7 +1353,6 @@ contains
         integer :: fl, fc
 
         composing = .false.
-        seed_fresh = .false.
         if (.not. search_mode_active) return
         if (.not. allocated(current_search_pattern)) return
         if (total_matches == 0) return
@@ -1369,7 +1371,7 @@ contains
 
         ! The seeded pattern behaves like selected text: the first character
         ! typed replaces it rather than extending it.
-        if (seed_fresh) then
+        if (seed_fresh .and. active_field == 1) then
             panel_find = ' '
             panel_find_len = 0
             seed_fresh = .false.
@@ -1401,6 +1403,21 @@ contains
             if (panel_replace_len > 0) panel_replace_len = panel_replace_len - 1
         end if
     end subroutine field_backspace
+
+    !> Does this key make the bar change the DOCUMENT rather than the bar?
+    !> The caller has to know before dispatching: an undo baseline is a
+    !> snapshot of the text as it was, so it can only be taken beforehand.
+    logical function search_panel_key_edits(key)
+        character(len=*), intent(in) :: key
+
+        search_panel_key_edits = .false.
+        if (.not. panel_visible) return
+        if (panel_find_len == 0) return
+        select case (trim(key))
+        case ('ctrl-r', 'ctrl-a')
+            search_panel_key_edits = .true.
+        end select
+    end function search_panel_key_edits
 
     function search_panel_handle_key(key, editor, buffer) result(handled)
         character(len=*), intent(in) :: key
@@ -1542,7 +1559,7 @@ contains
 
         if (.not. panel_visible) return
         w = editor%screen_cols
-        if (w < 20) return
+        if (w < 8) return
 
         if (active_field == 1) then
             head = ' find '
@@ -1551,8 +1568,11 @@ contains
         end if
 
         ! The field shows its TAIL when the pattern outgrows it: what you
-        ! just typed is what you need to see.
+        ! just typed is what you need to see. The second clamp is what stops
+        ! a very narrow terminal being handed a field wider than the row,
+        ! which would wrap the bar onto the document.
         fw = max(10, min(28, w / 3))
+        fw = min(fw, max(1, w - len(head) - 2))
         if (active_field == 1) then
             shown = panel_find_len
             if (shown > fw) then
@@ -1582,7 +1602,7 @@ contains
         else if (total_matches == 0) then
             tail = '  no matches'
         else
-            write(num, '(a,i0,a,i0,a)') '  ', current_match_index, ' of ', total_matches
+            write(num, '(a,i0,a,i0)') '  ', current_match_index, ' of ', total_matches
             tail = trim(num)
         end if
         if (len_trim(flags) > 0) tail = tail // '  [' // trim(adjustl(flags)) // ']'
@@ -1604,7 +1624,7 @@ contains
         ! field reads as a box you are typing into rather than more bar.
         call terminal_write(char(27) // '[0m' // char(27) // '[7m' // head)
         call terminal_write(char(27) // '[27m')
-        if (seed_fresh) call terminal_write(char(27) // '[4m')
+        if (seed_fresh .and. active_field == 1) call terminal_write(char(27) // '[4m')
         call terminal_write(field)
         call terminal_write(char(27) // '[0m' // char(27) // '[7m')
         call terminal_write(tail)
