@@ -120,8 +120,15 @@ Three chords for one command because most desktops claim the first two:
 the window. `ctrl+shift+alt+arrows` is the one neither of them wants.
 
 ### Search
-- `ctrl-f` - search forward
+- `ctrl-f` - find bar, seeded with the word under the caret
 - `ctrl-r` - find and replace
+
+`ctrl-f` on a word searches for that word without your typing it, lights every
+occurrence, and draws the one you are on differently from the rest. The bar
+stays up while you walk them: arrows, page keys, `enter`, `tab` and `space`
+step forward, add `shift` to step back, `home`/`end` are the first and last.
+Typing replaces the seeded word and re-searches live. A second `ctrl-f` puts
+the bar away and leaves the matches lit for `n`/`N`; `esc` ends the search.
 
 ### Special
 - `alt-'` - cycle quotes: " → ' → ` → "
