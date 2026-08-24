@@ -281,16 +281,26 @@ def test_auto_close_brackets(editor: FacsimileTest):
 
 
 def test_search(editor: FacsimileTest):
-    """Test search functionality (ctrl-f unified search; '/' is not a binding)."""
+    """Ctrl-F finds the text and leaves the match selected.
+
+    Enter used to mean "jump to the match and close the prompt". It now
+    steps to the NEXT match and the bar stays up, so closing is esc (or a
+    second ctrl-f). Closing leaves the match SELECTED rather than collapsing
+    the caret in front of it, so the first thing typed replaces it -- which
+    is what every other selection in the editor already does, and what the
+    highlight is telling you will happen.
+    """
     editor.start("Hello World\nHello Universe\nHello Galaxy")
     editor.send_key('ctrl-f')
     time.sleep(0.3)
     editor.type_text("Universe")
-    editor.send_key('enter')      # jump to match start and exit the prompt
+    time.sleep(0.4)
+    editor.send_key('escape')     # close the bar; the match stays selected
     time.sleep(0.3)
-    editor.type_text("X")         # insert at the match position
+    editor.type_text("X")         # types over the selected match
     content = editor.get_file_content()
-    assert "Hello XUniverse" in content, f"Search jump failed: '{content}'"
+    assert "Hello X" in content and "Universe" not in content, \
+        f"Search jump failed: '{content}'"
 
 
 def test_undo_redo(editor: FacsimileTest):

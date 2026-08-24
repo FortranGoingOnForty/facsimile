@@ -41,6 +41,7 @@ ROWS, COLS = 24, 100
 CTRL_F = "\x06"
 CTRL_S = "\x13"
 CTRL_HOME = "\x1b[1;5H"
+CTRL_A, CTRL_R, CTRL_Z = "\x01", "\x12", "\x1a"
 UP, DOWN, RIGHT, LEFT = "\x1b[A", "\x1b[B", "\x1b[C", "\x1b[D"
 PAGEUP, PAGEDOWN = "\x1b[5~", "\x1b[6~"
 ENTER, TAB, ESC = "\r", "\t", "\x1b"
@@ -396,6 +397,26 @@ def test_typing_replaces_the_seeded_word(binary):
         e.close()
 
 
+def test_the_seed_stays_replaceable_after_navigating(binary):
+    print("\nWalking the matches is not a decision to keep the seeded word")
+    e = Editor(binary)
+    try:
+        e.goto_needle(4)
+        e.send(CTRL_F, 0.8)
+        e.send(DOWN, 0.45)
+        e.send(DOWN, 0.45)
+        check(NEEDLE in e.bar(), "the seed is still in the field", e.bar())
+        e.send("plain", 0.9)
+        check(NEEDLE not in e.bar(),
+              "and typing after navigating still replaces it rather than "
+              "appending to it", e.bar())
+        check(e.counter() is not None and e.counter()[1] == 36,
+              "searching for what was typed, not for the two run together",
+              f"{e.counter()} bar {e.bar()!r}")
+    finally:
+        e.close()
+
+
 def test_space_types_while_composing_and_steps_once_you_navigate(binary):
     print("\nSpace belongs to the field while you type, and to the matches after")
     e = Editor(binary)
@@ -473,6 +494,77 @@ def test_ctrl_f_off_a_word_opens_empty(binary):
         e.close()
 
 
+def test_replacing_from_the_bar_is_undoable(binary):
+    print("\nA replace made from the bar is an edit like any other")
+    e = Editor(binary)
+    try:
+        e.goto_needle(4)
+        e.send(CTRL_F, 0.8)
+        # Reaching the replacement field means composing, and composing means
+        # having typed -- so the pattern is retyped rather than seeded.
+        e.send(NEEDLE, 0.9)
+        check(e.counter() is not None and e.counter()[1] == 12,
+              "the pattern is the needle again", f"{e.counter()} {e.bar()!r}")
+        e.send(TAB, 0.4)
+        check(e.bar().startswith("repl"),
+              "tab while composing reaches the replacement field", e.bar())
+        e.send("FOUND", 0.7)
+        e.send(CTRL_A, 2.0)
+        e.drain(1.2)
+        e.send(ESC, 0.5)
+        e.send(CTRL_S, 1.8)
+        e.drain(1.2)
+
+        after = open(e.path).read()
+        check(after.count("FOUND") == 12 and NEEDLE not in after,
+              "replace all rewrote every match",
+              f"FOUND x{after.count('FOUND')}, {NEEDLE} x{after.count(NEEDLE)}")
+
+        e.send(CTRL_Z, 1.5)
+        e.drain(1.0)
+        e.send(CTRL_S, 1.8)
+        e.drain(1.2)
+        back = open(e.path).read()
+        # One undo, not twelve: the baseline is taken once before the whole
+        # replace, and EDIT_STRUCTURAL never merges with a neighbouring run.
+        check(back.count(NEEDLE) == 12 and "FOUND" not in back,
+              "and a single undo puts all twelve back",
+              f"FOUND x{back.count('FOUND')}, {NEEDLE} x{back.count(NEEDLE)}")
+    finally:
+        e.close()
+
+
+def test_replacing_one_match_from_the_bar_is_undoable(binary):
+    print("\nAnd so is replacing just the one match")
+    e = Editor(binary)
+    try:
+        e.goto_needle(4)
+        e.send(CTRL_F, 0.8)
+        e.send(NEEDLE, 0.9)
+        e.send(TAB, 0.4)
+        e.send("ONE", 0.6)
+        e.send(CTRL_R, 1.5)
+        e.drain(0.8)
+        e.send(ESC, 0.5)
+        e.send(CTRL_S, 1.8)
+        e.drain(1.2)
+        after = open(e.path).read()
+        check(after.count("ONE") == 1 and after.count(NEEDLE) == 11,
+              "exactly one match was replaced",
+              f"ONE x{after.count('ONE')}, {NEEDLE} x{after.count(NEEDLE)}")
+
+        e.send(CTRL_Z, 1.5)
+        e.drain(1.0)
+        e.send(CTRL_S, 1.8)
+        e.drain(1.2)
+        back = open(e.path).read()
+        check(back.count(NEEDLE) == 12 and "ONE" not in back,
+              "and undo puts it back",
+              f"ONE x{back.count('ONE')}, {NEEDLE} x{back.count(NEEDLE)}")
+    finally:
+        e.close()
+
+
 def test_the_bar_declines_what_it_does_not_own(binary):
     print("\nThe bar is one line, not a takeover: Ctrl-S still saves under it")
     e = Editor(binary)
@@ -501,9 +593,12 @@ def main():
                test_the_bar_closes_only_on_ctrl_f_or_esc,
                test_esc_clears_the_highlights_and_ctrl_f_keeps_them,
                test_typing_replaces_the_seeded_word,
+               test_the_seed_stays_replaceable_after_navigating,
                test_space_types_while_composing_and_steps_once_you_navigate,
                test_the_page_holds_still_between_visible_matches,
                test_ctrl_f_off_a_word_opens_empty,
+               test_replacing_from_the_bar_is_undoable,
+               test_replacing_one_match_from_the_bar_is_undoable,
                test_the_bar_declines_what_it_does_not_own):
         try:
             fn(binary)

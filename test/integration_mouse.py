@@ -268,7 +268,12 @@ def changed_lines(text):
 PROMPTS = [
     ("\x07", "ctrl-g goto", "Go to (line:col)", False),
     ("\x12", "ctrl-r replace", "Replace:", False),
-    ("\x06", "ctrl-f search", "[f]:", False),
+    # Ctrl-F no longer reads raw bytes -- it is a bar the main loop
+    # drives, so mouse reports are decoded by the input layer rather
+    # than landing in its field. Kept in this list anyway: the question
+    # it asks (does clicking while this is up put escape bytes in the
+    # file?) is worth asking of the replacement too.
+    ("\x06", "ctrl-f find bar", "find", False),
     ("\x11", "ctrl-q quit with unsaved changes", "Unsaved changes", True),
     ("\x17", "ctrl-w close tab with unsaved changes", "Unsaved changes", True),
 ]
