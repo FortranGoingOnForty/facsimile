@@ -371,9 +371,11 @@ contains
 
         highlighter%current_lang%comment_single = "#"
 
-        ! String delimiters
+        ! String delimiters. Triple forms FIRST: process_string takes the
+        ! first delimiter that matches, so listing '"' ahead of '"""' made
+        ! the triple-quoted (multiline) form unreachable.
         allocate(highlighter%current_lang%string_delimiters(4))
-        highlighter%current_lang%string_delimiters = ['"   ', "'   ", '""" ', "''' "]
+        highlighter%current_lang%string_delimiters = ['""" ', "''' ", '"   ', "'   "]
 
         ! Operators
         allocate(highlighter%current_lang%operators(15))

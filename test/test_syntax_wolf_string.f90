@@ -61,6 +61,34 @@ program test_syntax_wolf_string
     call check(.not. hl%in_multiline_string, &
                'wolf: one-line """abc""" does not enter multiline mode')
 
+    ! --- python: same machinery; triple forms were unreachable because
+    ! '"' was listed ahead of '"""' and process_string takes the first match
+    call init_highlighter(hl, 'doc.py')
+
+    call tokenize_line(hl, 'def f():', tokens)
+    call check(covers(tokens, TOKEN_KEYWORD, 1, 3), 'py: def is a keyword')
+
+    call tokenize_line(hl, '    """Docstring opens here', tokens)
+    call check(hl%in_multiline_string, &
+               'py: unterminated """ enters multiline string mode')
+
+    call tokenize_line(hl, '    and closes here."""', tokens)
+    call check(.not. hl%in_multiline_string, &
+               'py: closing """ exits multiline string mode')
+
+    call tokenize_line(hl, '    return 42', tokens)
+    call check(.not. has_type(tokens, TOKEN_STRING), &
+               'py: code after docstring has no string token')
+    call check(has_type(tokens, TOKEN_KEYWORD), &
+               'py: return is a keyword after the docstring')
+
+    ! Single-quote pairs still tokenize as ordinary one-line strings
+    call tokenize_line(hl, "x = 'a' + 'b'", tokens)
+    call check(.not. hl%in_multiline_string, &
+               'py: one-line quotes never enter multiline mode')
+    call check(covers(tokens, TOKEN_STRING, 5, 7), &
+               'py: first quoted literal is one string token')
+
     if (nfail > 0) then
         print '(a,i0,a)', 'FAILED: ', nfail, ' assertion(s)'
         stop 1
