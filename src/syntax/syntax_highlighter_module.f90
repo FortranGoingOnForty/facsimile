@@ -1279,10 +1279,14 @@ contains
         integer :: end_pos, delim_len, line_len
 
         line_len = len(line)
-        delim_len = len(highlighter%string_delimiter)
+        ! string_delimiter is fixed width (len=4), so a stored """ arrives
+        ! blank-padded to '""" '. trim at both uses or the search looks for
+        ! triple-quote-plus-space, never matches a closing """ at end of
+        ! line, and multiline string mode never exits.
+        delim_len = len_trim(highlighter%string_delimiter)
 
         ! Look for closing delimiter
-        end_pos = index(line(pos:), highlighter%string_delimiter)
+        end_pos = index(line(pos:), trim(highlighter%string_delimiter))
 
         if (end_pos > 0) then
             ! Found closing delimiter on this line
