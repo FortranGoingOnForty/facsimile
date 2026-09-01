@@ -26,6 +26,7 @@ if shutil.which("clangd") is None:
     sys.exit(0)
 
 ROWS, COLS = 32, 120
+SHIFT_F12 = "\x1b[57375;2u"
 SOURCE = """static int square(int value)
 {
     return value * value;
@@ -170,6 +171,19 @@ def main():
         check(re.search(r"2/\d+", moved_footer) is not None,
               "j still advances the selected reference", moved_footer)
 
+        session.send("\x1br", 0.8)
+        check("References" not in "\n".join(session.screen.display),
+              "repeating Alt+R closes the panel and restores the editor")
+
+        session.goto_symbol()
+        session.send(SHIFT_F12, 2.0)
+        check("References" in "\n".join(session.screen.display),
+              "Shift+F12 opens the references panel")
+        session.send(SHIFT_F12, 0.8)
+        check("References" not in "\n".join(session.screen.display),
+              "repeating Shift+F12 closes the panel and restores the editor")
+
+        session.open_references()
         session.send("\x1b", 0.8)
         check("References" not in "\n".join(session.screen.display),
               "Esc closes the panel and restores the editor")

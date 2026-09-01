@@ -2492,6 +2492,16 @@ contains
                                     else
                                         ! Try panel-specific key handling
                                         handled = references_panel_handle_key(editor%references_panel, key_input)
+                                        ! A repeated references trigger is a
+                                        ! toggle. Once the panel handler hides
+                                        ! it, leave this blocking loop and
+                                        ! restore the ordinary editor frame,
+                                        ! exactly as the Esc branch above does.
+                                        if (handled .and. .not. &
+                                            is_references_panel_visible(editor%references_panel)) then
+                                            call render_screen(buffer, editor)
+                                            exit
+                                        end if
                                         ! Re-render with offcanvas panel
                                         call render_screen_with_lsp_panel(buffer, editor, "references")
                                     end if

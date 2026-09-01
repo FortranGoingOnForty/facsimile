@@ -489,7 +489,7 @@ contains
             ! User wants to jump to this reference
             handled = .true.
 
-        case('escape', 'shift-f12')
+        case('esc', 'escape', 'shift-f12', 'alt-r')
             ! Hide panel
             panel%visible = .false.
             handled = .true.
