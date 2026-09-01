@@ -807,20 +807,6 @@ contains
     end if
   end function glyph_for_cell
 
-  integer function utf8_sequence_length(first_byte) result(byte_count)
-    integer, intent(in) :: first_byte
-
-    if (first_byte >= 192 .and. first_byte <= 223) then
-      byte_count = 2
-    else if (first_byte >= 224 .and. first_byte <= 239) then
-      byte_count = 3
-    else if (first_byte >= 240 .and. first_byte <= 247) then
-      byte_count = 4
-    else
-      byte_count = 0
-    end if
-  end function utf8_sequence_length
-
   function renderable_glyph(cell, options) result(output)
     type(screen_cell), intent(in) :: cell
     type(screen_render_options), intent(in) :: options
