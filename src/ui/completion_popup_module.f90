@@ -6,6 +6,7 @@ module completion_popup_module
                            json_array_size, json_get_array_element, &
                            json_get_array, json_get_number
     use clickable_region_module, only: region_add, REGION_BLOCK
+    use modal_box_module, only: box_shadow
     use utf8_module, only: clip_to_cells
     use theme_module, only: THEME_BORDER, THEME_MUTED, THEME_PANEL, &
         THEME_PANEL_SELECTION, theme_glyph, theme_reset, theme_sgr
@@ -22,6 +23,8 @@ module completion_popup_module
 
     integer, parameter :: MAX_VISIBLE_ITEMS = 10
     integer, parameter :: MAX_LABEL_WIDTH = 40
+    integer, save :: g_screen_rows = huge(1)
+    integer, save :: g_screen_cols = huge(1)
 
     type :: completion_item_t
         character(len=:), allocatable :: label       ! Main text to display
@@ -183,13 +186,21 @@ contains
         ! near the bottom/right edge (or at small terminals) an unclamped
         ! popup draws off-screen or wraps onto the next line
         if (present(screen_rows)) then
-            if (popup%row + popup%height - 1 > screen_rows) then
+            g_screen_rows = screen_rows
+            if (screen_rows >= popup%height + 1 .and. &
+                popup%row + popup%height > screen_rows) then
+                popup%row = screen_rows - popup%height
+            else if (popup%row + popup%height - 1 > screen_rows) then
                 popup%row = screen_rows - popup%height + 1
             end if
             if (popup%row < 1) popup%row = 1
         end if
         if (present(screen_cols)) then
-            if (popup%col + popup%width - 1 > screen_cols) then
+            g_screen_cols = screen_cols
+            if (screen_cols >= popup%width + 2 .and. &
+                popup%col + popup%width + 1 > screen_cols) then
+                popup%col = screen_cols - popup%width - 1
+            else if (popup%col + popup%width - 1 > screen_cols) then
                 popup%col = screen_cols - popup%width + 1
             end if
             if (popup%col < 1) popup%col = 1
@@ -212,6 +223,9 @@ contains
         ! Calculate visible range
         start_idx = popup%scroll_offset + 1
         end_idx = min(popup%scroll_offset + MAX_VISIBLE_ITEMS, popup%item_count)
+
+        call box_shadow(popup%row, popup%col, popup%height, popup%width, &
+                        g_screen_rows, g_screen_cols)
 
         ! Draw top border
         call terminal_move_cursor(popup%row, popup%col)

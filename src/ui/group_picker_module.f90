@@ -26,10 +26,10 @@ module group_picker_module
                                        REGION_GP_NAME
     use utf8_module, only: clip_to_cells
     use dir_scan_module, only: dir_entry_t, list_directory
+    use modal_box_module, only: box_shadow
     use theme_module, only: THEME_BORDER, THEME_BORDER_FOCUS, THEME_DIRECTORY, &
         THEME_HINT, THEME_PANEL, THEME_PANEL_FOOTER, THEME_PANEL_HEADER, &
-        THEME_PANEL_SELECTION, THEME_SHADOW, THEME_SUCCESS, &
-        theme_reset, theme_sgr, theme_shadows_enabled
+        THEME_PANEL_SELECTION, THEME_SUCCESS, theme_reset, theme_sgr
     implicit none
     private
 
@@ -588,7 +588,8 @@ contains
 
         ! Before the box, so the box overwrites any overlap rather than the
         ! shadow being painted over the frame it is supposed to sit under.
-        call put_shadow()
+        call box_shadow(g_row0, g_col0, g_height, g_width, &
+                        g_screen_rows, g_screen_cols)
 
         r = g_row0
         if (g_mode == GP_MODE_EDIT) then
@@ -705,33 +706,6 @@ contains
         end if
         call terminal_write(right // theme_reset())
     end subroutine put_edge
-
-    !> A drop shadow, so the dialog reads as floating above the document
-    !> rather than pasted into it. Two columns right and one row down, each
-    !> run clipped to the screen -- an over-long write would wrap and smear
-    !> the shadow across the far side of the row below.
-    subroutine put_shadow()
-        integer :: r, w, c
-
-        if (.not. theme_shadows_enabled()) return
-
-        c = g_col0 + g_width
-        do r = g_row0 + 1, min(g_row0 + g_height, g_screen_rows)
-            w = min(2, g_screen_cols - c + 1)
-            if (w < 1) exit
-            call terminal_move_cursor(r, c)
-            call terminal_write(theme_sgr(THEME_SHADOW) // repeat(' ', w) // theme_reset())
-        end do
-
-        r = g_row0 + g_height
-        if (r <= g_screen_rows) then
-            w = min(g_width, g_screen_cols - (g_col0 + 2) + 1)
-            if (w > 0) then
-                call terminal_move_cursor(r, g_col0 + 2)
-                call terminal_write(theme_sgr(THEME_SHADOW) // repeat(' ', w) // theme_reset())
-            end if
-        end if
-    end subroutine put_shadow
 
     function item_line(idx) result(text)
         integer, intent(in) :: idx

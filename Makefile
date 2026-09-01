@@ -107,6 +107,7 @@ SOURCES = vendor/fgof-screen/src/fgof_screen_types.f90 \
           src/workspace/config_module.f90 \
           src/workspace/settings_module.f90 \
           src/ui/theme_module.f90 \
+          src/ui/modal_box_module.f90 \
           src/ui/theme_picker_module.f90 \
           src/utils/bracket_matching_module.f90 \
           src/navigation/jump_stack_module.f90 \
@@ -129,7 +130,6 @@ SOURCES = vendor/fgof-screen/src/fgof_screen_types.f90 \
           src/ui/command_palette_module.f90 \
           src/ui/workspace_symbols_panel_module.f90 \
           src/ui/lsp_server_installer_panel_module.f90 \
-          src/ui/modal_box_module.f90 \
 	src/ui/group_picker_module.f90 \
           src/ui/terminal_panel_module.f90 \
           src/ui/ghost_text_module.f90 \

@@ -58,7 +58,8 @@ def find_binary():
 
 
 class Session:
-    def __init__(self, binary, content, name="a.txt", args=None, extra_files=()):
+    def __init__(self, binary, content, name="a.txt", args=None, extra_files=(),
+                 themed=False):
         # HOME is nested one level down so the fortress navigator's parent
         # pane shows a directory we control rather than all of /tmp
         self.base = tempfile.mkdtemp(prefix="fac_mouse_")
@@ -67,6 +68,10 @@ class Session:
         with open(os.path.join(self.home, ".config", "fac", "state.json"), "w") as f:
             f.write('{"first_run_completed": true, "lsp_installer_seen": true,'
                     ' "version": "1.0"}\n')
+        if themed:
+            with open(os.path.join(self.home, ".config", "fac", "settings.json"), "w") as f:
+                f.write('{"ui.theme": "steel", "ui.color_mode": "truecolor",'
+                        ' "ui.shadows": true}\n')
         self.target = os.path.join(self.home, name)
         with open(self.target, "w") as f:
             f.write(content)
@@ -74,6 +79,9 @@ class Session:
             with open(os.path.join(self.home, extra), "w") as f:
                 f.write("hello\n")
         env = {**os.environ, "TERM": "xterm-256color", "HOME": self.home}
+        if themed:
+            env["COLORTERM"] = "truecolor"
+            env.pop("NO_COLOR", None)
         env.pop("XDG_CONFIG_HOME", None)
         self.screen = pyte.Screen(COLS, ROWS)
         self.stream = pyte.Stream(self.screen)
@@ -655,7 +663,8 @@ def main():
     # hole: the existing boxes place their right border with a separate cursor
     # move and leave the gap unpainted, which this must not do.
     filler = "@" * 45
-    s = Session(binary, "".join(f"{filler} line{i:02d}\n" for i in range(1, 25)))
+    s = Session(binary, "".join(f"{filler} line{i:02d}\n" for i in range(1, 25)),
+                themed=True)
 
     def box_rows():
         return [y + 1 for y in range(ROWS)
@@ -675,12 +684,27 @@ def main():
         r0, r1 = min(rows), max(rows)
         c0 = s.screen.display[r0 - 1].index("┌") + 1
         wid = len(s.screen.display[r0 - 1][c0 - 1:].split("┐")[0]) + 1
+        c1 = c0 + wid - 1
         leaked = [r for r in range(r0, r1 + 1)
                   if "@" in "".join(s.screen.buffer[r - 1][x].data
                                     for x in range(c0 - 1, c0 - 1 + wid))]
         check(not leaked, "the box fully occludes the document", str(leaked))
         check(c0 == 20 and r0 == 6, "the pointer cell is the top-left corner",
               f"row {r0} col {c0}")
+        right_shadow = [s.screen.buffer[row][col]
+                        for row in range(r0, r1)
+                        for col in range(c1, min(COLS, c1 + 2))]
+        bottom_shadow = ([s.screen.buffer[r1][col]
+                          for col in range(c0 + 1, min(COLS, c1 + 2))]
+                         if r1 < ROWS else [])
+        shadow_bg = right_shadow[0].bg if right_shadow else "default"
+        body_bg = s.screen.buffer[r0][c0].bg
+        check(right_shadow and bottom_shadow and shadow_bg != "default" and
+              shadow_bg != body_bg and
+              all(cell.bg == shadow_bg
+                  for cell in right_shadow + bottom_shadow),
+              "the context menu has a complete clipped shadow",
+              f"shadow={shadow_bg} body={body_bg}")
 
     s.send("\x1b", 0.6)
     check(not box_rows(), "escape dismisses the menu")

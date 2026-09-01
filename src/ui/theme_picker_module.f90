@@ -1,12 +1,14 @@
 module theme_picker_module
     use input_handler_module, only: get_key_input
-    use terminal_io_module, only: terminal_flush, terminal_move_cursor, terminal_write
-    use utf8_module, only: clip_to_cells, utf8_display_width
+    use terminal_io_module, only: terminal_begin_sync, terminal_end_sync, &
+        terminal_flush, terminal_move_cursor, terminal_write
+    use modal_box_module, only: box_fill, box_row, box_shadow
+    use utf8_module, only: utf8_display_width
     use theme_module, only: THEME_ACCENT, THEME_BORDER, THEME_HINT, THEME_MUTED, &
         THEME_PANEL, THEME_PANEL_FOOTER, THEME_PANEL_HEADER, THEME_PANEL_SELECTION, &
-        THEME_SHADOW, THEME_SYNTAX_COMMENT, THEME_SYNTAX_KEYWORD, &
+        THEME_SYNTAX_COMMENT, THEME_SYNTAX_KEYWORD, &
         THEME_SYNTAX_NUMBER, THEME_SYNTAX_STRING, theme_current_id, theme_list, &
-        theme_paint, theme_reset, theme_select, theme_sgr, theme_shadows_enabled
+        theme_foreground_sgr, theme_reset, theme_select, theme_sgr
     implicit none
     private
 
@@ -90,8 +92,8 @@ contains
         integer :: item
         integer :: first
         integer :: list_rows
+        integer :: shown_items
         integer :: pad
-        integer :: used
         character(len=:), allocatable :: line
 
         width = min(58, max(24, cols - 4))
@@ -99,70 +101,70 @@ contains
         row0 = max(1, (rows - height) / 2 + 1)
         col0 = max(1, (cols - width) / 2 + 1)
 
-        call terminal_write(achar(27) // '[2J' // achar(27) // '[H')
+        call terminal_begin_sync()
+        call box_shadow(row0, col0, height, width, rows, cols)
+        call box_fill(row0, col0, height, width)
         call terminal_move_cursor(row0, col0)
         call terminal_write(theme_sgr(THEME_BORDER) // '┌' // repeat('─', width - 2) // '┐')
         call terminal_move_cursor(row0 + 1, col0)
         line = ' Color Theme'
         pad = max(0, width - 2 - len(line))
-        call terminal_write(theme_sgr(THEME_PANEL_HEADER) // '│' // line // repeat(' ', pad) // &
-            theme_sgr(THEME_BORDER) // '│')
+        call terminal_write(theme_sgr(THEME_BORDER) // '│' // &
+            theme_sgr(THEME_PANEL_HEADER) // line // repeat(' ', pad) // &
+            theme_sgr(THEME_BORDER) // '│' // theme_reset())
         call terminal_move_cursor(row0 + 2, col0)
         call terminal_write(theme_sgr(THEME_BORDER) // '├' // repeat('─', width - 2) // '┤')
 
         list_rows = max(1, height - 6)
         first = max(1, min(selected, count - list_rows + 1))
-        do i = 1, min(count, list_rows)
+        shown_items = min(count, list_rows)
+        do i = 1, shown_items
             item = first + i - 1
             if (item > count) exit
-            call terminal_move_cursor(row0 + 2 + i, col0)
-            call clip_to_cells('  ' // trim(names(item)), width - 2, line, used)
-            pad = max(0, width - 2 - used)
             if (item == selected) then
-                call terminal_write(theme_sgr(THEME_PANEL_SELECTION) // '│' // trim(line) // &
-                    repeat(' ', pad) // theme_sgr(THEME_BORDER) // '│')
+                call box_row(row0 + 2 + i, col0, width, &
+                             '  ' // trim(names(item)), THEME_PANEL_SELECTION)
             else
-                call terminal_write(theme_sgr(THEME_PANEL) // '│' // trim(line) // &
-                    repeat(' ', pad) // theme_sgr(THEME_BORDER) // '│')
+                call box_row(row0 + 2 + i, col0, width, &
+                             '  ' // trim(names(item)), THEME_PANEL)
             end if
+        end do
+        do i = shown_items + 1, list_rows
+            call box_row(row0 + 2 + i, col0, width, '', THEME_PANEL)
         end do
 
         call terminal_move_cursor(row0 + height - 3, col0)
         if (width >= 48) then
-            call terminal_write(theme_sgr(THEME_PANEL) // '│  ' // &
-                theme_paint(THEME_SYNTAX_KEYWORD, 'function') // ' ' // &
-                theme_paint(THEME_ACCENT, 'facsimile') // theme_paint(THEME_MUTED, '(') // &
-                theme_paint(THEME_SYNTAX_STRING, '"theme"') // theme_paint(THEME_MUTED, ', ') // &
-                theme_paint(THEME_SYNTAX_NUMBER, '33') // theme_paint(THEME_MUTED, ')') // &
-                theme_paint(THEME_SYNTAX_COMMENT, '  ! preview') // &
+            call terminal_write(theme_sgr(THEME_BORDER) // '│' // &
+                theme_sgr(THEME_PANEL) // '  ' // &
+                theme_foreground_sgr(THEME_SYNTAX_KEYWORD) // 'function' // ' ' // &
+                theme_foreground_sgr(THEME_ACCENT) // 'facsimile' // &
+                theme_foreground_sgr(THEME_MUTED) // '(' // &
+                theme_foreground_sgr(THEME_SYNTAX_STRING) // '"theme"' // &
+                theme_foreground_sgr(THEME_MUTED) // ', ' // &
+                theme_foreground_sgr(THEME_SYNTAX_NUMBER) // '33' // &
+                theme_foreground_sgr(THEME_MUTED) // ')' // &
+                theme_foreground_sgr(THEME_SYNTAX_COMMENT) // '  ! preview' // &
                 theme_sgr(THEME_PANEL) // repeat(' ', max(0, width - 46)) // &
-                theme_sgr(THEME_BORDER) // '│')
+                theme_sgr(THEME_BORDER) // '│' // theme_reset())
         else
-            call terminal_write(theme_sgr(THEME_PANEL) // '│  ' // &
-                theme_paint(THEME_ACCENT, 'Aa') // ' ' // &
-                theme_paint(THEME_SYNTAX_NUMBER, '123') // &
-                theme_paint(THEME_SYNTAX_COMMENT, ' ! preview') // &
+            call terminal_write(theme_sgr(THEME_BORDER) // '│' // &
+                theme_sgr(THEME_PANEL) // '  ' // &
+                theme_foreground_sgr(THEME_ACCENT) // 'Aa' // ' ' // &
+                theme_foreground_sgr(THEME_SYNTAX_NUMBER) // '123' // &
+                theme_foreground_sgr(THEME_SYNTAX_COMMENT) // ' ! preview' // &
                 theme_sgr(THEME_PANEL) // repeat(' ', max(0, width - 20)) // &
-                theme_sgr(THEME_BORDER) // '│')
+                theme_sgr(THEME_BORDER) // '│' // theme_reset())
         end if
         call terminal_move_cursor(row0 + height - 2, col0)
         line = ' ↑↓ preview   Enter apply   Esc cancel'
         pad = max(0, width - 2 - utf8_display_width(line))
-        call terminal_write(theme_sgr(THEME_PANEL_FOOTER) // '│' // line // repeat(' ', pad) // &
-            theme_sgr(THEME_BORDER) // '│')
+        call terminal_write(theme_sgr(THEME_BORDER) // '│' // &
+            theme_sgr(THEME_PANEL_FOOTER) // line // repeat(' ', pad) // &
+            theme_sgr(THEME_BORDER) // '│' // theme_reset())
         call terminal_move_cursor(row0 + height - 1, col0)
         call terminal_write(theme_sgr(THEME_BORDER) // '└' // repeat('─', width - 2) // '┘' // theme_reset())
-
-        if (theme_shadows_enabled() .and. col0 + width <= cols) then
-            do i = 1, height - 1
-                call terminal_move_cursor(row0 + i, col0 + width)
-                call terminal_write(theme_sgr(THEME_SHADOW) // ' ' // theme_reset())
-            end do
-            if (row0 + height <= rows) then
-                call terminal_move_cursor(row0 + height, col0 + 2)
-                call terminal_write(theme_sgr(THEME_SHADOW) // repeat(' ', width - 1) // theme_reset())
-            end if
-        end if
+        call terminal_end_sync()
     end subroutine render_picker
 
 end module theme_picker_module

@@ -4,6 +4,7 @@ module lsp_server_installer_panel_module
     use server_installer_module, only: run_install_command, install_result_t
     use clipboard_module, only: copy_to_clipboard
     use clickable_region_module, only: region_add, REGION_BLOCK
+    use modal_box_module, only: box_shadow
     use utf8_module, only: clip_to_cells
     use theme_module, only: THEME_ACCENT, THEME_BORDER, THEME_GIT_ADDED, &
         THEME_GIT_DELETED, THEME_HINT, THEME_PANEL, THEME_PANEL_FOOTER, &
@@ -221,6 +222,9 @@ contains
             return
         end if
 
+        call box_shadow(start_row, start_col, MAX_VISIBLE + 6, content_width, &
+                        max_col=screen_cols)
+
         ! Draw top border
         call terminal_move_cursor(start_row, start_col)
         call terminal_write(theme_sgr(THEME_BORDER) // border_top // theme_reset())
@@ -320,6 +324,9 @@ contains
 
         server_name = panel%servers(panel%confirm_server_index)%name
         install_cmd = panel%servers(panel%confirm_server_index)%install_cmd
+
+        call box_shadow(start_row, start_col, 7, content_width, &
+                        max_col=screen_cols)
 
         ! Top border
         call terminal_move_cursor(start_row, start_col)

@@ -1934,9 +1934,10 @@ contains
             tree_width - 2, editor%fuss_hints_expanded, &
             fuss_git_prefix_active)
 
-        ! Render vertical separator
-        call render_vertical_separator(separator_col, first_content_row(editor), &
-            content_bottom)
+        ! The split owns its column across the tab strip too. Starting at the
+        ! content row left a terminal-background cell above the divider, so
+        ! the editor tab bar appeared to bleed into the Fuss surface.
+        call render_vertical_separator(separator_col, 1, content_bottom)
 
         ! Render terminal panel if visible
         if (term_h > 0) then

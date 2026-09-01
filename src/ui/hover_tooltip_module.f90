@@ -4,6 +4,7 @@ module hover_tooltip_module
     use json_module, only: json_value_t, json_get_string, &
                            json_get_object, json_has_key
     use clickable_region_module, only: region_add, REGION_BLOCK
+    use modal_box_module, only: box_shadow
     use utf8_module, only: clip_to_cells
     use theme_module, only: THEME_BORDER, THEME_PANEL, theme_reset, theme_sgr
     implicit none
@@ -139,6 +140,7 @@ contains
         integer, intent(in) :: row, col
         integer, intent(in), optional :: screen_rows, screen_cols
         integer :: display_row, i, line_start, line_end, used, inner
+        integer :: max_row, max_col
         character(len=:), allocatable :: line, shown
 
         if (.not. allocated(tooltip%content)) return
@@ -146,22 +148,35 @@ contains
 
         tooltip%row = row
         tooltip%col = col
+        max_row = huge(1)
+        max_col = huge(1)
 
-        ! Clamp the box inside the screen when dimensions are known
+        ! Clamp the box and, when the terminal has room, reserve the shared
+        ! one-row/two-column shadow instead of clipping it at the edge.
         if (present(screen_rows) .and. tooltip%height > 0) then
-            if (tooltip%row + tooltip%height - 1 > screen_rows) then
+            max_row = screen_rows
+            if (screen_rows >= tooltip%height + 1 .and. &
+                tooltip%row + tooltip%height > screen_rows) then
+                tooltip%row = screen_rows - tooltip%height
+            else if (tooltip%row + tooltip%height - 1 > screen_rows) then
                 tooltip%row = screen_rows - tooltip%height + 1
             end if
             if (tooltip%row < 1) tooltip%row = 1
         end if
         if (present(screen_cols) .and. tooltip%width > 0) then
-            if (tooltip%col + tooltip%width - 1 > screen_cols) then
+            max_col = screen_cols
+            if (screen_cols >= tooltip%width + 2 .and. &
+                tooltip%col + tooltip%width + 1 > screen_cols) then
+                tooltip%col = screen_cols - tooltip%width - 1
+            else if (tooltip%col + tooltip%width - 1 > screen_cols) then
                 tooltip%col = screen_cols - tooltip%width + 1
             end if
             if (tooltip%col < 1) tooltip%col = 1
         end if
 
         tooltip%visible = .true.
+        call box_shadow(tooltip%row, tooltip%col, tooltip%height, tooltip%width, &
+                        max_row, max_col)
 
         ! Draw top border
         call terminal_move_cursor(tooltip%row, tooltip%col)

@@ -1,6 +1,8 @@
 module command_palette_module
     use iso_fortran_env, only: int32
     use terminal_io_module
+    use modal_box_module, only: box_shadow
+    use utf8_module, only: clip_to_cells
     use theme_module, only: THEME_ACCENT, THEME_BORDER, THEME_MUTED, THEME_PANEL, &
         THEME_PANEL_HEADER, THEME_PANEL_SELECTION, theme_paint, theme_reset, theme_sgr
     implicit none
@@ -312,14 +314,18 @@ contains
         type(command_palette_t), intent(in) :: palette
         integer, intent(in) :: screen_cols
         integer :: i, visible_start, visible_end, row, start_col, start_row
-        integer :: content_width, display_width
+        integer :: content_width, display_width, used
         character(len=256) :: line, category_tag
         type(command_t) :: cmd
-        character(len=:), allocatable :: border_top, border_bottom
+        character(len=:), allocatable :: border_top, border_bottom, shown
         ! Calculate centering - top-center like VSCode
         content_width = min(PALETTE_WIDTH, screen_cols - 4)
         start_col = max(1, (screen_cols - content_width) / 2)
         start_row = 2  ! Start near top (below tab bar if present)
+
+        call terminal_begin_sync()
+        call box_shadow(start_row, start_col, MAX_VISIBLE + 5, content_width, &
+                        max_col=screen_cols)
 
         ! Build border strings
         border_top = '┌' // repeat('─', content_width - 2) // '┐'
@@ -384,25 +390,17 @@ contains
                 write(line, '(A,A,A)') trim(line), '  ', trim(cmd%shortcut)
             end if
 
-            ! Calculate visible width (actual characters, no ANSI codes)
-            display_width = len_trim(line)
-
-            ! Ensure it fits
-            if (display_width > content_width - 2) then
-                display_width = content_width - 2
-            end if
-
-            ! Calculate padding
-            display_width = max(0, min(display_width, content_width - 2))
+            call clip_to_cells(trim(line), content_width - 2, shown, used)
+            display_width = max(0, min(used, content_width - 2))
 
             if (i == palette%selected_index) then
                 ! Highlight selected item with inverse colors
                 call terminal_write(theme_sgr(THEME_PANEL_SELECTION))
-                call terminal_write(line(1:display_width))
+                call terminal_write(shown)
                 call terminal_write(repeat(' ', max(0, content_width - 2 - display_width)))
                 call terminal_write(theme_reset())
             else
-                call terminal_write(theme_sgr(THEME_PANEL) // line(1:display_width))
+                call terminal_write(theme_sgr(THEME_PANEL) // shown)
                 call terminal_write(repeat(' ', max(0, content_width - 2 - display_width)))
                 call terminal_write(theme_reset())
             end if
@@ -425,6 +423,7 @@ contains
 
         ! Position cursor at end of search query (inside the box)
         call terminal_move_cursor(start_row + 2, start_col + 4 + palette%search_pos)
+        call terminal_end_sync()
     end subroutine render_command_palette
 
 

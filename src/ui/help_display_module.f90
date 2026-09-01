@@ -7,8 +7,7 @@ module help_display_module
     use modal_box_module, only: box_frame, box_inner_rect
     use utf8_module, only: clip_to_cells
     use theme_module, only: THEME_ACCENT, THEME_BORDER, THEME_HINT, THEME_PANEL, &
-        THEME_PANEL_FOOTER, THEME_PANEL_HEADER, THEME_SHADOW, theme_paint, &
-        theme_foreground_sgr, theme_reset, theme_sgr, theme_shadows_enabled
+        theme_paint, theme_foreground_sgr, theme_reset, theme_sgr
     implicit none
     private
 
@@ -385,41 +384,29 @@ contains
         character(len=:), allocatable :: shown
         integer :: status
 
-        call terminal_write(achar(27) // '[2J' // achar(27) // '[H')
         call terminal_hide_cursor()
         width = min(70, max(28, editor%screen_cols - 4))
-        height = min(editor%screen_rows - 2, 19)
-        shown_count = min(15, max(1, height - 4))
+        height = min(editor%screen_rows - 2, 17)
+        shown_count = min(15, max(1, height - 2))
         row0 = max(1, (editor%screen_rows - height) / 2 + 1)
         col0 = max(1, (editor%screen_cols - width) / 2 + 1)
 
-        call terminal_move_cursor(row0, col0)
-        call terminal_write(theme_sgr(THEME_BORDER) // '┌' // repeat('─', width - 2) // '┐')
-        call terminal_move_cursor(row0 + 1, col0)
-        call terminal_write(theme_sgr(THEME_PANEL_HEADER) // '│ FUSS COMMANDS' // &
-            repeat(' ', max(0, width - 16)) // theme_sgr(THEME_BORDER) // '│')
+        call terminal_begin_sync()
+        call box_frame(row0, col0, height, width, 'FUSS COMMANDS', &
+                       'Any key closes', editor%screen_rows, editor%screen_cols)
         do i = 1, shown_count
-            row = row0 + 1 + i
+            row = row0 + i
             call terminal_move_cursor(row, col0)
-            call terminal_write(theme_sgr(THEME_PANEL) // '│ ')
+            call terminal_write(theme_sgr(THEME_BORDER) // '│' // &
+                                theme_sgr(THEME_PANEL) // ' ')
             call terminal_write(theme_paint(THEME_ACCENT, keys(i)))
             pad = max(1, 20 - len_trim(keys(i)))
             call clip_to_cells(trim(descriptions(i)), max(1, width - 23), shown, used)
             call terminal_write(theme_sgr(THEME_PANEL) // repeat(' ', pad) // shown // &
-                repeat(' ', max(0, width - 3 - 20 - used)) // theme_sgr(THEME_BORDER) // '│')
+                repeat(' ', max(0, width - 3 - 20 - used)) // &
+                theme_sgr(THEME_BORDER) // '│' // theme_reset())
         end do
-        call terminal_move_cursor(row0 + height - 2, col0)
-        call terminal_write(theme_sgr(THEME_PANEL_FOOTER) // '│ Any key closes' // &
-            repeat(' ', max(0, width - 17)) // theme_sgr(THEME_BORDER) // '│')
-        call terminal_move_cursor(row0 + height - 1, col0)
-        call terminal_write(theme_sgr(THEME_BORDER) // '└' // repeat('─', width - 2) // '┘' // theme_reset())
-
-        if (theme_shadows_enabled() .and. col0 + width <= editor%screen_cols) then
-            do row = row0 + 1, row0 + height - 1
-                call terminal_move_cursor(row, col0 + width)
-                call terminal_write(theme_sgr(THEME_SHADOW) // ' ' // theme_reset())
-            end do
-        end if
+        call terminal_end_sync()
         call terminal_flush()
 
         do

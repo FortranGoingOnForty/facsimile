@@ -294,8 +294,9 @@ def test_a_modified_member_is_not_closed_silently(binary):
         # implementation detail, and guessing it wrong silently turns this
         # into a test of the clean-file path.
         s.send("X", 0.8)
-        # The members row marks a modified member with a trailing asterisk.
-        m = re.search(r"(\w+\.c)\*", s.members_row())
+        # The members row uses the semantic modified glyph: a filled circle
+        # in Unicode mode and an asterisk for the ASCII fallback.
+        m = re.search(r"(\w+\.c)[●*]", s.members_row())
         dirty = m.group(1) if m else None
         check(dirty is not None, "found which member is now modified",
               s.members_row())

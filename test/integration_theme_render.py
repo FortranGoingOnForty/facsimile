@@ -35,6 +35,37 @@ def check(condition, name, detail=""):
         failures.append(name)
 
 
+def check_complete_shadow(session, title, name):
+    title_row = next((i for i, row in enumerate(session.screen.display)
+                      if title in row), -1)
+    top_row = title_row - 1
+    bottom_row = next((i for i in range(title_row + 1, ROWS)
+                       if "└" in session.screen.display[i] and
+                       "┘" in session.screen.display[i]), -1)
+    if top_row < 0 or bottom_row < 0 or bottom_row + 1 >= ROWS:
+        check(False, name, "box geometry was not visible")
+        return
+
+    top = session.screen.display[top_row]
+    left_col = top.find("┌")
+    right_col = top.rfind("┐")
+    if left_col < 0 or right_col < left_col or right_col + 2 >= COLS:
+        check(False, name, "box corners or shadow columns were clipped")
+        return
+
+    right_cells = [session.screen.buffer[row][col]
+                   for row in range(top_row + 1, bottom_row + 1)
+                   for col in range(right_col + 1, right_col + 3)]
+    bottom_cells = [session.screen.buffer[bottom_row + 1][col]
+                    for col in range(left_col + 2, right_col + 3)]
+    shadow_bg = right_cells[0].bg if right_cells else "default"
+    body_bg = session.screen.buffer[title_row][left_col + 1].bg
+    check(right_cells and bottom_cells and shadow_bg != "default" and
+          shadow_bg != body_bg and
+          all(cell.bg == shadow_bg for cell in right_cells + bottom_cells),
+          name, (shadow_bg, body_bg))
+
+
 def find_binary():
     if len(sys.argv) > 1:
         return os.path.abspath(sys.argv[1])
@@ -129,7 +160,11 @@ def main():
 
         s.send("\x02", 0.8)  # ctrl-b: Fuss open
         tree_width = COLS * 30 // 100
+        tab_row = s.screen.display[0]
         branch_row = s.screen.display[1]
+        check(tab_row[tree_width] == "│",
+              "the Fuss divider closes the top tab-strip junction",
+              tab_row[:tree_width + 8])
         check("…" in branch_row[:tree_width],
               "a long Fuss branch name is ellipsized")
         check(branch_row[tree_width] == "│",
@@ -176,9 +211,15 @@ def main():
               "the tab label survives repeated Fuss redraws", clean_bars[-1])
 
         s.send("\x10", 0.7)  # ctrl-p
+        check_complete_shadow(s, "Command Palette",
+                              "the command palette has a complete clipped shadow")
         s.send("Preferences: Color Theme", 0.8)
         s.send("\r", 1.0)
         check("Color Theme" in s.text(), "the live theme picker opens")
+        check("Command Palette" not in s.text(),
+              "the theme picker floats over a clean editor frame")
+        check_complete_shadow(s, "Color Theme",
+                              "the theme picker has a complete clipped shadow")
         picker_cells = s.cells("Color Theme", next(
             (i + 1 for i, row in enumerate(s.screen.display) if "Color Theme" in row), 1))
         check(picker_cells and any(cell.bg != "default" for cell in picker_cells),

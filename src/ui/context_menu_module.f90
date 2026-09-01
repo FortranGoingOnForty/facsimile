@@ -22,6 +22,7 @@ module context_menu_module
     ! redraw while `visible` stays true.
     use terminal_io_module, only: terminal_move_cursor, terminal_write
     use clickable_region_module, only: region_add, REGION_BLOCK, REGION_CTX_ROW
+    use modal_box_module, only: box_shadow
     use utf8_module, only: clip_to_cells
     use theme_module, only: THEME_BORDER, THEME_DISABLED, THEME_PANEL, &
                             THEME_PANEL_SELECTION, theme_reset, theme_sgr
@@ -55,6 +56,7 @@ module context_menu_module
     integer :: g_selected = 0            ! enabled, non-separator row; 0 = none
     integer :: g_kind = 0                ! opaque menu kind
     integer :: g_row0 = 0, g_col0 = 0, g_width = 0, g_height = 0
+    integer :: g_max_row = 0, g_max_col = 0
     logical :: g_visible = .false.
 
 contains
@@ -140,6 +142,8 @@ contains
 
         g_row0 = anchor_row
         g_col0 = anchor_col
+        g_max_row = bottom_row
+        g_max_col = right_col
         if (g_row0 + g_height - 1 > bottom_row) g_row0 = bottom_row - g_height + 1
         if (g_row0 < top_row) g_row0 = top_row
         if (g_col0 + g_width - 1 > right_col) g_col0 = right_col - g_width + 1
@@ -323,6 +327,9 @@ contains
         if (g_width < 3) return
 
         n = drawn_rows()
+
+        call box_shadow(g_row0, g_col0, g_height, g_width, &
+                        g_max_row, g_max_col)
 
         call terminal_move_cursor(g_row0, g_col0)
         call terminal_write(theme_sgr(THEME_BORDER) // '┌' // &

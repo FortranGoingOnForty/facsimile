@@ -12711,6 +12711,11 @@ contains
                 use theme_picker_module, only: show_theme_picker_interactive
                 logical :: changed
                 character(len=:), allocatable :: message
+                ! The palette runs a blocking loop and is still the last frame
+                ! on screen here. Restore the editor so the theme picker is a
+                ! floating dialog over the work, not a dialog over a stale
+                ! palette or a cleared terminal.
+                call render_screen(buffer, editor)
                 call show_theme_picker_interactive(editor%screen_rows, editor%screen_cols, &
                     changed, message)
                 call set_status_message(message)

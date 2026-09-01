@@ -729,7 +729,8 @@ contains
         ! and two footers.
         call fortress_sync(ih)
         call box_frame(r0, c0, h, w, 'FORTRESS  ' // trim(current_dir), &
-                       'arrows:nav  enter:open  S-enter/^g:group  esc:close')
+                       'arrows:nav  enter:open  S-enter/^g:group  esc:close', &
+                       bottom_row, right_col)
         call draw_fortress_interface(ih, iw, current_dir, current_files, &
                                      current_is_dir, current_is_exec, current_count, &
                                      parent_files, parent_is_dir, parent_count, &
