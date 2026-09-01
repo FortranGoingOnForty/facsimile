@@ -189,18 +189,16 @@ def test_csi_u_ctrl_shift_slash_is_help(binary):
         # final help line is visible. A fixed set of PageDown snapshots can
         # miss a boundary row when a busy CI runner observes only the later
         # redraw; single-line overlap keeps every binding in several frames.
-        pages = []
         reached_end = False
         for _ in range(160):
             frame = s.display()
-            pages.append(frame)
             ranges = re.findall(r"(\d+)-(\d+)/(\d+)", frame)
             if ranges and int(ranges[-1][1]) >= int(ranges[-1][2]):
                 reached_end = True
                 break
             s.send("j", 0.18)
         check(reached_end, "help binding audit reaches the final help line")
-        audited = "\n".join(pages)
+        audited = s.raw[raw_start:].decode("utf-8", "replace")
         audited_bindings = ("Alt+Shift+J", "Ctrl+O", "Ctrl+G then A/U/D",
                             "Alt+I", "Shift+Alt+F / Alt+M")
         missing_bindings = [binding for binding in audited_bindings
