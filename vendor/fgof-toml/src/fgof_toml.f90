@@ -798,7 +798,11 @@ contains
     if (.not. starts_with(value_text, "[")) return
 
     close_at = matching_end(value_text, 1, "[", "]")
-    complete = close_at /= 0 .and. len(trim_toml_whitespace(value_text(close_at + 1:))) == 0
+    if (close_at == 0) then
+      complete = .false.
+    else
+      complete = len(trim_toml_whitespace(value_text(close_at + 1:))) == 0
+    end if
   end function array_assignment_complete
 
   integer function find_multiline_close(text, delimiter, start) result(position)
@@ -826,7 +830,8 @@ contains
 
     count = 0
     i = position - 1
-    do while (i >= 1 .and. text(i:i) == BACKSLASH)
+    do while (i >= 1)
+      if (text(i:i) /= BACKSLASH) exit
       count = count + 1
       i = i - 1
     end do
@@ -836,11 +841,14 @@ contains
   subroutine trim_initial_newline(text)
     character(len=:), allocatable, intent(inout) :: text
 
-    if (len(text) >= 2 .and. text(1:1) == char(13) .and. text(2:2) == new_line('a')) then
-      text = text(3:)
-    else if (len(text) >= 1 .and. text(1:1) == new_line('a')) then
-      text = text(2:)
+    if (len(text) == 0) return
+    if (len(text) >= 2) then
+      if (text(1:1) == char(13) .and. text(2:2) == new_line('a')) then
+        text = text(3:)
+        return
+      end if
     end if
+    if (text(1:1) == new_line('a')) text = text(2:)
   end subroutine trim_initial_newline
 
   logical function line_ending_escape_at(text, pos) result(matches)
@@ -850,10 +858,11 @@ contains
 
     matches = .false.
     i = pos + 1
-    do while (i <= len(text) .and. (text(i:i) == " " .or. text(i:i) == char(9)))
+    do while (i <= len(text))
+      if (text(i:i) /= " " .and. text(i:i) /= char(9)) exit
       i = i + 1
     end do
-    matches = i <= len(text) .and. text(i:i) == new_line('a')
+    if (i <= len(text)) matches = text(i:i) == new_line('a')
   end function line_ending_escape_at
 
   subroutine skip_line_ending_escape(text, pos)
@@ -861,10 +870,13 @@ contains
     integer, intent(inout) :: pos
 
     pos = pos + 1
-    do while (pos <= len(text) .and. (text(pos:pos) == " " .or. text(pos:pos) == char(9)))
+    do while (pos <= len(text))
+      if (text(pos:pos) /= " " .and. text(pos:pos) /= char(9)) exit
       pos = pos + 1
     end do
-    if (pos <= len(text) .and. text(pos:pos) == new_line('a')) pos = pos + 1
+    if (pos <= len(text)) then
+      if (text(pos:pos) == new_line('a')) pos = pos + 1
+    end if
     do while (pos <= len(text))
       if (text(pos:pos) /= " " .and. text(pos:pos) /= char(9) .and. &
           text(pos:pos) /= new_line('a') .and. text(pos:pos) /= char(13)) return
@@ -1849,11 +1861,13 @@ contains
     integer :: length
 
     length = len(text)
-    if (length > 0 .and. text(length:length) == char(13)) then
-      trimmed = text(:length - 1)
-    else
-      trimmed = text
+    if (length > 0) then
+      if (text(length:length) == char(13)) then
+        trimmed = text(:length - 1)
+        return
+      end if
     end if
+    trimmed = text
   end function trim_carriage_return
 
   function trim_toml_whitespace(text) result(trimmed)
@@ -1863,12 +1877,14 @@ contains
     integer :: last
 
     first = 1
-    do while (first <= len(text) .and. toml_whitespace(text(first:first)))
+    do while (first <= len(text))
+      if (.not. toml_whitespace(text(first:first))) exit
       first = first + 1
     end do
 
     last = len(text)
-    do while (last >= first .and. toml_whitespace(text(last:last)))
+    do while (last >= first)
+      if (.not. toml_whitespace(text(last:last))) exit
       last = last - 1
     end do
 
@@ -1980,40 +1996,46 @@ contains
     if (digit_count == 0 .or. .not. valid_unsigned_decimal_digits(integer_part)) return
 
     saw_dot = .false.
-    if (pos <= len_trim(text) .and. text(pos:pos) == ".") then
-      saw_dot = .true.
-      pos = pos + 1
-      digit_count = 0
-      do while (pos <= len_trim(text))
-        if (text(pos:pos) == "_") then
-          pos = pos + 1
-        else if (decimal_digit(text(pos:pos))) then
-          digit_count = digit_count + 1
-          pos = pos + 1
-        else
-          exit
-        end if
-      end do
-      if (digit_count == 0) return
+    if (pos <= len_trim(text)) then
+      if (text(pos:pos) == ".") then
+        saw_dot = .true.
+        pos = pos + 1
+        digit_count = 0
+        do while (pos <= len_trim(text))
+          if (text(pos:pos) == "_") then
+            pos = pos + 1
+          else if (decimal_digit(text(pos:pos))) then
+            digit_count = digit_count + 1
+            pos = pos + 1
+          else
+            exit
+          end if
+        end do
+        if (digit_count == 0) return
+      end if
     end if
 
     saw_exponent = .false.
-    if (pos <= len_trim(text) .and. (text(pos:pos) == "e" .or. text(pos:pos) == "E")) then
-      saw_exponent = .true.
-      pos = pos + 1
-      if (pos <= len_trim(text) .and. (text(pos:pos) == "+" .or. text(pos:pos) == "-")) pos = pos + 1
-      digit_count = 0
-      do while (pos <= len_trim(text))
-        if (text(pos:pos) == "_") then
-          pos = pos + 1
-        else if (decimal_digit(text(pos:pos))) then
-          digit_count = digit_count + 1
-          pos = pos + 1
-        else
-          return
+    if (pos <= len_trim(text)) then
+      if (text(pos:pos) == "e" .or. text(pos:pos) == "E") then
+        saw_exponent = .true.
+        pos = pos + 1
+        if (pos <= len_trim(text)) then
+          if (text(pos:pos) == "+" .or. text(pos:pos) == "-") pos = pos + 1
         end if
-      end do
-      if (digit_count == 0) return
+        digit_count = 0
+        do while (pos <= len_trim(text))
+          if (text(pos:pos) == "_") then
+            pos = pos + 1
+          else if (decimal_digit(text(pos:pos))) then
+            digit_count = digit_count + 1
+            pos = pos + 1
+          else
+            return
+          end if
+        end do
+        if (digit_count == 0) return
+      end if
     end if
 
     valid = pos > len_trim(text) .and. (saw_dot .or. saw_exponent)
@@ -2022,7 +2044,10 @@ contains
   logical function valid_unsigned_decimal_digits(digits) result(valid)
     character(len=*), intent(in) :: digits
 
-    valid = len(digits) == 1 .or. digits(1:1) /= "0"
+    valid = len(digits) > 0
+    if (.not. valid) return
+    valid = len(digits) == 1
+    if (.not. valid) valid = digits(1:1) /= "0"
   end function valid_unsigned_decimal_digits
 
   logical function is_datetime_literal(text) result(valid)
@@ -2128,13 +2153,22 @@ contains
       return
     end if
 
-    if (pos <= len_trim(text) .and. text(pos:pos) == ".") then
+    if (pos <= len_trim(text)) then
+      if (text(pos:pos) /= ".") then
+        valid = .true.
+        return
+      end if
       pos = pos + 1
-      if (pos > len_trim(text) .or. .not. decimal_digit(text(pos:pos))) then
+      if (pos > len_trim(text)) then
         pos = start
         return
       end if
-      do while (pos <= len_trim(text) .and. decimal_digit(text(pos:pos)))
+      if (.not. decimal_digit(text(pos:pos))) then
+        pos = start
+        return
+      end if
+      do while (pos <= len_trim(text))
+        if (.not. decimal_digit(text(pos:pos))) exit
         pos = pos + 1
       end do
     end if
@@ -2252,8 +2286,10 @@ contains
   logical function has_integer_prefix(text) result(prefixed)
     character(len=*), intent(in) :: text
 
-    prefixed = len_trim(text) >= 2 .and. text(1:1) == "0" .and. &
-               any([text(2:2) == "x", text(2:2) == "X", &
+    prefixed = .false.
+    if (len_trim(text) < 2) return
+    if (text(1:1) /= "0") return
+    prefixed = any([text(2:2) == "x", text(2:2) == "X", &
                     text(2:2) == "o", text(2:2) == "O", &
                     text(2:2) == "b", text(2:2) == "B"])
   end function has_integer_prefix
@@ -2288,10 +2324,11 @@ contains
   logical function looks_like_number_or_datetime(text) result(matches)
     character(len=*), intent(in) :: text
 
-    matches = len_trim(text) > 0 .and. &
-              (decimal_digit(text(1:1)) .or. text(1:1) == "+" .or. text(1:1) == "-" .or. &
-               index(text, ".") /= 0 .or. index(text, ":") /= 0 .or. &
-               index(text, "-") /= 0 .or. index(text, "e") /= 0 .or. index(text, "E") /= 0)
+    matches = .false.
+    if (len_trim(text) == 0) return
+    matches = decimal_digit(text(1:1)) .or. text(1:1) == "+" .or. text(1:1) == "-" .or. &
+              index(text, ".") /= 0 .or. index(text, ":") /= 0 .or. &
+              index(text, "-") /= 0 .or. index(text, "e") /= 0 .or. index(text, "E") /= 0
   end function looks_like_number_or_datetime
 
   subroutine parse_prefixed_integer(text, value, status)
