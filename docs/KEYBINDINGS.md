@@ -4,7 +4,8 @@ Every key `fac` binds, and the reasoning behind the ones that look strange.
 Where two chords do the same thing, the `Alt` one is the one that survives
 contact with a real terminal — see [Tips](#tips) for why.
 
-`F1` inside the editor shows a shorter version of this list.
+`F1` inside the editor opens a scrollable quick-reference modal with the most
+useful entries from this list.
 
 ## Navigation
 
@@ -257,7 +258,7 @@ report every pointer movement.
 | `F5` or `Alt+T` | Integrated Terminal | Toggle the terminal panel |
 | `Ctrl+Shift+Up` / `Down` | Resize Terminal | Taller / shorter — **only while the terminal has focus** |
 | `Ctrl+Shift+M` | Maximize Terminal | Fill the screen, or go back to the previous height |
-| `Ctrl+?` or `F1` | Help | Show help screen (`Ctrl+?` needs a terminal that supports the kitty keyboard protocol; `F1` always works) |
+| `Ctrl+?` or `F1` | Help | Open the help modal (`Ctrl+?` needs a terminal that supports the kitty keyboard protocol; `F1` always works) |
 | `Ctrl+B` or `F3` | File Tree | Toggle file explorer (Fuss mode) |
 | `Ctrl+L` | Redraw Screen | Clear and redraw the screen |
 | `Esc` | Cancel/Close | Close panels, cancel operations. In the terminal panel it closes the panel only from a bare shell prompt — with text on the line, or inside a full-screen program, the shell gets it |
@@ -403,7 +404,7 @@ works everywhere.
 
 ### Discovering commands
 - `Ctrl+P` opens the command palette, which lists everything the editor can do
-- `Ctrl+?` or `F1` shows the help screen
+- `Ctrl+?` or `F1` opens the help modal
 
 ### Vim-flavoured keys
 - `Alt+H` / `Alt+J` / `Alt+K` / `Alt+L` move between panes

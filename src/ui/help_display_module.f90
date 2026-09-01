@@ -1,73 +1,60 @@
 module help_display_module
-    use iso_fortran_env, only: input_unit
-    use terminal_io_module, only: terminal_clear_screen, terminal_hide_cursor, terminal_show_cursor, &
+    use terminal_io_module, only: terminal_hide_cursor, terminal_show_cursor, &
                                    terminal_move_cursor, terminal_write, terminal_flush
     use input_handler_module, only: get_key_input
     use editor_state_module
+    use modal_box_module, only: box_frame, box_inner_rect
     use utf8_module, only: clip_to_cells
     use theme_module, only: THEME_ACCENT, THEME_BORDER, THEME_HINT, THEME_PANEL, &
         THEME_PANEL_FOOTER, THEME_PANEL_HEADER, THEME_SHADOW, theme_paint, &
-        theme_reset, theme_sgr, theme_shadows_enabled
+        theme_foreground_sgr, theme_reset, theme_sgr, theme_shadows_enabled
     implicit none
     private
 
     public :: show_help, show_tags_modal, display_tags_header, show_fuss_hints
 
+    integer, parameter :: HELP_BLANK = 0
+    integer, parameter :: HELP_SECTION = 1
+    integer, parameter :: HELP_BINDING = 2
+    integer, parameter :: HELP_NOTE = 3
+
+    type :: help_line_t
+        integer :: kind = HELP_BLANK
+        character(len=32) :: key = ''
+        character(len=100) :: text = ''
+    end type help_line_t
+
 contains
 
     subroutine show_help(editor)
         type(editor_state_t), intent(in) :: editor
-        character(len=100), allocatable :: help_lines(:)
+        type(help_line_t), allocatable :: help_lines(:)
         integer :: n_lines, viewport_start, viewport_size
-        integer :: row, max_rows
+        integer :: row0, col0, box_width, box_height
+        integer :: inner_row, inner_col, inner_h, inner_w, max_start
         character(len=32) :: key_input
         integer :: status
         logical :: done
 
-        max_rows = editor%screen_rows
-
-        ! Build help content array
         call build_help_content(help_lines, n_lines)
+        box_width = min(88, max(2, editor%screen_cols - 4))
+        box_height = min(26, max(4, editor%screen_rows - 4))
+        row0 = max(1, (editor%screen_rows - box_height) / 2 + 1)
+        col0 = max(1, (editor%screen_cols - box_width) / 2 + 1)
+        call box_inner_rect(row0, col0, box_height, box_width, &
+                            inner_row, inner_col, inner_h, inner_w)
 
-        ! Initialize viewport
         viewport_start = 1
-        viewport_size = max_rows - 4  ! Leave room for header and footer
+        viewport_size = max(1, inner_h)
+        max_start = max(1, n_lines - viewport_size + 1)
 
         call terminal_hide_cursor()
         done = .false.
         do while (.not. done)
-            ! Clear screen (buffered, no flush — arrives with content atomically)
-            call terminal_write(achar(27) // '[2J' // achar(27) // '[H')
+            call render_help_modal(help_lines, n_lines, viewport_start, &
+                                   row0, col0, box_height, box_width)
+            call terminal_flush()
 
-            ! Header
-            call terminal_move_cursor(1, 1)
-            call terminal_write("FACSIMILE HELP - Navigate: ↑↓/jk/PgUp/PgDn, Quit: q/ESC")
-            call terminal_move_cursor(2, 1)
-            call terminal_write(repeat("=", 70))
-
-            ! Display visible portion of help
-            call display_help_viewport(help_lines, n_lines, viewport_start, viewport_size, 3)
-
-            ! Footer with scroll indicator
-            row = max_rows - 1
-            call terminal_move_cursor(row, 1)
-            call terminal_write(repeat("=", 70))
-            row = max_rows
-            call terminal_move_cursor(row, 1)
-            if (n_lines > viewport_size) then
-                write(key_input, '(a,i0,a,i0,a,i0,a,i0,a)') "Lines ", viewport_start, "-", &
-                      min(viewport_start + viewport_size - 1, n_lines), " of ", n_lines, &
-                      " (", int(real(viewport_start) * 100.0 / real(max(1, n_lines - viewport_size + 1))), "%)"
-                call terminal_write(trim(key_input))
-            else
-                call terminal_write("All content visible")
-            end if
-
-            ! Show cursor
-            call terminal_move_cursor(max_rows, 1)
-            call terminal_show_cursor()
-
-            ! Handle navigation
             call get_key_input(key_input, status)
             if (status == 0) then
                 select case(trim(key_input))
@@ -78,230 +65,224 @@ contains
                 case('down', 'j')
                     if (viewport_start + viewport_size - 1 < n_lines) viewport_start = viewport_start + 1
                 case('pageup')
-                    viewport_start = max(1, viewport_start - viewport_size)
+                    viewport_start = max(1, viewport_start - max(1, viewport_size - 1))
                 case('pagedown')
-                    if (viewport_start + viewport_size - 1 < n_lines) then
-                        viewport_start = min(n_lines - viewport_size + 1, viewport_start + viewport_size)
-                    end if
+                    viewport_start = min(max_start, &
+                        viewport_start + max(1, viewport_size - 1))
                 case('home')
                     viewport_start = 1
                 case('end')
-                    if (n_lines > viewport_size) then
-                        viewport_start = n_lines - viewport_size + 1
-                    end if
+                    viewport_start = max_start
                 end select
             end if
         end do
 
-        ! Cleanup
         if (allocated(help_lines)) deallocate(help_lines)
-
-        ! Redraw will happen after returning
     end subroutine show_help
 
     subroutine build_help_content(lines, n_lines)
-        character(len=100), allocatable, intent(out) :: lines(:)
+        type(help_line_t), allocatable, intent(out) :: lines(:)
         integer, intent(out) :: n_lines
-        integer :: i
-
-        ! Count total lines needed (sections + items + spacing)
+        allocate(lines(160))
         n_lines = 0
-        n_lines = n_lines + 9 + 2   ! NAVIGATION (mouse moved to its own section)
-        n_lines = n_lines + 11 + 2  ! MOUSE
-        n_lines = n_lines + 6 + 2   ! SELECTION
-        n_lines = n_lines + 13 + 2  ! EDITING
-        n_lines = n_lines + 4 + 2   ! CLIPBOARD
-        n_lines = n_lines + 3 + 2   ! LINES
-        n_lines = n_lines + 17 + 2  ! SEARCH & REPLACE (find bar keys)
-        n_lines = n_lines + 5 + 2   ! MULTIPLE CURSORS (increased from 4)
-        n_lines = n_lines + 9 + 2   ! SPECIAL (added the two terminal resize lines)
-        n_lines = n_lines + 7 + 2   ! TABS
-        n_lines = n_lines + 7 + 2   ! PANES
-        n_lines = n_lines + 10 + 2  ! GIT
-        n_lines = n_lines + 5 + 2   ! FILE
-        n_lines = n_lines + 7 + 2   ! LSP (added code actions)
 
-        allocate(lines(n_lines))
-        i = 1
+        call add_section(lines, n_lines, 'NAVIGATION')
+        call add_binding(lines, n_lines, 'Arrows', 'Move the caret')
+        call add_binding(lines, n_lines, 'Home / Ctrl+A', 'Smart line start; press again for column one')
+        call add_binding(lines, n_lines, 'End / Ctrl+E', 'Move to line end')
+        call add_binding(lines, n_lines, 'Ctrl+Home / End', 'Move to file start / end')
+        call add_binding(lines, n_lines, 'Alt+Left / Right', 'Move by word')
+        call add_binding(lines, n_lines, 'PageUp / PageDown', 'Move by one editor page')
+        call add_binding(lines, n_lines, 'Ctrl+G', 'Go to line or line:column')
+        call add_binding(lines, n_lines, 'Alt+[ / Alt+]', 'Jump to the matching bracket')
+        call add_binding(lines, n_lines, 'Alt+,', 'Return to the previous jump location')
+        call add_blank(lines, n_lines)
 
-        ! NAVIGATION
-        lines(i) = "NAVIGATION"; i = i + 1
-        lines(i) = "  arrows              move cursor"; i = i + 1
-        lines(i) = "  ctrl-a/home         smart home (toggle)"; i = i + 1
-        lines(i) = "  ctrl-e/end          end of line"; i = i + 1
-        lines(i) = "  ctrl-home/end       file start/end"; i = i + 1
-        lines(i) = "  alt-left/right      word jump"; i = i + 1
-        lines(i) = "  alt-[/alt-]         jump to matching bracket"; i = i + 1
-        lines(i) = "  pageup/down         page scroll"; i = i + 1
-        lines(i) = "  ctrl-g              go to line:column"; i = i + 1
-        lines(i) = ""; i = i + 1
+        call add_section(lines, n_lines, 'EDITING')
+        call add_binding(lines, n_lines, 'Ctrl+Z / Ctrl+]', 'Undo / redo (Ctrl+Shift+Z also redoes)')
+        call add_binding(lines, n_lines, 'Tab / Shift+Tab', 'Indent / dedent using the file policy')
+        call add_binding(lines, n_lines, 'Ctrl+/', 'Toggle line comments')
+        call add_binding(lines, n_lines, 'Ctrl+K / Ctrl+U', 'Kill to line end / start')
+        call add_binding(lines, n_lines, 'Ctrl+Y', 'Yank the latest killed text')
+        call add_binding(lines, n_lines, 'Alt+Backspace / Alt+D', 'Delete the previous / next word')
+        call add_binding(lines, n_lines, 'Alt+Up / Down', 'Move the current line')
+        call add_binding(lines, n_lines, 'Alt+Shift+Up / Down', 'Duplicate the current line')
+        call add_binding(lines, n_lines, 'Alt+Shift+J', 'Join the next line onto this one')
+        call add_binding(lines, n_lines, 'Ctrl+Shift+K', 'Delete lines without using the clipboard')
+        call add_binding(lines, n_lines, "Alt+' / Alt+Shift+'", 'Cycle quotes / remove surrounding delimiters')
+        call add_binding(lines, n_lines, 'Ctrl+X / C / V', 'Cut / copy / paste line or selection')
+        call add_blank(lines, n_lines)
 
-        ! MOUSE
-        lines(i) = "MOUSE"; i = i + 1
-        lines(i) = "  click               position cursor (closes the tree)"; i = i + 1
-        lines(i) = "  drag                select text"; i = i + 1
-        lines(i) = "  alt-click           add/remove cursor"; i = i + 1
-        lines(i) = "  right-click         context menu at the pointer"; i = i + 1
-        lines(i) = "  ctrl-click          same menu (one-button pointer)"; i = i + 1
-        lines(i) = "  shift-f10 / alt-z   context menu at the caret"; i = i + 1
-        lines(i) = "  wheel               scroll whatever is under it"; i = i + 1
-        lines(i) = "  click a tab         switch to it"; i = i + 1
-        lines(i) = "  click a tree row    open a file / expand a folder"; i = i + 1
-        lines(i) = "  right-click a row   splits and git actions"; i = i + 1
-        lines(i) = "  click the chevron   toggle the file tree (bottom left)"; i = i + 1
-        lines(i) = ""; i = i + 1
+        call add_section(lines, n_lines, 'SELECTION & MULTIPLE CURSORS')
+        call add_binding(lines, n_lines, 'Shift+motion', 'Extend the selection by character, word, line, or page')
+        call add_binding(lines, n_lines, 'Alt+A', 'Select the entire file')
+        call add_binding(lines, n_lines, 'Ctrl+D', 'Select the word and add its next match')
+        call add_binding(lines, n_lines, 'Alt+Click', 'Add or remove a cursor at the pointer')
+        call add_binding(lines, n_lines, 'Ctrl+Alt+Up / Down', 'Add a cursor above / below')
+        call add_note(lines, n_lines, 'Super+Up/Down and Ctrl+Shift+Alt+Up/Down are alternate cursor chords.')
+        call add_binding(lines, n_lines, 'Esc', 'Clear selections and return to one cursor')
+        call add_blank(lines, n_lines)
 
-        ! SELECTION
-        lines(i) = "SELECTION"; i = i + 1
-        lines(i) = "  shift-arrows        character selection"; i = i + 1
-        lines(i) = "  shift-alt-l/r       word selection"; i = i + 1
-        lines(i) = "  shift-ctrl-a/e      select to line start/end"; i = i + 1
-        lines(i) = "  shift-home/end      select to line boundaries"; i = i + 1
-        lines(i) = "  shift-pageup/down   page selection"; i = i + 1
-        lines(i) = "  esc                 clear selection"; i = i + 1
-        lines(i) = ""; i = i + 1
+        call add_section(lines, n_lines, 'FILES, TABS & PANES')
+        call add_binding(lines, n_lines, 'Ctrl+S / Ctrl+Shift+S', 'Save this file / save every modified tab')
+        call add_binding(lines, n_lines, 'Ctrl+O', 'Open the Fortress file navigator')
+        call add_binding(lines, n_lines, 'Ctrl+T / Ctrl+W', 'New tab / close pane or tab')
+        call add_binding(lines, n_lines, 'Alt+1 ... Alt+0', 'Jump to a numbered tab (Ctrl+digits also work)')
+        call add_binding(lines, n_lines, 'Ctrl+PgUp / PgDown', 'Previous / next tab or group member')
+        call add_binding(lines, n_lines, 'Alt+V / Alt+S', 'Split vertically / horizontally')
+        call add_binding(lines, n_lines, 'Alt+H/J/K/L', 'Move between panes')
+        call add_binding(lines, n_lines, 'Alt+Q', 'Close only the current pane')
+        call add_binding(lines, n_lines, 'Ctrl+Q', 'Close the top surface, then quit')
+        call add_blank(lines, n_lines)
 
-        ! EDITING
-        lines(i) = "EDITING"; i = i + 1
-        lines(i) = "  backspace/ctrl-h    delete backward"; i = i + 1
-        lines(i) = "  delete              delete forward"; i = i + 1
-        lines(i) = "  tab                 insert 4 spaces/indent"; i = i + 1
-        lines(i) = "  shift-tab           dedent selection/line"; i = i + 1
-        lines(i) = "  ctrl-/              toggle line comment"; i = i + 1
-        lines(i) = "  ctrl-k              kill line forward"; i = i + 1
-        lines(i) = "  ctrl-shift-k        delete line (no clipboard/yank)"; i = i + 1
-        lines(i) = "  ctrl-u              kill line backward"; i = i + 1
-        lines(i) = "  ctrl-y              yank from stack"; i = i + 1
-        lines(i) = "  alt-bksp            delete word backward (eats blank lines)"; i = i + 1
-        lines(i) = "  alt-d               delete word forward"; i = i + 1
-        lines(i) = "  ctrl-j              join lines"; i = i + 1
-        lines(i) = "  ctrl-t              transpose characters"; i = i + 1
-        lines(i) = ""; i = i + 1
+        call add_section(lines, n_lines, 'SEARCH & REPLACE')
+        call add_binding(lines, n_lines, 'Ctrl+F', 'Open or close the live find bar')
+        call add_binding(lines, n_lines, 'Ctrl+R', 'Find and replace')
+        call add_binding(lines, n_lines, 'Ctrl+D', 'Select the word and find its next match')
+        call add_binding(lines, n_lines, 'n / N', 'Next / previous match after the bar closes')
+        call add_note(lines, n_lines, 'In the find bar: arrows/page keys navigate; Alt+C/W/R/S change matching.')
+        call add_blank(lines, n_lines)
 
-        ! CLIPBOARD
-        lines(i) = "CLIPBOARD (uses system clipboard)"; i = i + 1
-        lines(i) = "  ctrl-x              cut line/selection"; i = i + 1
-        lines(i) = "  ctrl-c              copy line/selection"; i = i + 1
-        lines(i) = "  ctrl-v              paste"; i = i + 1
-        lines(i) = ""; i = i + 1
+        call add_section(lines, n_lines, 'FUSS FILE TREE')
+        call add_binding(lines, n_lines, 'Ctrl+B / F3', 'Open or close Fuss')
+        call add_binding(lines, n_lines, 'Arrows / Enter / Space', 'Navigate, open, and expand the tree')
+        call add_binding(lines, n_lines, 'Type', 'Fuzzy-filter visible paths')
+        call add_binding(lines, n_lines, '. / Ctrl+/', 'Toggle hidden files / expand hints')
+        call add_binding(lines, n_lines, 'Ctrl+G then A/U/D', 'Stage / unstage / open diff')
+        call add_binding(lines, n_lines, 'Ctrl+G then M/P/F/L', 'Commit / push / fetch / pull')
+        call add_binding(lines, n_lines, 'Ctrl+G then T', 'Create and push a tag')
+        call add_note(lines, n_lines, 'Bare letters belong to fuzzy search; Git actions always use the Ctrl+G prefix.')
+        call add_blank(lines, n_lines)
 
-        ! LINES
-        lines(i) = "LINES"; i = i + 1
-        lines(i) = "  alt-up/down         move line"; i = i + 1
-        lines(i) = "  alt-shift-up/down   duplicate line"; i = i + 1
-        lines(i) = ""; i = i + 1
+        call add_section(lines, n_lines, 'COMMANDS & TERMINAL')
+        call add_binding(lines, n_lines, 'Ctrl+P', 'Open the command palette')
+        call add_binding(lines, n_lines, 'F5 / Alt+T', 'Open or focus the integrated terminal')
+        call add_binding(lines, n_lines, 'Ctrl+Shift+Up / Down', 'Resize the focused terminal')
+        call add_binding(lines, n_lines, 'Ctrl+Shift+M', 'Maximize / restore the terminal')
+        call add_binding(lines, n_lines, 'Ctrl+L', 'Clear and redraw the editor')
+        call add_binding(lines, n_lines, 'Ctrl+? / F1', 'Open this help modal')
+        call add_blank(lines, n_lines)
 
-        ! SEARCH & REPLACE
-        lines(i) = "SEARCH & REPLACE"; i = i + 1
-        lines(i) = "  ctrl-f              find bar (seeded with the word under the caret)"; i = i + 1
-        lines(i) = "  ctrl-r              find and replace"; i = i + 1
-        lines(i) = "  ctrl-d              select word & find next match"; i = i + 1
-        lines(i) = "  n / N               next / previous match (after the bar closes)"; i = i + 1
-        lines(i) = "  esc                 exit match mode / clear selections"; i = i + 1
-        lines(i) = ""; i = i + 1
-        lines(i) = "  IN THE FIND BAR"; i = i + 1
-        lines(i) = "  down right pgdn     next match (also enter, tab, space)"; i = i + 1
-        lines(i) = "  up left pgup        previous match (also shift-enter/tab/space)"; i = i + 1
-        lines(i) = "  home / end          first / last match"; i = i + 1
-        lines(i) = "  alt-up/down         previous searches"; i = i + 1
-        lines(i) = "  alt-c / alt-w       toggle case sensitive / whole word"; i = i + 1
-        lines(i) = "  alt-r / alt-s       toggle regex / search in selection"; i = i + 1
-        lines(i) = "  ctrl-r / ctrl-a     replace this match / replace all"; i = i + 1
-        lines(i) = "  ctrl-f / esc        close the bar / end the search"; i = i + 1
-        lines(i) = ""; i = i + 1
+        call add_section(lines, n_lines, 'INLINE COMPLETION')
+        call add_binding(lines, n_lines, 'Alt+I', 'Toggle inline AI completion')
+        call add_binding(lines, n_lines, 'Tab', 'Accept the complete suggestion')
+        call add_binding(lines, n_lines, 'Ctrl+Right / Alt+Right', 'Accept one word / one line')
+        call add_binding(lines, n_lines, 'Alt+\', 'Request a deeper completion')
+        call add_blank(lines, n_lines)
 
-        ! MULTIPLE CURSORS
-        lines(i) = "MULTIPLE CURSORS"; i = i + 1
-        lines(i) = "  ctrl-d              select word & add cursor at next match"; i = i + 1
-        lines(i) = "  alt-click           add/remove cursor at position"; i = i + 1
-        lines(i) = "  ctrl-alt-up/down    add cursor on line above/below"; i = i + 1
-        lines(i) = "  esc                 reduce to single cursor"; i = i + 1
-        lines(i) = ""; i = i + 1
+        call add_section(lines, n_lines, 'LANGUAGE INTELLIGENCE')
+        call add_binding(lines, n_lines, 'Ctrl+Space / Ctrl+H', 'Completion / hover information')
+        call add_binding(lines, n_lines, 'F12 / Alt+G / Ctrl+\', 'Go to definition')
+        call add_binding(lines, n_lines, 'Shift+F12 / Alt+R', 'Find references')
+        call add_binding(lines, n_lines, 'F2 / Alt+N', 'Rename symbol')
+        call add_binding(lines, n_lines, 'F10 / Alt+.', 'Code actions and quick fixes')
+        call add_binding(lines, n_lines, 'F4 / Alt+O', 'Document symbols')
+        call add_binding(lines, n_lines, 'F6 / Alt+P', 'Workspace symbols')
+        call add_binding(lines, n_lines, 'F8 / Alt+E', 'Diagnostics panel')
+        call add_binding(lines, n_lines, 'Shift+Alt+F / Alt+M', 'Format document / manage language servers')
+        call add_note(lines, n_lines, 'Panels use arrows or j/k, Enter to choose, and Esc to close.')
+        call add_blank(lines, n_lines)
 
-        ! SPECIAL
-        lines(i) = "SPECIAL"; i = i + 1
-        lines(i) = "  alt-'               cycle quotes"; i = i + 1
-        lines(i) = "  alt-shift-'         remove brackets/quotes"; i = i + 1
-        lines(i) = "  ctrl-z              undo"; i = i + 1
-        lines(i) = "  ctrl-]/ctrl-shift-z redo"; i = i + 1
-        lines(i) = "  ctrl-l              clear/redraw screen"; i = i + 1
-        lines(i) = "  F5 / alt-t          terminal panel (esc closes it at a bare prompt)"; i = i + 1
-        lines(i) = "  ctrl-shift-up/down  resize the terminal (while it has focus)"; i = i + 1
-        lines(i) = "  ctrl-shift-m        maximize/restore the terminal"; i = i + 1
-        lines(i) = ""; i = i + 1
-
-        ! TABS
-        lines(i) = "TABS"; i = i + 1
-        lines(i) = "  ctrl-t              new empty tab"; i = i + 1
-        lines(i) = "  ctrl-w              close current tab"; i = i + 1
-        lines(i) = "  ctrl-1 to ctrl-9    jump to tab 1-9 (or alt-1 to alt-9)"; i = i + 1
-        lines(i) = "  ctrl-0              jump to tab 10 (or alt-0)"; i = i + 1
-        lines(i) = "  ctrl-pageup         previous tab (or ctrl-alt-left)"; i = i + 1
-        lines(i) = "  ctrl-pagedown       next tab (or ctrl-alt-right)"; i = i + 1
-        lines(i) = ""; i = i + 1
-
-        ! PANES
-        lines(i) = "PANES"; i = i + 1
-        lines(i) = "  alt-v               split pane vertically"; i = i + 1
-        lines(i) = "  alt-s               split pane horizontally"; i = i + 1
-        lines(i) = "  alt-q               close current pane only"; i = i + 1
-        lines(i) = "  ctrl-w              close pane (then tab if last)"; i = i + 1
-        lines(i) = "  alt-h/j/k/l         navigate left/down/up/right (Vim style)"; i = i + 1
-        lines(i) = "  ctrl-shift-arrows   navigate between panes (alternative)"; i = i + 1
-        lines(i) = ""; i = i + 1
-
-        ! GIT (in fuss mode)
-        lines(i) = "GIT (in fuss mode - ctrl-b)"; i = i + 1
-        lines(i) = "  a                   stage file/add"; i = i + 1
-        lines(i) = "  u                   unstage file"; i = i + 1
-        lines(i) = "  m                   commit with message"; i = i + 1
-        lines(i) = "  p                   push to remote"; i = i + 1
-        lines(i) = "  f                   fetch from remote"; i = i + 1
-        lines(i) = "  l                   pull from remote"; i = i + 1
-        lines(i) = "  t                   create tag"; i = i + 1
-        lines(i) = "  d                   diff file in new tab"; i = i + 1
-        lines(i) = "  enter               open file in editor"; i = i + 1
-        lines(i) = ""; i = i + 1
-
-        ! FILE
-        lines(i) = "FILE"; i = i + 1
-        lines(i) = "  ctrl-b              toggle file browser (fuss mode)"; i = i + 1
-        lines(i) = "  ctrl-s              save"; i = i + 1
-        lines(i) = "  ctrl-q              quit"; i = i + 1
-        lines(i) = "  ctrl-? or F1        show this help"; i = i + 1
-        lines(i) = ""; i = i + 1
-
-        ! LSP (Language Server Protocol)
-        lines(i) = "LSP (Language Server Protocol)"; i = i + 1
-        lines(i) = "  ctrl-space          code completion"; i = i + 1
-        lines(i) = "  F12/alt-g           go to definition"; i = i + 1
-        lines(i) = "  shift-F12/alt-r     find all references"; i = i + 1
-        lines(i) = "  alt-, (alt-comma)   jump back (navigation history)"; i = i + 1
-        lines(i) = "  F2 / alt-n          rename symbol"; i = i + 1
-        lines(i) = "  F10/alt-.           code actions (quick fixes)"; i = i + 1
-        lines(i) = "  F4/alt-o            document symbols (outline)"; i = i + 1
-        lines(i) = "  F6/alt-p            workspace symbols (search project)"; i = i + 1
-        lines(i) = "  F8/alt-e            toggle diagnostics panel (errors)"; i = i + 1
-        lines(i) = "  ctrl-p              command palette"; i = i + 1
-        lines(i) = ""; i = i + 1
-
-        n_lines = i - 1
+        call add_section(lines, n_lines, 'MOUSE')
+        call add_binding(lines, n_lines, 'Click / Drag', 'Place the caret / select text')
+        call add_binding(lines, n_lines, 'Right-click', 'Open the context menu at the pointer')
+        call add_binding(lines, n_lines, 'Shift+F10 / Alt+Z', 'Open the context menu at the caret')
+        call add_binding(lines, n_lines, 'Wheel', 'Scroll the pane or terminal under the pointer')
+        call add_binding(lines, n_lines, 'Drag terminal border', 'Resize the integrated terminal')
+        call add_binding(lines, n_lines, 'Click tabs or tree rows', 'Switch files, open paths, or expand directories')
     end subroutine build_help_content
 
-    subroutine display_help_viewport(lines, n_lines, start_line, viewport_size, start_row)
-        character(len=*), intent(in) :: lines(:)
-        integer, intent(in) :: n_lines, start_line, viewport_size, start_row
-        integer :: i, row, end_line
+    subroutine add_section(lines, n, text)
+        type(help_line_t), intent(inout) :: lines(:)
+        integer, intent(inout) :: n
+        character(len=*), intent(in) :: text
+        n = n + 1
+        lines(n)%kind = HELP_SECTION
+        lines(n)%text = text
+    end subroutine add_section
 
-        row = start_row
-        end_line = min(start_line + viewport_size - 1, n_lines)
+    subroutine add_binding(lines, n, key, text)
+        type(help_line_t), intent(inout) :: lines(:)
+        integer, intent(inout) :: n
+        character(len=*), intent(in) :: key, text
+        n = n + 1
+        lines(n)%kind = HELP_BINDING
+        lines(n)%key = key
+        lines(n)%text = text
+    end subroutine add_binding
+
+    subroutine add_note(lines, n, text)
+        type(help_line_t), intent(inout) :: lines(:)
+        integer, intent(inout) :: n
+        character(len=*), intent(in) :: text
+        n = n + 1
+        lines(n)%kind = HELP_NOTE
+        lines(n)%text = text
+    end subroutine add_note
+
+    subroutine add_blank(lines, n)
+        type(help_line_t), intent(inout) :: lines(:)
+        integer, intent(inout) :: n
+        n = n + 1
+        lines(n)%kind = HELP_BLANK
+    end subroutine add_blank
+
+    subroutine render_help_modal(lines, n_lines, start_line, row0, col0, height, width)
+        type(help_line_t), intent(in) :: lines(:)
+        integer, intent(in) :: n_lines, start_line, row0, col0, height, width
+        integer :: inner_row, inner_col, inner_h, inner_w
+        integer :: i, row, end_line, key_col, key_width, separator_col
+        integer :: description_col, description_width, used
+        character(len=80) :: footer
+        character(len=:), allocatable :: shown
+
+        call box_inner_rect(row0, col0, height, width, &
+                            inner_row, inner_col, inner_h, inner_w)
+        write(footer, '(a,i0,a,i0,a,i0)') &
+            '↑↓ scroll  PgUp/PgDn  Esc close  ', start_line, '-', &
+            min(n_lines, start_line + inner_h - 1), '/', n_lines
+        call box_frame(row0, col0, height, width, 'FACSIMILE HELP', trim(footer))
+
+        do row = inner_row, inner_row + inner_h - 1
+            call terminal_move_cursor(row, inner_col)
+            call terminal_write(theme_sgr(THEME_PANEL) // repeat(' ', inner_w) // theme_reset())
+        end do
+
+        key_col = inner_col + min(2, max(0, inner_w - 1))
+        key_width = min(24, max(10, inner_w / 3))
+        separator_col = min(inner_col + inner_w - 1, key_col + key_width)
+        description_col = min(inner_col + inner_w, separator_col + 2)
+        description_width = max(0, inner_col + inner_w - description_col)
+        end_line = min(n_lines, start_line + inner_h - 1)
+        row = inner_row
 
         do i = start_line, end_line
-            call terminal_move_cursor(row, 1)
-            call terminal_write(lines(i))
+            select case (lines(i)%kind)
+            case (HELP_SECTION)
+                call clip_to_cells(trim(lines(i)%text), max(0, inner_w - 4), shown, used)
+                call terminal_move_cursor(row, key_col)
+                call terminal_write(theme_sgr(THEME_PANEL) // &
+                    theme_foreground_sgr(THEME_ACCENT) // shown // theme_reset())
+            case (HELP_BINDING)
+                call clip_to_cells(trim(lines(i)%key), max(0, key_width - 1), shown, used)
+                call terminal_move_cursor(row, key_col)
+                call terminal_write(theme_sgr(THEME_PANEL) // &
+                    theme_foreground_sgr(THEME_ACCENT) // shown // theme_reset())
+                call terminal_move_cursor(row, separator_col)
+                call terminal_write(theme_sgr(THEME_PANEL) // &
+                    theme_foreground_sgr(THEME_BORDER) // '│' // theme_reset())
+                call clip_to_cells(trim(lines(i)%text), description_width, shown, used)
+                call terminal_move_cursor(row, description_col)
+                call terminal_write(theme_sgr(THEME_PANEL) // shown // theme_reset())
+            case (HELP_NOTE)
+                call clip_to_cells(trim(lines(i)%text), max(0, inner_w - 4), shown, used)
+                call terminal_move_cursor(row, key_col)
+                call terminal_write(theme_sgr(THEME_PANEL) // &
+                    theme_foreground_sgr(THEME_HINT) // shown // theme_reset())
+            end select
             row = row + 1
         end do
-    end subroutine display_help_viewport
+    end subroutine render_help_modal
 
     subroutine show_tags_modal(editor, tags, n_tags)
         type(editor_state_t), intent(in) :: editor

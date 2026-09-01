@@ -14,6 +14,7 @@ Usage: python3 test/integration_comment.py [path-to-fac-binary]
 Requires: pip3 install pexpect pyte
 """
 
+import codecs
 import os
 import shutil
 import sys
@@ -59,10 +60,13 @@ class Session:
         self.target = os.path.join(self.home, name)
         with open(self.target, "w") as f:
             f.write(content)
-        env = {**os.environ, "TERM": "xterm-256color", "HOME": self.home}
+        env = {**os.environ, "TERM": "xterm-256color", "COLORTERM": "truecolor",
+               "HOME": self.home}
         env.pop("XDG_CONFIG_HOME", None)
+        env.pop("NO_COLOR", None)
         self.screen = pyte.Screen(COLS, ROWS)
         self.stream = pyte.Stream(self.screen)
+        self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.raw = b""
         self.child = pexpect.spawn(binary, [self.target], dimensions=(ROWS, COLS),
                                    env=env, cwd=self.home)
@@ -74,7 +78,7 @@ class Session:
             try:
                 data = self.child.read_nonblocking(65536, 0.1)
                 self.raw += data
-                self.stream.feed(data.decode("utf-8", "replace"))
+                self.stream.feed(self.decoder.decode(data))
             except pexpect.TIMEOUT:
                 pass
             except pexpect.EOF:
@@ -144,7 +148,34 @@ def test_csi_u_ctrl_shift_slash_is_help(binary):
         s.send("\x1b[47;6u", 0.9)
         check("FACSIMILE HELP" in s.display(), "CSI 47;6u opens help",
               s.display()[:200])
+        title_row = next((i for i, row in enumerate(s.screen.display)
+                          if "FACSIMILE HELP" in row), -1)
+        title_col = (s.screen.display[title_row].find("FACSIMILE HELP")
+                     if title_row >= 0 else -1)
+        check(title_row > 0 and title_col > 0,
+              "help is an inset modal rather than a full-screen pager",
+              (title_row, title_col))
+        check("c.py" in s.screen.display[0],
+              "the editor remains visible behind the help modal",
+              s.screen.display[0])
+        title_cell = (s.screen.buffer[title_row][title_col]
+                      if title_row >= 0 and title_col >= 0 else None)
+        check(title_cell is not None and title_cell.bg != "default",
+              "the help frame uses the active semantic theme")
+
+        pages = [s.display()]
+        for _ in range(6):
+            s.send("\x1b[6~", 0.35)  # PageDown
+            pages.append(s.display())
+        audited = "\n".join(pages)
+        check("Alt+Shift+J" in audited and "Ctrl+O" in audited and
+              "Ctrl+G then A/U/D" in audited and "Alt+I" in audited and
+              "Shift+Alt+F / Alt+M" in audited,
+              "help includes current editor, Fuss, AI, and LSP bindings")
+        check("transpose characters" not in audited,
+              "help no longer advertises the stale Ctrl+T transpose binding")
         s.send("q", 0.5)
+        check("FACSIMILE HELP" not in s.display(), "q dismisses the help modal")
         check(s.saved_text() == "a = 1\n", "help did not touch the buffer")
     finally:
         s.close()
@@ -153,11 +184,11 @@ def test_csi_u_ctrl_shift_slash_is_help(binary):
 def test_help_hint_and_f1(binary):
     s = Session(binary, "a = 1\n")
     try:
-        check("ctrl-?:help" in s.display(), "status bar advertises ctrl-?",
-              s.display()[-300:])
         s.send("\x1bOP", 0.9)           # F1
         check("FACSIMILE HELP" in s.display(), "F1 opens help",
               s.display()[:200])
+        s.send("\x1b", 0.5)
+        check("FACSIMILE HELP" not in s.display(), "escape dismisses the help modal")
     finally:
         s.close()
 
