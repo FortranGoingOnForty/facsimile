@@ -55,7 +55,8 @@ module theme_module
     integer, parameter, public :: THEME_SEARCH_MATCH = 43
     integer, parameter, public :: THEME_CURRENT_LINE = 44
     integer, parameter, public :: THEME_DISABLED = 45
-    integer, parameter, public :: THEME_ROLE_COUNT = 45
+    integer, parameter, public :: THEME_TERMINAL_BG = 46
+    integer, parameter, public :: THEME_ROLE_COUNT = 46
 
     integer, parameter, public :: ICONS_ASCII = 0
     integer, parameter, public :: ICONS_UNICODE = 1
@@ -72,7 +73,7 @@ module theme_module
         'ghost', 'line_number', 'line_number.active', 'syntax.keyword', &
         'syntax.string', 'syntax.comment', 'syntax.number', 'syntax.type', &
         'syntax.function', 'syntax.preprocessor', 'search.match', 'current_line', &
-        'disabled']
+        'disabled', 'terminal.background']
 
     type, public :: theme_t
         character(len=64) :: name = 'Facsimile Steel'
@@ -549,6 +550,7 @@ contains
         theme%styles(THEME_DISABLED)%fg = 8
         theme%styles(THEME_DISABLED)%dim = .true.
         theme%styles(THEME_DISABLED)%italic = .true.
+        call set_rgb(theme, THEME_TERMINAL_BG, '', '#000000')
     end subroutine build_legacy
 
     subroutine establish_roles(theme, fg, bg, muted, accent, accent_fg, selection_bg, &
@@ -604,6 +606,7 @@ contains
         call set_rgb(theme, THEME_SEARCH_MATCH, accent_fg, warning, bold=.true.)
         call set_rgb(theme, THEME_CURRENT_LINE, fg, panel_bg)
         call set_rgb(theme, THEME_DISABLED, muted, panel_bg, dim=.true., italic=.true.)
+        call set_rgb(theme, THEME_TERMINAL_BG, '', '#000000')
     end subroutine establish_roles
 
     subroutine load_custom_theme(name, theme, ok, message)

@@ -2,8 +2,9 @@ module terminal_panel_module
     use iso_fortran_env, only: int32, int64
     use iso_c_binding
     use theme_module, only: THEME_BORDER, THEME_ERROR, THEME_MUTED, &
-        THEME_PANEL_HEADER, THEME_STATUS_ACCENT, THEME_WARNING, &
-        theme_glyph, theme_reset, theme_sgr
+        THEME_PANEL_HEADER, THEME_STATUS_ACCENT, THEME_TERMINAL_BG, &
+        THEME_WARNING, theme_background_sgr, theme_glyph, theme_reset, &
+        theme_sgr
     use terminal_io_module, only: terminal_write, terminal_move_cursor, &
                                    terminal_flush
     use session_ipc_module, only: session_ipc_dir
@@ -620,6 +621,7 @@ contains
         integer :: nb, bi
         integer :: last_fg, last_bg, last_attr
         integer :: cursor_r, cursor_c
+        integer :: left_rule, remaining, right_rule
         integer(c_int) :: cc_row, cc_col
         character(len=32) :: ansi_seq
         logical :: at_bottom
@@ -665,8 +667,8 @@ contains
             else
                 call terminal_write(theme_sgr(THEME_MUTED))
             end if
-            call terminal_write(repeat('─', min(cols, 3)))
             if (cols > 14) then
+                call terminal_write(repeat('─', 3))
                 if (panel%focused) then
                     call terminal_write(' TERMINAL ')
                 else
@@ -677,14 +679,18 @@ contains
                 ! bar needs any-motion reporting, which costs an event per
                 ! pixel of travel for the whole session -- too much to pay for
                 ! an affordance that can simply be visible.
+                remaining = cols - 13
                 if (cols > 34) then
-                    call terminal_write(repeat('─', (cols - 16) / 2 - 2))
+                    left_rule = max(0, (remaining - 3) / 2)
+                    right_rule = max(0, remaining - 3 - left_rule)
+                    call terminal_write(repeat('─', left_rule))
                     call terminal_write(' ' // theme_glyph('grab') // ' ')
-                    call terminal_write(repeat('─', &
-                        cols - 16 - ((cols - 16) / 2 - 2) - 3))
+                    call terminal_write(repeat('─', right_rule))
                 else
-                    call terminal_write(repeat('─', cols - 16))
+                    call terminal_write(repeat('─', remaining))
                 end if
+            else
+                call terminal_write(repeat('─', max(0, cols)))
             end if
         end if
         call terminal_write(theme_reset())
@@ -703,7 +709,8 @@ contains
             call terminal_move_cursor(start_row + 1 + r, 1)
 
             ! Reset style at start of each row
-            call terminal_write(ESC_CH // '[0m')
+            call terminal_write(ESC_CH // '[0m' // &
+                theme_background_sgr(THEME_TERMINAL_BG))
             last_fg = 0
             last_bg = 0
             last_attr = 0
@@ -727,7 +734,8 @@ contains
                     int(c_bg) /= last_bg .or. &
                     int(c_attr) /= last_attr) then
 
-                    call terminal_write(ESC_CH // '[0m')
+                    call terminal_write(ESC_CH // '[0m' // &
+                        theme_background_sgr(THEME_TERMINAL_BG))
                     last_fg = int(c_fg)
                     last_bg = int(c_bg)
                     last_attr = int(c_attr)
@@ -796,7 +804,8 @@ contains
 
             ! Clear to end of row if grid is narrower than screen
             if (grid_cols < cols) then
-                call terminal_write(ESC_CH // '[0m')
+                call terminal_write(ESC_CH // '[0m' // &
+                    theme_background_sgr(THEME_TERMINAL_BG))
                 call terminal_write( &
                     repeat(' ', cols - grid_cols))
                 last_fg = 0

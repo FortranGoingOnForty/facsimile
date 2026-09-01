@@ -119,6 +119,7 @@ line_number             line_number.active      syntax.keyword
 syntax.string           syntax.comment          syntax.number
 syntax.type             syntax.function         syntax.preprocessor
 search.match            current_line            disabled
+terminal.background
 ```
 
 An invalid custom theme is rejected without replacing the active theme. Parse

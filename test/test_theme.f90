@@ -45,6 +45,9 @@ program test_theme
                index(sequence, achar(27) // '[48;') == 0 .and. &
                index(sequence, achar(27) // '[38;2;') > 0, &
                'foreground overlays preserve an existing panel background')
+    sequence = theme_background_sgr(THEME_TERMINAL_BG)
+    call check(index(sequence, achar(27) // '[48;2;0;0;0m') > 0, &
+               'the integrated terminal has an explicit black surface')
 
     call write_custom_theme()
     call theme_select('test-modern', .false., ok, message)

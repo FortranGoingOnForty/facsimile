@@ -13,6 +13,7 @@ Usage: python3 test/integration_terminal_panel.py [path-to-fac-binary]
 Requires: pip3 install pexpect pyte
 """
 
+import codecs
 import os
 import shutil
 import sys
@@ -82,6 +83,7 @@ class Session:
         env.pop("XDG_CONFIG_HOME", None)
         self.screen = pyte.Screen(COLS, ROWS)
         self.stream = pyte.Stream(self.screen)
+        self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.child = pexpect.spawn(binary, [self.target], dimensions=(ROWS, COLS),
                                    env=env, cwd=self.home)
         self.drain(wait)
@@ -91,7 +93,7 @@ class Session:
         while time.time() < end:
             try:
                 data = self.child.read_nonblocking(65536, 0.1)
-                self.stream.feed(data.decode("utf-8", "replace"))
+                self.stream.feed(self.decoder.decode(data))
             except pexpect.TIMEOUT:
                 pass
             except pexpect.EOF:

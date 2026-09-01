@@ -8,6 +8,7 @@ Usage: python3 test/integration_theme_render.py [path-to-fac-binary]
 Requires: pip3 install pexpect pyte
 """
 
+import codecs
 import json
 import os
 import shutil
@@ -68,6 +69,7 @@ class Session:
         env.pop("NO_COLOR", None)
         self.screen = pyte.Screen(COLS, ROWS)
         self.stream = pyte.Stream(self.screen)
+        self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.child = pexpect.spawn(binary, [self.target], dimensions=(ROWS, COLS),
                                    cwd=self.home, env=env, timeout=10)
         self.drain(1.5)
@@ -77,7 +79,7 @@ class Session:
         while time.time() < end:
             try:
                 data = self.child.read_nonblocking(65536, 0.1)
-                self.stream.feed(data.decode("utf-8", "replace"))
+                self.stream.feed(self.decoder.decode(data))
             except pexpect.TIMEOUT:
                 continue
             except pexpect.EOF:
@@ -190,6 +192,18 @@ def main():
         check(before != after, "moving in the picker previews another theme")
         s.send("\x1b", 0.8)
         check("Color Theme" not in s.text(), "escape restores the editor")
+
+        s.send("\x1bt", 1.5)  # alt-t: integrated terminal
+        terminal_row = next((i for i, row in enumerate(s.screen.display)
+                             if "TERMINAL" in row), -1)
+        check(terminal_row >= 0, "the integrated terminal opens")
+        check(terminal_row >= 0 and
+              s.screen.buffer[terminal_row][COLS - 1].data == "─",
+              "the terminal border reaches the final screen column")
+        terminal_surface = s.screen.buffer[ROWS - 2][COLS // 2]
+        check(terminal_surface.bg == "000000",
+              "the integrated terminal uses a stark black surface",
+              terminal_surface.bg)
     finally:
         s.close()
 
