@@ -78,16 +78,20 @@ contains
     end subroutine put_edge
 
     !> Two columns right and one row down, so the box reads as floating above
-    !> the document rather than pasted into it.
+    !> the document rather than pasted into it. The right strip and full
+    !> bottom strip meet at the lower-right corner.
     subroutine put_shadow(row0, col0, height, width)
         integer, intent(in) :: row0, col0, height, width
         integer :: r
 
         if (.not. theme_shadows_enabled()) return
-        do r = row0 + 1, row0 + height
+        do r = row0 + 1, row0 + height - 1
             call terminal_move_cursor(r, col0 + width)
             call terminal_write(theme_sgr(THEME_SHADOW) // '  ' // theme_reset())
         end do
+        call terminal_move_cursor(row0 + height, col0 + 2)
+        call terminal_write(theme_sgr(THEME_SHADOW) // &
+            repeat(' ', width) // theme_reset())
     end subroutine put_shadow
 
 end module modal_box_module

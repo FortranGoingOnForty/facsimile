@@ -145,9 +145,15 @@ def test_csi_u_ctrl_slash(binary):
 def test_csi_u_ctrl_shift_slash_is_help(binary):
     s = Session(binary, "a = 1\n")
     try:
+        raw_start = len(s.raw)
         s.send("\x1b[47;6u", 0.9)
+        modal_raw = s.raw[raw_start:]
         check("FACSIMILE HELP" in s.display(), "CSI 47;6u opens help",
               s.display()[:200])
+        sync_start = modal_raw.find(b"\x1b[?2026h")
+        sync_end = modal_raw.find(b"\x1b[?2026l")
+        check(sync_start >= 0 and sync_end > sync_start,
+              "help redraws use synchronized terminal output")
         title_row = next((i for i, row in enumerate(s.screen.display)
                           if "FACSIMILE HELP" in row), -1)
         title_col = (s.screen.display[title_row].find("FACSIMILE HELP")
@@ -162,16 +168,34 @@ def test_csi_u_ctrl_shift_slash_is_help(binary):
                       if title_row >= 0 and title_col >= 0 else None)
         check(title_cell is not None and title_cell.bg != "default",
               "the help frame uses the active semantic theme")
+        title_text = s.screen.display[title_row] if title_row >= 0 else ""
+        left_col = title_text.find("╭")
+        right_col = title_text.rfind("╮")
+        bottom_row = next((i for i, row in enumerate(s.screen.display)
+                           if "╰" in row and "╯" in row), -1)
+        shadow_cells = []
+        if (left_col >= 0 and right_col >= left_col and bottom_row + 1 < ROWS):
+            shadow_cells = [s.screen.buffer[bottom_row + 1][col]
+                            for col in range(left_col + 2, right_col + 3)]
+        right_shadow = (s.screen.buffer[title_row + 1][right_col + 1]
+                        if title_row + 1 < ROWS and right_col + 1 < COLS else None)
+        check(shadow_cells and shadow_cells[0].bg != "default" and
+              all(cell.bg == shadow_cells[0].bg for cell in shadow_cells) and
+              right_shadow is not None and right_shadow.bg == shadow_cells[0].bg,
+              "the help modal has complete right and bottom shadows")
 
         pages = [s.display()]
         for _ in range(6):
-            s.send("\x1b[6~", 0.35)  # PageDown
+            s.send("\x1b[6~", 0.5)  # PageDown
             pages.append(s.display())
         audited = "\n".join(pages)
-        check("Alt+Shift+J" in audited and "Ctrl+O" in audited and
-              "Ctrl+G then A/U/D" in audited and "Alt+I" in audited and
-              "Shift+Alt+F / Alt+M" in audited,
-              "help includes current editor, Fuss, AI, and LSP bindings")
+        audited_bindings = ("Alt+Shift+J", "Ctrl+O", "Ctrl+G then A/U/D",
+                            "Alt+I", "Shift+Alt+F / Alt+M")
+        missing_bindings = [binding for binding in audited_bindings
+                            if binding not in audited]
+        check(not missing_bindings,
+              "help includes current editor, Fuss, AI, and LSP bindings",
+              missing_bindings)
         check("transpose characters" not in audited,
               "help no longer advertises the stale Ctrl+T transpose binding")
         s.send("q", 0.5)

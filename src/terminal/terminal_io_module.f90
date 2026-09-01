@@ -15,6 +15,7 @@ module terminal_io_module
     public :: terminal_move_cursor, terminal_hide_cursor, terminal_show_cursor
     public :: terminal_get_size, terminal_enable_raw_mode, terminal_disable_raw_mode
     public :: terminal_write, terminal_flush, terminal_enable_mouse, terminal_disable_mouse
+    public :: terminal_begin_sync, terminal_end_sync
     public :: terminal_set_motion_tracking
     public :: terminal_input_available, terminal_read_char
     public :: terminal_read_char_escape, terminal_input_available_count
@@ -229,6 +230,17 @@ contains
     subroutine terminal_flush()
         call c_term_buf_flush()
     end subroutine terminal_flush
+
+    ! DEC private mode 2026 asks supporting terminals to present every cursor
+    ! movement in a redraw at once. Unsupported terminals safely ignore it;
+    ! the ordinary output buffer remains the fallback in either case.
+    subroutine terminal_begin_sync()
+        call buf_write_str(CSI // '?2026h')
+    end subroutine terminal_begin_sync
+
+    subroutine terminal_end_sync()
+        call buf_write_str(CSI // '?2026l')
+    end subroutine terminal_end_sync
 
     subroutine terminal_enable_mouse()
         call buf_write_str(CSI // '?1000h')

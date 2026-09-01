@@ -122,13 +122,14 @@ class Editor:
         return out
 
     def selected_row(self):
-        """The highlighted entry. It is marked with ATTRIBUTES (bold +
-        underline), which never show up in screen.display -- comparing text
+        """The highlighted entry uses the theme's semantic reverse-video
+        selection, which never shows up in screen.display -- comparing text
         would call a moved selection 'no change'."""
-        for y in range(ROWS):
+        # Row zero is the tab strip; its active tab also uses reverse video.
+        for y in range(1, ROWS - 1):
             cells = [self.screen.buffer[y][x] for x in range(COLS)]
-            if any(c.underscore and c.bold for c in cells):
-                return y, "".join(c.data for c in cells if c.underscore).strip()
+            if any(c.reverse for c in cells):
+                return y, "".join(c.data for c in cells if c.reverse).strip()
         return None, None
 
     def has_box(self):

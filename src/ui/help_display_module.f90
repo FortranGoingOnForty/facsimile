@@ -1,5 +1,6 @@
 module help_display_module
-    use terminal_io_module, only: terminal_hide_cursor, terminal_show_cursor, &
+    use terminal_io_module, only: terminal_begin_sync, terminal_end_sync, &
+                                   terminal_hide_cursor, terminal_show_cursor, &
                                    terminal_move_cursor, terminal_write, terminal_flush
     use input_handler_module, only: get_key_input
     use editor_state_module
@@ -51,8 +52,10 @@ contains
         call terminal_hide_cursor()
         done = .false.
         do while (.not. done)
+            call terminal_begin_sync()
             call render_help_modal(help_lines, n_lines, viewport_start, &
                                    row0, col0, box_height, box_width)
+            call terminal_end_sync()
             call terminal_flush()
 
             call get_key_input(key_input, status)
@@ -231,10 +234,11 @@ contains
         type(help_line_t), intent(in) :: lines(:)
         integer, intent(in) :: n_lines, start_line, row0, col0, height, width
         integer :: inner_row, inner_col, inner_h, inner_w
-        integer :: i, row, end_line, key_col, key_width, separator_col
-        integer :: description_col, description_width, used
+        integer :: i, row, key_col, key_width, separator_col
+        integer :: description_col, description_width, used, description_used
+        integer :: left_padding, description_gap
         character(len=80) :: footer
-        character(len=:), allocatable :: shown
+        character(len=:), allocatable :: shown, description, styled
 
         call box_inner_rect(row0, col0, height, width, &
                             inner_row, inner_col, inner_h, inner_w)
@@ -243,44 +247,54 @@ contains
             min(n_lines, start_line + inner_h - 1), '/', n_lines
         call box_frame(row0, col0, height, width, 'FACSIMILE HELP', trim(footer))
 
-        do row = inner_row, inner_row + inner_h - 1
-            call terminal_move_cursor(row, inner_col)
-            call terminal_write(theme_sgr(THEME_PANEL) // repeat(' ', inner_w) // theme_reset())
-        end do
-
         key_col = inner_col + min(2, max(0, inner_w - 1))
         key_width = min(24, max(10, inner_w / 3))
         separator_col = min(inner_col + inner_w - 1, key_col + key_width)
+        key_width = max(0, separator_col - key_col)
         description_col = min(inner_col + inner_w, separator_col + 2)
         description_width = max(0, inner_col + inner_w - description_col)
-        end_line = min(n_lines, start_line + inner_h - 1)
-        row = inner_row
+        left_padding = max(0, key_col - inner_col)
+        description_gap = max(0, description_col - separator_col - 1)
 
-        do i = start_line, end_line
-            select case (lines(i)%kind)
-            case (HELP_SECTION)
-                call clip_to_cells(trim(lines(i)%text), max(0, inner_w - 4), shown, used)
-                call terminal_move_cursor(row, key_col)
-                call terminal_write(theme_sgr(THEME_PANEL) // &
-                    theme_foreground_sgr(THEME_ACCENT) // shown // theme_reset())
-            case (HELP_BINDING)
-                call clip_to_cells(trim(lines(i)%key), max(0, key_width - 1), shown, used)
-                call terminal_move_cursor(row, key_col)
-                call terminal_write(theme_sgr(THEME_PANEL) // &
-                    theme_foreground_sgr(THEME_ACCENT) // shown // theme_reset())
-                call terminal_move_cursor(row, separator_col)
-                call terminal_write(theme_sgr(THEME_PANEL) // &
-                    theme_foreground_sgr(THEME_BORDER) // '│' // theme_reset())
-                call clip_to_cells(trim(lines(i)%text), description_width, shown, used)
-                call terminal_move_cursor(row, description_col)
-                call terminal_write(theme_sgr(THEME_PANEL) // shown // theme_reset())
-            case (HELP_NOTE)
-                call clip_to_cells(trim(lines(i)%text), max(0, inner_w - 4), shown, used)
-                call terminal_move_cursor(row, key_col)
-                call terminal_write(theme_sgr(THEME_PANEL) // &
-                    theme_foreground_sgr(THEME_HINT) // shown // theme_reset())
-            end select
-            row = row + 1
+        do row = inner_row, inner_row + inner_h - 1
+            i = start_line + row - inner_row
+            styled = theme_sgr(THEME_PANEL)
+            if (i <= n_lines) then
+                select case (lines(i)%kind)
+                case (HELP_SECTION)
+                    call clip_to_cells(trim(lines(i)%text), &
+                        max(0, inner_w - left_padding), shown, used)
+                    styled = styled // repeat(' ', left_padding) // &
+                        theme_foreground_sgr(THEME_ACCENT) // shown // &
+                        theme_sgr(THEME_PANEL) // &
+                        repeat(' ', max(0, inner_w - left_padding - used))
+                case (HELP_BINDING)
+                    call clip_to_cells(trim(lines(i)%key), &
+                        max(0, key_width - 1), shown, used)
+                    call clip_to_cells(trim(lines(i)%text), description_width, &
+                        description, description_used)
+                    styled = styled // repeat(' ', left_padding) // &
+                        theme_foreground_sgr(THEME_ACCENT) // shown // &
+                        theme_sgr(THEME_PANEL) // &
+                        repeat(' ', max(0, key_width - used)) // &
+                        theme_foreground_sgr(THEME_BORDER) // '│' // &
+                        theme_sgr(THEME_PANEL) // repeat(' ', description_gap) // &
+                        description // repeat(' ', max(0, description_width - description_used))
+                case (HELP_NOTE)
+                    call clip_to_cells(trim(lines(i)%text), &
+                        max(0, inner_w - left_padding), shown, used)
+                    styled = styled // repeat(' ', left_padding) // &
+                        theme_foreground_sgr(THEME_HINT) // shown // &
+                        theme_sgr(THEME_PANEL) // &
+                        repeat(' ', max(0, inner_w - left_padding - used))
+                case default
+                    styled = styled // repeat(' ', inner_w)
+                end select
+            else
+                styled = styled // repeat(' ', inner_w)
+            end if
+            call terminal_move_cursor(row, inner_col)
+            call terminal_write(styled // theme_reset())
         end do
     end subroutine render_help_modal
 
