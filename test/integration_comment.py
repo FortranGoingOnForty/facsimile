@@ -185,8 +185,8 @@ def test_csi_u_ctrl_shift_slash_is_help(binary):
               "the help modal has complete right and bottom shadows")
 
         pages = [s.display()]
-        for _ in range(6):
-            s.send("\x1b[6~", 0.5)  # PageDown
+        for _ in range(8):
+            s.send("\x1b[6~", 0.8)  # PageDown
             pages.append(s.display())
         audited = "\n".join(pages)
         audited_bindings = ("Alt+Shift+J", "Ctrl+O", "Ctrl+G then A/U/D",

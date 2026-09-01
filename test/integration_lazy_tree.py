@@ -127,8 +127,8 @@ def main():
 
         # activate fuss (Ctrl-B)
         p.send(b"\x02")
-        ok = scr.wait_for(p, lambda t: "+ sub/" in t, 10,
-                          "collapsed '+ sub/' visible after Ctrl-B")
+        ok = scr.wait_for(p, lambda t: any(g + " sub/" in t for g in ("+", "▸")), 10,
+                          "collapsed directory visible after Ctrl-B")
         failures += 0 if ok else 1
         if "a.txt" in scr.text():
             print("FAIL a.txt visible before expand (tree not lazy)")
@@ -143,13 +143,15 @@ def main():
 
         # selection starts on 'sub' (only dir, dirs sort first): expand
         p.send(b" ")
-        ok = scr.wait_for(p, lambda t: "a.txt" in t and "- sub/" in t, 10,
-                          "space expands sub (a.txt + '- sub/')")
+        ok = scr.wait_for(p, lambda t: "a.txt" in t and
+                          any(g + " sub/" in t for g in ("-", "▾")), 10,
+                          "space expands sub")
         failures += 0 if ok else 1
 
         # collapse again
         p.send(b" ")
-        ok = scr.wait_for(p, lambda t: "a.txt" not in t and "+ sub/" in t, 10,
+        ok = scr.wait_for(p, lambda t: "a.txt" not in t and
+                          any(g + " sub/" in t for g in ("+", "▸")), 10,
                           "space collapses sub again")
         failures += 0 if ok else 1
 

@@ -34,8 +34,6 @@ except ImportError as e:
     sys.exit(0)
 
 ROWS, COLS = 30, 120
-COMMENT_FG = "brightblack"
-
 failures = []
 
 
@@ -84,6 +82,7 @@ class Split:
         env = {**os.environ, "TERM": "xterm-256color", "HOME": self.home}
         env.pop("XDG_CONFIG_HOME", None)
         env.pop("FAC_SESSION", None)
+        env.pop("NO_COLOR", None)
         self.screen = pyte.Screen(COLS, ROWS)
         self.stream = pyte.Stream(self.screen)
         self.child = pexpect.spawn(binary, [os.path.join(self.work, "main.c")],
@@ -134,6 +133,11 @@ class Split:
                     out[c.fg] = out.get(c.fg, 0) + 1
         return out
 
+    def left_has_italic_text(self):
+        return any(self.screen.buffer[y][x].italics
+                   for y in range(3, 26) for x in range(6, 50)
+                   if self.screen.buffer[y][x].data.strip())
+
     def right_rows(self):
         out = []
         for y in range(2, ROWS - 2):
@@ -141,9 +145,11 @@ class Split:
                           for x in range(62, 118)).rstrip()
             if not txt.strip():
                 continue
-            fg = {self.screen.buffer[y][x].fg for x in range(62, 118)
-                  if self.screen.buffer[y][x].data.strip()}
-            out.append((txt.strip(), fg))
+            cells = [self.screen.buffer[y][x] for x in range(62, 118)
+                     if self.screen.buffer[y][x].data.strip()]
+            fg = {cell.fg for cell in cells}
+            out.append((txt.strip(), fg, bool(cells) and
+                        all(cell.italics for cell in cells)))
         return out
 
     def close(self):
@@ -163,7 +169,7 @@ def test_scrolling_one_pane_leaves_the_other_alone(binary):
         check(len(before) >= 3,
               "main.c starts with real highlighting, not one flat colour",
               str(before))
-        check(before.get(COMMENT_FG, 0) == 0,
+        check(not s.left_has_italic_text(),
               "and nothing in it is comment-coloured, since it has no comments",
               str(before))
 
@@ -191,16 +197,15 @@ def test_block_comments_stay_comments_while_scrolling(binary):
         saw_code = False
         for step in range(26):
             s.send("\x1b[B", 0.10)
-            for txt, fg in s.right_rows():
+            for txt, fg, comment_style in s.right_rows():
                 is_comment = txt.startswith(("/*", "*", "*/")) or "of the comment" in txt
-                coloured_as_comment = fg <= {COMMENT_FG}
                 if is_comment:
                     saw_comment = True
-                    if not coloured_as_comment:
+                    if not comment_style:
                         wrong.append((step, "comment drawn as code", txt))
                 elif txt.startswith("int "):
                     saw_code = True
-                    if coloured_as_comment:
+                    if comment_style:
                         wrong.append((step, "code drawn as comment", txt))
 
         check(saw_comment, "the scroll passed through the block comment")

@@ -226,8 +226,7 @@ class Session:
         return out
 
     def attributed_rows(self):
-        """Rows carrying any non-default attribute: how the fortress panes
-        mark their selection. Text alone does not change when it moves."""
+        """Rows carrying Fortress's bold-and-underlined active entry."""
         out = []
         for y in range(ROWS):
             text = self.screen.display[y].rstrip()
@@ -235,7 +234,7 @@ class Session:
                 continue
             for x in range(COLS):
                 c = self.screen.buffer[y][x]
-                if c.reverse or c.bold or c.fg != "default" or c.bg != "default":
+                if c.bold and c.underscore:
                     out.append((y + 1, text[:34]))
                     break
         return out
@@ -405,6 +404,10 @@ def main():
     check(len(sel) > 0, "navigator selection is detectable", "no attributed rows")
     s.send("\x1b[B", 0.7)             # a real arrow must still move it
     moved = s.attributed_rows()
+    deadline = time.time() + 2.0
+    while moved == sel and time.time() < deadline:
+        s.drain(0.2)
+        moved = s.attributed_rows()
     check(moved != sel, "navigator: arrow key still moves the selection")
 
     s.click(6, 20)                    # a click must not

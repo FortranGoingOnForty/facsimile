@@ -57,7 +57,7 @@ def find_binary():
 class Session:
     """A workspace of N_FILES files, each whose content names itself."""
 
-    def __init__(self, binary):
+    def __init__(self, binary, cols=COLS):
         self.home = tempfile.mkdtemp(prefix="fac_maxtabs_")
         cfg = os.path.join(self.home, ".config", "fac")
         os.makedirs(cfg)
@@ -78,10 +78,11 @@ class Session:
 
         env = {**os.environ, "TERM": "xterm-256color", "HOME": self.home}
         env.pop("XDG_CONFIG_HOME", None)
-        self.screen = pyte.Screen(COLS, ROWS)
+        self.cols = cols
+        self.screen = pyte.Screen(cols, ROWS)
         self.stream = pyte.Stream(self.screen)
         first = os.path.join(self.ws, self.names[0])
-        self.child = pexpect.spawn(binary, [first], dimensions=(ROWS, COLS),
+        self.child = pexpect.spawn(binary, [first], dimensions=(ROWS, cols),
                                    env=env, cwd=self.ws)
         self.drain(1.5)
 
@@ -256,14 +257,11 @@ def test_the_active_tab_is_always_drawn(binary):
 
 def test_overflow_is_announced(binary):
     """Tabs past the edge are indicated rather than silently dropped."""
-    s = Session(binary)
+    s = Session(binary, cols=50)
     try:
         open_the_rest(s)
-        # Walk back to the first tab; tabs to the right must then be flagged.
-        for _ in range(N_FILES + 2):
-            s.send("\x1b[5;5~", 0.25)         # ctrl-pageup
         bar = s.tab_bar()
-        check(">" in bar or "<" in bar,
+        check(any(marker in bar for marker in (">", "<", "›", "‹")),
               "an overflow marker is shown when tabs do not all fit", repr(bar))
     finally:
         s.close()

@@ -20,7 +20,8 @@ module renderer_module
         THEME_EDITOR, THEME_EDITOR_BG, THEME_GHOST, THEME_HINT, &
         THEME_LINE_NUMBER, THEME_LINE_NUMBER_ACTIVE, THEME_MUTED, &
         THEME_PANEL, THEME_PANEL_FOOTER, THEME_PANEL_HEADER, THEME_PANEL_SELECTION, &
-        THEME_SEARCH_MATCH, THEME_SELECTION, THEME_SELECTION_INACTIVE, THEME_STATUS, &
+        THEME_SEARCH_MATCH, THEME_SEARCH_MATCH_ACTIVE, THEME_SELECTION, &
+        THEME_SELECTION_INACTIVE, THEME_STATUS, &
         THEME_STATUS_ACCENT, THEME_TAB_ACTIVE, THEME_TAB_BAR, &
         THEME_TAB_DRAG, THEME_TAB_INACTIVE, THEME_TAB_MODIFIED, THEME_TAB_ORPHAN, &
         theme_background_sgr, theme_glyph, theme_paint, theme_reset, theme_sgr
@@ -1102,12 +1103,9 @@ contains
 
             ! Determine this character's style (priority order preserved)
             if (is_active_match) then
-                ! The match the caret is on, above even the selection --
-                ! which it IS, so reverse video here would make the current
-                ! match indistinguishable from any other selected text.
-                ! Bold black on orange reads at a glance against the plain
-                ! yellow of the rest.
-                style = theme_sgr(THEME_SEARCH_MATCH)
+                ! A separate semantic role keeps the active match distinct
+                ! from both ordinary matches and selected text.
+                style = theme_sgr(THEME_SEARCH_MATCH_ACTIVE)
             else if (in_selection) then
                 ! Selected text: reverse video
                 style = theme_sgr(THEME_SELECTION)

@@ -80,8 +80,11 @@ class Tree:
         with open(os.path.join(self.home, ".config", "fac", "state.json"), "w") as f:
             f.write('{"first_run_completed": true, "lsp_installer_seen": true,'
                     ' "version": "1.0"}\n')
+        with open(os.path.join(self.home, ".config", "fac", "settings.json"), "w") as f:
+            f.write('{"ui.theme": "steel", "ui.color_mode": "truecolor"}\n')
         env = {**os.environ, "TERM": "xterm-256color", "HOME": self.home}
         env.pop("XDG_CONFIG_HOME", None)
+        env.pop("NO_COLOR", None)
         self.screen = pyte.Screen(COLS, ROWS)
         self.stream = pyte.Stream(self.screen)
         self.child = pexpect.spawn(binary, [os.path.join(workdir, "visible.txt")],
@@ -200,7 +203,7 @@ def test_git_status_and_ignores_still_work(binary):
         check("artifact.o" not in body,
               "ignored build output stays out of the way", body)
         check("fresh.c" in body, "an untracked file is listed", body)
-        check(any(m in body for m in ("✗", "↑")),
+        check("fresh.c ?" in body and "buried.c ~" in body,
               "and git status markers are drawn", body)
 
         # collapse_tree_smart used to open the folders holding changes by
@@ -220,6 +223,10 @@ def test_git_status_and_ignores_still_work(binary):
 def grey_rows(t):
     """(text, is_grey) per row of the TREE pane, stopping at the separator."""
     out = []
+    muted_fg = next((t.screen.buffer[y][x].fg
+                     for y, text in enumerate(t.screen.display)
+                     if ".:hide" in text
+                     for x in range(COLS) if t.screen.buffer[y][x].data.strip()), None)
     for y in range(ROWS):
         row = t.screen.buffer[y]
         cols = []
@@ -231,7 +238,7 @@ def grey_rows(t):
         if not txt or txt.startswith(("esc/", ".:hide")):
             continue
         fg = {row[x].fg for x in cols if row[x].data.strip()}
-        out.append((txt, "brightblack" in fg))
+        out.append((txt, muted_fg is not None and muted_fg in fg))
     return out
 
 
@@ -266,7 +273,7 @@ def test_an_ignored_directory_is_grey_before_it_is_opened(binary):
         check(bool(sprint), "sprints/ appears once .docs is opened", str(rows))
         if sprint:
             txt, grey = sprint[0]
-            check(txt.startswith("+"),
+            check(txt.startswith(("+", "▸")),
                   "and is still collapsed, never having been expanded", txt)
             check(grey, "yet is already drawn grey", txt)
     finally:
@@ -582,12 +589,14 @@ def test_left_collapses_an_open_directory(binary):
         t.child.send(" ")                 # expand
         t.drain(0.8)
         opened = [r for r in rows(t) if "ch4" in r]
-        check(any("-" in r for r in opened), "ch4/ is expanded", str(opened))
+        check(any(glyph in r for r in opened for glyph in ("-", "▾")),
+              "ch4/ is expanded", str(opened))
 
         t.child.send("\x1b[D")            # LEFT
         t.drain(0.8)
         after = [r for r in rows(t) if "ch4" in r]
-        check(any("+" in r for r in after), "Left collapsed it", str(after))
+        check(any(glyph in r for r in after for glyph in ("+", "▸")),
+              "Left collapsed it", str(after))
         check(any(r.startswith(">") and "ch4" in r for r in rows(t)),
               "and the selection stayed on it", str(rows(t)))
 
@@ -595,11 +604,11 @@ def test_left_collapses_an_open_directory(binary):
         # stopped collapsing once Left had been pressed.
         t.child.send(" ")
         t.drain(0.8)
-        check(any("-" in r for r in rows(t) if "ch4" in r),
+        check(any(glyph in r for r in rows(t) if "ch4" in r for glyph in ("-", "▾")),
               "space still expands after a Left", str(rows(t)))
         t.child.send(" ")
         t.drain(0.8)
-        check(any("+" in r for r in rows(t) if "ch4" in r),
+        check(any(glyph in r for r in rows(t) if "ch4" in r for glyph in ("+", "▸")),
               "and still collapses", str(rows(t)))
     finally:
         t.close()

@@ -143,7 +143,7 @@ def snapshot(binary, keys, force_full, src=None, name="d.f90"):
 
     text = [screen.display[y].rstrip() for y in range(ROWS)]
     attrs = [(y + 1, x + 1, screen.buffer[y][x].fg, screen.buffer[y][x].bg,
-              screen.buffer[y][x].reverse)
+              screen.buffer[y][x].reverse, screen.buffer[y][x].italics)
              for y in range(ROWS) for x in range(COLS)
              if screen.buffer[y][x].fg != "default"
              or screen.buffer[y][x].bg != "default"
@@ -235,7 +235,7 @@ def main():
                 if "INSIDE" not in row:
                     continue
                 x = row.index("INSIDE")
-                if not any(a[0] == y + 1 and a[1] == x + 1 and a[2] == "brightblack"
+                if not any(a[0] == y + 1 and a[1] == x + 1 and a[5]
                            for a in attrs):
                     wrong.append(y + 1)
             check(not wrong,

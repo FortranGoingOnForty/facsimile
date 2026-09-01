@@ -118,8 +118,8 @@ directory               executable              ghost
 line_number             line_number.active      syntax.keyword
 syntax.string           syntax.comment          syntax.number
 syntax.type             syntax.function         syntax.preprocessor
-search.match            current_line            disabled
-terminal.background
+search.match            search.match.active     current_line
+disabled                terminal.background     syntax.operator
 ```
 
 An invalid custom theme is rejected without replacing the active theme. Parse

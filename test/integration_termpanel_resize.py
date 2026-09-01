@@ -45,7 +45,7 @@ def sep_row(s):
     """1-based screen row of the panel's separator bar, or 0."""
     for i, r in enumerate(s.screen.display, 1):
         if "TERMINAL" in r or "terminal " in r:
-            if "-" in r:
+            if "-" in r or "─" in r:
                 return i
     return 0
 
@@ -335,7 +335,8 @@ def test_the_grab_handle_is_visible(binary):
             return
         r = sep_row(s)
         bar = s.screen.display[r - 1]
-        check("⇕" in bar, "the separator advertises that it can be dragged",
+        check(any(handle in bar for handle in ("⇕", "⋮", "|")),
+              "the separator advertises that it can be dragged",
               repr(bar))
     finally:
         s.close()

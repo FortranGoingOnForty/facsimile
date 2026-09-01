@@ -598,19 +598,21 @@ def narrow_session(binary, n_files, cols):
     return s
 
 
-def reverse_cells(s, r0, r1, c0, c1):
-    """How many cells in this rectangle are drawn reverse-video.
-
-    The split preview is a band of reverse-video SPACES, so it is invisible
-    in screen.display -- which shows characters, not attributes. Counting the
-    attribute is the only way to see it, and is what it actually is.
-    """
-    n = 0
+def cell_styles(s, r0, r1, c0, c1):
+    """Visible cell attributes in a 1-based rectangle."""
+    styles = {}
     for y in range(r0 - 1, min(r1, s.screen.lines)):
         for x in range(c0 - 1, min(c1, s.screen.columns)):
-            if s.screen.buffer[y][x].reverse:
-                n += 1
-    return n
+            cell = s.screen.buffer[y][x]
+            styles[(y, x)] = (cell.fg, cell.bg, cell.bold, cell.underscore,
+                              cell.reverse)
+    return styles
+
+
+def changed_cells(s, baseline, r0, r1, c0, c1):
+    """Count cells whose semantic style changed from an unarmed frame."""
+    current = cell_styles(s, r0, r1, c0, c1)
+    return sum(current[key] != baseline[key] for key in current)
 
 
 def carry_to(s, name, col, row):
@@ -631,27 +633,29 @@ def test_an_edge_previews_a_split(binary):
     try:
         s.open_all()
         mid = COLS // 2
+        baseline = cell_styles(s, 2, 28, 1, COLS)
         # Middle of the document: no edge, so nothing is offered.
         carry_to(s, "alpha.c", mid, 12)
         # Rows either side of the pointer: the GHOST is reverse video too and
         # sits on the pointer's own row, so counting that row would find the
         # label and call it a preview.
-        centre = reverse_cells(s, 3, 10, 30, 90) + reverse_cells(s, 14, 25, 30, 90)
+        centre = changed_cells(s, baseline, 3, 10, 30, 90) + \
+                 changed_cells(s, baseline, 14, 25, 30, 90)
         check(centre == 0, "the middle of the pane offers no split",
-              f"{centre} reverse cells")
+              f"{centre} changed cells")
 
         # Right edge.
         s.child.send(f"\x1b[<32;{COLS - 3};12M")
         s.drain(0.5)
-        right = reverse_cells(s, 3, 25, COLS - 25, COLS)
-        left_side = reverse_cells(s, 3, 25, 2, 30)
+        right = changed_cells(s, baseline, 3, 25, COLS - 25, COLS)
+        left_side = changed_cells(s, baseline, 3, 25, 2, 30)
         check(right > 100, "the right quarter is banded", f"{right} cells")
         check(left_side == 0, "and the left is not", f"{left_side} cells")
 
         # Bottom edge.
         s.child.send(f"\x1b[<32;{mid};26M")
         s.drain(0.5)
-        bottom = reverse_cells(s, 24, 28, 10, COLS - 10)
+        bottom = changed_cells(s, baseline, 24, 28, 10, COLS - 10)
         check(bottom > 100, "moving to the bottom bands that instead",
               f"{bottom} cells")
 
@@ -844,17 +848,18 @@ def test_returning_to_the_bar_cancels_a_split(binary):
     s = Session(binary)
     try:
         s.open_all()
+        baseline = cell_styles(s, 3, 25, COLS - 40, COLS)
         src = s.entry_col("alpha.c")
         s.child.send(f"\x1b[<0;{src};1M")
         s.drain(0.4)
         s.child.send(f"\x1b[<32;{COLS - 3};12M")
         s.drain(0.5)
-        armed = reverse_cells(s, 3, 25, COLS - 40, COLS)
+        armed = changed_cells(s, baseline, 3, 25, COLS - 40, COLS)
         check(armed > 100, "the split is previewed at the edge", f"{armed} cells")
 
         s.child.send(f"\x1b[<32;{src + 20};1M")
         s.drain(0.5)
-        left = reverse_cells(s, 3, 25, COLS - 40, COLS)
+        left = changed_cells(s, baseline, 3, 25, COLS - 40, COLS)
         check(left == 0, "coming back to the bar clears the preview",
               f"{left} cells")
 
@@ -874,8 +879,11 @@ def test_the_preview_is_the_pane_that_appears(binary):
     s = Session(binary)
     try:
         s.open_all()
+        baseline = cell_styles(s, 3, 25, 1, COLS)
         carry_to(s, "alpha.c", COLS - 3, 12)
-        band = [x + 1 for x in range(COLS) if s.screen.buffer[11][x].reverse]
+        band = [x + 1 for x in range(COLS)
+                if cell_styles(s, 12, 12, x + 1, x + 1)[(11, x)] !=
+                baseline[(11, x)]]
         check(bool(band), "a band is shown")
         if not band:
             return
@@ -888,7 +896,8 @@ def test_the_preview_is_the_pane_that_appears(binary):
         # A quarter in from the edge is well inside the pane and must not arm.
         s.child.send(f"\x1b[<32;{COLS - 3 - COLS // 4};12M")
         s.drain(0.4)
-        n = reverse_cells(s, 3, 10, 2, COLS) + reverse_cells(s, 14, 25, 2, COLS)
+        n = changed_cells(s, baseline, 3, 10, 2, COLS) + \
+            changed_cells(s, baseline, 14, 25, 2, COLS)
         check(n == 0, "a quarter in from the edge arms nothing",
               f"{n} cells")
         s.child.send(f"\x1b[<0;{COLS - 3 - COLS // 4};12m")
@@ -1055,24 +1064,28 @@ def test_the_chevron_scrolls_whatever_is_active(binary):
     bar there with everything else behind a chevron that would not move.
     """
     print("\nThe chevron scrolls regardless of which tab is active")
-    s = narrow_session(binary, 6, 60)
+    s = narrow_session(binary, 10, 60)
     try:
         bar = s.tab_bar()
-        check("<" in bar, "opening six tabs in a narrow window overflows", bar)
-        check("file6.c" in bar, "and the newest tab is the one on screen", bar)
-        if "<" not in bar:
+        left_markers = ("<", "‹")
+        check(any(marker in bar for marker in left_markers),
+              "opening ten tabs in a narrow window overflows", bar)
+        check("file10.c" in bar, "and the newest tab is the one on screen", bar)
+        if not any(marker in bar for marker in left_markers):
             return
 
-        col = bar.find("<") + 1
+        col = next(bar.find(marker) + 1 for marker in left_markers if marker in bar)
         steps = [bar]
-        for _ in range(4):
+        for _ in range(10):
             s.click(1, col)
             steps.append(s.tab_bar())
+            if "file1.c" in steps[-1]:
+                break
         check(steps[1] != steps[0], "the first click scrolls", str(steps[:2]))
         check("file1.c" in steps[-1],
               "and it keeps going past where the active tab drops off, "
               "all the way to the first", str(steps[-1]))
-        check("file6.c" not in steps[-1],
+        check("file10.c" not in steps[-1],
               "the active tab is off screen, which is allowed", steps[-1])
 
         before = s.tab_bar()
@@ -1081,14 +1094,11 @@ def test_the_chevron_scrolls_whatever_is_active(binary):
         check(s.tab_bar() == before, "and the position survives a redraw",
               f"{before!r} -> {s.tab_bar()!r}")
 
-        # Switching to an off-screen tab must still reveal it. Land on a
-        # VISIBLE one first: file6 was already active -- scrolling does not
-        # change which tab you are in -- so jumping to it would be a no-op
-        # and would prove nothing.
-        vis = s.entry_col("file2.c")
-        if vis is not None:
-            s.click(1, vis + 3)
-        check("file2.c" in s.status(), "moved to a visible tab", s.status())
+        # Switching to an off-screen tab must still reveal it. Make the first
+        # visible tab active explicitly; the active tab after opening files is
+        # not part of this test's contract and has changed before.
+        s.send("\x1b1", 1.0)
+        check("file1.c" in s.status(), "made a visible tab active", s.status())
         s.send("\x1b6", 1.0)
         check("file6.c" in s.status(), "jumped to the hidden tab", s.status())
         check("file6.c" in s.tab_bar(),

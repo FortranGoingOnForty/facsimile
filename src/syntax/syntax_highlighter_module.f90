@@ -1,6 +1,6 @@
 module syntax_highlighter_module
     use iso_fortran_env, only: int32
-    use theme_module, only: THEME_ACCENT, THEME_SYNTAX_COMMENT, &
+    use theme_module, only: THEME_SYNTAX_COMMENT, THEME_SYNTAX_OPERATOR, &
         THEME_SYNTAX_FUNCTION, THEME_SYNTAX_KEYWORD, THEME_SYNTAX_NUMBER, &
         THEME_SYNTAX_PREPROCESSOR, THEME_SYNTAX_STRING, THEME_SYNTAX_TYPE, &
         theme_sgr
@@ -267,7 +267,7 @@ contains
         case(TOKEN_COMMENT)
             color = theme_sgr(THEME_SYNTAX_COMMENT)
         case(TOKEN_OPERATOR)
-            color = theme_sgr(THEME_ACCENT)
+            color = theme_sgr(THEME_SYNTAX_OPERATOR)
         case(TOKEN_TYPE)
             color = theme_sgr(THEME_SYNTAX_TYPE)
         case(TOKEN_FUNCTION)

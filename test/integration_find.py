@@ -154,12 +154,17 @@ class Editor:
     def highlights(self):
         """Every run of styled cells on screen, as (buffer_line, text, kind).
 
-        kind is 'active' for the bold-on-orange match the caret is on and
-        'match' for the plain yellow of the others. Reading attributes is
+        kind is 'active' for the bold, underlined match the caret is on and
+        'match' for the quiet variant of the same semantic fill. Reading attributes is
         the only way to tell them apart -- and the only way to notice if a
         future change makes them the same again.
         """
         runs = []
+        search_bg = next((cell.bg for row in self.screen.buffer.values()
+                          for cell in row.values()
+                          if cell.bold and cell.underscore and cell.bg != "default"), None)
+        if search_bg is None:
+            return runs
         for r in range(1, ROWS - 1):
             text = self.screen.display[r]
             tok = text.strip().split(" ")
@@ -169,9 +174,9 @@ class Editor:
             cur = None
             for c in range(COLS):
                 cell = self.screen.buffer[r][c]
-                if cell.bold and cell.bg == "ff8700":
+                if cell.bold and cell.underscore and cell.bg == search_bg:
                     kind = "active"
-                elif cell.bg == "brown":
+                elif cell.bg == search_bg:
                     kind = "match"
                 else:
                     kind = None

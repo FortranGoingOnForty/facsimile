@@ -25,6 +25,12 @@ program test_theme
     style = theme_style(THEME_DISABLED)
     call check(style%dim .and. style%italic, &
                'disabled controls have a distinct text variant')
+    style = theme_style(THEME_SEARCH_MATCH)
+    call check(.not. style%bold .and. .not. style%underline, &
+               'ordinary search matches use the quiet search style')
+    style = theme_style(THEME_SEARCH_MATCH_ACTIVE)
+    call check(style%bold .and. style%underline, &
+               'the active search match has a distinct text variant')
 
     call theme_list(names, count)
     call check(count >= 4, 'the four built-in themes are discoverable')

@@ -56,7 +56,9 @@ module theme_module
     integer, parameter, public :: THEME_CURRENT_LINE = 44
     integer, parameter, public :: THEME_DISABLED = 45
     integer, parameter, public :: THEME_TERMINAL_BG = 46
-    integer, parameter, public :: THEME_ROLE_COUNT = 46
+    integer, parameter, public :: THEME_SYNTAX_OPERATOR = 47
+    integer, parameter, public :: THEME_SEARCH_MATCH_ACTIVE = 48
+    integer, parameter, public :: THEME_ROLE_COUNT = 48
 
     integer, parameter, public :: ICONS_ASCII = 0
     integer, parameter, public :: ICONS_UNICODE = 1
@@ -73,7 +75,7 @@ module theme_module
         'ghost', 'line_number', 'line_number.active', 'syntax.keyword', &
         'syntax.string', 'syntax.comment', 'syntax.number', 'syntax.type', &
         'syntax.function', 'syntax.preprocessor', 'search.match', 'current_line', &
-        'disabled', 'terminal.background']
+        'disabled', 'terminal.background', 'syntax.operator', 'search.match.active']
 
     type, public :: theme_t
         character(len=64) :: name = 'Facsimile Steel'
@@ -550,6 +552,20 @@ contains
         theme%styles(THEME_DISABLED)%fg = 8
         theme%styles(THEME_DISABLED)%dim = .true.
         theme%styles(THEME_DISABLED)%italic = .true.
+        theme%styles(THEME_SYNTAX_KEYWORD)%fg = 4
+        theme%styles(THEME_SYNTAX_KEYWORD)%bold = .true.
+        theme%styles(THEME_SYNTAX_STRING)%fg = 2
+        theme%styles(THEME_SYNTAX_NUMBER)%fg = 5
+        theme%styles(THEME_SYNTAX_COMMENT)%fg = 8
+        theme%styles(THEME_SYNTAX_OPERATOR)%fg = 3
+        theme%styles(THEME_SYNTAX_TYPE)%fg = 6
+        theme%styles(THEME_SYNTAX_FUNCTION)%fg = 6
+        theme%styles(THEME_SYNTAX_FUNCTION)%bold = .true.
+        theme%styles(THEME_SYNTAX_PREPROCESSOR)%fg = 13
+        theme%styles(THEME_SEARCH_MATCH)%bg = 3
+        theme%styles(THEME_SEARCH_MATCH_ACTIVE)%fg = 0
+        theme%styles(THEME_SEARCH_MATCH_ACTIVE)%bg = 208
+        theme%styles(THEME_SEARCH_MATCH_ACTIVE)%bold = .true.
         call set_rgb(theme, THEME_TERMINAL_BG, '', '#000000')
     end subroutine build_legacy
 
@@ -603,7 +619,10 @@ contains
         call set_rgb(theme, THEME_LINE_NUMBER, muted, bg, dim=.true.)
         call set_rgb(theme, THEME_LINE_NUMBER_ACTIVE, accent, bg, bold=.true.)
         call set_rgb(theme, THEME_SYNTAX_COMMENT, muted, bg, italic=.true.)
-        call set_rgb(theme, THEME_SEARCH_MATCH, accent_fg, warning, bold=.true.)
+        call set_rgb(theme, THEME_SYNTAX_OPERATOR, accent, bg)
+        call set_rgb(theme, THEME_SEARCH_MATCH, accent_fg, warning)
+        call set_rgb(theme, THEME_SEARCH_MATCH_ACTIVE, accent_fg, warning, &
+            bold=.true., underline=.true.)
         call set_rgb(theme, THEME_CURRENT_LINE, fg, panel_bg)
         call set_rgb(theme, THEME_DISABLED, muted, panel_bg, dim=.true., italic=.true.)
         call set_rgb(theme, THEME_TERMINAL_BG, '', '#000000')
