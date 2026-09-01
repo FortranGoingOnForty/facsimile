@@ -12,6 +12,7 @@ Usage: python3 test/integration_tabgroups.py [path-to-fac-binary]
 Requires: pip3 install pexpect pyte
 """
 
+import codecs
 import glob
 import os
 import re
@@ -72,6 +73,11 @@ class Session:
         env.pop("XDG_CONFIG_HOME", None)
         self.screen = pyte.Screen(COLS, ROWS)
         self.stream = pyte.Stream(self.screen)
+        # PTY reads can split a multibyte glyph anywhere. Decoding each chunk
+        # independently turns the two halves into replacement characters;
+        # on a full-width status row those extra cells make pyte scroll the
+        # screen and falsely report that the Fuss chevron disappeared.
+        self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.child = pexpect.spawn(binary, [os.path.join(self.ws, self.names[0])],
                                    dimensions=(ROWS, COLS), env=env, cwd=self.ws)
         self.drain(1.6)
@@ -80,8 +86,8 @@ class Session:
         end = time.time() + w
         while time.time() < end:
             try:
-                self.stream.feed(self.child.read_nonblocking(65536, 0.1)
-                                 .decode("utf-8", "replace"))
+                chunk = self.child.read_nonblocking(65536, 0.1)
+                self.stream.feed(self.decoder.decode(chunk))
             except pexpect.TIMEOUT:
                 pass
             except pexpect.EOF:

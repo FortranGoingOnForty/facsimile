@@ -67,18 +67,12 @@ def make_more_files(s, n):
                 f.write("".join("%s line %d\n" % (name, i) for i in range(1, 40)))
 
 
-def open_tabs(s, n):
+def open_tabs(s, n, leave_tree_open=False):
     """Open files 2..n as tabs through the file tree."""
-    def tree_is_open():
-        # With enough tabs to overflow row one, the status chevron can lag
-        # behind the visible Fuss surface. The tree itself is authoritative
-        # for this setup; its WORKSPACE heading cannot appear in editor mode.
-        return s.in_tree() or "WORKSPACE" in s.row(1)[:30]
-
     for name in s.names[1:n]:
-        if not tree_is_open():
+        if not s.in_tree():
             s.send("\x02", 0.7)
-        if not tree_is_open():
+        if not s.in_tree():
             return False
         for _ in range(3 * len(s.names) + 8):
             sel = s.tree_selection()
@@ -86,7 +80,12 @@ def open_tabs(s, n):
                 break
             s.send("\x1b[B", 0.08)
         s.send("\r", 0.5)
-    if tree_is_open():
+        # Opening a file deliberately leaves Fuss active. Losing the status
+        # row here used to make the active panel look closed and caused the
+        # next iteration to toggle the actual state in the wrong direction.
+        if not s.in_tree():
+            return False
+    if not leave_tree_open and s.in_tree():
         s.send("\x02", 0.6)
     return True
 
@@ -223,6 +222,23 @@ def test_an_invalid_composite_falls_back_to_its_last_digit(binary):
         s.close()
 
 
+def test_a_crowded_tab_bar_does_not_scroll_fuss_off_its_rows(binary):
+    s = Session(binary)
+    # The larger visible tree produces enough UTF-8 output to exercise PTY
+    # chunk boundaries while tab 12 makes the strip itself crowded.
+    make_more_files(s, 16)
+    try:
+        opened = open_tabs(s, 12, leave_tree_open=True)
+        check(opened, "opening tab 12 keeps the Fuss chevron on the status row",
+              s.status())
+        check("WORKSPACE" in s.row(2)[:30],
+              "the crowded tab strip stays above the Fuss body", s.row(1) + "\n" + s.row(2))
+        check("file12.txt" in s.row(1),
+              "the active crowded tab remains on row one", s.row(1))
+    finally:
+        s.close()
+
+
 def test_the_pending_window_is_announced(binary):
     s = many_tabs(binary)
     if s is None:
@@ -347,6 +363,7 @@ def main():
                test_a_non_digit_ends_the_window,
                test_an_out_of_range_number_keeps_the_first_jump,
                test_an_invalid_composite_falls_back_to_its_last_digit,
+               test_a_crowded_tab_bar_does_not_scroll_fuss_off_its_rows,
                test_the_pending_window_is_announced,
                test_a_digit_picks_a_group_member,
                test_the_group_window_says_how_many_members,
