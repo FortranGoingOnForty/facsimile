@@ -11,34 +11,17 @@ CC = gcc
 ifeq ($(UNAME_S),Darwin)
     # macOS
     ifeq ($(UNAME_M),arm64)
-        # Apple Silicon - use gfortran-15 for syntax highlighting support
+        # The Homebrew formula depends on GCC, so prefer its stable gfortran
+        # symlink. Current Flang miscompiles deferred-length character
+        # assignment used throughout the editor and is not a safe fallback.
         BREW_PREFIX = /opt/homebrew
-        ifneq ($(wildcard $(BREW_PREFIX)/bin/gfortran-15),)
-            FC = $(BREW_PREFIX)/bin/gfortran-15
-            FFLAGS = -O2 -Wall -ffree-line-length-none
-            FFLAGS_DEV = -O0 -g -Wall -Wextra -pedantic -Wunused-variable -Wuninitialized \
-                         -Wimplicit-interface -fcheck=all -fbacktrace -ffree-line-length-none
-            FFLAGS_DEBUG = -O0 -g -fcheck=all -fbacktrace -ffree-line-length-none
-        else ifneq ($(wildcard $(BREW_PREFIX)/bin/flang-new),)
-            # Fallback to flang-new if gfortran-15 not available
-            FC = $(BREW_PREFIX)/bin/flang-new
-            # flang-new flags
-            FFLAGS = -O2
-            # Development flags (flang-new has very limited warning support)
-            # For comprehensive warnings, use gfortran instead
-            FFLAGS_DEV = -O0 -g -pedantic
-            # Debug flags with debug symbols
-            FFLAGS_DEBUG = -O0 -g
-        else
-            # Fallback to any available gfortran
-            ifneq ($(wildcard $(BREW_PREFIX)/bin/gfortran-*),)
-                FC = $(shell ls $(BREW_PREFIX)/bin/gfortran-* | head -n1)
-            endif
-            FFLAGS = -O2 -Wall -ffree-line-length-none
-            FFLAGS_DEV = -O0 -g -Wall -Wextra -pedantic -Wunused-variable -Wuninitialized \
-                         -Wimplicit-interface -fcheck=all -fbacktrace -ffree-line-length-none
-            FFLAGS_DEBUG = -O0 -g -fcheck=all -fbacktrace -ffree-line-length-none
+        ifneq ($(wildcard $(BREW_PREFIX)/bin/gfortran),)
+            FC = $(BREW_PREFIX)/bin/gfortran
         endif
+        FFLAGS = -O2 -Wall -ffree-line-length-none
+        FFLAGS_DEV = -O0 -g -Wall -Wextra -pedantic -Wunused-variable -Wuninitialized \
+                     -Wimplicit-interface -fcheck=all -fbacktrace -ffree-line-length-none
+        FFLAGS_DEBUG = -O0 -g -fcheck=all -fbacktrace -ffree-line-length-none
         CFLAGS = -O2 -Wall
         CFLAGS_DEV = -O0 -g -Wall -Wextra -pedantic -Wconversion
     else

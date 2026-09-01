@@ -38,7 +38,7 @@ Or take a tarball for Linux, macOS or Windows from
 ### From source
 
 Needs gfortran and a C compiler. The Makefile picks the toolchain per platform
-— gfortran-15 or flang-new from Homebrew on Apple silicon, plain gfortran
+— Homebrew gfortran on Apple silicon, plain gfortran
 elsewhere.
 
 ```bash
