@@ -34,7 +34,7 @@ module renderer_module
                                    get_diagnostic_at_cursor, &
                                    SEVERITY_ERROR, SEVERITY_WARNING, SEVERITY_INFO, SEVERITY_HINT
     use diagnostics_panel_module, only: render_diagnostics_panel
-    use references_panel_module, only: render_references_panel
+    use references_panel_module, only: render_references_panel, render_references_panel_at
     use code_actions_panel_module, only: render_code_actions_panel
     use symbols_panel_module, only: render_symbols_panel
     use unified_search_module, only: get_matches_on_line, search_mode_active, &
@@ -373,7 +373,7 @@ contains
                 end if
 
                 ! Render references panel if visible (for panes path)
-                call render_references_panel(editor%references_panel, 3)
+                call render_references_panel(editor%references_panel, first_content_row(editor))
 
                 ! Render code actions menu if visible (for panes path)
                 call render_code_actions_panel(editor%code_actions_panel, editor%screen_rows, editor%screen_cols)
@@ -487,7 +487,7 @@ contains
         end if
 
         ! Render references panel if visible
-        call render_references_panel(editor%references_panel, 3)
+        call render_references_panel(editor%references_panel, first_content_row(editor))
 
         ! Render code actions menu if visible
         call render_code_actions_panel(editor%code_actions_panel, editor%screen_rows, editor%screen_cols)
@@ -1959,7 +1959,7 @@ contains
         end if
 
         ! Render references panel if visible
-        call render_references_panel(editor%references_panel, 3)
+        call render_references_panel(editor%references_panel, first_content_row(editor))
 
         ! Render code actions menu if visible
         call render_code_actions_panel(editor%code_actions_panel, editor%screen_rows, editor%screen_cols)
@@ -4165,6 +4165,7 @@ contains
         integer :: separator_col, panel_start_col
         integer :: row
 
+        call terminal_begin_sync()
         call terminal_hide_cursor()
         call regions_begin_frame()
 
@@ -4190,7 +4191,7 @@ contains
         ! Render status bar (full width)
         call render_status_bar(editor, buffer, match_mode_active, match_case_sens)
 
-        ! Render vertical separator (start at row 2 for tab bar)
+        ! Keep the split below every occupied tab-strip row.
         call render_vertical_separator(separator_col, first_content_row(editor), &
                                        editor%screen_rows - 1)
 
@@ -4198,8 +4199,8 @@ contains
         select case (panel_type)
         case ("references")
             if (is_references_panel_visible(editor%references_panel)) then
-                call render_lsp_references_panel(editor%references_panel, panel_start_col, panel_width, &
-                                                 2, editor%screen_rows - 1)
+                call render_references_panel_at(editor%references_panel, panel_start_col, panel_width, &
+                                                first_content_row(editor), editor%screen_rows - 1)
             end if
         case ("symbols")
             if (is_symbols_panel_visible(editor%symbols_panel)) then
@@ -4216,6 +4217,8 @@ contains
 
         call terminal_show_cursor()
         call render_menu_overlay(editor)
+        call terminal_end_sync()
+        call terminal_flush()
     end subroutine render_screen_with_lsp_panel
 
     ! Helper to render editor area when LSP panel is on right
@@ -4329,130 +4332,6 @@ contains
         end if
     end subroutine render_cursor_for_panes_in_lsp_view
 
-    ! Render references panel in offcanvas mode (right side, full height)
-    subroutine render_lsp_references_panel(panel, start_col, width, start_row, end_row)
-        use references_panel_module, only: references_panel_t
-        type(references_panel_t), intent(in) :: panel
-        integer, intent(in) :: start_col, width, start_row, end_row
-        integer :: row, i, visible_index, max_visible
-        character(len=256) :: line
-        character(len=100) :: header, location_str
-        character(len=:), allocatable :: filename_display
-
-        ! Clear panel area
-        do row = start_row, end_row
-            call terminal_move_cursor(row, start_col)
-            call terminal_write(theme_sgr(THEME_PANEL) // repeat(' ', width) // theme_reset())
-        end do
-
-        row = start_row
-
-        ! Header with symbol name
-        call terminal_move_cursor(row, start_col)
-        if (allocated(panel%symbol_name)) then
-            write(header, '(A,A,A,I0,A)') " References: ", trim(panel%symbol_name), &
-                " (", panel%num_references, ") "
-        else
-            write(header, '(A,I0,A)') " References (", panel%num_references, ") "
-        end if
-
-        ! Truncate header if too long
-        if (len_trim(header) > width) then
-            header = header(1:width-3) // "..."
-        end if
-
-        call terminal_write(theme_sgr(THEME_PANEL_HEADER) // trim(header))
-        ! Pad rest of header line
-        if (len_trim(header) < width) then
-            call terminal_write(repeat(' ', width - len_trim(header)))
-        end if
-        call terminal_write(theme_reset())
-        row = row + 1
-
-        ! Separator
-        call terminal_move_cursor(row, start_col)
-        call terminal_write(theme_sgr(THEME_PANEL_HEADER) // &
-                            repeat("─", width) // theme_reset())
-        row = row + 1
-
-        ! Legend
-        call terminal_move_cursor(row, start_col)
-        call terminal_write(theme_sgr(THEME_PANEL_FOOTER))
-        if (width >= 31) then
-            call terminal_write('j/k:nav  enter:jump  esc:close')
-        else
-            call terminal_write('j/k enter esc')
-        end if
-        if (width > 0) call terminal_write(repeat(' ', max(0, width - min(width, 31))))
-        call terminal_write(theme_reset())
-        row = row + 1
-
-        ! Separator
-        call terminal_move_cursor(row, start_col)
-        call terminal_write(theme_sgr(THEME_PANEL_FOOTER) // &
-                            repeat("─", width) // theme_reset())
-        row = row + 1
-
-        ! Calculate max visible items
-        max_visible = end_row - row + 1
-
-        ! Display references
-        if (panel%num_references == 0) then
-            call terminal_move_cursor(row, start_col)
-            call terminal_write(theme_sgr(THEME_PANEL_FOOTER) // " No references found")
-            if (20 < width) then
-                call terminal_write(repeat(' ', width - 20))
-            end if
-            call terminal_write(theme_reset())
-        else
-            do i = 1, min(max_visible, panel%num_references - panel%scroll_offset)
-                visible_index = panel%scroll_offset + i
-                if (visible_index > panel%num_references) exit
-
-                call terminal_move_cursor(row, start_col)
-
-                ! Highlight selected item
-                if (visible_index == panel%selected_index) then
-                    call terminal_write(theme_sgr(THEME_PANEL_SELECTION))
-                else
-                    call terminal_write(theme_sgr(THEME_PANEL))
-                end if
-
-                ! Format location string
-                if (allocated(panel%references(visible_index)%filename)) then
-                    ! Extract just the filename from full path
-                    filename_display = get_basename_str(panel%references(visible_index)%filename)
-                    write(location_str, '(A,A,I0,A,I0)') &
-                        trim(filename_display), &
-                        ":", panel%references(visible_index)%line, &
-                        ":", panel%references(visible_index)%column
-                else
-                    write(location_str, '(I0,A,I0)') &
-                        panel%references(visible_index)%line, &
-                        ":", panel%references(visible_index)%column
-                end if
-
-                ! Build line with location
-                line = " " // trim(adjustl(location_str))
-
-                ! Truncate to fit panel width
-                if (len_trim(line) > width) then
-                    line = line(1:width - 3) // '...'
-                end if
-
-                ! Write line and pad to width
-                call terminal_write(line(1:min(len_trim(line), width)))
-                if (len_trim(line) < width) then
-                    call terminal_write(repeat(' ', width - len_trim(line)))
-                end if
-                call terminal_write(theme_reset())
-
-                row = row + 1
-                if (row > end_row) exit
-            end do
-        end if
-    end subroutine render_lsp_references_panel
-
     ! Render symbols panel in offcanvas mode (right side, full height)
     subroutine render_lsp_symbols_panel(panel, screen_height)
         use symbols_panel_module, only: symbols_panel_t, render_symbols_panel
@@ -4474,27 +4353,6 @@ contains
         ! The panel manages its own positioning via panel_start_col and panel_width
         call render_workspace_symbols_panel(panel, screen_height)
     end subroutine render_lsp_workspace_symbols_panel
-
-    ! Helper function to extract basename from path
-    function get_basename_str(path) result(basename)
-        character(len=*), intent(in) :: path
-        character(len=:), allocatable :: basename
-        integer :: i, last_slash
-
-        last_slash = 0
-        do i = len(path), 1, -1
-            if (path(i:i) == '/' .or. path(i:i) == '\') then
-                last_slash = i
-                exit
-            end if
-        end do
-
-        if (last_slash > 0 .and. last_slash < len(path)) then
-            basename = path(last_slash+1:len(path))
-        else
-            basename = path
-        end if
-    end function get_basename_str
 
     ! Get current time in milliseconds (for fuzzy search timeout)
     function get_time_ms() result(ms)
