@@ -8,6 +8,10 @@ FIRST digit rather than waiting to see whether more follow, because waiting
 would put half a second of lag on the overwhelmingly common single-digit case;
 superseding a jump that already happened costs nothing.
 
+If the extended number does not exist, its last digit is retried as a fresh
+single-digit jump. Alt-2 then Alt-1 therefore tries tab 21 and falls back to
+tab 1 rather than leaving the user stranded on tab 2.
+
 When the tab the first digit landed on belongs to a group, the next digit picks
 a member of that group instead. A group entry carries no number on the tab bar,
 so there is nothing for a digit to extend towards.
@@ -65,10 +69,16 @@ def make_more_files(s, n):
 
 def open_tabs(s, n):
     """Open files 2..n as tabs through the file tree."""
+    def tree_is_open():
+        # With enough tabs to overflow row one, the status chevron can lag
+        # behind the visible Fuss surface. The tree itself is authoritative
+        # for this setup; its WORKSPACE heading cannot appear in editor mode.
+        return s.in_tree() or "WORKSPACE" in s.row(1)[:30]
+
     for name in s.names[1:n]:
-        if not s.in_tree():
+        if not tree_is_open():
             s.send("\x02", 0.7)
-        if not s.in_tree():
+        if not tree_is_open():
             return False
         for _ in range(3 * len(s.names) + 8):
             sel = s.tree_selection()
@@ -76,7 +86,7 @@ def open_tabs(s, n):
                 break
             s.send("\x1b[B", 0.08)
         s.send("\r", 0.5)
-    if s.in_tree():
+    if tree_is_open():
         s.send("\x02", 0.6)
     return True
 
@@ -185,6 +195,30 @@ def test_an_out_of_range_number_keeps_the_first_jump(binary):
         check("9" not in "".join(s.screen.display[1:3]).replace("file09", ""),
               "and the digit was not typed into the document",
               "\n".join(s.screen.display[:4]))
+    finally:
+        s.close()
+
+
+def test_an_invalid_composite_falls_back_to_its_last_digit(binary):
+    # Twelve tabs are enough to prove both fallback and re-arming while
+    # keeping setup below the crowded-tab tree toggle edge exercised by the
+    # separate overflow suites.
+    s = many_tabs(binary, n=12)
+    if s is None:
+        check(False, "setup: could not open tabs")
+        return
+    try:
+        alt(s, 2)
+        s.send("\x1b1", 0.2)            # keep Alt held: tab 21 is absent
+        check(showing(s) == "file01.txt",
+              "alt-2 then alt-1 falls back from tab 21 to tab 1", showing(s))
+        check("another digit" in s.status(),
+              "the fallback digit starts a fresh extension window", s.status())
+
+        s.child.send("2")
+        s.drain(0.9)
+        check(showing(s) == "file12.txt",
+              "a digit after the fallback can still extend to tab 12", showing(s))
     finally:
         s.close()
 
@@ -312,6 +346,7 @@ def main():
                test_after_the_window_a_digit_is_just_text,
                test_a_non_digit_ends_the_window,
                test_an_out_of_range_number_keeps_the_first_jump,
+               test_an_invalid_composite_falls_back_to_its_last_digit,
                test_the_pending_window_is_announced,
                test_a_digit_picks_a_group_member,
                test_the_group_window_says_how_many_members,

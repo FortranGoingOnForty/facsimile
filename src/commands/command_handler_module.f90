@@ -10453,7 +10453,7 @@ contains
         character(len=*), intent(in) :: key_str
         logical :: handled
         integer, allocatable :: members(:)
-        integer :: digit, target
+        integer :: digit, target, fallback
         character(len=48) :: msg
 
         handled = .false.
@@ -10493,13 +10493,25 @@ contains
 
         target = g_jump_value * 10 + digit
         if (target < 1 .or. target > size(editor%tabs)) then
-            ! Out of range. The earlier jump stands rather than being undone,
-            ! and the digit is not typed into the document either -- it was
-            ! meant as part of a chord, and inserting it would be a surprise
-            ! edit to a file the user was only navigating.
-            write(msg, '(a,i0,a)') 'No tab ', target, ''
-            call clear_tab_jump()
-            call set_status_message(trim(msg))
+            ! Treat the last digit as a fresh one-digit chord. A fast Alt+2,
+            ! Alt+1 first tries tab 21; if it does not exist, tab 1 is still a
+            ! useful and deterministic destination. Zero keeps its established
+            ! single-key meaning of tab 10.
+            fallback = digit
+            if (fallback == 0) fallback = 10
+            if (fallback >= 1 .and. fallback <= size(editor%tabs)) then
+                call switch_to_tab_with_buffer(editor, fallback, buffer)
+                g_jump_value = fallback
+                g_jump_deadline = platform_now_ms() + int(JUMP_WINDOW_MS, int64)
+                g_jump_group = editor%tabs(fallback)%group_id
+                call announce_tab_jump(editor)
+            else
+                ! Neither interpretation names a tab. Keep the earlier jump
+                ! and consume the digit so navigation never edits the file.
+                write(msg, '(a,i0,a)') 'No tab ', target, ''
+                call clear_tab_jump()
+                call set_status_message(trim(msg))
+            end if
             return
         end if
 

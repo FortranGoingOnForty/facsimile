@@ -9,9 +9,9 @@ module fortress_display_module
     use terminal_io_module, only: terminal_write, terminal_flush, terminal_move_cursor
     use fortress_fs_module, only: MAX_PATH, MAX_FILES
     use utf8_module, only: clip_to_cells
-    use theme_module, only: THEME_DIRECTORY, THEME_EXECUTABLE, THEME_HINT, &
-        THEME_MUTED, THEME_PANEL, THEME_PANEL_HEADER, THEME_PANEL_SELECTION, &
-        theme_paint, theme_reset, theme_sgr
+    use theme_module, only: THEME_ACCENT, THEME_DIRECTORY, THEME_EXECUTABLE, &
+        THEME_HINT, THEME_MUTED, THEME_PANEL, THEME_PANEL_HEADER, &
+        theme_foreground_sgr, theme_reset, theme_sgr
     implicit none
     private
 
@@ -38,6 +38,7 @@ contains
         !> them, so a window does not carry two titles and two footers.
         logical, intent(in), optional :: chrome
         integer :: left_w, i, j, parent_idx, current_idx, vis_h
+        integer :: parent_role, current_role
         character(len=256) :: parent_name, current_name
         logical :: do_clear
         integer :: r0, c0, name_w, used, list_top
@@ -105,21 +106,16 @@ contains
                 if (parent_is_dir(parent_idx)) parent_name = trim(parent_name) // "/"
             end if
             call clip_to_cells(trim(parent_name), left_w, shown, used)
-            ! Active directory stands out (bold + underlined); other siblings
-            ! are dimmed but still visible -- dirs in blue, files in default.
-            ! (The old DIM+GREY rendered as near-invisible dark-on-dark.)
-            if (used > 0 .and. parent_idx == parent_selected) then
-                call terminal_write(theme_paint(THEME_PANEL_SELECTION, shown))
-            else if (used > 0 .and. parent_is_dir(parent_idx)) then
-                call terminal_write(theme_paint(THEME_DIRECTORY, shown))
-            else if (used > 0) then
-                call terminal_write(theme_paint(THEME_MUTED, shown))
+            parent_role = THEME_MUTED
+            if (parent_idx >= 1 .and. parent_idx <= parent_count) then
+                if (parent_is_dir(parent_idx)) parent_role = THEME_DIRECTORY
             end if
-            if (left_w - used > 0) &
-                call terminal_write(repeat(' ', left_w - used))
+            call put_entry(shown, used, left_w, parent_role, &
+                           used > 0 .and. parent_idx == parent_selected)
 
-            call terminal_write(theme_paint(THEME_MUTED, &
-                " " // char(226)//char(148)//char(130) // " "))
+            call terminal_write(theme_sgr(THEME_PANEL) // &
+                theme_foreground_sgr(THEME_MUTED) // &
+                " " // char(226)//char(148)//char(130) // " ")
 
             ! === Current pane (right) ===
             current_name = ''
@@ -130,21 +126,17 @@ contains
                 if (current_is_dir(current_idx)) current_name = trim(current_name) // "/"
             end if
             call clip_to_cells(trim(current_name), name_w, shown, used)
-            if (used > 0 .and. current_idx == selected) then
-                call terminal_write(theme_paint(THEME_PANEL_SELECTION, shown))
-            else if (used > 0 .and. current_is_dir(current_idx)) then
-                call terminal_write(theme_paint(THEME_DIRECTORY, shown))
-            else if (used > 0 .and. current_is_exec(current_idx)) then
-                call terminal_write(theme_paint(THEME_EXECUTABLE, shown))
-            else if (used > 0) then
-                call terminal_write(theme_paint(THEME_PANEL, shown))
+            current_role = THEME_PANEL
+            if (current_idx >= 1 .and. current_idx <= current_count) then
+                if (current_is_dir(current_idx)) then
+                    current_role = THEME_DIRECTORY
+                else if (current_is_exec(current_idx)) then
+                    current_role = THEME_EXECUTABLE
+                end if
             end if
-            ! Pad rather than ESC[K. Clear-to-end-of-line clears to the end of
-            ! the TERMINAL line, which for a modal is the document beside the
-            ! box -- the same defect that had ghost text erasing the pane next
-            ! to it.
-            if (name_w - used > 0) &
-                call terminal_write(repeat(' ', name_w - used))
+            call put_entry(shown, used, name_w, current_role, &
+                           used > 0 .and. current_idx == selected)
+            call terminal_write(theme_reset())
         end do
 
         ! Footer. As a window there is none, and nothing is pushed out here
@@ -170,6 +162,31 @@ contains
             integer, intent(in) :: row, col
             call terminal_move_cursor(row, col)
         end subroutine move_to
+
+        !> Paint one name and all of its padding as a single panel surface.
+        !> Foreground-only overlays keep directory/muted colors from replacing
+        !> the modal background. The active row is intentionally typographic,
+        !> not reverse video: reverse made the two-pane cursor look like
+        !> broken rectangular fragments around the separator.
+        subroutine put_entry(text, used_cells, cells, role, active)
+            character(len=*), intent(in) :: text
+            integer, intent(in) :: used_cells, cells, role
+            logical, intent(in) :: active
+
+            call terminal_write(theme_sgr(THEME_PANEL))
+            if (used_cells > 0) then
+                if (active) then
+                    call terminal_write(theme_foreground_sgr(THEME_ACCENT) // &
+                                        ESC // '[1;4m' // text)
+                else
+                    call terminal_write(theme_foreground_sgr(role) // text)
+                end if
+            end if
+            if (cells - used_cells > 0) then
+                call terminal_write(theme_sgr(THEME_PANEL) // &
+                                    repeat(' ', cells - used_cells))
+            end if
+        end subroutine put_entry
 
         !> Write styled text and pad to `cells`. `plain` is the same text with
         !> no escapes, because the styled form's length is not its width.

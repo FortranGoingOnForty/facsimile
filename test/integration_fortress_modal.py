@@ -66,6 +66,8 @@ class Editor:
         with open(os.path.join(self.home, ".config", "fac", "state.json"), "w") as f:
             f.write('{"first_run_completed": true, "lsp_installer_seen": true,'
                     ' "version": "1.0"}\n')
+        with open(os.path.join(self.home, ".config", "fac", "settings.json"), "w") as f:
+            f.write('{"ui.theme": "steel", "ui.color_mode": "truecolor"}\n')
         self.work = tempfile.mkdtemp(prefix="fac_fm_work_")
         os.makedirs(os.path.join(self.work, "ch5"))
         for n in ("alpha.c", "beta.c"):
@@ -84,9 +86,11 @@ class Editor:
             f.writelines("int line%02d_%s = %d; // RIGHTEDGE%02d\n"
                          % (i, "x" * 70, i, i) for i in range(1, 25))
 
-        env = {**os.environ, "TERM": "xterm-256color", "HOME": self.home}
+        env = {**os.environ, "TERM": "xterm-256color", "COLORTERM": "truecolor",
+               "HOME": self.home}
         env.pop("XDG_CONFIG_HOME", None)
         env.pop("FAC_SESSION", None)
+        env.pop("NO_COLOR", None)
         self.screen = pyte.Screen(COLS, ROWS)
         self.stream = pyte.Stream(self.screen)
         self.child = pexpect.spawn(binary, [self.target], dimensions=(ROWS, COLS),
@@ -122,14 +126,12 @@ class Editor:
         return out
 
     def selected_row(self):
-        """The highlighted entry uses the theme's semantic reverse-video
-        selection, which never shows up in screen.display -- comparing text
-        would call a moved selection 'no change'."""
-        # Row zero is the tab strip; its active tab also uses reverse video.
+        """The active Fortress entry is bold and underlined, not reversed."""
         for y in range(1, ROWS - 1):
             cells = [self.screen.buffer[y][x] for x in range(COLS)]
-            if any(c.reverse for c in cells):
-                return y, "".join(c.data for c in cells if c.reverse).strip()
+            selected = [c for c in cells if c.bold and c.underscore]
+            if selected:
+                return y, "".join(c.data for c in selected).strip()
         return None, None
 
     def has_box(self):
@@ -172,6 +174,17 @@ def test_it_is_a_window_over_the_document(binary):
         check(top is not None and bottom is not None and bottom > top + 1,
               "found the box's rows", f"{top}..{bottom}")
         if top is not None and bottom is not None:
+            top_line = s.screen.display[top]
+            left = top_line.index("╭")
+            right = top_line.rindex("╮")
+            interior = [s.screen.buffer[y][x]
+                        for y in range(top + 1, bottom)
+                        for x in range(left + 1, right)]
+            panel_bg = interior[0].bg if interior else "default"
+            check(interior and panel_bg != "default" and
+                  all(cell.bg == panel_bg for cell in interior),
+                  "the Fortress body is one continuous panel surface",
+                  sorted({cell.bg for cell in interior}))
             spanned = [s.screen.display[y] for y in range(top + 1, bottom)]
             check(any("RIGHTEDGE" in r for r in spanned),
                   "document text right of the box survives on its own rows",
@@ -207,6 +220,12 @@ def test_arrows_move_the_window_not_the_document(binary):
         s.send(CTRL_O, 1.8)
         first = s.selected_row()
         check(first[0] is not None, "something is selected to begin with")
+        if first[0] is not None:
+            selected_cells = [s.screen.buffer[first[0]][x] for x in range(COLS)
+                              if s.screen.buffer[first[0]][x].bold and
+                              s.screen.buffer[first[0]][x].underscore]
+            check(selected_cells and not any(cell.reverse for cell in selected_cells),
+                  "the selection is bold and underlined without reverse video")
         s.send("\x1b[B", 0.7)
         after = s.selected_row()
         check(after != first, "the selection moved on the arrow",

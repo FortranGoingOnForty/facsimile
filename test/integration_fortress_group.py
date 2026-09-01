@@ -100,15 +100,15 @@ class Fortress:
         return "\n".join(r.rstrip() for r in self.screen.display)
 
     def selected(self):
-        """Fortress marks the selection with semantic reverse video."""
-        # Row zero is the tab strip, whose active tab is also reverse video.
+        """Fortress marks the selection with bold, underlined text."""
         for y in range(1, ROWS - 1):
             row = self.screen.display[y]
             d = row.find("│")
             lo = d + 1 if d >= 0 else 0
             cells = [self.screen.buffer[y][x] for x in range(lo, COLS)]
-            if any(c.reverse for c in cells):
-                return "".join(c.data for c in cells if c.reverse).strip()
+            selected = [c for c in cells if c.bold and c.underscore]
+            if selected:
+                return "".join(c.data for c in selected).strip()
         return None
 
     def open_on(self, name, limit=16):
