@@ -6,6 +6,9 @@ module completion_popup_module
                            json_array_size, json_get_array_element, &
                            json_get_array, json_get_number
     use clickable_region_module, only: region_add, REGION_BLOCK
+    use utf8_module, only: clip_to_cells
+    use theme_module, only: THEME_BORDER, THEME_MUTED, THEME_PANEL, &
+        THEME_PANEL_SELECTION, theme_glyph, theme_reset, theme_sgr
     implicit none
     private
 
@@ -201,8 +204,8 @@ contains
     ! each frame so the box survives full-screen redraws.
     subroutine render_completion_popup(popup)
         type(completion_popup_t), intent(in) :: popup
-        integer :: i, display_row, start_idx, end_idx
-        character(len=256) :: line
+        integer :: i, display_row, start_idx, end_idx, used, inner
+        character(len=:), allocatable :: line, shown
 
         if (.not. popup%visible .or. popup%item_count == 0) return
 
@@ -212,33 +215,37 @@ contains
 
         ! Draw top border
         call terminal_move_cursor(popup%row, popup%col)
-        call terminal_write("┌" // repeat("─", popup%width - 2) // "┐")
+        call terminal_write(theme_sgr(THEME_BORDER) // "┌" // &
+            repeat("─", popup%width - 2) // "┐" // theme_reset())
 
         ! Draw items
         display_row = popup%row + 1
         do i = start_idx, end_idx
             call terminal_move_cursor(display_row, popup%col)
 
-            ! Format item line
-            if (i == popup%selected_index) then
-                ! Highlight selected item with > marker
-                write(line, '(a,a)') "│>", adjustl(popup%items(i)%label)
-                call terminal_write(line(1:min(len_trim(line), popup%width - 1)))
-                call terminal_move_cursor(display_row, popup%col + popup%width - 1)
-                call terminal_write("│")
-            else
-                write(line, '(a,a)') "│ ", adjustl(popup%items(i)%label)
-                call terminal_write(line(1:min(len_trim(line), popup%width - 1)))
-                call terminal_move_cursor(display_row, popup%col + popup%width - 1)
-                call terminal_write("│")
+            line = ' ' // theme_glyph('symbol') // ' ' // trim(popup%items(i)%label)
+            if (allocated(popup%items(i)%kind)) then
+                if (len_trim(popup%items(i)%kind) > 0) line = line // &
+                    '  ' // trim(popup%items(i)%kind)
             end if
+            inner = max(0, popup%width - 2)
+            call clip_to_cells(line, inner, shown, used)
+            call terminal_write(theme_sgr(THEME_BORDER) // '│')
+            if (i == popup%selected_index) then
+                call terminal_write(theme_sgr(THEME_PANEL_SELECTION))
+            else
+                call terminal_write(theme_sgr(THEME_PANEL))
+            end if
+            call terminal_write(shown // repeat(' ', max(0, inner - used)))
+            call terminal_write(theme_sgr(THEME_BORDER) // '│' // theme_reset())
 
             display_row = display_row + 1
         end do
 
         ! Draw bottom border
         call terminal_move_cursor(display_row, popup%col)
-        call terminal_write("└" // repeat("─", popup%width - 2) // "┘")
+        call terminal_write(theme_sgr(THEME_BORDER) // "└" // &
+            repeat("─", popup%width - 2) // "┘" // theme_reset())
 
         ! Claim the box so a click on it is swallowed instead of moving the
         ! caret in the document underneath -- which used to leave the popup

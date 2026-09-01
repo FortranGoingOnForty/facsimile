@@ -6,9 +6,12 @@ module fortress_display_module
     ! module that flushes on its own puts half a frame on the terminal
     ! ahead of the other half, which is what made this window flicker as it
     ! scrolled.
-    use terminal_io_module, only: terminal_write, terminal_flush
+    use terminal_io_module, only: terminal_write, terminal_flush, terminal_move_cursor
     use fortress_fs_module, only: MAX_PATH, MAX_FILES
     use utf8_module, only: clip_to_cells
+    use theme_module, only: THEME_DIRECTORY, THEME_EXECUTABLE, THEME_HINT, &
+        THEME_MUTED, THEME_PANEL, THEME_PANEL_HEADER, THEME_PANEL_SELECTION, &
+        theme_paint, theme_reset, theme_sgr
     implicit none
     private
 
@@ -16,15 +19,6 @@ module fortress_display_module
 
     ! ANSI escape codes
     character(len=*), parameter :: ESC = char(27)
-    character(len=*), parameter :: BOLD = ESC // "[1m"
-    character(len=*), parameter :: DIM = ESC // "[2m"
-    character(len=*), parameter :: UNDERLINE = ESC // "[4m"
-    character(len=*), parameter :: RESET = ESC // "[0m"
-    character(len=*), parameter :: BLUE = ESC // "[34m"
-    character(len=*), parameter :: GREEN = ESC // "[32m"
-    character(len=*), parameter :: GREY = ESC // "[90m"
-    character(len=*), parameter :: WHITE = ESC // "[37m"
-
 contains
 
     subroutine draw_fortress_interface(r, c, current_dir, current_files, current_is_dir, current_is_exec, &
@@ -89,7 +83,8 @@ contains
 
         if (want_chrome) then
             call move_to(r0, c0)
-            call put_cells(BOLD // "FORTRESS" // RESET // " - " // trim(current_dir), &
+            call put_cells(theme_sgr(THEME_PANEL_HEADER) // " FORTRESS " // &
+                           theme_sgr(THEME_PANEL) // trim(current_dir) // theme_reset(), &
                            "FORTRESS - " // trim(current_dir), c)
             call move_to(r0 + 1, c0)
             call put_cells("", "", c)
@@ -114,16 +109,17 @@ contains
             ! are dimmed but still visible -- dirs in blue, files in default.
             ! (The old DIM+GREY rendered as near-invisible dark-on-dark.)
             if (used > 0 .and. parent_idx == parent_selected) then
-                call terminal_write(BOLD // UNDERLINE // BLUE // shown // RESET)
+                call terminal_write(theme_paint(THEME_PANEL_SELECTION, shown))
             else if (used > 0 .and. parent_is_dir(parent_idx)) then
-                call terminal_write(DIM // BLUE // shown // RESET)
+                call terminal_write(theme_paint(THEME_DIRECTORY, shown))
             else if (used > 0) then
-                call terminal_write(DIM // shown // RESET)
+                call terminal_write(theme_paint(THEME_MUTED, shown))
             end if
             if (left_w - used > 0) &
                 call terminal_write(repeat(' ', left_w - used))
 
-            call terminal_write(" " // char(226)//char(148)//char(130) // " ")
+            call terminal_write(theme_paint(THEME_MUTED, &
+                " " // char(226)//char(148)//char(130) // " "))
 
             ! === Current pane (right) ===
             current_name = ''
@@ -135,13 +131,13 @@ contains
             end if
             call clip_to_cells(trim(current_name), name_w, shown, used)
             if (used > 0 .and. current_idx == selected) then
-                call terminal_write(BOLD // UNDERLINE // WHITE // shown // RESET)
+                call terminal_write(theme_paint(THEME_PANEL_SELECTION, shown))
             else if (used > 0 .and. current_is_dir(current_idx)) then
-                call terminal_write(BLUE // shown // RESET)
+                call terminal_write(theme_paint(THEME_DIRECTORY, shown))
             else if (used > 0 .and. current_is_exec(current_idx)) then
-                call terminal_write(GREEN // shown // RESET)
+                call terminal_write(theme_paint(THEME_EXECUTABLE, shown))
             else if (used > 0) then
-                call terminal_write(shown // RESET)
+                call terminal_write(theme_paint(THEME_PANEL, shown))
             end if
             ! Pad rather than ESC[K. Clear-to-end-of-line clears to the end of
             ! the TERMINAL line, which for a modal is the document beside the
@@ -157,10 +153,10 @@ contains
         ! around them, and scrolling shows the two arriving separately.
         if (.not. want_chrome) return
         call move_to(r0 + r - 1, c0)
-        call put_cells(DIM // "arrows:nav  enter:open  S-enter/^g:tab group  " // &
-                       "^f:favorite  esc:quit" // RESET, &
+        call put_cells(theme_sgr(THEME_HINT) // " arrows:nav  enter:open  S-enter/^g:tab group  " // &
+                       "^f:favorite  esc:quit" // theme_reset(), &
                        "arrows:nav  enter:open  S-enter/^g:tab group  " // &
-                       "^f:favorite  esc:quit", c)
+                       "^f:favorite  esc:quit", max(0, c - 1))
 
         ! The full-screen driver has no frame to flush for it: it draws and
         ! then blocks on a key, so anything still in the buffer would not
@@ -172,9 +168,7 @@ contains
 
         subroutine move_to(row, col)
             integer, intent(in) :: row, col
-            character(len=32) :: seq
-            write(seq, '(a,i0,a,i0,a)') ESC // "[", row, ";", col, "H"
-            call terminal_write(trim(seq))
+            call terminal_move_cursor(row, col)
         end subroutine move_to
 
         !> Write styled text and pad to `cells`. `plain` is the same text with

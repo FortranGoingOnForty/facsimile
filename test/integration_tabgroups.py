@@ -136,7 +136,7 @@ def open_all(s):
             break
         for _ in range(2 * N_FILES + 8):
             sel = s.tree_selection()
-            if sel and sel.split()[0] == n:
+            if sel and n in sel:
                 break
             s.send("\x1b[B", 0.12)
         s.send("\r", 0.7)
@@ -239,7 +239,7 @@ def group_some_and_leave(s):
             return False
         for _ in range(2 * N_FILES + 8):
             sel = s.tree_selection()
-            if sel and sel.split()[0] == n:
+            if sel and n in sel:
                 break
             s.send("\x1b[B", 0.12)
         s.send("\r", 0.7)
@@ -251,7 +251,7 @@ def group_some_and_leave(s):
         s.send("\x02", 0.8)
     for _ in range(2 * N_FILES + 8):
         sel = s.tree_selection()
-        if sel and sel.split()[0] == s.names[-1]:
+        if sel and s.names[-1] in sel:
             break
         s.send("\x1b[B", 0.12)
     s.send("\r", 0.8)

@@ -176,7 +176,7 @@ def test_rename_reaches_a_file_that_was_never_open(binary):
         # Every touched file must be marked dirty, or save-all walks past it
         # and the rename is only in memory.
         bar = s.screen.display[0]
-        check(bar.count("*") >= 3,
+        check(bar.count("*") + bar.count("●") >= 3,
               "every file the rename touched is marked modified", bar[:120])
 
         # Ctrl-Shift-S only exists as a kitty CSI-u report: 115 is 's', and

@@ -3,6 +3,9 @@ module hover_tooltip_module
     use terminal_io_module, only: terminal_move_cursor, terminal_write
     use json_module, only: json_value_t, json_get_string, &
                            json_get_object, json_has_key
+    use clickable_region_module, only: region_add, REGION_BLOCK
+    use utf8_module, only: clip_to_cells
+    use theme_module, only: THEME_BORDER, THEME_PANEL, theme_reset, theme_sgr
     implicit none
     private
 
@@ -135,8 +138,8 @@ contains
         type(hover_tooltip_t), intent(inout) :: tooltip
         integer, intent(in) :: row, col
         integer, intent(in), optional :: screen_rows, screen_cols
-        integer :: display_row, i, line_start, line_end
-        character(len=256) :: line
+        integer :: display_row, i, line_start, line_end, used, inner
+        character(len=:), allocatable :: line, shown
 
         if (.not. allocated(tooltip%content)) return
         if (len_trim(tooltip%content) == 0) return
@@ -162,7 +165,8 @@ contains
 
         ! Draw top border
         call terminal_move_cursor(tooltip%row, tooltip%col)
-        call terminal_write("┌" // repeat("─", tooltip%width - 2) // "┐")
+        call terminal_write(theme_sgr(THEME_BORDER) // "┌" // &
+            repeat("─", tooltip%width - 2) // "┐" // theme_reset())
 
         ! Draw content lines
         display_row = tooltip%row + 1
@@ -176,12 +180,14 @@ contains
                     line_end = i - 1
                 end if
 
+                line = ' ' // tooltip%content(line_start:line_end)
+                inner = max(0, tooltip%width - 2)
+                call clip_to_cells(line, inner, shown, used)
                 call terminal_move_cursor(display_row, tooltip%col)
-                write(line, '(a,a,a)') "│ ", &
-                    tooltip%content(line_start:line_end), " "
-                call terminal_write(line(1:min(len_trim(line), tooltip%width - 1)))
-                call terminal_move_cursor(display_row, tooltip%col + tooltip%width - 1)
-                call terminal_write("│")
+                call terminal_write(theme_sgr(THEME_BORDER) // '│' // &
+                    theme_sgr(THEME_PANEL) // shown // &
+                    repeat(' ', max(0, inner - used)) // &
+                    theme_sgr(THEME_BORDER) // '│' // theme_reset())
 
                 display_row = display_row + 1
                 line_start = i + 1
@@ -192,7 +198,11 @@ contains
 
         ! Draw bottom border
         call terminal_move_cursor(display_row, tooltip%col)
-        call terminal_write("└" // repeat("─", tooltip%width - 2) // "┘")
+        call terminal_write(theme_sgr(THEME_BORDER) // "└" // &
+            repeat("─", tooltip%width - 2) // "┘" // theme_reset())
+
+        call region_add(REGION_BLOCK, tooltip%row, display_row, tooltip%col, &
+                        tooltip%col + tooltip%width - 1)
 
     end subroutine show_hover_tooltip
 

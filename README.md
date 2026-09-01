@@ -180,6 +180,7 @@ converted to bytes only where a C interface demands it.
 - [KEYBINDINGS.md](docs/KEYBINDINGS.md) — every key, and why some are odd
 - [LSP_GUIDE.md](docs/LSP_GUIDE.md) — language servers
 - [AI_COMPLETION.md](docs/AI_COMPLETION.md) — inline completion setup
+- [THEMES.md](docs/THEMES.md) — built-in themes, terminal capabilities, and custom theme schema
 - [WORKSPACE_QUICKSTART.md](docs/WORKSPACE_QUICKSTART.md) — workspaces and the fortress
 - [config_spec.md](docs/config_spec.md) — settings reference
 

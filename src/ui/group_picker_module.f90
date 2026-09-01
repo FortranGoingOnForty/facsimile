@@ -26,6 +26,10 @@ module group_picker_module
                                        REGION_GP_NAME
     use utf8_module, only: clip_to_cells
     use dir_scan_module, only: dir_entry_t, list_directory
+    use theme_module, only: THEME_BORDER, THEME_BORDER_FOCUS, THEME_DIRECTORY, &
+        THEME_HINT, THEME_PANEL, THEME_PANEL_FOOTER, THEME_PANEL_HEADER, &
+        THEME_PANEL_SELECTION, THEME_SHADOW, THEME_SUCCESS, &
+        theme_reset, theme_sgr, theme_shadows_enabled
     implicit none
     private
 
@@ -62,30 +66,6 @@ module group_picker_module
     ! the meaning of the result lives in command_handler_module.
     integer, parameter :: GP_MODE_NEW  = 1
     integer, parameter :: GP_MODE_EDIT = 2
-
-    character(len=*), parameter :: ESC   = char(27)
-    character(len=*), parameter :: RESET = ESC // '[0m'
-
-    ! A filled 256-colour panel, the same family references_panel and
-    ! symbols_panel use. The picker predated that style and drew ASCII on
-    ! whatever background the document happened to have, so it read as part of
-    ! the text rather than as something floating over it.
-    character(len=*), parameter :: BODY_BG   = ESC // '[48;5;235m'
-    character(len=*), parameter :: CHROME_BG = ESC // '[48;5;237m'
-    character(len=*), parameter :: SEL_BG    = ESC // '[48;5;240m'
-    character(len=*), parameter :: SHADOW_BG = ESC // '[48;5;233m'
-    character(len=*), parameter :: BORDER_FG = ESC // '[38;5;67m'
-    character(len=*), parameter :: TITLE_FG  = ESC // '[1;38;5;81m'
-    character(len=*), parameter :: DIR_FG    = ESC // '[38;5;75m'
-    character(len=*), parameter :: TICK_FG   = ESC // '[38;5;114m'
-    character(len=*), parameter :: HINT_FG   = ESC // '[38;5;245m'
-    character(len=*), parameter :: TEXT_FG   = ESC // '[38;5;252m'
-    character(len=*), parameter :: SEL_FG    = ESC // '[1;38;5;231m'
-
-    ! Frame chrome resets first: the title and the selected row set bold, and a
-    ! bare colour change does not clear intensity, so the bold would otherwise
-    ! bleed into whichever border character came next.
-    character(len=*), parameter :: FRAME = RESET // BODY_BG // BORDER_FG
 
     type :: gp_item_t
         character(len=256) :: name = ''
@@ -620,9 +600,9 @@ contains
         r = r + 1
         line = ' Name  ' // trim(g_name(1:max(0, g_name_len)))
         if (g_focus == GP_FOCUS_NAME) then
-            call put_row(r, line, SEL_BG // SEL_FG)
+            call put_row(r, line, theme_sgr(THEME_PANEL_SELECTION))
         else
-            call put_row(r, line, CHROME_BG // TEXT_FG)
+            call put_row(r, line, theme_sgr(THEME_PANEL_HEADER))
         end if
         call region_add(REGION_GP_NAME, r, r, g_col0, g_col0 + g_width - 1)
 
@@ -633,20 +613,20 @@ contains
             r = r + 1
             idx = g_scroll + i
             if (idx > g_n_items) then
-                call put_row(r, '', BODY_BG)
+                call put_row(r, '', theme_sgr(THEME_PANEL))
                 cycle
             end if
             line = item_line(idx)
             if (idx == g_sel .and. g_focus == GP_FOCUS_LIST) then
-                call put_row(r, line, SEL_BG // SEL_FG)
+                call put_row(r, line, theme_sgr(THEME_PANEL_SELECTION))
             else if (g_items(idx)%is_dir) then
-                call put_row(r, line, BODY_BG // DIR_FG)
+                call put_row(r, line, theme_sgr(THEME_DIRECTORY))
             else if (picked_index(full_path(idx)) > 0) then
                 ! Ticked rows carry the accent colour too, so a glance down the
                 ! list says what is in the group without reading each box.
-                call put_row(r, line, BODY_BG // TICK_FG)
+                call put_row(r, line, theme_sgr(THEME_SUCCESS))
             else
-                call put_row(r, line, BODY_BG // TEXT_FG)
+                call put_row(r, line, theme_sgr(THEME_PANEL))
             end if
             call region_add(REGION_GP_ROW, r, r, g_col0, g_col0 + g_width - 1, idx)
         end do
@@ -659,18 +639,18 @@ contains
         ! sight, and without this the ../ row looks like it loses them.
         write(foot, '(i0,a)') g_n_picked, ' selected'
         line = ' ' // clip_dir(trim(g_dir), g_width - 16) // '  ' // trim(foot)
-        call put_row(r, line, CHROME_BG // TEXT_FG)
+        call put_row(r, line, theme_sgr(THEME_PANEL_FOOTER))
 
         r = r + 1
         if (len_trim(g_note) > 0) then
-            call put_row(r, ' ' // trim(g_note), CHROME_BG // TICK_FG)
+            call put_row(r, ' ' // trim(g_note), theme_sgr(THEME_SUCCESS))
         else
             if (g_mode == GP_MODE_EDIT) then
                 line = ' tab focus  ·  space tick  ·  enter save  ·  esc cancel'
             else
                 line = ' tab focus  ·  space tick  ·  enter create  ·  esc cancel'
             end if
-            call put_row(r, line, CHROME_BG // HINT_FG)
+            call put_row(r, line, theme_sgr(THEME_HINT))
         end if
 
         r = r + 1
@@ -699,9 +679,9 @@ contains
         inner = max(0, g_width - 2)
         call clip_to_cells(text, inner, shown, used)
         call terminal_move_cursor(row, g_col0)
-        call terminal_write(FRAME // '│')
+        call terminal_write(theme_sgr(THEME_BORDER) // '│')
         call terminal_write(body_style // shown // repeat(' ', max(0, inner - used)))
-        call terminal_write(FRAME // '│' // RESET)
+        call terminal_write(theme_sgr(THEME_BORDER) // '│' // theme_reset())
     end subroutine put_row
 
     !> A horizontal rule with the given corners, and optionally a title set
@@ -713,16 +693,17 @@ contains
 
         inner = max(0, g_width - 2)
         call terminal_move_cursor(row, g_col0)
-        call terminal_write(FRAME // left)
+        call terminal_write(theme_sgr(THEME_BORDER) // left)
         if (len_trim(title) > 0 .and. inner > len_trim(title) + 2) then
             pad = inner - (len_trim(title) + 2)
             call terminal_write(repeat('─', pad / 2) // ' ')
-            call terminal_write(TITLE_FG // trim(title) // FRAME)
+            call terminal_write(theme_sgr(THEME_BORDER_FOCUS) // trim(title) // &
+                                theme_sgr(THEME_BORDER))
             call terminal_write(' ' // repeat('─', pad - pad / 2))
         else
             call terminal_write(repeat('─', inner))
         end if
-        call terminal_write(right // RESET)
+        call terminal_write(right // theme_reset())
     end subroutine put_edge
 
     !> A drop shadow, so the dialog reads as floating above the document
@@ -732,12 +713,14 @@ contains
     subroutine put_shadow()
         integer :: r, w, c
 
+        if (.not. theme_shadows_enabled()) return
+
         c = g_col0 + g_width
         do r = g_row0 + 1, min(g_row0 + g_height, g_screen_rows)
             w = min(2, g_screen_cols - c + 1)
             if (w < 1) exit
             call terminal_move_cursor(r, c)
-            call terminal_write(SHADOW_BG // repeat(' ', w) // RESET)
+            call terminal_write(theme_sgr(THEME_SHADOW) // repeat(' ', w) // theme_reset())
         end do
 
         r = g_row0 + g_height
@@ -745,7 +728,7 @@ contains
             w = min(g_width, g_screen_cols - (g_col0 + 2) + 1)
             if (w > 0) then
                 call terminal_move_cursor(r, g_col0 + 2)
-                call terminal_write(SHADOW_BG // repeat(' ', w) // RESET)
+                call terminal_write(theme_sgr(THEME_SHADOW) // repeat(' ', w) // theme_reset())
             end if
         end if
     end subroutine put_shadow

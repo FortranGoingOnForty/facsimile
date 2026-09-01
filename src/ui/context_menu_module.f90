@@ -23,6 +23,8 @@ module context_menu_module
     use terminal_io_module, only: terminal_move_cursor, terminal_write
     use clickable_region_module, only: region_add, REGION_BLOCK, REGION_CTX_ROW
     use utf8_module, only: clip_to_cells
+    use theme_module, only: THEME_BORDER, THEME_DISABLED, THEME_PANEL, &
+                            THEME_PANEL_SELECTION, theme_reset, theme_sgr
     implicit none
     private
 
@@ -39,11 +41,6 @@ module context_menu_module
     integer, parameter :: CTX_MAX_LABEL = 48
     integer, parameter :: CTX_MAX_ACCEL = 16
     integer, parameter :: CTX_MIN_WIDTH = 18
-
-    character(len=*), parameter :: ESC = char(27)
-    character(len=*), parameter :: INVERSE = ESC // '[7m'
-    character(len=*), parameter :: DIM     = ESC // '[90m'
-    character(len=*), parameter :: RESET   = ESC // '[0m'
 
     type :: ctx_row_t
         character(len=CTX_MAX_LABEL) :: label = ''
@@ -328,13 +325,15 @@ contains
         n = drawn_rows()
 
         call terminal_move_cursor(g_row0, g_col0)
-        call terminal_write('┌' // repeat('─', g_width - 2) // '┐')
+        call terminal_write(theme_sgr(THEME_BORDER) // '┌' // &
+                            repeat('─', g_width - 2) // '┐' // theme_reset())
 
         do i = 1, n
             r = g_row0 + i
             call terminal_move_cursor(r, g_col0)
             if (g_rows(i)%separator) then
-                call terminal_write('├' // repeat('─', g_width - 2) // '┤')
+                call terminal_write(theme_sgr(THEME_BORDER) // '├' // &
+                                    repeat('─', g_width - 2) // '┤' // theme_reset())
                 cycle
             end if
 
@@ -344,16 +343,23 @@ contains
             ! through; every cell here is written.
             inner = row_inner(i, g_width - 2)
             if (i == g_selected) then
-                call terminal_write('│' // INVERSE // inner // RESET // '│')
+                call terminal_write(theme_sgr(THEME_BORDER) // '│' // &
+                    theme_sgr(THEME_PANEL_SELECTION) // inner // &
+                    theme_sgr(THEME_BORDER) // '│' // theme_reset())
             else if (.not. g_rows(i)%enabled) then
-                call terminal_write('│' // DIM // inner // RESET // '│')
+                call terminal_write(theme_sgr(THEME_BORDER) // '│' // &
+                    theme_sgr(THEME_DISABLED) // inner // &
+                    theme_sgr(THEME_BORDER) // '│' // theme_reset())
             else
-                call terminal_write('│' // inner // '│')
+                call terminal_write(theme_sgr(THEME_BORDER) // '│' // &
+                    theme_sgr(THEME_PANEL) // inner // &
+                    theme_sgr(THEME_BORDER) // '│' // theme_reset())
             end if
         end do
 
         call terminal_move_cursor(g_row0 + n + 1, g_col0)
-        call terminal_write('└' // repeat('─', g_width - 2) // '┘')
+        call terminal_write(theme_sgr(THEME_BORDER) // '└' // &
+                            repeat('─', g_width - 2) // '┘' // theme_reset())
 
         ! Block first, rows after: region_at searches backwards, so the rows
         ! win over the block and the block catches the borders.

@@ -3,15 +3,15 @@ module file_tree_renderer_module
     use file_tree_module
     use terminal_io_module
     use clickable_region_module, only: region_add, REGION_TREE_ROW
+    use utf8_module, only: clip_to_cells
+    use theme_module, only: THEME_ACCENT, THEME_DIRECTORY, THEME_GIT_ADDED, &
+        THEME_GIT_MODIFIED, THEME_HINT, THEME_MUTED, THEME_PANEL, &
+        THEME_PANEL_HEADER, THEME_PANEL_SELECTION, THEME_WARNING, &
+        theme_glyph, theme_paint, theme_reset, theme_sgr
     implicit none
     private
 
     public :: render_file_tree
-
-    ! Simple expansion indicators (no box-drawing)
-    character(len=*), parameter :: EXPANDED_DIR = '-'
-    character(len=*), parameter :: COLLAPSED_DIR = '+'
-    character(len=1), parameter :: ESC = achar(27)
 
     ! Columns of indent per level of nesting.
     character(len=*), parameter :: NEST_INDENT = '   '
@@ -25,7 +25,6 @@ contains
         logical, intent(in), optional :: git_prefix_active
         logical :: git_mode
         integer :: current_row, item_idx, row
-        character(len=512) :: status_line
         character(len=:), allocatable :: padding
 
         ! Handle optional git_prefix_active parameter
@@ -41,7 +40,7 @@ contains
         padding = repeat(' ', width + start_col)
         do row = start_row, end_row
             call terminal_move_cursor(row, 1)
-            call terminal_write(padding)
+            call terminal_write(theme_sgr(THEME_PANEL) // padding // theme_reset())
         end do
 
         current_row = start_row
@@ -73,18 +72,11 @@ contains
                     end if
                 end if
 
-                if (len_trim(branch_str) > 0) then
-                    write(status_line, '(A,A,A,A,A,A,A)') &
-                        ESC // '[1;36m', trim(repo_str), &
-                        ESC // '[0m', ':', &
-                        ESC // '[1;33m', trim(branch_str), &
-                        ESC // '[0m'
-                else
-                    write(status_line, '(A,A,A)') &
-                        ESC // '[1;36m', trim(repo_str), &
-                        ESC // '[0m'
-                end if
-                call terminal_write(trim(status_line))
+                call terminal_write(theme_sgr(THEME_PANEL_HEADER) // ' ' // &
+                    trim(repo_str) // theme_sgr(THEME_MUTED))
+                if (len_trim(branch_str) > 0) call terminal_write(' : ' // &
+                    theme_paint(THEME_GIT_MODIFIED, trim(branch_str)))
+                call terminal_write(theme_reset())
             end block
             current_row = current_row + 2  ! Skip a line
         end if
@@ -92,7 +84,7 @@ contains
         ! Display root
         if (current_row <= end_row) then
             call terminal_move_cursor(current_row, start_col)
-            call terminal_write('.')
+            call terminal_write(theme_paint(THEME_ACCENT, ' WORKSPACE'))
             current_row = current_row + 1
         end if
 
@@ -113,39 +105,39 @@ contains
             ! Expanded legend (six rows, short lines to fit pane)
             if (end_row >= start_row + 6) then
                 call terminal_move_cursor(end_row - 5, start_col)
-                call terminal_write(ESC // '[90m' // 'j/k:nav o:open' // ESC // '[0m')
+                call terminal_write(theme_paint(THEME_HINT, 'j/k:nav  o:open'))
 
                 call terminal_move_cursor(end_row - 4, start_col)
-                call terminal_write(ESC // '[90m' // '→:in ←:up .:hide' // ESC // '[0m')
+                call terminal_write(theme_paint(THEME_HINT, '→:in  ←:up  .:hide'))
 
                 call terminal_move_cursor(end_row - 3, start_col)
-                call terminal_write(ESC // '[90m' // 'spc:toggle' // ESC // '[0m')
+                call terminal_write(theme_paint(THEME_HINT, 'space:toggle'))
 
                 if (git_mode) then
                     call terminal_move_cursor(end_row - 2, start_col)
-                    call terminal_write(ESC // '[1;33m' // 'a:stage u:unstage' // ESC // '[0m')
+                    call terminal_write(theme_paint(THEME_WARNING, 'a:stage  u:unstage'))
 
                     call terminal_move_cursor(end_row - 1, start_col)
-                    call terminal_write(ESC // '[1;33m' // 'd:diff m:commit' // ESC // '[0m')
+                    call terminal_write(theme_paint(THEME_WARNING, 'd:diff  m:commit'))
                 else
                     call terminal_move_cursor(end_row - 2, start_col)
-                    call terminal_write(ESC // '[90m' // 'alt-v:vs alt-s:hs' // ESC // '[0m')
+                    call terminal_write(theme_paint(THEME_HINT, 'alt-v:vs  alt-s:hs'))
 
                     call terminal_move_cursor(end_row - 1, start_col)
-                    call terminal_write(ESC // '[90m' // 'ctrl-g:git  type:search' // ESC // '[0m')
+                    call terminal_write(theme_paint(THEME_HINT, 'ctrl-g:git  type:search'))
                 end if
 
                 call terminal_move_cursor(end_row, start_col)
-                call terminal_write(ESC // '[90m' // 'ctrl-/:less esc:close' // ESC // '[0m')
+                call terminal_write(theme_paint(THEME_HINT, 'ctrl-/:less  esc:close'))
             end if
         else
             ! Minimal legend (two rows)
             if (end_row >= start_row + 2) then
                 call terminal_move_cursor(end_row - 1, start_col)
-                call terminal_write(ESC // '[90m' // '.:hide ctrl-/:hints' // ESC // '[0m')
+                call terminal_write(theme_paint(THEME_HINT, '.:hide  ctrl-/:hints'))
 
                 call terminal_move_cursor(end_row, start_col)
-                call terminal_write(ESC // '[90m' // 'esc/F3:close' // ESC // '[0m')
+                call terminal_write(theme_paint(THEME_HINT, 'esc/F3:close'))
             end if
         end if
     end subroutine render_file_tree
@@ -159,9 +151,9 @@ contains
         integer, intent(inout) :: item_idx, current_row
         integer, intent(in) :: end_row, start_col, width
 
-        character(len=:), allocatable :: line, new_prefix
+        character(len=:), allocatable :: line, new_prefix, shown
         character(len=:), allocatable :: base_line
-        integer :: visible_len
+        integer :: used, role
         type(tree_node_t), pointer :: child
         logical :: is_selected, is_last_child
 
@@ -186,46 +178,43 @@ contains
                     ! too; only scanned-and-empty dirs render as leaves.
                     if (node%scan_pending .or. associated(node%first_child)) then
                         if (node%expanded) then
-                            base_line = prefix // EXPANDED_DIR // ' ' // trim(node%name) // '/'
+                            base_line = prefix // theme_glyph('directory_open') // ' ' // trim(node%name) // '/'
                         else
-                            base_line = prefix // COLLAPSED_DIR // ' ' // trim(node%name) // '/'
+                            base_line = prefix // theme_glyph('directory_closed') // ' ' // trim(node%name) // '/'
                         end if
                     else
                         base_line = prefix // '  ' // trim(node%name) // '/'
                     end if
                 else
-                    base_line = prefix // '  ' // trim(node%name)
+                    base_line = prefix // theme_glyph('file') // ' ' // trim(node%name)
                 end if
 
                 ! Truncate with ellipsis if line overflows tree pane width
-                visible_len = len(base_line)
-                if (visible_len > width) then
-                    line = base_line(1:width - 3) // '...'
-                else
-                    line = base_line
-                end if
+                line = base_line
 
                 ! Add status indicators for files only (after truncation
                 ! so indicators stay visible at the end)
                 if (node%is_file) then
                     if (node%is_staged) then
-                        line = line // ' ' // ESC // '[32m↑' // ESC // '[0m'
+                        line = line // ' +'
                     end if
                     if (node%is_unstaged) then
-                        line = line // ' ' // ESC // '[31m✗' // ESC // '[0m'
+                        line = line // ' ~'
                     end if
                     if (node%is_untracked) then
-                        line = line // ' ' // ESC // '[90m✗' // ESC // '[0m'
+                        line = line // ' ?'
                     end if
                     if (node%has_incoming) then
-                        line = line // ' ' // ESC // '[34m↓' // ESC // '[0m'
+                        line = line // ' ↓'
                     end if
                 end if
 
                 ! Render with selection highlight
                 call terminal_move_cursor(current_row, start_col)
                 if (is_selected) then
-                    call terminal_write(ESC // '[7m' // line // ESC // '[0m')
+                    call clip_to_cells(line, width, shown, used)
+                    call terminal_write(theme_sgr(THEME_PANEL_SELECTION) // shown // &
+                        repeat(' ', max(0, width - used)) // theme_reset())
                 else
                     ! Greyed when git would ignore it, or when a directory has
                     ! nothing in it but hidden things.
@@ -238,10 +227,20 @@ contains
                     ! opening the thing the grey was supposed to warn you about.
                     if (node%is_gitignored .or. &
                         (.not. node%is_file .and. node%all_children_hidden)) then
-                        call terminal_write(ESC // '[90m' // line // ESC // '[0m')
+                        role = THEME_MUTED
+                    else if (.not. node%is_file) then
+                        role = THEME_DIRECTORY
+                    else if (node%is_staged) then
+                        role = THEME_GIT_ADDED
+                    else if (node%is_unstaged) then
+                        role = THEME_GIT_MODIFIED
+                    else if (node%is_untracked) then
+                        role = THEME_WARNING
                     else
-                        call terminal_write(line)
+                        role = THEME_PANEL
                     end if
+                    call clip_to_cells(line, width, shown, used)
+                    call terminal_write(theme_paint(role, shown))
                 end if
 
                 ! Claim the row for this item. item_idx is the same index

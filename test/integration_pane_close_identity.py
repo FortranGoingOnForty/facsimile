@@ -127,7 +127,7 @@ def run(binary):
         s.send("\x02", 1.2)
         for _ in range(20):
             sel = s.tree_selection()
-            if sel and sel.split()[0] == "beta.txt":
+            if sel and "beta.txt" in sel:
                 break
             s.send("\x1b[B", 0.2)
         else:

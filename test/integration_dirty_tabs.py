@@ -121,9 +121,9 @@ class Group:
         self.drain(w)
 
     def marked(self):
-        """Member names currently showing an unsaved-changes asterisk."""
-        return sorted(w.rstrip("*") for w in self.screen.display[1].split()
-                      if w.endswith("*"))
+        """Member names currently showing an unsaved-changes marker."""
+        return sorted(w.rstrip("●*") for w in self.screen.display[1].split()
+                      if w.endswith(("●", "*")))
 
     def showing(self):
         return self.screen.display[2].rstrip()[6:44]

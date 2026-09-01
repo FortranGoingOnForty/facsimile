@@ -21,7 +21,7 @@ module clickable_region_module
 
     public :: clickable_region_t
     public :: regions_begin_frame, region_add, region_at, region_count
-    public :: REGION_NONE, REGION_TAB, REGION_FUSS_TOGGLE, REGION_TREE_ROW
+    public :: REGION_NONE, REGION_TAB, REGION_NEW_TAB, REGION_FUSS_TOGGLE, REGION_TREE_ROW
     public :: REGION_BLOCK, REGION_CTX_ROW, REGION_TAB_SCROLL
     public :: REGION_GP_NAME, REGION_GP_ROW
 
@@ -38,6 +38,7 @@ module clickable_region_module
     integer, parameter :: REGION_TAB_SCROLL = 6
     integer, parameter :: REGION_GP_NAME = 7      ! group picker name field
     integer, parameter :: REGION_GP_ROW  = 8      ! group picker list row
+    integer, parameter :: REGION_NEW_TAB = 9      ! payload: unused
 
     ! Fixed capacity, so a frame costs no allocation. Overflow drops the
     ! extra regions: they simply stay unclickable, which degrades to the

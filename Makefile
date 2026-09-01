@@ -78,7 +78,10 @@ VERSION := $(shell cat VERSION 2>/dev/null || echo "unknown")
 # Source files (order matters for dependencies)
 # Note: the fortress modules sit before renderer_module -- the editor frame
 # now draws the browser window, so the renderer uses them.
-SOURCES = src/version_module.f90 \
+SOURCES = vendor/fgof-screen/src/fgof_screen_types.f90 \
+          vendor/fgof-screen/src/fgof_screen.f90 \
+          vendor/fgof-toml/src/fgof_toml.f90 \
+          src/version_module.f90 \
           src/utils/platform_module.f90 \
           src/utils/utf8_module.f90 \
           src/utils/regex_module.f90 \
@@ -101,6 +104,10 @@ SOURCES = src/version_module.f90 \
           src/terminal/raw_mode_module.f90 \
           src/terminal/terminal_io_module.f90 \
           src/terminal/input_handler_module.f90 \
+          src/workspace/config_module.f90 \
+          src/workspace/settings_module.f90 \
+          src/ui/theme_module.f90 \
+          src/ui/theme_picker_module.f90 \
           src/utils/bracket_matching_module.f90 \
           src/navigation/jump_stack_module.f90 \
           src/lsp/json_module.f90 \
@@ -131,8 +138,6 @@ SOURCES = src/version_module.f90 \
           src/workspace/file_tree_module.f90 \
           src/workspace/git_ops_module.f90 \
           src/workspace/file_tree_renderer_module.f90 \
-          src/workspace/config_module.f90 \
-          src/workspace/settings_module.f90 \
           src/workspace/app_state_module.f90 \
           src/workspace/favorites_module.f90 \
           src/workspace/recents_module.f90 \
@@ -360,6 +365,19 @@ check-render:
 		echo "  these write to the unit instead of terminal_write:"; \
 		for f in $$bad; do echo "    $$f"; done; \
 		echo "  (see the note above this target -- it causes visible flicker)"; \
+		exit 1; \
+	fi
+	@echo ok
+	@printf 'Checking that UI colors use semantic theme roles... '
+	@bad=`grep -rnE '\[(3[0-7]|4[0-7]|9[0-7]|38;5;|48;5;)' src/ \
+		--include='*.f90' 2>/dev/null | \
+		grep -v 'src/ui/terminal_panel_module.f90' | \
+		awk -F: '$$3 !~ /^[[:space:]]*!/' || true`; \
+	if [ -n "$$bad" ]; then \
+		echo; \
+		echo "  fixed palette escapes found outside the child VT renderer:"; \
+		echo "$$bad" | sed 's/^/    /'; \
+		echo "  use a role from src/ui/theme_module.f90"; \
 		exit 1; \
 	fi
 	@echo ok

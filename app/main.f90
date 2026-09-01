@@ -53,6 +53,7 @@ program facsimile
     use renderer_module, only: tab_group_preview_visible, set_group_preview_enabled
     use group_picker_module, only: is_group_picker_visible
     use settings_module, only: settings_get_logical, settings_get_integer
+    use theme_module, only: theme_init
     use text_buffer_module
     use renderer_module
     use ai_engine_module, only: ai_tick, ai_configure
@@ -372,6 +373,10 @@ program facsimile
             end if
         end if
     end if
+
+    ! Resolve terminal capabilities and the selected theme before any editor
+    ! surface is painted. Settings load lazily inside theme_init.
+    call theme_init()
 
     ! Initialize editor
     call init_editor(editor)
@@ -1625,6 +1630,8 @@ contains
                               'Ctrl+Shift+Down', 'View')
         call register_command('Terminal Maximize/Restore', 'terminal-max', &
                               'Ctrl+Shift+M', 'View')
+        call register_command('Preferences: Color Theme', 'theme-select', '', 'Preferences')
+        call register_command('Preferences: Reload Theme', 'theme-reload', '', 'Preferences')
 
         ! Help
         call register_command('Show Help', 'help', 'Ctrl+?', 'Help')

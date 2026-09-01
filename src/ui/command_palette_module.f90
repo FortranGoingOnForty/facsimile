@@ -1,6 +1,8 @@
 module command_palette_module
     use iso_fortran_env, only: int32
     use terminal_io_module
+    use theme_module, only: THEME_ACCENT, THEME_BORDER, THEME_MUTED, THEME_PANEL, &
+        THEME_PANEL_HEADER, THEME_PANEL_SELECTION, theme_paint, theme_reset, theme_sgr
     implicit none
     private
 
@@ -314,13 +316,6 @@ contains
         character(len=256) :: line, category_tag
         type(command_t) :: cmd
         character(len=:), allocatable :: border_top, border_bottom
-        ! ANSI escape codes
-        character(len=*), parameter :: ESC = char(27)
-        character(len=*), parameter :: CYAN = ESC // '[36m'
-        character(len=*), parameter :: YELLOW = ESC // '[33m'
-        character(len=*), parameter :: INVERSE = ESC // '[7m'
-        character(len=*), parameter :: RESET = ESC // '[0m'
-
         ! Calculate centering - top-center like VSCode
         content_width = min(PALETTE_WIDTH, screen_cols - 4)
         start_col = max(1, (screen_cols - content_width) / 2)
@@ -332,22 +327,23 @@ contains
 
         ! Draw top border
         call terminal_move_cursor(start_row, start_col)
-        call terminal_write(border_top)
+        call terminal_write(theme_paint(THEME_BORDER, border_top))
 
         ! Draw header line with cyan title
         row = start_row + 1
         call terminal_move_cursor(row, start_col)
-        call terminal_write('│')
-        call terminal_write(CYAN // ' Command Palette' // RESET)
+        call terminal_write(theme_sgr(THEME_PANEL_HEADER) // &
+            theme_sgr(THEME_BORDER) // '│' // theme_sgr(THEME_PANEL_HEADER))
+        call terminal_write(' Command Palette')
         display_width = 16  ! " Command Palette" visible length
-        call terminal_write(repeat(' ', max(0, content_width - 2 - display_width)))
-        call terminal_write('│')
+        call terminal_write(repeat(' ', max(0, content_width - 2 - display_width)) // &
+            theme_sgr(THEME_BORDER) // '│' // theme_reset())
 
         ! Draw search query line with yellow prompt
         row = row + 1
         call terminal_move_cursor(row, start_col)
-        call terminal_write('│')
-        call terminal_write(YELLOW // ' > ' // RESET)
+        call terminal_write(theme_sgr(THEME_PANEL) // theme_sgr(THEME_BORDER) // '│' // &
+            theme_sgr(THEME_ACCENT) // ' > ' // theme_sgr(THEME_PANEL))
         ! Not trim(): a trailing space is part of what the user typed, and
         ! hiding it makes the space bar look broken.
         if (palette%search_pos > 0) then
@@ -355,12 +351,12 @@ contains
         end if
         display_width = 3 + palette%search_pos  ! " > " + query length
         call terminal_write(repeat(' ', max(0, content_width - 2 - display_width)))
-        call terminal_write('│')
+        call terminal_write(theme_sgr(THEME_BORDER) // '│' // theme_reset())
 
         ! Draw separator
         row = row + 1
         call terminal_move_cursor(row, start_col)
-        call terminal_write('├' // repeat('─', content_width - 2) // '┤')
+        call terminal_write(theme_paint(THEME_BORDER, '├' // repeat('─', content_width - 2) // '┤'))
 
         ! Calculate visible range
         visible_start = palette%scroll_offset + 1
@@ -372,7 +368,7 @@ contains
             cmd = palette%filtered_commands(i)
 
             call terminal_move_cursor(row, start_col)
-            call terminal_write('│')
+            call terminal_write(theme_sgr(THEME_BORDER) // '│')
 
             ! Build line with category, name, and shortcut (for display_width calculation)
             if (len_trim(cmd%category) > 0) then
@@ -401,29 +397,31 @@ contains
 
             if (i == palette%selected_index) then
                 ! Highlight selected item with inverse colors
-                call terminal_write(INVERSE)
+                call terminal_write(theme_sgr(THEME_PANEL_SELECTION))
                 call terminal_write(line(1:display_width))
                 call terminal_write(repeat(' ', max(0, content_width - 2 - display_width)))
-                call terminal_write(RESET)
+                call terminal_write(theme_reset())
             else
-                call terminal_write(line(1:display_width))
+                call terminal_write(theme_sgr(THEME_PANEL) // line(1:display_width))
                 call terminal_write(repeat(' ', max(0, content_width - 2 - display_width)))
+                call terminal_write(theme_reset())
             end if
 
-            call terminal_write('│')
+            call terminal_write(theme_paint(THEME_BORDER, '│'))
         end do
 
         ! Fill remaining visible slots with empty rows
         do i = visible_end + 1, visible_start + MAX_VISIBLE - 1
             row = row + 1
             call terminal_move_cursor(row, start_col)
-            call terminal_write('│' // repeat(' ', content_width - 2) // '│')
+            call terminal_write(theme_sgr(THEME_BORDER) // '│' // theme_sgr(THEME_PANEL) // &
+                repeat(' ', content_width - 2) // theme_sgr(THEME_BORDER) // '│' // theme_reset())
         end do
 
         ! Draw bottom border
         row = row + 1
         call terminal_move_cursor(row, start_col)
-        call terminal_write(border_bottom)
+        call terminal_write(theme_paint(THEME_BORDER, border_bottom))
 
         ! Position cursor at end of search query (inside the box)
         call terminal_move_cursor(start_row + 2, start_col + 4 + palette%search_pos)

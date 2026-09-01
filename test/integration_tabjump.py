@@ -72,7 +72,7 @@ def open_tabs(s, n):
             return False
         for _ in range(3 * len(s.names) + 8):
             sel = s.tree_selection()
-            if sel and sel.split()[0] == name:
+            if sel and name in sel:
                 break
             s.send("\x1b[B", 0.08)
         s.send("\r", 0.5)

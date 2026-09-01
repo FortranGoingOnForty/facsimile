@@ -133,27 +133,14 @@ class Bar:
 
     def entries(self):
         """Bar entries in order, as short names."""
-        out = []
-        for e in re.findall(r"\[([^\]]+)\]", self.bar()):
-            m = re.match(r"\s*\d+:\s*(\S+)", e)
-            out.append(m.group(1) if m else e.split()[0])
-        return out
+        tokens = re.findall(r"([\w.-]+/)\s+\(\d+\)|\d+\s+([\w.-]+)", self.bar())
+        return [group or filename for group, filename in tokens]
 
     def col_of(self, label):
-        """Column just inside the '[' of the entry showing `label`.
-
-        Group entries render as '[alpha/ (6)]' but a loose tab as
-        '[11: one.c ]', so find the name and walk back to its bracket.
-        """
+        """Column inside the entry showing `label`."""
         b = self.bar()
-        j = b.find("[" + label)
-        if j >= 0:
-            return j + 2
         j = b.find(label)
-        if j < 0:
-            return None
-        k = b.rfind("[", 0, j)
-        return k + 2 if k >= 0 else None
+        return j + 1 if j >= 0 else None
 
     def drag(self, from_col, to_col):
         self.child.send(f"\x1b[<0;{from_col};1M")

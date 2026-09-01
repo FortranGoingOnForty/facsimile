@@ -19,5 +19,5 @@ main = "main.f90"
 link = ["c"]
 
 [dependencies]
-# We'll add stdlib when needed
-# stdlib = "*"
+fgof-screen = { path = "vendor/fgof-screen" }
+fgof-toml = { path = "vendor/fgof-toml" }

@@ -2,6 +2,8 @@ module references_panel_module
     use iso_fortran_env, only: int32
     use terminal_io_module, only: terminal_move_cursor, terminal_write
     use clickable_region_module, only: region_add, REGION_BLOCK
+    use theme_module, only: THEME_MUTED, THEME_PANEL, THEME_PANEL_FOOTER, &
+        THEME_PANEL_HEADER, THEME_PANEL_SELECTION, theme_reset, theme_sgr
     implicit none
     private
 
@@ -210,7 +212,7 @@ contains
 
         ! Header with symbol name
         call terminal_move_cursor(row, start_col)
-        call terminal_write(char(27) // '[48;5;237m')  ! Dark background
+        call terminal_write(theme_sgr(THEME_PANEL_HEADER))
 
         if (allocated(panel%symbol_name)) then
             write(header, '(A,A,A,I0,A)') " References: ", trim(panel%symbol_name), &
@@ -227,7 +229,7 @@ contains
         ! Center the header
         col = start_col + (panel%width - len_trim(header)) / 2
         call terminal_move_cursor(row, col)
-        call terminal_write(char(27) // '[1m' // trim(header) // char(27) // '[0m')
+        call terminal_write(trim(header) // theme_reset())
 
         ! Clear to end of header line
         call terminal_move_cursor(row, start_col + len_trim(header))
@@ -237,16 +239,14 @@ contains
 
         ! Draw separator
         call terminal_move_cursor(row, start_col)
-        call terminal_write(char(27) // '[48;5;237m' // repeat("─", panel%width) // char(27) // '[0m')
+        call terminal_write(theme_sgr(THEME_PANEL_HEADER) // repeat("─", panel%width) // theme_reset())
         row = row + 1
 
         ! Display references
         if (panel%num_references == 0) then
             call terminal_move_cursor(row, start_col)
-            call terminal_write(char(27) // '[48;5;235m' // char(27) // '[90m')
-            call terminal_write(" No references found")
-            call terminal_write(char(27) // '[K')  ! Clear to end of line
-            call terminal_write(char(27) // '[0m')
+            call terminal_write(theme_sgr(THEME_MUTED) // " No references found" // &
+                repeat(' ', max(0, panel%width - 20)) // theme_reset())
         else
             ! Display visible references
             do i = 1, min(max_visible, panel%num_references - panel%scroll_offset)
@@ -258,9 +258,9 @@ contains
 
                 ! Highlight selected item
                 if (visible_index == panel%selected_index) then
-                    call terminal_write(char(27) // '[48;5;240m')  ! Highlight background
+                    call terminal_write(theme_sgr(THEME_PANEL_SELECTION))
                 else
-                    call terminal_write(char(27) // '[48;5;235m')  ! Normal background
+                    call terminal_write(theme_sgr(THEME_PANEL))
                 end if
 
                 ! Format location string
@@ -291,7 +291,7 @@ contains
                 end if
 
                 call terminal_write(line(1:panel%width))
-                call terminal_write(char(27) // '[0m')
+                call terminal_write(theme_reset())
 
                 row = row + 1
             end do
@@ -306,7 +306,7 @@ contains
             ! Show scroll indicator if needed
             if (panel%num_references > max_visible) then
                 call terminal_move_cursor(start_row + max_visible + 2, start_col)
-                call terminal_write(char(27) // '[48;5;237m' // char(27) // '[90m')
+                call terminal_write(theme_sgr(THEME_PANEL_FOOTER))
                 write(line, '(A,I0,A,I0,A)') " [", panel%selected_index, "/", panel%num_references, "] "
                 if (panel%scroll_offset > 0) then
                     line = trim(line) // "↑"
@@ -315,7 +315,7 @@ contains
                     line = trim(line) // "↓"
                 end if
                 call terminal_write(trim(line))
-                call terminal_write(char(27) // '[0m')
+                call terminal_write(theme_reset())
             end if
         end if
 
@@ -328,7 +328,7 @@ contains
 
     subroutine render_empty_line(width)
         integer, intent(in) :: width
-        call terminal_write(char(27) // '[48;5;235m' // repeat(" ", width) // char(27) // '[0m')
+        call terminal_write(theme_sgr(THEME_PANEL) // repeat(" ", width) // theme_reset())
     end subroutine render_empty_line
 
     function references_panel_handle_key(panel, key) result(handled)

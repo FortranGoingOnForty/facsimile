@@ -14,8 +14,15 @@ module renderer_module
                               drag_candidate_gid
     use clickable_region_module, only: regions_begin_frame, region_add, REGION_TAB, &
                                        region_at, clickable_region_t, &
-                                       REGION_TAB_SCROLL, &
+                                       REGION_TAB_SCROLL, REGION_NEW_TAB, &
                                        REGION_FUSS_TOGGLE
+    use theme_module, only: THEME_ACCENT, THEME_BORDER, THEME_BORDER_FOCUS, THEME_CURRENT_LINE, &
+        THEME_GHOST, THEME_HINT, THEME_LINE_NUMBER, THEME_LINE_NUMBER_ACTIVE, THEME_MUTED, &
+        THEME_PANEL, THEME_PANEL_FOOTER, THEME_PANEL_HEADER, THEME_PANEL_SELECTION, &
+        THEME_SEARCH_MATCH, THEME_SELECTION, THEME_SELECTION_INACTIVE, THEME_STATUS, &
+        THEME_STATUS_ACCENT, THEME_TAB_ACTIVE, THEME_TAB_BAR, &
+        THEME_TAB_DRAG, THEME_TAB_INACTIVE, THEME_TAB_MODIFIED, THEME_TAB_ORPHAN, &
+        theme_background_sgr, theme_glyph, theme_paint, theme_reset, theme_sgr
     use context_menu_module, only: render_context_menu, is_context_menu_visible
     use group_picker_module, only: render_group_picker, is_group_picker_visible
     use fortress_navigator_module, only: render_fortress, is_fortress_visible
@@ -220,6 +227,7 @@ module renderer_module
         character(len=192) :: label = ''
         integer :: payload = 0
         logical :: dim = .false.       ! drawn grey (an orphan tab)
+        logical :: modified = .false.
     end type strip_entry_t
 
     type :: strip_span_t
@@ -431,11 +439,11 @@ contains
 
                         if (buffer_line == editor%cursors(editor%active_cursor)%line) then
                             ! Highlight current line number
-                            call terminal_write(char(27) // '[1;33m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
-                                              // char(27) // '[0m ')
+                            call terminal_write(theme_paint(THEME_LINE_NUMBER_ACTIVE, &
+                                adjustl(line_num_str(1:LINE_NUMBER_WIDTH))) // ' ')
                         else
-                            call terminal_write(char(27) // '[90m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
-                                              // char(27) // '[0m ')
+                            call terminal_write(theme_paint(THEME_LINE_NUMBER, &
+                                adjustl(line_num_str(1:LINE_NUMBER_WIDTH))) // ' ')
                         end if
                     else
                         ! Empty line number area for lines beyond file
@@ -1096,19 +1104,26 @@ contains
                 ! match indistinguishable from any other selected text.
                 ! Bold black on orange reads at a glance against the plain
                 ! yellow of the rest.
-                style = char(27) // '[1m' // char(27) // '[30m' // char(27) // '[48;5;208m'
+                style = theme_sgr(THEME_SEARCH_MATCH)
             else if (in_selection) then
                 ! Selected text: reverse video
-                style = char(27) // '[7m'
+                style = theme_sgr(THEME_SELECTION)
             else if (is_bracket_match) then
-                ! Matching brackets: cyan background
-                style = char(27) // '[46m'
+                style = theme_sgr(THEME_STATUS_ACCENT)
             else if (is_search_match) then
                 ! Search matches: yellow background (+ syntax color)
-                style = token_color // char(27) // '[43m'
+                if (len(token_color) > 0) then
+                    style = token_color // theme_background_sgr(THEME_SEARCH_MATCH)
+                else
+                    style = theme_sgr(THEME_SEARCH_MATCH)
+                end if
             else if (is_current_line) then
                 ! Current line: subtle background (+ syntax color)
-                style = token_color // char(27) // '[48;5;236m'
+                if (len(token_color) > 0) then
+                    style = token_color // theme_background_sgr(THEME_CURRENT_LINE)
+                else
+                    style = theme_sgr(THEME_CURRENT_LINE)
+                end if
             else
                 ! Syntax color only (empty for plain text)
                 style = token_color
@@ -1197,9 +1212,9 @@ contains
             end do
 
             if (in_selection) then
-                style = char(27) // '[7m'
+                style = theme_sgr(THEME_SELECTION)
             else if (is_current_line) then
-                style = char(27) // '[48;5;236m'
+                style = theme_sgr(THEME_CURRENT_LINE)
             else
                 style = ''
             end if
@@ -1252,6 +1267,7 @@ contains
         logical, intent(in), optional :: match_case_sens
         character(len=256) :: status_left, status_center, status_right
         character(len=:), allocatable :: status_bar
+        character(len=:), allocatable :: status_tail
         character(len=200) :: fname_disp
         integer :: padding_len, left_pad, right_pad, fname_len
         type(cursor_t) :: cursor
@@ -1378,20 +1394,17 @@ contains
         ! arrives is a control you cannot rely on. It stands in for the old
         ! 'ctrl-b:fuss' text: same meaning, and it also shows which way the
         ! tree will move and can be clicked.
-        status_left = chevron // ' | ' // trim(status_left)
+        status_tail = trim(status_left)
+        status_left = chevron // ' | ' // status_tail
 
         ! Create full status bar with center text.
         !
-        ! Measured in display cells, not bytes: status_right now ends with the
-        ! chevron, which is two bytes wide and one cell wide. Padding by bytes
-        ! would leave the bar a cell short and put the chevron one column left
-        ! of the edge -- and two columns left if the filename also held a
-        ! multibyte character, which would move it out of the clickable region
-        ! claimed below. The narrow fallbacks further down stay byte-based, as
-        ! they were, since they do not place the chevron at all.
-        padding_len = editor%screen_cols - utf8_char_count(trim(status_left)) &
-                      - utf8_char_count(trim(status_center)) &
-                      - utf8_char_count(trim(status_right))
+        ! Measured in display cells, not bytes. The leading chevron and a path
+        ! containing wide characters must occupy the same columns the padding
+        ! calculation reserves for them.
+        padding_len = editor%screen_cols - utf8_display_width(trim(status_left)) &
+                      - utf8_display_width(trim(status_center)) &
+                      - utf8_display_width(trim(status_right))
         if (padding_len > 0) then
             ! Distribute padding around center text
             left_pad = padding_len / 2
@@ -1404,7 +1417,9 @@ contains
             if (show_match_hint) then
                 ! Show: left + hint + minimal right (just line/col, no cursor count)
                 write(status_right, '(a,i0,a,i0,a)') 'Ln ', cursor%line, ',Col ', cursor%column, ' '
-                padding_len = editor%screen_cols - len_trim(status_left) - len_trim(status_center) - len_trim(status_right)
+                padding_len = editor%screen_cols - utf8_display_width(trim(status_left)) - &
+                    utf8_display_width(trim(status_center)) - &
+                    utf8_display_width(trim(status_right))
                 if (padding_len > 0) then
                     left_pad = padding_len / 2
                     right_pad = padding_len - left_pad
@@ -1412,13 +1427,16 @@ contains
                                 trim(status_center) // repeat(' ', right_pad) // trim(status_right)
                 else
                     ! Still not enough space, show hint + right only
-                    padding_len = editor%screen_cols - len_trim(status_center) - len_trim(status_right)
+                    padding_len = editor%screen_cols - &
+                        utf8_display_width(trim(status_center)) - &
+                        utf8_display_width(trim(status_right))
                     if (padding_len > 0) then
                         status_bar = repeat(' ', padding_len / 2) // trim(status_center) // &
                                     repeat(' ', padding_len - padding_len / 2) // trim(status_right)
                     else
                         ! Absolute minimum: just show the hint centered
-                        padding_len = editor%screen_cols - len_trim(status_center)
+                        padding_len = editor%screen_cols - &
+                            utf8_display_width(trim(status_center))
                         if (padding_len > 0) then
                             left_pad = padding_len / 2
                             status_bar = repeat(' ', left_pad) // trim(status_center) // &
@@ -1430,11 +1448,47 @@ contains
                 end if
             else
                 ! Normal mode: just show left and right
-                padding_len = editor%screen_cols - len_trim(status_left) - len_trim(status_right)
+                padding_len = editor%screen_cols - utf8_display_width(trim(status_left)) - &
+                    utf8_display_width(trim(status_right))
                 if (padding_len > 0) then
                     status_bar = trim(status_left) // repeat(' ', padding_len) // trim(status_right)
                 else
-                    status_bar = trim(status_left)
+                    ! Absolute paths on macOS can be longer than the entire
+                    ! terminal. Coordinates remain actionable information, so
+                    ! reserve their cells and retain the filename end of the
+                    ! path. The Fuss control remains at column 1.
+                    block
+                        character(len=:), allocatable :: shown_left, shown_tail, ch
+                        integer :: left_cells, left_budget, right_cells
+                        integer :: prefix_cells, tail_budget, tail_cells
+                        integer :: ci, ch_cells
+                        right_cells = utf8_display_width(trim(status_right))
+                        left_budget = max(0, editor%screen_cols - right_cells)
+                        prefix_cells = utf8_display_width(chevron // ' | ')
+                        if (utf8_display_width(trim(status_left)) <= left_budget) then
+                            shown_left = trim(status_left)
+                            left_cells = utf8_display_width(shown_left)
+                        else if (left_budget > prefix_cells) then
+                            tail_budget = max(0, left_budget - prefix_cells - 1)
+                            shown_tail = ''
+                            tail_cells = 0
+                            do ci = utf8_char_count(status_tail), 1, -1
+                                ch = utf8_char_at(status_tail, ci)
+                                ch_cells = utf8_display_width(ch)
+                                if (tail_cells + ch_cells > tail_budget) exit
+                                shown_tail = ch // shown_tail
+                                tail_cells = tail_cells + ch_cells
+                            end do
+                            shown_left = chevron // ' | ' // '…' // shown_tail
+                            left_cells = prefix_cells + 1 + tail_cells
+                        else
+                            call clip_to_cells(chevron // ' | ', left_budget, &
+                                               shown_left, left_cells)
+                        end if
+                        status_bar = shown_left // &
+                            repeat(' ', max(0, left_budget - left_cells)) // &
+                            trim(status_right)
+                    end block
                 end if
             end if
         end if
@@ -1518,9 +1572,9 @@ contains
             line = line // repeat(' ', budget - len(line))
         end if
 
-        call terminal_write(char(27) // '[7m')  ! Inverse video
+        call terminal_write(theme_sgr(THEME_STATUS))
         call terminal_write(line)
-        call terminal_write(char(27) // '[0m')  ! Reset attributes
+        call terminal_write(theme_reset())
     end subroutine write_status_message
 
     ! Number of display cells between the viewport's first visible character
@@ -1659,8 +1713,8 @@ contains
 
                         ! Inactive cursor - draw character with reverse video
                         call terminal_move_cursor(screen_row, screen_col)
-                        call terminal_write(char(27) // '[7m' // cursor_char)  ! Inverse video
-                        call terminal_write(char(27) // '[0m')   ! Reset
+                        call terminal_write(theme_sgr(THEME_SELECTION) // &
+                                            cursor_char // theme_reset())
                     end if
                 end if
             end do
@@ -1957,7 +2011,7 @@ contains
 
         do row = start_row, end_row
             call terminal_move_cursor(row, col)
-            call terminal_write(char(27) // '[90m│' // char(27) // '[0m')  ! Gray vertical line
+            call terminal_write(theme_paint(THEME_BORDER, '│'))
         end do
     end subroutine render_vertical_separator
 
@@ -2099,11 +2153,11 @@ contains
             if (buffer_line <= line_count) then
                 write(line_num_str, '(i5)') buffer_line
                 if (buffer_line == editor%cursors(editor%active_cursor)%line) then
-                    call terminal_write(char(27) // '[1;33m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
-                                      // char(27) // '[0m ')
+                    call terminal_write(theme_paint(THEME_LINE_NUMBER_ACTIVE, &
+                        adjustl(line_num_str(1:LINE_NUMBER_WIDTH))) // ' ')
                 else
-                    call terminal_write(char(27) // '[90m' // adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) &
-                                      // char(27) // '[0m ')
+                    call terminal_write(theme_paint(THEME_LINE_NUMBER, &
+                        adjustl(line_num_str(1:LINE_NUMBER_WIDTH))) // ' ')
                 end if
             else
                 call terminal_write(repeat(' ', line_num_width))
@@ -2287,11 +2341,10 @@ contains
         do screen_row = content_start_row, content_start_row + content_height - 1
             call terminal_move_cursor(screen_row, col)
             if (.not. pane%is_active) then
-                ! Subtle dark background for inactive panes
-                call terminal_write(char(27) // '[48;5;234m')  ! Very dark gray
+                call terminal_write(theme_sgr(THEME_SELECTION_INACTIVE))
             end if
             call terminal_write(repeat(' ', width))
-            call terminal_write(char(27) // '[0m')
+            call terminal_write(theme_reset())
         end do
 
         ! Render buffer content with pane's viewport (use pane's own buffer)
@@ -2307,14 +2360,14 @@ contains
                 ! Render empty line number area if line numbers are enabled
                 if (show_line_numbers) then
                     if (.not. pane%is_active) then
-                        call terminal_write(char(27) // '[48;5;234m')  ! Dark gray for inactive
+                        call terminal_write(theme_sgr(THEME_SELECTION_INACTIVE))
                     end if
                     call terminal_write(repeat(' ', LINE_NUMBER_WIDTH + 1))
                 end if
 
                 ! Render the ~ indicator
                 if (.not. pane%is_active) then
-                    call terminal_write(char(27) // '[48;5;234m')  ! Dark gray for inactive
+                    call terminal_write(theme_sgr(THEME_SELECTION_INACTIVE))
                 end if
                 call terminal_write('~')
 
@@ -2328,7 +2381,7 @@ contains
                         call terminal_write(repeat(' ', width - 1))
                     end if
                 end if
-                call terminal_write(char(27) // '[0m')
+                call terminal_write(theme_reset())
             end if
         end do
     end subroutine render_single_pane
@@ -2375,11 +2428,9 @@ contains
 
         ! Draw header with reverse video (like tab bar)
         if (pane%is_active) then
-            ! Active pane: bright reverse video
-            call terminal_write(char(27) // '[7m')  ! Reverse video
+            call terminal_write(theme_sgr(THEME_TAB_ACTIVE))
         else
-            ! Inactive pane: dimmed reverse video
-            call terminal_write(char(27) // '[2;7m')  ! Dim + reverse video
+            call terminal_write(theme_sgr(THEME_TAB_INACTIVE))
         end if
 
         ! Draw the header line
@@ -2388,7 +2439,7 @@ contains
         call terminal_write(repeat('─', padding_right))
 
         ! Reset attributes
-        call terminal_write(char(27) // '[0m')
+        call terminal_write(theme_reset())
     end subroutine render_pane_header
 
     !> The file a pane is showing, for keying the highlight scan.
@@ -2448,24 +2499,24 @@ contains
             if (pane%is_active) then
                 ! Active pane: line number on the default background.
                 if (is_current_line) then
-                    call terminal_write(char(27) // '[1;33m' // &
-                        adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) // char(27) // '[0m ')
+                    call terminal_write(theme_paint(THEME_LINE_NUMBER_ACTIVE, &
+                        adjustl(line_num_str(1:LINE_NUMBER_WIDTH))) // ' ')
                 else
-                    call terminal_write(char(27) // '[90m' // &
-                        adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) // char(27) // '[0m ')
+                    call terminal_write(theme_paint(THEME_LINE_NUMBER, &
+                        adjustl(line_num_str(1:LINE_NUMBER_WIDTH))) // ' ')
                 end if
             else
                 ! Inactive pane: keep the dim background continuous across the
                 ! whole gutter (number + separator) so no default-background
                 ! stripe shows through, and use a fixed gray (not [90m, whose
                 ! shade varies by terminal and can vanish into the background).
-                call terminal_write(char(27) // '[48;5;234m' // char(27) // '[38;5;245m' // &
-                    adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) // ' ' // char(27) // '[0m')
+                call terminal_write(theme_sgr(THEME_SELECTION_INACTIVE) // &
+                    adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) // ' ' // theme_reset())
             end if
 
             ! Continue with pane background for content
             if (.not. pane%is_active) then
-                call terminal_write(char(27) // '[48;5;234m')  ! Dark gray background
+                call terminal_write(theme_sgr(THEME_SELECTION_INACTIVE))
             end if
 
             content_width = width - LINE_NUMBER_WIDTH - 1
@@ -2618,16 +2669,23 @@ contains
             ! Determine this character's style (priority order preserved)
             if (in_selection) then
                 ! Selected text: reverse video
-                style = char(27) // '[7m'
+                style = theme_sgr(THEME_SELECTION)
             else if (is_bracket_match) then
-                ! Matching brackets: cyan background
-                style = char(27) // '[46m'
+                style = theme_sgr(THEME_STATUS_ACCENT)
             else if (pane%is_active .and. is_current_line) then
                 ! Current line background (+ syntax color)
-                style = token_color // char(27) // '[48;5;237m'
+                if (len(token_color) > 0) then
+                    style = token_color // theme_background_sgr(THEME_CURRENT_LINE)
+                else
+                    style = theme_sgr(THEME_CURRENT_LINE)
+                end if
             else if (.not. pane%is_active) then
                 ! Inactive pane background (+ syntax color)
-                style = token_color // char(27) // '[48;5;234m'
+                if (len(token_color) > 0) then
+                    style = token_color // theme_background_sgr(THEME_SELECTION_INACTIVE)
+                else
+                    style = theme_sgr(THEME_SELECTION_INACTIVE)
+                end if
             else
                 ! Syntax color only (empty for plain text)
                 style = token_color
@@ -2647,9 +2705,9 @@ contains
         ! Fill remaining width with spaces
         do while (display_col < content_width)
             if (.not. pane%is_active) then
-                style = char(27) // '[48;5;234m'
+                style = theme_sgr(THEME_SELECTION_INACTIVE)
             else if (is_current_line) then
-                style = char(27) // '[48;5;237m'
+                style = theme_sgr(THEME_CURRENT_LINE)
             else
                 style = ''
             end if
@@ -2677,9 +2735,7 @@ contains
         ! Draw vertical separator with distinct visual
         do row = start_row, start_row + height - 1
             call terminal_move_cursor(row, col)
-            ! Use reverse video for a solid separator
-            call terminal_write(char(27) // '[7m ')  ! Reverse video space
-            call terminal_write(char(27) // '[0m')   ! Reset
+            call terminal_write(theme_sgr(THEME_BORDER_FOCUS) // ' ' // theme_reset())
         end do
     end subroutine render_pane_separator
 
@@ -2774,8 +2830,8 @@ contains
 
                         ! Inactive cursor - draw character with reverse video
                         call terminal_move_cursor(screen_row, screen_col)
-                        call terminal_write(char(27) // '[7m' // cursor_char)  ! Inverse video
-                        call terminal_write(char(27) // '[0m')   ! Reset
+                        call terminal_write(theme_sgr(THEME_SELECTION) // &
+                                            cursor_char // theme_reset())
                     end if
                 end if
             end do
@@ -2941,8 +2997,7 @@ contains
         if (len(shown) == 0) return
 
         call terminal_move_cursor(screen_row, screen_col)
-        call terminal_write(char(27) // '[2m' // char(27) // '[90m' // &
-                            shown // char(27) // '[0m')
+        call terminal_write(theme_paint(THEME_GHOST, shown))
 
         ! Mid-line: redraw the real text right of the cursor, shifted past
         ! the suggestion, so nothing is hidden while the ghost is up.
@@ -3012,8 +3067,7 @@ contains
             ! leaving the number the base render put there would duplicate it
             ! against the real line pushed down below.
             if (gutter > 0) call terminal_write(repeat(' ', gutter))
-            call terminal_write(char(27) // '[2m' // char(27) // '[90m' // &
-                                shown // char(27) // '[0m')
+            call terminal_write(theme_sgr(THEME_GHOST) // shown // theme_reset())
             ! Pad to the pane's width rather than ESC[K.
             !
             ! [K clears to the end of the TERMINAL LINE, which in a vertical
@@ -3057,9 +3111,8 @@ contains
         if (gutter <= 0) return
         if (buffer_line <= line_count) then
             write(num_str, '(i5)') buffer_line
-            call terminal_write(char(27) // '[90m' // &
-                                adjustl(num_str(1:LINE_NUMBER_WIDTH)) // &
-                                char(27) // '[0m ')
+            call terminal_write(theme_paint(THEME_LINE_NUMBER, &
+                                adjustl(num_str(1:LINE_NUMBER_WIDTH))) // ' ')
         else
             call terminal_write(repeat(' ', gutter))
         end if
@@ -3075,8 +3128,7 @@ contains
         write(marker, '(a,i0,a)') ' +', extra, ' more (Tab)'
         if (col0 + cwidth - 1 - len_trim(marker) < col0) return
         call terminal_move_cursor(anchor_row, col0 + cwidth - len_trim(marker))
-        call terminal_write(char(27) // '[2m' // char(27) // '[90m' // &
-                            trim(marker) // char(27) // '[0m')
+        call terminal_write(theme_paint(THEME_HINT, trim(marker)))
     end subroutine render_block_overflow_marker
 
     ! Last row the editor may draw content on: above the status bar, and above
@@ -3477,7 +3529,8 @@ contains
         integer(int32) :: seen_gids(STRIP_MAX_ENTRIES)
         integer :: n_seen
         logical :: more_left, more_right, cand
-        character(len=:), allocatable :: shown, base
+        logical :: compact_labels
+        character(len=:), allocatable :: shown, base, marker
         character(len=16) :: more_lbl
 
         tab_count = size(editor%tabs)
@@ -3495,6 +3548,23 @@ contains
             max_width = editor%screen_cols
         end if
         if (max_width < 1) return
+        ! Groups collapse many tabs into one row-one entry. Base density on
+        ! what the strip will actually draw, otherwise a bar with two groups
+        ! and two loose tabs is needlessly reduced to bare numbers merely
+        ! because the groups contain several members.
+        n_entries = 0
+        n_seen = 0
+        do i = 1, tab_count
+            gid = editor%tabs(i)%group_id
+            if (gid == 0) then
+                n_entries = n_entries + 1
+            else if (.not. group_seen(gid, seen_gids, n_seen)) then
+                n_seen = n_seen + 1
+                seen_gids(n_seen) = gid
+                n_entries = n_entries + 1
+            end if
+        end do
+        compact_labels = max_width / max(1, n_entries) < 12
 
         ! Build row 1. A group occupies ONE entry, placed where its first
         ! member sits, and its members do not appear individually -- they get
@@ -3505,6 +3575,7 @@ contains
         ! second region kind for the ungrouped case.
         g_slot_n(1) = 0
         n_entries = 0
+        n_seen = 0
         active_entry = 0
         do i = 1, tab_count
             if (n_entries >= STRIP_MAX_ENTRIES) exit
@@ -3514,7 +3585,7 @@ contains
                     n_seen = n_seen + 1
                     seen_gids(n_seen) = gid
                     n_entries = n_entries + 1
-                    entries(n_entries)%label = '[' // group_label(editor, gid) // ']'
+                    entries(n_entries)%label = ' ' // group_label(editor, gid) // ' '
                     entries(n_entries)%payload = -gid
                     entries(n_entries)%dim = .false.
                     if (gid == active_group_id(editor)) active_entry = n_entries
@@ -3523,10 +3594,19 @@ contains
             end if
             base = basename_of(editor%tabs(i)%filename)
             n_entries = n_entries + 1
-            write(entries(n_entries)%label, '(a,i0,a,a,a,a)') '[', i, ': ', trim(base), &
-                merge('*', ' ', editor%tabs(i)%modified), ']'
+            marker = ''
+            if (editor%tabs(i)%modified) marker = theme_glyph('modified')
+            ! Dense bars may reduce inactive tabs to their index, but the
+            ! active document must remain identifiable at every width.
+            if (compact_labels .and. i /= editor%active_tab_index) then
+                write(entries(n_entries)%label, '(a,i0,a,a)') ' ', i, trim(marker), ' '
+            else
+                write(entries(n_entries)%label, '(a,i0,a,a,a,a)') ' ', i, ' ', &
+                    trim(base), trim(marker), ' '
+            end if
             entries(n_entries)%payload = i
             entries(n_entries)%dim = editor%tabs(i)%is_orphan
+            entries(n_entries)%modified = editor%tabs(i)%modified
             if (i == editor%active_tab_index) active_entry = n_entries
         end do
 
@@ -3552,11 +3632,11 @@ contains
         g_tabbar_width = max_width
 
         call terminal_move_cursor(1, start_column)
-        call terminal_write(repeat(' ', max_width))
+        call terminal_write(theme_sgr(THEME_TAB_BAR) // repeat(' ', max_width) // theme_reset())
 
         if (more_left) then
             call terminal_move_cursor(1, start_column)
-            call terminal_write(char(27) // '[90m' // '<' // char(27) // '[0m')
+            call terminal_write(theme_paint(THEME_MUTED, theme_glyph('chevron_left')))
             call region_add(REGION_TAB_SCROLL, 1, 1, start_column, start_column, -1)
         end if
 
@@ -3573,13 +3653,19 @@ contains
                 cand = .false.
                 if (drag_candidate_gid() /= 0 .and. entries(sp%idx)%payload < 0) &
                     cand = (int(-entries(sp%idx)%payload, int32) == drag_candidate_gid())
-                if (entries(sp%idx)%dim) call terminal_write(char(27) // '[90m')
-                if (cand) call terminal_write(char(27) // '[1;7;38;5;114m')
-                if (sp%idx == active_entry .and. .not. cand) &
-                    call terminal_write(char(27) // '[7m')
+                if (cand) then
+                    call terminal_write(theme_sgr(THEME_TAB_DRAG))
+                else if (sp%idx == active_entry) then
+                    call terminal_write(theme_sgr(THEME_TAB_ACTIVE))
+                else if (entries(sp%idx)%dim) then
+                    call terminal_write(theme_sgr(THEME_TAB_ORPHAN))
+                else if (entries(sp%idx)%modified) then
+                    call terminal_write(theme_sgr(THEME_TAB_MODIFIED))
+                else
+                    call terminal_write(theme_sgr(THEME_TAB_INACTIVE))
+                end if
                 call terminal_write(shown)
-                if (entries(sp%idx)%dim .or. sp%idx == active_entry .or. cand) &
-                    call terminal_write(char(27) // '[0m')
+                call terminal_write(theme_reset())
 
                 ! The span is in CELLS, from the same layout that drew it, so a
                 ! multibyte filename no longer shifts every click to its right.
@@ -3597,9 +3683,20 @@ contains
             write(more_lbl, '(a,i0)') '>', n_entries - (spans(max(1, n_spans))%idx)
             col = start_column + max_width - len_trim(more_lbl)
             call terminal_move_cursor(1, col)
-            call terminal_write(char(27) // '[90m' // trim(more_lbl) // char(27) // '[0m')
+            call terminal_write(theme_paint(THEME_MUTED, trim(more_lbl)))
             call region_add(REGION_TAB_SCROLL, 1, 1, col, &
                             start_column + max_width - 1, 1)
+        else
+            if (n_spans > 0) then
+                col = start_column + spans(n_spans)%col1 + 1
+            else
+                col = start_column
+            end if
+            if (col + 2 <= start_column + max_width - 1) then
+                call terminal_move_cursor(1, col)
+                call terminal_write(theme_paint(THEME_ACCENT, ' ' // theme_glyph('add') // ' '))
+                call region_add(REGION_NEW_TAB, 1, 1, col, col + 2)
+            end if
         end if
 
         ! Row 2: the active group's members, pinned while we are inside it.
@@ -3638,7 +3735,7 @@ contains
         integer, allocatable :: members(:)
         integer :: i, n_entries, n_spans, active_entry, col, used
         logical :: more_left, more_right
-        character(len=:), allocatable :: shown, base
+        character(len=:), allocatable :: shown, base, marker
         character(len=16) :: more_lbl
 
         if (gid == 0 .or. width < 1) return
@@ -3651,10 +3748,12 @@ contains
         active_entry = 0
         do i = 1, n_entries
             base = basename_of(editor%tabs(members(i))%filename)
-            write(entries(i)%label, '(a,a,a)') ' ', trim(base), &
-                merge('*', ' ', editor%tabs(members(i))%modified)
+            marker = ''
+            if (editor%tabs(members(i))%modified) marker = theme_glyph('modified')
+            write(entries(i)%label, '(a,a,a,a)') ' ', trim(base), trim(marker), ' '
             entries(i)%payload = members(i)
             entries(i)%dim = editor%tabs(members(i))%is_orphan
+            entries(i)%modified = editor%tabs(members(i))%modified
             if (members(i) == editor%active_tab_index) active_entry = i
         end do
 
@@ -3674,11 +3773,11 @@ contains
         g_last_width(2) = width
 
         call terminal_move_cursor(row, start_col)
-        call terminal_write(repeat(' ', width))
+        call terminal_write(theme_sgr(THEME_TAB_BAR) // repeat(' ', width) // theme_reset())
 
         if (more_left) then
             call terminal_move_cursor(row, start_col)
-            call terminal_write(char(27) // '[90m' // '<' // char(27) // '[0m')
+            call terminal_write(theme_paint(THEME_MUTED, theme_glyph('chevron_left')))
             call region_add(REGION_TAB_SCROLL, row, row, start_col, start_col, -2)
         end if
 
@@ -3687,14 +3786,17 @@ contains
                 call clip_to_cells(trim(entries(sp%idx)%label), MAX_ENTRY_CELLS, &
                                    shown, used)
                 call terminal_move_cursor(row, start_col + sp%col0 - 1)
-                if (entries(sp%idx)%dim) call terminal_write(char(27) // '[90m')
                 if (sp%idx == active_entry) then
-                    call terminal_write(char(27) // '[7m')
+                    call terminal_write(theme_sgr(THEME_TAB_ACTIVE))
+                else if (entries(sp%idx)%dim) then
+                    call terminal_write(theme_sgr(THEME_TAB_ORPHAN))
+                else if (entries(sp%idx)%modified) then
+                    call terminal_write(theme_sgr(THEME_TAB_MODIFIED))
                 else
-                    call terminal_write(char(27) // '[2m')   ! members read as secondary
+                    call terminal_write(theme_sgr(THEME_TAB_INACTIVE))
                 end if
                 call terminal_write(shown)
-                call terminal_write(char(27) // '[0m')
+                call terminal_write(theme_reset())
                 call region_add(REGION_TAB, row, row, &
                                 start_col + sp%col0 - 1, &
                                 start_col + sp%col1 - 1, &
@@ -3708,7 +3810,7 @@ contains
             write(more_lbl, '(a,i0)') '>', n_entries - spans(max(1, n_spans))%idx
             col = start_col + width - len_trim(more_lbl)
             call terminal_move_cursor(row, col)
-            call terminal_write(char(27) // '[90m' // trim(more_lbl) // char(27) // '[0m')
+            call terminal_write(theme_paint(THEME_MUTED, trim(more_lbl)))
             call region_add(REGION_TAB_SCROLL, row, row, col, &
                             start_col + width - 1, 2)
         end if
@@ -3809,8 +3911,8 @@ contains
             call terminal_move_cursor(r, c0)
             ! A dim reverse block: visible over text without hiding which
             ! text it is about to sit next to.
-            call terminal_write(char(27) // '[7;2m' // repeat(' ', w) // &
-                                char(27) // '[0m')
+            call terminal_write(theme_sgr(THEME_SELECTION_INACTIVE) // &
+                                repeat(' ', w) // theme_reset())
         end do
     end subroutine render_split_preview
 
@@ -3854,7 +3956,7 @@ contains
         call terminal_move_cursor(r, c)
         ! Reverse video on a dim background: it reads as lifted off the bar
         ! rather than as another entry sitting on it.
-        call terminal_write(char(27) // '[7;2m' // text // char(27) // '[0m')
+        call terminal_write(theme_sgr(THEME_TAB_DRAG) // text // theme_reset())
     end subroutine render_drag_ghost
 
     !> Remember that entry `slot` of `strip` was drawn at these columns.
@@ -4250,20 +4352,17 @@ contains
         character(len=256) :: line
         character(len=100) :: header, location_str
         character(len=:), allocatable :: filename_display
-        character(len=1), parameter :: ESC = achar(27)
 
         ! Clear panel area
         do row = start_row, end_row
             call terminal_move_cursor(row, start_col)
-            call terminal_write(repeat(' ', width))
+            call terminal_write(theme_sgr(THEME_PANEL) // repeat(' ', width) // theme_reset())
         end do
 
         row = start_row
 
         ! Header with symbol name
         call terminal_move_cursor(row, start_col)
-        call terminal_write(ESC // '[48;5;237m')  ! Dark background
-
         if (allocated(panel%symbol_name)) then
             write(header, '(A,A,A,I0,A)') " References: ", trim(panel%symbol_name), &
                 " (", panel%num_references, ") "
@@ -4276,33 +4375,36 @@ contains
             header = header(1:width-3) // "..."
         end if
 
-        call terminal_write(ESC // '[1m' // trim(header))
+        call terminal_write(theme_sgr(THEME_PANEL_HEADER) // trim(header))
         ! Pad rest of header line
         if (len_trim(header) < width) then
             call terminal_write(repeat(' ', width - len_trim(header)))
         end if
-        call terminal_write(ESC // '[0m')
+        call terminal_write(theme_reset())
         row = row + 1
 
         ! Separator
         call terminal_move_cursor(row, start_col)
-        call terminal_write(ESC // '[48;5;237m' // repeat("─", width) // ESC // '[0m')
+        call terminal_write(theme_sgr(THEME_PANEL_HEADER) // &
+                            repeat("─", width) // theme_reset())
         row = row + 1
 
         ! Legend
         call terminal_move_cursor(row, start_col)
-        call terminal_write(ESC // '[90m')
+        call terminal_write(theme_sgr(THEME_PANEL_FOOTER))
         if (width >= 31) then
             call terminal_write('j/k:nav  enter:jump  esc:close')
         else
             call terminal_write('j/k enter esc')
         end if
-        call terminal_write(ESC // '[0m')
+        if (width > 0) call terminal_write(repeat(' ', max(0, width - min(width, 31))))
+        call terminal_write(theme_reset())
         row = row + 1
 
         ! Separator
         call terminal_move_cursor(row, start_col)
-        call terminal_write(ESC // '[90m' // repeat("─", width) // ESC // '[0m')
+        call terminal_write(theme_sgr(THEME_PANEL_FOOTER) // &
+                            repeat("─", width) // theme_reset())
         row = row + 1
 
         ! Calculate max visible items
@@ -4311,12 +4413,11 @@ contains
         ! Display references
         if (panel%num_references == 0) then
             call terminal_move_cursor(row, start_col)
-            call terminal_write(ESC // '[48;5;235m' // ESC // '[90m')
-            call terminal_write(" No references found")
+            call terminal_write(theme_sgr(THEME_PANEL_FOOTER) // " No references found")
             if (20 < width) then
                 call terminal_write(repeat(' ', width - 20))
             end if
-            call terminal_write(ESC // '[0m')
+            call terminal_write(theme_reset())
         else
             do i = 1, min(max_visible, panel%num_references - panel%scroll_offset)
                 visible_index = panel%scroll_offset + i
@@ -4326,9 +4427,9 @@ contains
 
                 ! Highlight selected item
                 if (visible_index == panel%selected_index) then
-                    call terminal_write(ESC // '[48;5;240m')  ! Highlight background
+                    call terminal_write(theme_sgr(THEME_PANEL_SELECTION))
                 else
-                    call terminal_write(ESC // '[48;5;235m')  ! Normal background
+                    call terminal_write(theme_sgr(THEME_PANEL))
                 end if
 
                 ! Format location string
@@ -4358,7 +4459,7 @@ contains
                 if (len_trim(line) < width) then
                     call terminal_write(repeat(' ', width - len_trim(line)))
                 end if
-                call terminal_write(ESC // '[0m')
+                call terminal_write(theme_reset())
 
                 row = row + 1
                 if (row > end_row) exit

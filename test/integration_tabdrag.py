@@ -134,7 +134,7 @@ class Session:
 
     def order(self):
         """Tab names in bar order, ignoring the numbering."""
-        return re.findall(r"\[\d+:\s*([\w.]+)", self.tab_bar())
+        return re.findall(r"\d+\s+([\w.]+)", self.tab_bar())
 
     def entry_col(self, text, row=1):
         j = self.screen.display[row - 1].find(text)
@@ -715,7 +715,8 @@ def test_a_modified_tab_will_not_split_off(binary):
         s.open_all()
         # gamma.c is active; dirty it, then try to carry it to an edge.
         s.send("Z", 0.8)
-        check("*" in s.tab_bar(), "gamma.c is modified", s.tab_bar())
+        check(any(mark in s.tab_bar() for mark in ("*", "●")),
+              "gamma.c is modified", s.tab_bar())
 
         carry_to(s, "gamma.c", COLS - 3, 12)
         s.child.send(f"\x1b[<0;{COLS - 3};12m")
@@ -731,10 +732,10 @@ def test_a_modified_tab_will_not_split_off(binary):
 def test_the_bar_never_renders_torn(binary):
     """Reported: tabs rendering in pieces while dragging over them.
 
-    The ghost was drawn ON the tab bar, overwriting the entries underneath --
-    [1: a alpha.c [3: gamma.c] and so on. The bar already shows where the held
-    tab will land, so a label on top of it was redundant as well as
-    destructive. Balanced brackets is the cheap invariant that catches it.
+    The ghost was drawn ON the tab bar, overwriting the entries underneath.
+    The bar already shows where the held tab will land, so a label on top of
+    it was redundant as well as destructive. A complete unique name list is
+    the invariant that catches it.
     """
     print("\nThe bar stays intact while a tab is carried over it")
     s = Session(binary, n=4)
@@ -748,7 +749,7 @@ def test_the_bar_never_renders_torn(binary):
             s.child.send(f"\x1b[<32;{c};1M")
             s.drain(0.07)
             bar = s.tab_bar()
-            if bar.count("[") != bar.count("]"):
+            if sorted(s.order()) != sorted(s.names):
                 torn.append((c, bar))
         check(not torn, "no torn entry at any column",
               f"{len(torn)} of them, first: {torn[0] if torn else ''}")
@@ -782,10 +783,8 @@ def test_no_ghost_is_left_behind(binary):
         s.child.send(f"\x1b[<0;{COLS - 4};1m")
         s.drain(1.2)
         bar = s.tab_bar()
-        check(bar.count("[") == bar.count("]"), "the bar is intact", bar)
-        # The ghost reads " alpha.c " with no brackets; a bare name outside
-        # any entry is the stranded label.
-        check("alpha.c ]" in bar or "alpha.c*]" in bar,
+        check(sorted(s.order()) == sorted(s.names), "the bar is intact", bar)
+        check(bar.count("alpha.c") == 1,
               "alpha.c appears only as a real entry", bar)
     finally:
         s.close()

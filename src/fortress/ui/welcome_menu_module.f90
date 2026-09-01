@@ -8,6 +8,9 @@ module welcome_menu_module
     use input_handler_module, only: get_key_input
     use favorites_module, only: favorite_t, favorites_load, favorites_remove
     use recents_module, only: recent_t, recents_load, recents_remove
+    use theme_module, only: THEME_ACCENT, THEME_BORDER, THEME_HINT, THEME_MUTED, &
+        THEME_PANEL, THEME_PANEL_FOOTER, THEME_PANEL_HEADER, &
+        THEME_PANEL_SELECTION, theme_reset, theme_sgr
     implicit none
     private
 
@@ -175,15 +178,15 @@ contains
         line = '╔═══════════════════════' // &
                '═══════════════════════' // &
                '══════════════════════╗'
-        call terminal_write(trim(line))
+        call terminal_write(theme_sgr(THEME_BORDER) // trim(line) // theme_reset())
         call terminal_move_cursor(2, 1)
-        write(line, '(A)') '║                     FAC - Welcome Menu                               ║'
-        call terminal_write(trim(line))
+        write(line, '(A)') '║                   FACSIMILE - Welcome Menu                           ║'
+        call terminal_write(theme_sgr(THEME_PANEL_HEADER) // trim(line) // theme_reset())
         call terminal_move_cursor(3, 1)
         line = '╚═══════════════════════' // &
                '═══════════════════════' // &
                '══════════════════════╝'
-        call terminal_write(trim(line))
+        call terminal_write(theme_sgr(THEME_BORDER) // trim(line) // theme_reset())
 
         ! View title
         call terminal_move_cursor(5, 1)
@@ -194,14 +197,14 @@ contains
             write(title, '(A,I0,A)') 'RECENT WORKSPACES (', rec_count, ' total)'
             item_count = rec_count
         end if
-        call terminal_write(trim(title))
+        call terminal_write(theme_sgr(THEME_ACCENT) // trim(title) // theme_reset())
 
         ! Separator
         call terminal_move_cursor(6, 1)
         line = '────────────────────────' // &
                '────────────────────────' // &
                '──────────────────────'
-        call terminal_write(trim(line))
+        call terminal_write(theme_sgr(THEME_BORDER) // trim(line) // theme_reset())
 
         ! List items
         visible_height = rows - 8  ! Reserve space for header and footer
@@ -216,36 +219,30 @@ contains
 
             call terminal_move_cursor(display_row, 1)
 
-            ! Check if this item is selected
-            if (actual_index == selected_index) then
-                ! Highlight selected
-                write(line, '(A)') char(27) // '[7m'  ! Reverse video
-            else
-                write(line, '(A)') ''
-            end if
-
             if (actual_index == 0) then
                 ! CURRENT DIRECTORY option
-                write(line, '(A,A,I0,A,A)') trim(line), '  [', actual_index, '] ', &
-                    'CURRENT DIRECTORY → ' // trim(cwd)
+                write(line, '(A,I0,A,A)') '  ', actual_index, '  ', &
+                    'CURRENT DIRECTORY  ' // trim(cwd)
             else
                 ! Regular items (favorites or recents)
                 if (showing_favorites) then
-                    write(line, '(A,A,I0,A,A,A,A)') trim(line), '  [', actual_index, '] ', &
-                        trim(favorites(actual_index)%label), ' → ', &
+                    write(line, '(A,I0,A,A,A,A)') '  ', actual_index, '  ', &
+                        trim(favorites(actual_index)%label), '  ', &
                         trim(favorites(actual_index)%path)
                 else
-                    write(line, '(A,A,I0,A,A,A,A)') trim(line), '  [', actual_index, '] ', &
-                        trim(recents(actual_index)%label), ' → ', &
+                    write(line, '(A,I0,A,A,A,A)') '  ', actual_index, '  ', &
+                        trim(recents(actual_index)%label), '  ', &
                         trim(recents(actual_index)%path)
                 end if
             end if
 
             if (actual_index == selected_index) then
-                write(line, '(A,A)') trim(line), char(27) // '[0m'  ! Reset
+                call terminal_write(theme_sgr(THEME_PANEL_SELECTION) // &
+                    trim(line) // repeat(' ', max(0, 72 - len_trim(line))) // theme_reset())
+            else
+                call terminal_write(theme_sgr(THEME_PANEL) // trim(line) // &
+                    repeat(' ', max(0, 72 - len_trim(line))) // theme_reset())
             end if
-
-            call terminal_write(trim(line))
             display_row = display_row + 1
         end do
 
@@ -253,9 +250,11 @@ contains
         if (item_count == 0 .and. selected_index /= 0) then
             call terminal_move_cursor(display_row, 1)
             if (showing_favorites) then
-                call terminal_write('  (No favorites yet - press ''f'' in Fortress to add)')
+                call terminal_write(theme_sgr(THEME_MUTED) // &
+                    '  (No favorites yet - press ''f'' in Fortress to add)' // theme_reset())
             else
-                call terminal_write('  (No recent workspaces)')
+                call terminal_write(theme_sgr(THEME_MUTED) // &
+                    '  (No recent workspaces)' // theme_reset())
             end if
         end if
 
@@ -264,11 +263,11 @@ contains
         line = '────────────────────────' // &
                '────────────────────────' // &
                '──────────────────────'
-        call terminal_write(trim(line))
+        call terminal_write(theme_sgr(THEME_BORDER) // trim(line) // theme_reset())
 
         call terminal_move_cursor(rows - 1, 1)
         write(line, '(A)') '↑/↓:navigate  Enter:select  8:toggle fav/recent  b:browse  ESC/q:quit'
-        call terminal_write(trim(line))
+        call terminal_write(theme_sgr(THEME_PANEL_FOOTER) // trim(line) // theme_reset())
     end subroutine render_welcome_menu
 
     !> Adjust scroll offset to keep CURRENT DIRECTORY visible

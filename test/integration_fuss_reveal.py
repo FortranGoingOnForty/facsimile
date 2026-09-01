@@ -104,7 +104,7 @@ class Tree:
         return self.screen.display[0].rstrip()
 
     def names(self):
-        return re.findall(r"\[\d+:\s*([\w.]+)", self.bar())
+        return re.findall(r"\d+\s+([\w.]+)", self.bar())
 
     def status(self):
         return self.screen.display[ROWS - 1].rstrip()

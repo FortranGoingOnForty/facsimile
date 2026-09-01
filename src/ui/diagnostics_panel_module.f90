@@ -6,6 +6,9 @@ module diagnostics_panel_module
                                   SEVERITY_INFO, SEVERITY_HINT
     use terminal_io_module, only: terminal_write, terminal_move_cursor
     use clickable_region_module, only: region_add, REGION_BLOCK
+    use theme_module, only: THEME_ERROR, THEME_HINT, THEME_INFO, THEME_MUTED, &
+        THEME_PANEL, THEME_PANEL_FOOTER, THEME_PANEL_HEADER, THEME_PANEL_SELECTION, &
+        THEME_WARNING, theme_glyph, theme_reset, theme_sgr
     implicit none
     private
 
@@ -88,7 +91,7 @@ contains
         integer :: start_col, row, i, visible_items
         character(len=256) :: line_buffer
         character(len=5) :: severity_marker
-        character(len=10) :: severity_color
+        character(len=:), allocatable :: severity_color
 
         ! Initialize line_buffer to prevent garbage characters
         line_buffer = repeat(' ', len(line_buffer))
@@ -107,14 +110,14 @@ contains
         call terminal_move_cursor(row, start_col)
 
         ! Top border with title
-        call terminal_write(char(27) // '[48;5;236m')  ! Dark background
         write(line_buffer, '(A,I0,A)') ' Diagnostics (', panel%diagnostic_count, ') '
-        call terminal_write(char(27) // '[1m' // trim(line_buffer) // char(27) // '[0m')
+        call terminal_write(theme_sgr(THEME_PANEL_HEADER) // trim(line_buffer) // &
+            repeat(' ', max(0, panel%width - len_trim(line_buffer))) // theme_reset())
 
         ! Separator
         row = row + 1
         call terminal_move_cursor(row, start_col)
-        call terminal_write(char(27) // '[48;5;236m' // repeat("─", panel%width) // char(27) // '[0m')
+        call terminal_write(theme_sgr(THEME_PANEL_HEADER) // repeat("─", panel%width) // theme_reset())
 
         ! Content area
         visible_items = min(panel%diagnostic_count, screen_rows - 3)
@@ -123,10 +126,8 @@ contains
         ! Display diagnostics or "No diagnostics" message
         if (panel%diagnostic_count == 0) then
             call terminal_move_cursor(row, start_col)
-            call terminal_write(char(27) // '[48;5;235m' // char(27) // '[90m')
-            call terminal_write(' No diagnostics found')
-            call terminal_write(char(27) // '[K')  ! Clear to end of line
-            call terminal_write(char(27) // '[0m')
+            call terminal_write(theme_sgr(THEME_PANEL) // theme_sgr(THEME_MUTED) // &
+                ' No diagnostics found' // repeat(' ', max(0, panel%width - 21)) // theme_reset())
             return
         end if
 
@@ -173,8 +174,7 @@ contains
                         screen_line = screen_line + 1
 
                         call terminal_move_cursor(row + screen_line - 1, start_col)
-                        call terminal_write(char(27) // '[48;5;240m')  ! Highlight
-                        call terminal_write(trim(severity_color))
+                        call terminal_write(theme_sgr(THEME_PANEL_SELECTION))
 
                         ! Append first portion of message (no truncation marker)
                         if (first_line_chars > 0 .and. msg_len > 0) then
@@ -192,7 +192,7 @@ contains
                         end do
 
                         call terminal_write(line_buffer(1:panel%width))
-                        call terminal_write(char(27) // '[0m')
+                        call terminal_write(theme_reset())
 
                         ! Calculate and render continuation lines for remaining message
                         remaining_len = msg_len - first_line_chars
@@ -225,9 +225,9 @@ contains
                                         cont_buffer(k:k) = ' '
                                     end do
 
-                                    call terminal_write(char(27) // '[48;5;240m')  ! Highlight
+                                    call terminal_write(theme_sgr(THEME_PANEL_SELECTION))
                                     call terminal_write(cont_buffer(1:panel%width))
-                                    call terminal_write(char(27) // '[0m')
+                                    call terminal_write(theme_reset())
                                 end block
                             end do
                         end if
@@ -236,12 +236,11 @@ contains
                     ! Not selected: single truncated line
                     screen_line = screen_line + 1
                     call terminal_move_cursor(row + screen_line - 1, start_col)
-                    call terminal_write(char(27) // '[48;5;235m')  ! Normal
-                    call terminal_write(trim(severity_color))
+                    call terminal_write(theme_sgr(THEME_PANEL) // trim(severity_color))
                     call append_truncated_message(line_buffer, &
                         panel%diagnostics(diag_idx)%message, panel%width)
                     call terminal_write(line_buffer(1:panel%width))
-                    call terminal_write(char(27) // '[0m')
+                    call terminal_write(theme_reset())
                 end if
 
                 diag_idx = diag_idx + 1
@@ -260,9 +259,7 @@ contains
             call terminal_move_cursor(screen_rows - 1, start_col + 2)
             write(line_buffer, '(A,I0,A,I0,A)') '[', panel%selected_index, '/', &
                    panel%diagnostic_count, ']'
-            call terminal_write(char(27) // '[48;5;236m')
-            call terminal_write(trim(line_buffer))
-            call terminal_write(char(27) // '[0m')
+            call terminal_write(theme_sgr(THEME_PANEL_FOOTER) // trim(line_buffer) // theme_reset())
         end if
 
         ! Claim the strip so clicks cannot reach the document behind it
@@ -274,29 +271,27 @@ contains
     subroutine render_empty_line(width)
         integer, intent(in) :: width
 
-        call terminal_write(char(27) // '[48;5;235m')  ! Dark background
-        call terminal_write(repeat(' ', width))
-        call terminal_write(char(27) // '[0m')
+        call terminal_write(theme_sgr(THEME_PANEL) // repeat(' ', width) // theme_reset())
     end subroutine render_empty_line
 
     subroutine get_severity_display(severity, marker, color)
         integer, intent(in) :: severity
         character(len=5), intent(out) :: marker
-        character(len=10), intent(out) :: color
+        character(len=:), allocatable, intent(out) :: color
 
         select case(severity)
         case(SEVERITY_ERROR)
-            marker = '●'
-            color = char(27) // '[31m'  ! Red
+            marker = theme_glyph('error')
+            color = theme_sgr(THEME_ERROR)
         case(SEVERITY_WARNING)
-            marker = '▲'
-            color = char(27) // '[33m'  ! Yellow
+            marker = theme_glyph('warning')
+            color = theme_sgr(THEME_WARNING)
         case(SEVERITY_INFO)
-            marker = '◆'
-            color = char(27) // '[36m'  ! Cyan
+            marker = theme_glyph('info')
+            color = theme_sgr(THEME_INFO)
         case(SEVERITY_HINT)
-            marker = '○'
-            color = char(27) // '[90m'  ! Gray
+            marker = theme_glyph('info')
+            color = theme_sgr(THEME_HINT)
         case default
             marker = ' '
             color = ''

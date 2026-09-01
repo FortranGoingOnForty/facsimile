@@ -90,8 +90,8 @@ class Session:
         self.drain(w)
 
     def dirty(self):
-        """Is the tab bar showing an unsaved-changes asterisk?"""
-        return "*" in self.screen.display[0]
+        """Is the tab bar showing an unsaved-changes marker?"""
+        return any(mark in self.screen.display[0] for mark in ("*", "●"))
 
     def body(self, n=3):
         return [self.screen.display[i].rstrip()[6:] for i in range(1, n + 1)]

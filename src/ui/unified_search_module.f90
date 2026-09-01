@@ -5,6 +5,8 @@ module unified_search_module
     use text_buffer_module
     use regex_module
     use utf8_module, only: utf8_char_count, utf8_char_to_byte_index, utf8_byte_to_char_index
+    use theme_module, only: THEME_PANEL_SELECTION, THEME_STATUS, &
+                            THEME_STATUS_ACCENT, theme_reset, theme_sgr
     implicit none
     private
 
@@ -1620,17 +1622,16 @@ contains
 
         call terminal_hide_cursor()
         call terminal_move_cursor(editor%screen_rows, 1)
-        ! Reverse video for the bar, normal video for the field, so the
-        ! field reads as a box you are typing into rather than more bar.
-        call terminal_write(char(27) // '[0m' // char(27) // '[7m' // head)
-        call terminal_write(char(27) // '[27m')
-        if (seed_fresh .and. active_field == 1) call terminal_write(char(27) // '[4m')
-        call terminal_write(field)
-        call terminal_write(char(27) // '[0m' // char(27) // '[7m')
-        call terminal_write(tail)
+        call terminal_write(theme_sgr(THEME_STATUS) // head)
+        if (active_field == 1) then
+            call terminal_write(theme_sgr(THEME_STATUS_ACCENT))
+        else
+            call terminal_write(theme_sgr(THEME_PANEL_SELECTION))
+        end if
+        call terminal_write(field // theme_sgr(THEME_STATUS) // tail)
         caret_col = w - len(head) - fw - len(tail)
         if (caret_col > 0) call terminal_write(repeat(' ', caret_col))
-        call terminal_write(char(27) // '[0m')
+        call terminal_write(theme_reset())
 
         ! The caret marks where the next character lands.
         caret_col = len(head) + min(shown, fw) + 1

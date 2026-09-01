@@ -223,7 +223,8 @@ def test_a_modified_tab_is_not_closed_silently(binary):
         s.open_all()
         # gamma.c is active; dirty it, then close it from the menu.
         s.send("Z", 0.8)
-        check("*" in s.tab_bar(), "gamma.c is modified", s.tab_bar())
+        check(any(mark in s.tab_bar() for mark in ("*", "●")),
+              "gamma.c is modified", s.tab_bar())
         check(s.right_click_tab("gamma.c"), "the menu appeared")
         check(s.choose("Close Tab"), "chose Close Tab")
         body = s.text()

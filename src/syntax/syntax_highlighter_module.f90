@@ -1,5 +1,9 @@
 module syntax_highlighter_module
     use iso_fortran_env, only: int32
+    use theme_module, only: THEME_ACCENT, THEME_SYNTAX_COMMENT, &
+        THEME_SYNTAX_FUNCTION, THEME_SYNTAX_KEYWORD, THEME_SYNTAX_NUMBER, &
+        THEME_SYNTAX_PREPROCESSOR, THEME_SYNTAX_STRING, THEME_SYNTAX_TYPE, &
+        theme_sgr
     implicit none
     private
 
@@ -54,17 +58,6 @@ module syntax_highlighter_module
         logical :: in_multiline_string = .false.
         character(len=4) :: string_delimiter = ""
     end type syntax_highlighter_t
-
-    ! Color mapping (ANSI escape codes)
-    character(len=*), parameter :: COLOR_KEYWORD = char(27) // '[1;34m'     ! Bold Blue
-    character(len=*), parameter :: COLOR_STRING = char(27) // '[32m'        ! Green
-    character(len=*), parameter :: COLOR_NUMBER = char(27) // '[35m'        ! Magenta
-    character(len=*), parameter :: COLOR_COMMENT = char(27) // '[90m'       ! Gray
-    character(len=*), parameter :: COLOR_OPERATOR = char(27) // '[33m'      ! Yellow
-    character(len=*), parameter :: COLOR_TYPE = char(27) // '[36m'          ! Cyan
-    character(len=*), parameter :: COLOR_FUNCTION = char(27) // '[1;36m'    ! Bold Cyan
-    character(len=*), parameter :: COLOR_PREPROC = char(27) // '[95m'       ! Light Magenta
-    character(len=*), parameter :: COLOR_RESET = char(27) // '[0m'
 
 contains
 
@@ -266,21 +259,21 @@ contains
 
         select case(tok_type)
         case(TOKEN_KEYWORD)
-            color = COLOR_KEYWORD
+            color = theme_sgr(THEME_SYNTAX_KEYWORD)
         case(TOKEN_STRING)
-            color = COLOR_STRING
+            color = theme_sgr(THEME_SYNTAX_STRING)
         case(TOKEN_NUMBER)
-            color = COLOR_NUMBER
+            color = theme_sgr(THEME_SYNTAX_NUMBER)
         case(TOKEN_COMMENT)
-            color = COLOR_COMMENT
+            color = theme_sgr(THEME_SYNTAX_COMMENT)
         case(TOKEN_OPERATOR)
-            color = COLOR_OPERATOR
+            color = theme_sgr(THEME_ACCENT)
         case(TOKEN_TYPE)
-            color = COLOR_TYPE
+            color = theme_sgr(THEME_SYNTAX_TYPE)
         case(TOKEN_FUNCTION)
-            color = COLOR_FUNCTION
+            color = theme_sgr(THEME_SYNTAX_FUNCTION)
         case(TOKEN_PREPROCESSOR)
-            color = COLOR_PREPROC
+            color = theme_sgr(THEME_SYNTAX_PREPROCESSOR)
         case(TOKEN_PLAIN)
             color = ""
         case default

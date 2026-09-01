@@ -158,7 +158,7 @@ class Session:
         if row is None:
             return None
         c0 = self.screen.display[row - 1].index("│") + 1
-        return self.screen.buffer[row - 1][c0 + 2].fg == "default"
+        return not self.screen.buffer[row - 1][c0 + 2].italics
 
     def tree_row(self, name):
         """Row of a name within the tree column only. Searching the whole
@@ -201,7 +201,7 @@ class Session:
         """[(label, col0, col1)] for each tab drawn on row 1, 1-based."""
         bar = self.screen.display[0]
         return [(m.group(0), m.start() + 1, m.end())
-                for m in re.finditer(r"\[\d+: [^\]]*\]", bar)]
+                for m in re.finditer(r"\d+\s+[^\s]+", bar)]
 
     def active_tabs(self):
         """Labels drawn in reverse video: the tab bar marks the active one."""
@@ -442,7 +442,7 @@ def main():
               str(wrong_caret[:3]))
         s.close()
 
-    # Tab bar: clicking a [n: name] region activates that tab. The layout
+    # Tab bar: clicking a numbered filename region activates that tab. The layout
     # only ever existed during the draw -- label widths vary with the
     # filename and the modified marker, and in tree mode the bar does not
     # start at column 1 -- so the renderer now records each span.
@@ -803,7 +803,7 @@ def main():
     check(row is not None, "the LSP rows are listed even without a server")
     if row:
         c0 = s.screen.display[row - 1].index("│") + 1
-        greyed = s.screen.buffer[row - 1][c0 + 2].fg != "default"
+        greyed = s.screen.buffer[row - 1][c0 + 2].italics
         check(greyed, "Go to Definition is greyed without a language server",
               str(s.screen.buffer[row - 1][c0 + 2].fg))
         s.click(row, c0 + 5)
@@ -824,7 +824,7 @@ def main():
     row = s.menu_row("Go to Definition")
     if row:
         c0 = s.screen.display[row - 1].index("│") + 1
-        if s.screen.buffer[row - 1][c0 + 2].fg == "default":
+        if not s.screen.buffer[row - 1][c0 + 2].italics:
             check(True, "Go to Definition is live with a language server")
         else:
             print("  ..  skip LSP-enabled check: no language server attached")

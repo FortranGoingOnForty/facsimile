@@ -136,7 +136,7 @@ def split_beta_in(s):
     s.send("\x02", 1.2)                       # ctrl-b: file tree
     for _ in range(25):
         sel = s.tree_selection()
-        if sel and sel.split()[0] == "beta.txt":
+        if sel and "beta.txt" in sel:
             break
         s.send("\x1b[B", 0.18)
     else:

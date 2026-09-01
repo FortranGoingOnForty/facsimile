@@ -51,6 +51,10 @@ Keys are documented with their feature. See `docs/AI_COMPLETION.md` for the
 |---|---|---|
 | `tabs.group_hover_preview` | `true` | Preview a tab group's members on hover. Off stops the editor asking the terminal to report every pointer movement |
 | `terminal.height_percent` | `30` | How tall the terminal panel opens, as a percentage of the screen. Only a starting point: resizing it stores the new size per workspace, which then wins |
+| `ui.theme` | `steel` | Built-in or custom theme ID. See [THEMES.md](THEMES.md) |
+| `ui.color_mode` | `auto` | Terminal color capability: `auto`, `truecolor`, `256`, `basic`, or `mono` |
+| `ui.icons` | `unicode` | Glyph set: `ascii`, `unicode`, or `nerd` |
+| `ui.shadows` | `true` | Draw modal drop shadows when color output is available |
 
 ## Directory Structure
 

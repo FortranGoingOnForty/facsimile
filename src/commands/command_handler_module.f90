@@ -10,8 +10,10 @@ module command_handler_module
                                    sync_editor_to_pane, tab_t
     use text_buffer_module
     use platform_module, only: canonical_path
+    use theme_module, only: THEME_ERROR, THEME_INFO, THEME_SUCCESS, &
+                            theme_glyph, theme_paint
     use tab_drag_module, only: drag_is_armed, drag_cancel, drag_is_showing
-    use clickable_region_module, only: clickable_region_t, region_at, REGION_TAB_SCROLL, &
+    use clickable_region_module, only: clickable_region_t, region_at, REGION_TAB_SCROLL, REGION_NEW_TAB, &
                                        REGION_TAB, REGION_BLOCK, REGION_FUSS_TOGGLE, &
                                        REGION_GP_ROW, REGION_GP_NAME, &
                                        REGION_TREE_ROW, REGION_CTX_ROW, REGION_NONE
@@ -465,7 +467,7 @@ contains
         end if
     end function now_ms
 
-    subroutine handle_key_command(key_str, editor, buffer, should_quit)
+    recursive subroutine handle_key_command(key_str, editor, buffer, should_quit)
         character(len=*), intent(in) :: key_str
         type(editor_state_t), intent(inout), target :: editor
         type(buffer_t), intent(inout), target :: buffer
@@ -691,6 +693,9 @@ contains
                         case (REGION_TAB_SCROLL)
                             call nudge_tab_scroll(hit%payload)
                             g_lsp_ui_changed = .true.
+                            return
+                        case (REGION_NEW_TAB)
+                            call handle_key_command('ctrl-t', editor, buffer, should_quit)
                             return
                         case (REGION_FUSS_TOGGLE)
                             call toggle_fuss_mode(editor)
@@ -9533,9 +9538,11 @@ contains
             call terminal_write(repeat(' ', 200))
             call terminal_move_cursor(editor%screen_rows, 1)
             if (success) then
-                call terminal_write(char(27) // '[32m✓ Committed successfully!' // char(27) // '[0m')
+                call terminal_write(theme_paint(THEME_SUCCESS, &
+                    theme_glyph('success') // ' Committed successfully!'))
             else
-                call terminal_write(char(27) // '[31m✗ Commit failed (nothing staged?)' // char(27) // '[0m')
+                call terminal_write(theme_paint(THEME_ERROR, &
+                    theme_glyph('close') // ' Commit failed (nothing staged?)'))
             end if
 
             ! Brief pause
@@ -9555,7 +9562,7 @@ contains
         call terminal_move_cursor(editor%screen_rows, 1)
         call terminal_write(repeat(' ', 200))
         call terminal_move_cursor(editor%screen_rows, 1)
-        call terminal_write('Pushing to remote...')
+        call terminal_write(theme_paint(THEME_INFO, 'Pushing to remote...'))
 
         call git_push(editor%workspace_path, success)
 
@@ -9564,9 +9571,11 @@ contains
         call terminal_write(repeat(' ', 200))
         call terminal_move_cursor(editor%screen_rows, 1)
         if (success) then
-            call terminal_write(char(27) // '[32m✓ Pushed successfully!' // char(27) // '[0m')
+            call terminal_write(theme_paint(THEME_SUCCESS, &
+                theme_glyph('success') // ' Pushed successfully!'))
         else
-            call terminal_write(char(27) // '[31m✗ Push failed (check remote/branch)' // char(27) // '[0m')
+            call terminal_write(theme_paint(THEME_ERROR, &
+                theme_glyph('close') // ' Push failed (check remote/branch)'))
         end if
 
         ! Brief pause
@@ -9585,7 +9594,7 @@ contains
         call terminal_move_cursor(editor%screen_rows, 1)
         call terminal_write(repeat(' ', 200))
         call terminal_move_cursor(editor%screen_rows, 1)
-        call terminal_write('Fetching from remote...')
+        call terminal_write(theme_paint(THEME_INFO, 'Fetching from remote...'))
 
         call git_fetch(editor%workspace_path, success)
 
@@ -9594,9 +9603,11 @@ contains
         call terminal_write(repeat(' ', 200))
         call terminal_move_cursor(editor%screen_rows, 1)
         if (success) then
-            call terminal_write(char(27) // '[32m✓ Fetch completed!' // char(27) // '[0m')
+            call terminal_write(theme_paint(THEME_SUCCESS, &
+                theme_glyph('success') // ' Fetch completed!'))
         else
-            call terminal_write(char(27) // '[31m✗ Fetch failed!' // char(27) // '[0m')
+            call terminal_write(theme_paint(THEME_ERROR, &
+                theme_glyph('close') // ' Fetch failed!'))
         end if
 
         ! Brief pause
@@ -9615,7 +9626,7 @@ contains
         call terminal_move_cursor(editor%screen_rows, 1)
         call terminal_write(repeat(' ', 200))
         call terminal_move_cursor(editor%screen_rows, 1)
-        call terminal_write('Pulling from remote...')
+        call terminal_write(theme_paint(THEME_INFO, 'Pulling from remote...'))
 
         call git_pull(editor%workspace_path, success)
 
@@ -9624,9 +9635,11 @@ contains
         call terminal_write(repeat(' ', 200))
         call terminal_move_cursor(editor%screen_rows, 1)
         if (success) then
-            call terminal_write(char(27) // '[32m✓ Pull completed!' // char(27) // '[0m')
+            call terminal_write(theme_paint(THEME_SUCCESS, &
+                theme_glyph('success') // ' Pull completed!'))
         else
-            call terminal_write(char(27) // '[31m✗ Pull failed!' // char(27) // '[0m')
+            call terminal_write(theme_paint(THEME_ERROR, &
+                theme_glyph('close') // ' Pull failed!'))
         end if
 
         ! Brief pause
@@ -9666,7 +9679,8 @@ contains
                 call terminal_write(repeat(' ', 200))
                 call terminal_move_cursor(editor%screen_rows, 1)
                 if (success) then
-                    call terminal_write(char(27) // '[32m✓ Tag created: ' // trim(tag_name) // char(27) // '[0m')
+                    call terminal_write(theme_paint(THEME_SUCCESS, &
+                        theme_glyph('success') // ' Tag created: ' // trim(tag_name)))
 
                     ! Brief pause
                     call execute_command_line('sleep 1')
@@ -9682,15 +9696,18 @@ contains
                         call terminal_write(repeat(' ', 200))
                         call terminal_move_cursor(editor%screen_rows, 1)
                         if (success) then
-                            call terminal_write(char(27) // '[32m✓ Tag pushed to origin' // char(27) // '[0m')
+                            call terminal_write(theme_paint(THEME_SUCCESS, &
+                                theme_glyph('success') // ' Tag pushed to origin'))
                         else
-                            call terminal_write(char(27) // '[31m✗ Failed to push tag (check remote)' // char(27) // '[0m')
+                            call terminal_write(theme_paint(THEME_ERROR, &
+                                theme_glyph('close') // ' Failed to push tag (check remote)'))
                         end if
 
                         call execute_command_line('sleep 1')
                     end if
                 else
-                    call terminal_write(char(27) // '[31m✗ Failed to create tag' // char(27) // '[0m')
+                    call terminal_write(theme_paint(THEME_ERROR, &
+                        theme_glyph('close') // ' Failed to create tag'))
                     call execute_command_line('sleep 1')
                 end if
 
@@ -9724,7 +9741,8 @@ contains
             call terminal_move_cursor(editor%screen_rows, 1)
             call terminal_write(repeat(' ', 200))
             call terminal_move_cursor(editor%screen_rows, 1)
-            call terminal_write(char(27) // '[31m✗ Failed to get diff' // char(27) // '[0m')
+            call terminal_write(theme_paint(THEME_ERROR, &
+                theme_glyph('close') // ' Failed to get diff'))
             call execute_command_line('sleep 1')
             return
         end if
@@ -12687,6 +12705,28 @@ contains
             call palette_resize_terminal(editor, 'ctrl-shift-down')
         case('terminal-max')
             call palette_resize_terminal(editor, 'ctrl-shift-m')
+
+        case('theme-select')
+            block
+                use theme_picker_module, only: show_theme_picker_interactive
+                logical :: changed
+                character(len=:), allocatable :: message
+                call show_theme_picker_interactive(editor%screen_rows, editor%screen_cols, &
+                    changed, message)
+                call set_status_message(message)
+            end block
+        case('theme-reload')
+            block
+                use theme_module, only: theme_reload
+                logical :: ok
+                character(len=:), allocatable :: message
+                call theme_reload(ok, message)
+                if (ok) then
+                    call set_status_message(message)
+                else
+                    call set_status_message('Theme reload failed: ' // message)
+                end if
+            end block
 
         case('close-tab')
             call handle_key_command('ctrl-w', editor, buffer, should_quit)

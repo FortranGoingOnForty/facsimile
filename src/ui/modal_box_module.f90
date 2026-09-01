@@ -13,15 +13,12 @@
 module modal_box_module
     use terminal_io_module, only: terminal_move_cursor, terminal_write
     use utf8_module, only: clip_to_cells
+    use theme_module, only: THEME_BORDER, THEME_SHADOW, theme_reset, theme_sgr, &
+        theme_shadows_enabled
     implicit none
     private
 
     public :: box_frame, box_inner_rect
-
-    character(len=*), parameter :: ESC = char(27)
-    character(len=*), parameter :: RESET = ESC // '[0m'
-    character(len=*), parameter :: CHROME = ESC // '[48;5;236m' // ESC // '[38;5;252m'
-    character(len=*), parameter :: SHADE = ESC // '[48;5;234m'
 
 contains
 
@@ -51,9 +48,9 @@ contains
         call put_edge(row0, col0, width, '╭', '╮', title)
         do r = row0 + 1, row0 + height - 2
             call terminal_move_cursor(r, col0)
-            call terminal_write(CHROME // '│' // RESET)
+            call terminal_write(theme_sgr(THEME_BORDER) // '│' // theme_reset())
             call terminal_move_cursor(r, col0 + width - 1)
-            call terminal_write(CHROME // '│' // RESET)
+            call terminal_write(theme_sgr(THEME_BORDER) // '│' // theme_reset())
         end do
         call put_edge(row0 + height - 1, col0, width, '╰', '╯', footer)
     end subroutine box_frame
@@ -69,7 +66,7 @@ contains
         call clip_to_cells(trim(label), max(0, inner - 4), shown, used)
 
         call terminal_move_cursor(row, col0)
-        call terminal_write(CHROME // left)
+        call terminal_write(theme_sgr(THEME_BORDER) // left)
         if (used > 0) then
             call terminal_write('─ ' // shown // ' ')
             pad = inner - used - 3
@@ -77,7 +74,7 @@ contains
             pad = inner
         end if
         if (pad > 0) call terminal_write(repeat('─', pad))
-        call terminal_write(right // RESET)
+        call terminal_write(right // theme_reset())
     end subroutine put_edge
 
     !> Two columns right and one row down, so the box reads as floating above
@@ -86,9 +83,10 @@ contains
         integer, intent(in) :: row0, col0, height, width
         integer :: r
 
+        if (.not. theme_shadows_enabled()) return
         do r = row0 + 1, row0 + height
             call terminal_move_cursor(r, col0 + width)
-            call terminal_write(SHADE // '  ' // RESET)
+            call terminal_write(theme_sgr(THEME_SHADOW) // '  ' // theme_reset())
         end do
     end subroutine put_shadow
 

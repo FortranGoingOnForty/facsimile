@@ -1,6 +1,9 @@
 module workspace_symbols_panel_module
     use iso_fortran_env, only: int32
     use terminal_io_module
+    use theme_module, only: THEME_ACCENT, THEME_HINT, THEME_MUTED, THEME_PANEL, &
+        THEME_PANEL_FOOTER, THEME_PANEL_HEADER, THEME_PANEL_SELECTION, &
+        theme_glyph, theme_paint, theme_reset, theme_sgr
     implicit none
     private
 
@@ -391,39 +394,40 @@ contains
         integer, intent(in) :: screen_height
         integer :: row, i, start_idx, end_idx
         character(len=256) :: line, file_info
-        character(len=1), parameter :: ESC = char(27)
+        character(len=:), allocatable :: icon
 
         if (.not. panel%visible) return
 
-        ! Draw title bar with background color
         row = 1
         call terminal_move_cursor(row, panel%panel_start_col)
-        call terminal_write(ESC // '[48;5;237m' // ESC // '[1m')  ! Dark bg, bold
         line = " Workspace Symbols"
         if (panel%num_filtered > 0) then
             write(line, '(A,I0,A)') trim(line) // " (", panel%num_filtered, ")"
         end if
-        call terminal_write(line(1:min(len_trim(line), panel%panel_width)))
-        call terminal_write(repeat(" ", max(0, panel%panel_width - len_trim(line))))
-        call terminal_write(ESC // '[0m')
+        call terminal_write(theme_sgr(THEME_PANEL_HEADER) // &
+            line(1:min(len_trim(line), panel%panel_width)) // &
+            repeat(" ", max(0, panel%panel_width - len_trim(line))) // theme_reset())
 
         ! Draw search input
         row = 2
         call terminal_move_cursor(row, panel%panel_start_col)
-        call terminal_write(ESC // '[48;5;236m')  ! Slightly lighter for input
         if (panel%search_pos > 0) then
             line = " > " // trim(panel%search_query(1:panel%search_pos))
+            call terminal_write(theme_sgr(THEME_PANEL) // &
+                line(1:min(len_trim(line), panel%panel_width)) // &
+                repeat(" ", max(0, panel%panel_width - len_trim(line))) // theme_reset())
         else
-            line = " > " // ESC // '[90m' // "(type to filter)" // ESC // '[0m' // ESC // '[48;5;236m'
+            line = " > "
+            call terminal_write(theme_sgr(THEME_PANEL) // line // &
+                theme_paint(THEME_HINT, "(type to filter)") // &
+                theme_sgr(THEME_PANEL) // repeat(" ", max(0, panel%panel_width - 19)) // theme_reset())
         end if
-        call terminal_write(line(1:min(len_trim(line), panel%panel_width)))
-        call terminal_write(repeat(" ", max(0, panel%panel_width - len_trim(line))))
-        call terminal_write(ESC // '[0m')
 
         ! Draw separator
         row = 3
         call terminal_move_cursor(row, panel%panel_start_col)
-        call terminal_write(ESC // '[48;5;237m' // repeat("-", panel%panel_width) // ESC // '[0m')
+        call terminal_write(theme_sgr(THEME_PANEL_HEADER) // &
+            repeat("─", panel%panel_width) // theme_reset())
 
         ! Calculate visible range
         start_idx = panel%scroll_offset + 1
@@ -435,11 +439,10 @@ contains
                 row = row + 1
                 call terminal_move_cursor(row, panel%panel_start_col)
 
-                ! Background color based on selection
                 if (i == panel%selected_index) then
-                    call terminal_write(ESC // '[48;5;240m')  ! Highlight
+                    call terminal_write(theme_sgr(THEME_PANEL_SELECTION))
                 else
-                    call terminal_write(ESC // '[48;5;235m')  ! Normal
+                    call terminal_write(theme_sgr(THEME_PANEL))
                 end if
 
                 ! Build display line: icon + name + file:line
@@ -447,11 +450,12 @@ contains
 
                 ! Add kind indicator
                 if (allocated(panel%filtered_symbols(i)%kind_name)) then
-                    line = trim(line) // "[" // &
+                    icon = theme_glyph('symbol')
+                    line = trim(line) // " " // icon // " " // &
                         trim(panel%filtered_symbols(i)%kind_name(1: &
-                        min(3, len_trim(panel%filtered_symbols(i)%kind_name)))) // "] "
+                        min(3, len_trim(panel%filtered_symbols(i)%kind_name)))) // "  "
                 else
-                    line = trim(line) // "    "
+                    line = trim(line) // "      "
                 end if
 
                 ! Add symbol name
@@ -467,7 +471,7 @@ contains
                             ":", panel%filtered_symbols(i)%line
                         file_info = trim(file_info) // ")"
                         if (len_trim(line) + len_trim(file_info) < panel%panel_width - 1) then
-                            line = trim(line) // ESC // '[90m' // trim(file_info) // ESC // '[0m' // ESC // '[48;5;240m'
+                            line = trim(line) // trim(file_info)
                         end if
                     end if
                 end if
@@ -475,20 +479,20 @@ contains
                 ! Write line and pad
                 call terminal_write(line(1:min(len_trim(line), panel%panel_width)))
                 call terminal_write(repeat(" ", max(0, panel%panel_width - len_trim(line))))
-                call terminal_write(ESC // '[0m')
+                call terminal_write(theme_reset())
             end do
 
             ! Fill empty rows
             do while (row < screen_height - 1)
                 row = row + 1
                 call terminal_move_cursor(row, panel%panel_start_col)
-                call terminal_write(ESC // '[48;5;235m' // repeat(" ", panel%panel_width) // ESC // '[0m')
+                call terminal_write(theme_sgr(THEME_PANEL) // &
+                    repeat(" ", panel%panel_width) // theme_reset())
             end do
         else
             ! No symbols message
             row = row + 1
             call terminal_move_cursor(row, panel%panel_start_col)
-            call terminal_write(ESC // '[48;5;235m' // ESC // '[90m')
             if (panel%search_pos == 0) then
                 line = " Type to search..."
             else if (panel%num_symbols == 0) then
@@ -496,24 +500,24 @@ contains
             else
                 line = " No matching symbols"
             end if
-            call terminal_write(line(1:min(len_trim(line), panel%panel_width)))
-            call terminal_write(repeat(" ", max(0, panel%panel_width - len_trim(line))))
-            call terminal_write(ESC // '[0m')
+            call terminal_write(theme_sgr(THEME_MUTED) // &
+                line(1:min(len_trim(line), panel%panel_width)) // &
+                repeat(" ", max(0, panel%panel_width - len_trim(line))) // theme_reset())
 
             do while (row < screen_height - 1)
                 row = row + 1
                 call terminal_move_cursor(row, panel%panel_start_col)
-                call terminal_write(ESC // '[48;5;235m' // repeat(" ", panel%panel_width) // ESC // '[0m')
+                call terminal_write(theme_sgr(THEME_PANEL) // &
+                    repeat(" ", panel%panel_width) // theme_reset())
             end do
         end if
 
         ! Draw hint bar at bottom
         call terminal_move_cursor(screen_height, panel%panel_start_col)
-        call terminal_write(ESC // '[48;5;237m' // ESC // '[90m')
         line = " Enter:open  Esc:close  Ctrl-U:clear"
-        call terminal_write(line(1:min(len_trim(line), panel%panel_width)))
-        call terminal_write(repeat(" ", max(0, panel%panel_width - len_trim(line))))
-        call terminal_write(ESC // '[0m')
+        call terminal_write(theme_sgr(THEME_PANEL_FOOTER) // &
+            line(1:min(len_trim(line), panel%panel_width)) // &
+            repeat(" ", max(0, panel%panel_width - len_trim(line))) // theme_reset())
     end subroutine render_workspace_symbols_panel
 
     function get_basename(path) result(basename)

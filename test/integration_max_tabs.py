@@ -167,7 +167,7 @@ def open_the_rest(s):
         found = False
         for _ in range(2 * N_FILES + 8):
             sel = s.tree_selection()
-            if sel and sel.split()[0] == n:
+            if sel and n in sel:
                 found = True
                 break
             s.send("\x1b[B", 0.12)

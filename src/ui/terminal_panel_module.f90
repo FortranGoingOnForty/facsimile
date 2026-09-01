@@ -1,6 +1,9 @@
 module terminal_panel_module
     use iso_fortran_env, only: int32, int64
     use iso_c_binding
+    use theme_module, only: THEME_BORDER, THEME_ERROR, THEME_MUTED, &
+        THEME_PANEL_HEADER, THEME_STATUS_ACCENT, THEME_WARNING, &
+        theme_glyph, theme_reset, theme_sgr
     use terminal_io_module, only: terminal_write, terminal_move_cursor, &
                                    terminal_flush
     use session_ipc_module, only: session_ipc_dir
@@ -597,6 +600,10 @@ contains
         ! Check if child is still running
         if (c_pty_is_running(panel%pty_handle) == 0) then
             panel%pty_alive = .false.
+            ! The process can be reaped on a later poll than its final bytes.
+            ! Make that state transition request a frame of its own so the
+            ! dead-process banner does not wait for another input event.
+            panel%has_new_output = .true.
         end if
     end subroutine terminal_panel_poll
 
@@ -639,22 +646,26 @@ contains
         call terminal_move_cursor(start_row, 1)
         if (vo > 0 .and. cols > 24) then
             write(scroll_lbl, '(a,i0,a)') ' SCROLLBACK -', vo, ' '
-            call terminal_write(ESC_CH // '[93m')   ! bright yellow
-            call terminal_write(repeat('-', 6))
+            call terminal_write(theme_sgr(THEME_WARNING))
+            call terminal_write(repeat('─', 3))
             call terminal_write(trim(scroll_lbl))
-            call terminal_write(repeat('-', &
-                max(0, cols - 6 - len_trim(scroll_lbl))))
+            call terminal_write(repeat('─', &
+                max(0, cols - 3 - len_trim(scroll_lbl))))
         else if (.not. panel%pty_alive .and. cols > 40) then
             ! The shell exited but the panel is still up. Say so, and say how
             ! to get out -- otherwise it looks like a working terminal that
             ! has silently stopped accepting input.
-            call terminal_write(ESC_CH // '[93m')
-            call terminal_write(repeat('-', 6))
+            call terminal_write(theme_sgr(THEME_ERROR))
+            call terminal_write(repeat('─', 3))
             call terminal_write(' PROCESS EXITED - Enter: new shell, Esc: close ')
-            call terminal_write(repeat('-', max(0, cols - 6 - 47)))
+            call terminal_write(repeat('─', max(0, cols - 3 - 47)))
         else
-            call terminal_write(ESC_CH // '[90m')
-            call terminal_write(repeat('-', min(cols, 6)))
+            if (panel%focused) then
+                call terminal_write(theme_sgr(THEME_STATUS_ACCENT))
+            else
+                call terminal_write(theme_sgr(THEME_MUTED))
+            end if
+            call terminal_write(repeat('─', min(cols, 3)))
             if (cols > 14) then
                 if (panel%focused) then
                     call terminal_write(' TERMINAL ')
@@ -667,16 +678,16 @@ contains
                 ! pixel of travel for the whole session -- too much to pay for
                 ! an affordance that can simply be visible.
                 if (cols > 34) then
-                    call terminal_write(repeat('-', (cols - 16) / 2 - 2))
-                    call terminal_write(' ' // GRAB_GLYPH // ' ')
-                    call terminal_write(repeat('-', &
+                    call terminal_write(repeat('─', (cols - 16) / 2 - 2))
+                    call terminal_write(' ' // theme_glyph('grab') // ' ')
+                    call terminal_write(repeat('─', &
                         cols - 16 - ((cols - 16) / 2 - 2) - 3))
                 else
-                    call terminal_write(repeat('-', cols - 16))
+                    call terminal_write(repeat('─', cols - 16))
                 end if
             end if
         end if
-        call terminal_write(ESC_CH // '[0m')
+        call terminal_write(theme_reset())
 
         ! Get cursor position for highlighting
         call c_grid_get_cursor(panel%grid_handle, cc_row, cc_col)

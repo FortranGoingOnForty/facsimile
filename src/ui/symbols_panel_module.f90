@@ -2,6 +2,8 @@ module symbols_panel_module
     use iso_fortran_env, only: int32
     use terminal_io_module, only: terminal_move_cursor, terminal_write
     use clickable_region_module, only: region_add, REGION_BLOCK
+    use theme_module, only: THEME_MUTED, THEME_PANEL, THEME_PANEL_FOOTER, &
+        THEME_PANEL_HEADER, THEME_PANEL_SELECTION, theme_reset, theme_sgr
     implicit none
     private
 
@@ -271,26 +273,25 @@ contains
         character(len=256) :: line
         character(len=20) :: location
         character(len=5) :: icon
-        character(len=1), parameter :: ESC = char(27)
 
         if (.not. panel%visible) return
 
         ! Draw title bar with background color
         row = 1
         call terminal_move_cursor(row, panel%panel_start_col)
-        call terminal_write(ESC // '[48;5;237m' // ESC // '[1m')  ! Dark bg, bold
+        call terminal_write(theme_sgr(THEME_PANEL_HEADER))
         line = " Document Symbols"
         if (panel%num_flat_symbols > 0) then
             write(line, '(A,I0,A)') trim(line) // " (", panel%num_flat_symbols, ")"
         end if
         call terminal_write(line(1:min(len_trim(line), panel%panel_width)))
         call terminal_write(repeat(" ", max(0, panel%panel_width - len_trim(line))))
-        call terminal_write(ESC // '[0m')
+        call terminal_write(theme_reset())
 
         ! Draw separator
         row = 2
         call terminal_move_cursor(row, panel%panel_start_col)
-        call terminal_write(ESC // '[48;5;237m' // repeat("-", panel%panel_width) // ESC // '[0m')
+        call terminal_write(theme_sgr(THEME_PANEL_HEADER) // repeat("─", panel%panel_width) // theme_reset())
 
         ! Calculate visible range
         start_idx = panel%scroll_offset + 1
@@ -304,9 +305,9 @@ contains
 
                 ! Background color based on selection
                 if (i == panel%selected_index) then
-                    call terminal_write(ESC // '[48;5;240m')  ! Highlight background
+                    call terminal_write(theme_sgr(THEME_PANEL_SELECTION))
                 else
-                    call terminal_write(ESC // '[48;5;235m')  ! Normal background
+                    call terminal_write(theme_sgr(THEME_PANEL))
                 end if
 
                 ! Get symbol icon
@@ -348,7 +349,7 @@ contains
                 ! Write line and pad to width
                 call terminal_write(line(1:min(len_trim(line), panel%panel_width)))
                 call terminal_write(repeat(" ", max(0, panel%panel_width - len_trim(line))))
-                call terminal_write(ESC // '[0m')
+                call terminal_write(theme_reset())
             end do
 
             ! Fill empty rows
@@ -361,11 +362,11 @@ contains
             ! No symbols message
             row = row + 1
             call terminal_move_cursor(row, panel%panel_start_col)
-            call terminal_write(ESC // '[48;5;235m' // ESC // '[90m')
+            call terminal_write(theme_sgr(THEME_MUTED))
             line = " No symbols found"
             call terminal_write(line(1:min(len_trim(line), panel%panel_width)))
             call terminal_write(repeat(" ", max(0, panel%panel_width - len_trim(line))))
-            call terminal_write(ESC // '[0m')
+            call terminal_write(theme_reset())
 
             do while (row < screen_height - 1)
                 row = row + 1
@@ -376,11 +377,11 @@ contains
 
         ! Draw hint bar at bottom
         call terminal_move_cursor(screen_height, panel%panel_start_col)
-        call terminal_write(ESC // '[48;5;237m' // ESC // '[90m')
+        call terminal_write(theme_sgr(THEME_PANEL_FOOTER))
         line = " j/k:nav  Enter:jump  Esc:close"
         call terminal_write(line(1:min(len_trim(line), panel%panel_width)))
         call terminal_write(repeat(" ", max(0, panel%panel_width - len_trim(line))))
-        call terminal_write(ESC // '[0m')
+        call terminal_write(theme_reset())
 
         ! Claim the column strip. A click here used to reach the document
         ! behind the panel and move the caret, so typing afterwards edited
@@ -448,9 +449,7 @@ contains
 
     subroutine render_empty_line(width)
         integer, intent(in) :: width
-        character(len=1), parameter :: ESC = char(27)
-
-        call terminal_write(ESC // '[48;5;235m' // repeat(" ", width) // ESC // '[0m')
+        call terminal_write(theme_sgr(THEME_PANEL) // repeat(" ", width) // theme_reset())
     end subroutine render_empty_line
 
     function symbols_panel_handle_key(panel, key) result(handled)

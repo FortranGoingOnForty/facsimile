@@ -1,9 +1,13 @@
 module help_display_module
     use iso_fortran_env, only: input_unit
     use terminal_io_module, only: terminal_clear_screen, terminal_hide_cursor, terminal_show_cursor, &
-                                   terminal_move_cursor, terminal_write
+                                   terminal_move_cursor, terminal_write, terminal_flush
     use input_handler_module, only: get_key_input
     use editor_state_module
+    use utf8_module, only: clip_to_cells
+    use theme_module, only: THEME_ACCENT, THEME_BORDER, THEME_HINT, THEME_PANEL, &
+        THEME_PANEL_FOOTER, THEME_PANEL_HEADER, THEME_SHADOW, theme_paint, &
+        theme_reset, theme_sgr, theme_shadows_enabled
     implicit none
     private
 
@@ -370,92 +374,64 @@ contains
     ! Display fuss mode hints (compact help for ctrl-b mode)
     subroutine show_fuss_hints(editor)
         type(editor_state_t), intent(in) :: editor
-        integer :: row
+        character(len=18), parameter :: keys(15) = [character(len=18) :: &
+            'j / k', 'arrows', 'o / Enter', 'Space', '.', '/', 'Ctrl+/', &
+            'Ctrl+G then A', 'Ctrl+G then U', 'Ctrl+G then D', &
+            'Ctrl+G then M', 'Ctrl+G then P', 'Ctrl+G then F', &
+            'Ctrl+G then L', 'Esc / F3']
+        character(len=42), parameter :: descriptions(15) = [character(len=42) :: &
+            'Move selection', 'Enter or leave a directory', 'Open file', &
+            'Expand or collapse directory', 'Toggle hidden files', &
+            'Search the tree', 'Toggle compact hints', 'Stage file', &
+            'Unstage file', 'Open diff in a tab', 'Commit changes', &
+            'Push', 'Fetch', 'Pull', 'Close Fuss']
+        integer :: row, row0, col0, width, height, shown_count, i, pad, used
         character(len=32) :: key_input
+        character(len=:), allocatable :: shown
         integer :: status
 
-        ! Clear screen (buffered) and hide cursor
         call terminal_write(achar(27) // '[2J' // achar(27) // '[H')
+        call terminal_hide_cursor()
+        width = min(70, max(28, editor%screen_cols - 4))
+        height = min(editor%screen_rows - 2, 19)
+        shown_count = min(15, max(1, height - 4))
+        row0 = max(1, (editor%screen_rows - height) / 2 + 1)
+        col0 = max(1, (editor%screen_cols - width) / 2 + 1)
 
-        ! Title
-        row = 1
-        call terminal_move_cursor(row, 1)
-        call terminal_write("FUSS MODE HINTS - Press any key to close")
-        row = row + 1
-        call terminal_move_cursor(row, 1)
-        call terminal_write(repeat("=", 60))
-        row = row + 2
+        call terminal_move_cursor(row0, col0)
+        call terminal_write(theme_sgr(THEME_BORDER) // '┌' // repeat('─', width - 2) // '┐')
+        call terminal_move_cursor(row0 + 1, col0)
+        call terminal_write(theme_sgr(THEME_PANEL_HEADER) // '│ FUSS COMMANDS' // &
+            repeat(' ', max(0, width - 16)) // theme_sgr(THEME_BORDER) // '│')
+        do i = 1, shown_count
+            row = row0 + 1 + i
+            call terminal_move_cursor(row, col0)
+            call terminal_write(theme_sgr(THEME_PANEL) // '│ ')
+            call terminal_write(theme_paint(THEME_ACCENT, keys(i)))
+            pad = max(1, 20 - len_trim(keys(i)))
+            call clip_to_cells(trim(descriptions(i)), max(1, width - 23), shown, used)
+            call terminal_write(theme_sgr(THEME_PANEL) // repeat(' ', pad) // shown // &
+                repeat(' ', max(0, width - 3 - 20 - used)) // theme_sgr(THEME_BORDER) // '│')
+        end do
+        call terminal_move_cursor(row0 + height - 2, col0)
+        call terminal_write(theme_sgr(THEME_PANEL_FOOTER) // '│ Any key closes' // &
+            repeat(' ', max(0, width - 17)) // theme_sgr(THEME_BORDER) // '│')
+        call terminal_move_cursor(row0 + height - 1, col0)
+        call terminal_write(theme_sgr(THEME_BORDER) // '└' // repeat('─', width - 2) // '┘' // theme_reset())
 
-        ! Navigation
-        call terminal_move_cursor(row, 1)
-        call terminal_write("NAVIGATION")
-        row = row + 1
-        call terminal_move_cursor(row, 3)
-        call terminal_write("j/k                 move to previous/next sibling")
-        row = row + 1
-        call terminal_move_cursor(row, 3)
-        call terminal_write("→/←                 expand/collapse or enter/exit directory")
-        row = row + 1
-        call terminal_move_cursor(row, 3)
-        call terminal_write("o/enter             open file in editor")
-        row = row + 1
-        call terminal_move_cursor(row, 3)
-        call terminal_write("space               toggle directory expand/collapse")
-        row = row + 2
-
-        ! Git Operations
-        call terminal_move_cursor(row, 1)
-        call terminal_write("GIT OPERATIONS")
-        row = row + 1
-        call terminal_move_cursor(row, 3)
-        call terminal_write("a                   stage file")
-        row = row + 1
-        call terminal_move_cursor(row, 3)
-        call terminal_write("u                   unstage file")
-        row = row + 1
-        call terminal_move_cursor(row, 3)
-        call terminal_write("d                   diff file in new tab")
-        row = row + 1
-        call terminal_move_cursor(row, 3)
-        call terminal_write("m                   commit with message")
-        row = row + 1
-        call terminal_move_cursor(row, 3)
-        call terminal_write("p                   push to remote")
-        row = row + 1
-        call terminal_move_cursor(row, 3)
-        call terminal_write("f                   fetch from remote")
-        row = row + 1
-        call terminal_move_cursor(row, 3)
-        call terminal_write("l                   pull from remote")
-        row = row + 1
-        call terminal_move_cursor(row, 3)
-        call terminal_write("t                   create and push tag")
-        row = row + 2
-
-        ! Exit
-        call terminal_move_cursor(row, 1)
-        call terminal_write("EXIT")
-        row = row + 1
-        call terminal_move_cursor(row, 3)
-        call terminal_write("esc/ctrl-b          close fuss mode")
-        row = row + 1
-
-        ! Footer
-        if (row < editor%screen_rows - 1) then
-            row = editor%screen_rows - 1
-            call terminal_move_cursor(row, 1)
-            call terminal_write(repeat("=", 60))
+        if (theme_shadows_enabled() .and. col0 + width <= editor%screen_cols) then
+            do row = row0 + 1, row0 + height - 1
+                call terminal_move_cursor(row, col0 + width)
+                call terminal_write(theme_sgr(THEME_SHADOW) // ' ' // theme_reset())
+            end do
         end if
+        call terminal_flush()
 
-        ! Show cursor at bottom
-        call terminal_move_cursor(editor%screen_rows, 1)
-        call terminal_show_cursor()
-
-        ! Wait for any key press
         do
             call get_key_input(key_input, status)
-            if (status == 0) exit  ! Got a valid key, exit loop
+            if (status == 0) exit
         end do
+        call terminal_show_cursor()
     end subroutine show_fuss_hints
 
     ! Display tags header without waiting for input (for split view with prompt)

@@ -2,6 +2,9 @@ module code_actions_panel_module
     use iso_fortran_env, only: int32
     use terminal_io_module, only: terminal_move_cursor, terminal_write
     use clickable_region_module, only: region_add, REGION_BLOCK
+    use theme_module, only: THEME_INFO, THEME_MUTED, THEME_PANEL, THEME_PANEL_FOOTER, &
+        THEME_PANEL_HEADER, THEME_PANEL_SELECTION, THEME_SUCCESS, THEME_WARNING, &
+        theme_reset, theme_sgr
     implicit none
     private
 
@@ -146,7 +149,7 @@ contains
         integer :: start_col, row, i, max_content_lines
         character(len=256) :: line_buffer
         character(len=10) :: kind_icon
-        character(len=10) :: kind_color
+        character(len=:), allocatable :: kind_color
 
         if (.not. panel%visible) return
 
@@ -160,18 +163,18 @@ contains
         ! Draw panel header
         row = 1
         call terminal_move_cursor(row, start_col)
-        call terminal_write(char(27) // '[48;5;236m')  ! Dark background
         write(line_buffer, '(A,I0,A)') ' Code Actions (', panel%num_actions, ') '
-        call terminal_write(char(27) // '[1m' // trim(line_buffer) // char(27) // '[0m')
+        call terminal_write(theme_sgr(THEME_PANEL_HEADER) // trim(line_buffer) // theme_reset())
 
         ! Pad header to width
         call terminal_move_cursor(row, start_col + len_trim(line_buffer))
-        call terminal_write(char(27) // '[48;5;236m' // repeat(' ', panel%width - len_trim(line_buffer)) // char(27) // '[0m')
+        call terminal_write(theme_sgr(THEME_PANEL_HEADER) // &
+            repeat(' ', panel%width - len_trim(line_buffer)) // theme_reset())
 
         ! Separator
         row = row + 1
         call terminal_move_cursor(row, start_col)
-        call terminal_write(char(27) // '[48;5;236m' // repeat('-', panel%width) // char(27) // '[0m')
+        call terminal_write(theme_sgr(THEME_PANEL_HEADER) // repeat('─', panel%width) // theme_reset())
 
         ! Content area
         row = row + 1
@@ -180,16 +183,16 @@ contains
         ! Display "No code actions" if empty
         if (panel%num_actions == 0) then
             call terminal_move_cursor(row, start_col)
-            call terminal_write(char(27) // '[48;5;235m' // char(27) // '[90m')
+            call terminal_write(theme_sgr(THEME_MUTED))
             line_buffer = ' No code actions available'
             call pad_to_width(line_buffer, panel%width)
             call terminal_write(line_buffer(1:panel%width))
-            call terminal_write(char(27) // '[0m')
+            call terminal_write(theme_reset())
 
             ! Fill remaining lines
             do i = row + 1, screen_rows - 1
                 call terminal_move_cursor(i, start_col)
-                call terminal_write(char(27) // '[48;5;235m' // repeat(' ', panel%width) // char(27) // '[0m')
+                call terminal_write(theme_sgr(THEME_PANEL) // repeat(' ', panel%width) // theme_reset())
             end do
             return
         end if
@@ -204,9 +207,9 @@ contains
 
             ! Highlight selected item
             if (i == panel%selected_index) then
-                call terminal_write(char(27) // '[48;5;240m')  ! Highlight background
+                call terminal_write(theme_sgr(THEME_PANEL_SELECTION))
             else
-                call terminal_write(char(27) // '[48;5;235m')  ! Normal background
+                call terminal_write(theme_sgr(THEME_PANEL))
             end if
 
             ! Format: " [icon] Title "
@@ -230,9 +233,9 @@ contains
             call pad_to_width(line_buffer, panel%width)
 
             ! Apply kind color to icon
-            call terminal_write(trim(kind_color))
+            if (i /= panel%selected_index) call terminal_write(trim(kind_color))
             call terminal_write(line_buffer(1:panel%width))
-            call terminal_write(char(27) // '[0m')
+            call terminal_write(theme_reset())
 
             row = row + 1
         end do
@@ -240,16 +243,16 @@ contains
         ! Fill remaining lines with empty background
         do i = row, screen_rows - 1
             call terminal_move_cursor(i, start_col)
-            call terminal_write(char(27) // '[48;5;235m' // repeat(' ', panel%width) // char(27) // '[0m')
+            call terminal_write(theme_sgr(THEME_PANEL) // repeat(' ', panel%width) // theme_reset())
         end do
 
         ! Footer with hints
         call terminal_move_cursor(screen_rows - 1, start_col)
-        call terminal_write(char(27) // '[48;5;236m' // char(27) // '[90m')
+        call terminal_write(theme_sgr(THEME_PANEL_FOOTER))
         line_buffer = ' j/k:Navigate  Enter:Apply  Esc:Close'
         call pad_to_width(line_buffer, panel%width)
         call terminal_write(line_buffer(1:panel%width))
-        call terminal_write(char(27) // '[0m')
+        call terminal_write(theme_reset())
 
         ! Claim the strip so clicks cannot reach the document behind it
         call region_add(REGION_BLOCK, 1, screen_rows, start_col, &
@@ -260,7 +263,7 @@ contains
     subroutine get_action_display(kind, icon, color)
         character(len=*), intent(in), optional :: kind
         character(len=10), intent(out) :: icon
-        character(len=10), intent(out) :: color
+        character(len=:), allocatable, intent(out) :: color
 
         icon = ''
         color = ''
@@ -271,31 +274,31 @@ contains
         select case(trim(kind))
         case('quickfix')
             icon = '[fix]'
-            color = char(27) // '[33m'  ! Yellow
+            color = theme_sgr(THEME_WARNING)
         case('refactor')
             icon = '[ref]'
-            color = char(27) // '[36m'  ! Cyan
+            color = theme_sgr(THEME_INFO)
         case('refactor.extract')
             icon = '[ext]'
-            color = char(27) // '[36m'
+            color = theme_sgr(THEME_INFO)
         case('refactor.inline')
             icon = '[inl]'
-            color = char(27) // '[36m'
+            color = theme_sgr(THEME_INFO)
         case('refactor.rewrite')
             icon = '[rw]'
-            color = char(27) // '[36m'
+            color = theme_sgr(THEME_INFO)
         case('source')
             icon = '[src]'
-            color = char(27) // '[32m'  ! Green
+            color = theme_sgr(THEME_SUCCESS)
         case('source.organizeImports', 'source.organizeImports.ruff')
             icon = '[org]'
-            color = char(27) // '[32m'
+            color = theme_sgr(THEME_SUCCESS)
         case('source.fixAll', 'source.fixAll.ruff')
             icon = '[all]'
-            color = char(27) // '[32m'
+            color = theme_sgr(THEME_SUCCESS)
         case default
             icon = ''
-            color = char(27) // '[37m'  ! White
+            color = theme_sgr(THEME_PANEL)
         end select
     end subroutine get_action_display
 

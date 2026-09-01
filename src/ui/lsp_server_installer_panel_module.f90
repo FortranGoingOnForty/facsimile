@@ -4,6 +4,11 @@ module lsp_server_installer_panel_module
     use server_installer_module, only: run_install_command, install_result_t
     use clipboard_module, only: copy_to_clipboard
     use clickable_region_module, only: region_add, REGION_BLOCK
+    use utf8_module, only: clip_to_cells
+    use theme_module, only: THEME_ACCENT, THEME_BORDER, THEME_GIT_ADDED, &
+        THEME_GIT_DELETED, THEME_HINT, THEME_PANEL, THEME_PANEL_FOOTER, &
+        THEME_PANEL_HEADER, THEME_PANEL_SELECTION, THEME_WARNING, &
+        theme_glyph, theme_reset, theme_sgr
     implicit none
     private
 
@@ -195,15 +200,8 @@ contains
         integer :: start_col, start_row, row, i, visible_end
         integer :: content_width, visible_len, status_len, padding
         character(len=:), allocatable :: border_top, border_mid, border_bottom
-        character(len=128) :: visible_text, status_text
-        character(len=*), parameter :: ESC = char(27)
-        character(len=*), parameter :: GREEN = ESC // '[32m'
-        character(len=*), parameter :: RED = ESC // '[31m'
-        character(len=*), parameter :: CYAN = ESC // '[36m'
-        character(len=*), parameter :: YELLOW = ESC // '[33m'
-        character(len=*), parameter :: DIM = ESC // '[90m'
-        character(len=*), parameter :: INVERSE = ESC // '[7m'
-        character(len=*), parameter :: RESET = ESC // '[0m'
+        character(len=256) :: visible_text, status_text
+        character(len=:), allocatable :: icon
 
         if (.not. panel%visible) return
 
@@ -225,108 +223,75 @@ contains
 
         ! Draw top border
         call terminal_move_cursor(start_row, start_col)
-        call terminal_write(border_top)
+        call terminal_write(theme_sgr(THEME_BORDER) // border_top // theme_reset())
 
         ! Draw header
         row = start_row + 1
-        call terminal_move_cursor(row, start_col)
-        call terminal_write('│' // CYAN // ' Language Server Manager' // RESET)
-        call terminal_write(repeat(' ', content_width - 32) // DIM // 'Alt+M' // RESET // ' │')
+        visible_text = ' Language Server Manager'
+        call render_panel_row(row, start_col, content_width, trim(visible_text), &
+                              THEME_PANEL_HEADER)
 
         ! Draw separator
         row = row + 1
         call terminal_move_cursor(row, start_col)
-        call terminal_write(border_mid)
+        call terminal_write(theme_sgr(THEME_BORDER) // border_mid // theme_reset())
 
         ! Draw server list
         visible_end = min(panel%scroll_offset + MAX_VISIBLE, panel%num_servers)
         do i = panel%scroll_offset + 1, visible_end
             row = row + 1
-            call terminal_move_cursor(row, start_col)
-            call terminal_write('│')
-
-            ! Build line content (visible text only for width calculation)
-            ! Format: " X servername (Language) <spaces> status"
-            ! Use ' X ' (3 ASCII chars) instead of ' ✓ ' (5 bytes) for correct display width
-            visible_text = ' X ' // trim(panel%servers(i)%name) // ' (' // &
-                          trim(panel%servers(i)%language) // ')'
-
-            ! Calculate visible length (icon + space + name + space + language + parens)
-            visible_len = len_trim(visible_text)
-
-            ! Add status text length
             if (panel%servers(i)%is_installed) then
                 status_text = 'installed'
-                status_len = 9
+                icon = theme_glyph('success')
             else
                 status_text = 'Enter to install'
-                status_len = 16
+                icon = theme_glyph('close')
             end if
-
-            ! Calculate padding needed (content_width - 2 for borders, minus visible text, minus status)
+            visible_text = ' ' // icon // ' ' // trim(panel%servers(i)%name) // ' (' // &
+                           trim(panel%servers(i)%language) // ')'
+            visible_len = len_trim(visible_text)
+            status_len = len_trim(status_text)
             padding = max(1, content_width - 2 - visible_len - status_len)
-
-            ! Highlight selected row
+            visible_text = trim(visible_text) // repeat(' ', padding) // trim(status_text)
             if (i == panel%selected_index) then
-                call terminal_write(INVERSE)
-            end if
-
-            ! Write status icon with color
-            if (panel%servers(i)%is_installed) then
-                call terminal_write(' ' // GREEN // '✓' // RESET // ' ')
+                call render_panel_row(row, start_col, content_width, &
+                                      trim(visible_text), THEME_PANEL_SELECTION)
+            else if (panel%servers(i)%is_installed) then
+                call render_panel_row(row, start_col, content_width, &
+                                      trim(visible_text), THEME_GIT_ADDED)
             else
-                call terminal_write(' ' // RED // '✗' // RESET // ' ')
+                call render_panel_row(row, start_col, content_width, &
+                                      trim(visible_text), THEME_GIT_DELETED)
             end if
-
-            ! Write server name and language
-            call terminal_write(trim(panel%servers(i)%name) // ' (' // &
-                               trim(panel%servers(i)%language) // ')')
-
-            ! Write padding
-            call terminal_write(repeat(' ', padding))
-
-            ! Write status text with color
-            if (panel%servers(i)%is_installed) then
-                call terminal_write(DIM // trim(status_text) // RESET)
-            else
-                call terminal_write(YELLOW // trim(status_text) // RESET)
-            end if
-
-            ! Reset highlighting
-            if (i == panel%selected_index) then
-                call terminal_write(RESET)
-            end if
-
-            call terminal_write('│')
         end do
 
         ! Fill remaining rows if needed
         do i = visible_end + 1, panel%scroll_offset + MAX_VISIBLE
             row = row + 1
-            call terminal_move_cursor(row, start_col)
-            call terminal_write('│' // repeat(' ', content_width - 2) // '│')
+            call render_panel_row(row, start_col, content_width, '', THEME_PANEL)
         end do
 
         ! Draw separator before footer
         row = row + 1
         call terminal_move_cursor(row, start_col)
-        call terminal_write(border_mid)
+        call terminal_write(theme_sgr(THEME_BORDER) // border_mid // theme_reset())
 
         ! Draw status message or help
         row = row + 1
         call terminal_move_cursor(row, start_col)
         if (len_trim(panel%status_message) > 0) then
-            call terminal_write('│ ' // YELLOW // trim(panel%status_message) // RESET)
-            call terminal_write(repeat(' ', max(0, content_width - len_trim(panel%status_message) - 4)) // ' │')
+            call render_panel_row(row, start_col, content_width, &
+                                  ' ' // trim(panel%status_message), THEME_WARNING)
         else
-            call terminal_write('│' // DIM // ' ↑↓ Navigate  Enter Install  c Copy  r Refresh  Esc Close' // RESET)
-            call terminal_write(repeat(' ', max(0, content_width - 59)) // '│')
+            call render_panel_row(row, start_col, content_width, &
+                ' ↑↓ Navigate  Enter Install  c Copy  r Refresh  Esc Close', &
+                THEME_PANEL_FOOTER)
         end if
 
         ! Draw bottom border
         row = row + 1
         call terminal_move_cursor(row, start_col)
-        call terminal_write(border_bottom)
+        call terminal_write(theme_sgr(THEME_BORDER) // border_bottom // theme_reset())
 
         ! Claim the dialog. This one mattered most: the cursor is hidden
         ! below, so a click falling through to the document moved the caret
@@ -344,12 +309,7 @@ contains
         integer :: start_col, start_row, row, content_width
         character(len=:), allocatable :: border_top, border_bottom
         character(len=256) :: server_name, install_cmd
-        character(len=*), parameter :: ESC = char(27)
-        character(len=*), parameter :: CYAN = ESC // '[36m'
-        character(len=*), parameter :: YELLOW = ESC // '[33m'
-        character(len=*), parameter :: GREEN = ESC // '[32m'
-        character(len=*), parameter :: RED = ESC // '[31m'
-        character(len=*), parameter :: RESET = ESC // '[0m'
+        character(len=512) :: line
 
         content_width = min(PANEL_WIDTH, screen_cols - 4)
         start_col = max(1, (screen_cols - content_width) / 2)
@@ -363,45 +323,51 @@ contains
 
         ! Top border
         call terminal_move_cursor(start_row, start_col)
-        call terminal_write(border_top)
+        call terminal_write(theme_sgr(THEME_BORDER) // border_top // theme_reset())
 
         ! Title
         row = start_row + 1
-        call terminal_move_cursor(row, start_col)
-        call terminal_write('│' // CYAN // ' Install ' // trim(server_name) // '?' // RESET)
-        call terminal_write(repeat(' ', max(0, content_width - 12 - len_trim(server_name))) // '│')
+        call render_panel_row(row, start_col, content_width, &
+            ' Install ' // trim(server_name) // '?', THEME_PANEL_HEADER)
 
         ! Blank line
         row = row + 1
-        call terminal_move_cursor(row, start_col)
-        call terminal_write('│' // repeat(' ', content_width - 2) // '│')
+        call render_panel_row(row, start_col, content_width, '', THEME_PANEL)
 
         ! Command
         row = row + 1
-        call terminal_move_cursor(row, start_col)
-        call terminal_write('│ Command: ' // YELLOW // trim(install_cmd) // RESET)
-        call terminal_write(repeat(' ', max(0, content_width - 12 - len_trim(install_cmd))) // '│')
+        line = ' Command: ' // trim(install_cmd)
+        call render_panel_row(row, start_col, content_width, trim(line), THEME_WARNING)
 
         ! Blank line
         row = row + 1
-        call terminal_move_cursor(row, start_col)
-        call terminal_write('│' // repeat(' ', content_width - 2) // '│')
+        call render_panel_row(row, start_col, content_width, '', THEME_PANEL)
 
         ! Yes/Copy/No buttons (21 visible chars: [Y]es   [C]opy   [N]o)
         row = row + 1
-        call terminal_move_cursor(row, start_col)
-        call terminal_write('│' // repeat(' ', max(0, (content_width - 23) / 2)))
-        call terminal_write('[' // GREEN // 'Y' // RESET // ']es   ')
-        call terminal_write('[' // CYAN // 'C' // RESET // ']opy   ')
-        call terminal_write('[' // RED // 'N' // RESET // ']o')
-        call terminal_write(repeat(' ', max(0, content_width - 23 - (content_width - 23) / 2)) // '│')
+        call render_panel_row(row, start_col, content_width, &
+            '        [Y]es   [C]opy   [N]o', THEME_ACCENT)
 
         ! Bottom border
         row = row + 1
         call terminal_move_cursor(row, start_col)
-        call terminal_write(border_bottom)
+        call terminal_write(theme_sgr(THEME_BORDER) // border_bottom // theme_reset())
 
         call terminal_hide_cursor()
     end subroutine render_confirm_dialog
+
+    subroutine render_panel_row(row, start_col, width, text, role)
+        integer, intent(in) :: row, start_col, width, role
+        character(len=*), intent(in) :: text
+        character(len=:), allocatable :: shown
+        integer :: used, inner
+
+        inner = max(0, width - 2)
+        call clip_to_cells(text, inner, shown, used)
+        call terminal_move_cursor(row, start_col)
+        call terminal_write(theme_sgr(THEME_BORDER) // '│' // &
+            theme_sgr(role) // shown // repeat(' ', max(0, inner - used)) // &
+            theme_sgr(THEME_BORDER) // '│' // theme_reset())
+    end subroutine render_panel_row
 
 end module lsp_server_installer_panel_module
