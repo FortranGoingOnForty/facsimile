@@ -16,6 +16,7 @@ Requires: pip3 install pexpect pyte
 
 import codecs
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -184,10 +185,21 @@ def test_csi_u_ctrl_shift_slash_is_help(binary):
               right_shadow is not None and right_shadow.bg == shadow_cells[0].bg,
               "the help modal has complete right and bottom shadows")
 
-        pages = [s.display()]
-        for _ in range(8):
-            s.send("\x1b[6~", 0.8)  # PageDown
-            pages.append(s.display())
+        # Walk one line at a time until the modal's own range footer says the
+        # final help line is visible. A fixed set of PageDown snapshots can
+        # miss a boundary row when a busy CI runner observes only the later
+        # redraw; single-line overlap keeps every binding in several frames.
+        pages = []
+        reached_end = False
+        for _ in range(160):
+            frame = s.display()
+            pages.append(frame)
+            ranges = re.findall(r"(\d+)-(\d+)/(\d+)", frame)
+            if ranges and int(ranges[-1][1]) >= int(ranges[-1][2]):
+                reached_end = True
+                break
+            s.send("j", 0.18)
+        check(reached_end, "help binding audit reaches the final help line")
         audited = "\n".join(pages)
         audited_bindings = ("Alt+Shift+J", "Ctrl+O", "Ctrl+G then A/U/D",
                             "Alt+I", "Shift+Alt+F / Alt+M")
