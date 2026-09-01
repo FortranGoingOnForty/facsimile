@@ -11,6 +11,7 @@ Requires: pip3 install pexpect pyte
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -57,6 +58,8 @@ class Session:
         self.target = os.path.join(self.home, "a.f90")
         with open(self.target, "w") as f:
             f.write("function alpha()\ninteger :: value\nend function alpha\n")
+        subprocess.run(["git", "init", "-q", "-b", "feature/modern-terminal-ui"],
+                       cwd=self.home, check=True)
 
         env = {**os.environ, "HOME": self.home, "TERM": "xterm-256color",
                "COLORTERM": "truecolor"}
@@ -114,6 +117,32 @@ def main():
               "syntax tokens receive the theme foreground")
         check(keyword and all(cell.bg != "default" for cell in keyword),
               "syntax tokens retain the current-line background")
+        plain = s.cells("value", 3)
+        check(plain and all(cell.bg != "default" for cell in plain),
+              "plain source text receives the editor background")
+        check(s.screen.buffer[2][90].bg == plain[0].bg,
+              "the editor background continues through trailing cells")
+        check(s.screen.buffer[2][5].bg == plain[0].bg,
+              "the gutter separator has no terminal-background gap")
+
+        s.send("\x02", 0.8)  # ctrl-b: Fuss open
+        tree_width = COLS * 30 // 100
+        branch_row = s.screen.display[1]
+        check("…" in branch_row[:tree_width],
+              "a long Fuss branch name is ellipsized")
+        check(branch_row[tree_width] == "│",
+              "the branch label stops before the Fuss separator", branch_row[:40])
+        check("…" not in branch_row[tree_width + 1:tree_width + 7],
+              "the branch ellipsis does not leak into the line-number gutter",
+              branch_row[:40])
+        repo_start = branch_row.index("home", 0, tree_width)
+        branch_end = branch_row.index("…", repo_start, tree_width)
+        header_cells = [s.screen.buffer[1][col]
+                        for col in range(repo_start, branch_end + 1)]
+        check(header_cells and header_cells[0].bg != "default" and
+              all(cell.bg == header_cells[0].bg for cell in header_cells),
+              "the Fuss header keeps one continuous panel surface")
+        s.send("\x02", 0.8)  # close Fuss
 
         s.send("\x14", 0.8)  # ctrl-t
         inactive = s.cells("1 a.f90")

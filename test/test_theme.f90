@@ -40,6 +40,11 @@ program test_theme
     call check(index(sequence, achar(27) // '[0m') == 0 .and. &
                index(sequence, achar(27) // '[48;2;') > 0, &
                'background overlays preserve an existing syntax foreground')
+    sequence = theme_foreground_sgr(THEME_GIT_MODIFIED)
+    call check(index(sequence, achar(27) // '[0m') == 0 .and. &
+               index(sequence, achar(27) // '[48;') == 0 .and. &
+               index(sequence, achar(27) // '[38;2;') > 0, &
+               'foreground overlays preserve an existing panel background')
 
     call write_custom_theme()
     call theme_select('test-modern', .false., ok, message)

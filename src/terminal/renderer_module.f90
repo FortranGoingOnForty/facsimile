@@ -17,7 +17,8 @@ module renderer_module
                                        REGION_TAB_SCROLL, REGION_NEW_TAB, &
                                        REGION_FUSS_TOGGLE
     use theme_module, only: THEME_ACCENT, THEME_BORDER, THEME_BORDER_FOCUS, THEME_CURRENT_LINE, &
-        THEME_GHOST, THEME_HINT, THEME_LINE_NUMBER, THEME_LINE_NUMBER_ACTIVE, THEME_MUTED, &
+        THEME_EDITOR, THEME_EDITOR_BG, THEME_GHOST, THEME_HINT, &
+        THEME_LINE_NUMBER, THEME_LINE_NUMBER_ACTIVE, THEME_MUTED, &
         THEME_PANEL, THEME_PANEL_FOOTER, THEME_PANEL_HEADER, THEME_PANEL_SELECTION, &
         THEME_SEARCH_MATCH, THEME_SELECTION, THEME_SELECTION_INACTIVE, THEME_STATUS, &
         THEME_STATUS_ACCENT, THEME_TAB_ACTIVE, THEME_TAB_BAR, &
@@ -440,14 +441,15 @@ contains
                         if (buffer_line == editor%cursors(editor%active_cursor)%line) then
                             ! Highlight current line number
                             call terminal_write(theme_paint(THEME_LINE_NUMBER_ACTIVE, &
-                                adjustl(line_num_str(1:LINE_NUMBER_WIDTH))) // ' ')
+                                adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) // ' '))
                         else
                             call terminal_write(theme_paint(THEME_LINE_NUMBER, &
-                                adjustl(line_num_str(1:LINE_NUMBER_WIDTH))) // ' ')
+                                adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) // ' '))
                         end if
                     else
                         ! Empty line number area for lines beyond file
-                        call terminal_write(repeat(' ', LINE_NUMBER_WIDTH + 1))
+                        call terminal_write(theme_paint(THEME_LINE_NUMBER, &
+                            repeat(' ', LINE_NUMBER_WIDTH + 1)))
                     end if
                 end if
 
@@ -456,11 +458,12 @@ contains
                     call render_line_with_selections(buffer, editor, buffer_line, &
                                                     editor%viewport_column, content_width)
                 else
-                    ! Beyond file content: '~' only, the ESC[K below clears
-                    call terminal_write('~')
+                    call terminal_write(theme_sgr(THEME_EDITOR) // '~')
                 end if
-                ! Clear to end of line to prevent stale content when scrolling
-                call terminal_write(char(27) // '[K')
+                ! Erased cells use the current background, so establish the
+                ! editor surface before clearing stale content.
+                call terminal_write(theme_sgr(THEME_EDITOR_BG) // &
+                    char(27) // '[K' // theme_reset())
             end do
 
         ! Render terminal panel if visible
@@ -1125,8 +1128,11 @@ contains
                     style = theme_sgr(THEME_CURRENT_LINE)
                 end if
             else
-                ! Syntax color only (empty for plain text)
-                style = token_color
+                if (len(token_color) > 0) then
+                    style = token_color // theme_background_sgr(THEME_EDITOR)
+                else
+                    style = theme_sgr(THEME_EDITOR)
+                end if
             end if
 
             if (style /= last_style) then
@@ -1140,28 +1146,8 @@ contains
             char_idx = char_idx + 1
         end do
 
-        ! Fill remaining width. When the tail needs no styling (no
-        ! current-line background, no selection anywhere), skip it: both
-        ! callers follow this routine with ESC[K, which clears the same
-        ! cells with default attributes at a fraction of the bytes.
-        block
-            logical :: fill_styled
-            fill_styled = is_current_line
-            if (.not. fill_styled) then
-                do i = 1, size(editor%cursors)
-                    if (editor%cursors(i)%has_selection) then
-                        fill_styled = .true.
-                        exit
-                    end if
-                end do
-            end if
-            if (.not. fill_styled) then
-                if (len(last_style) > 0) call terminal_write(char(27) // '[0m')
-                if (allocated(line)) deallocate(line)
-                if (allocated(utf8_ch)) deallocate(utf8_ch)
-                return
-            end if
-        end block
+        ! Fill the row explicitly. Terminal defaults are user-configurable and
+        ! cannot stand in for the selected theme's editor background.
         do while (display_col < width)
             in_selection = .false.
 
@@ -1216,7 +1202,7 @@ contains
             else if (is_current_line) then
                 style = theme_sgr(THEME_CURRENT_LINE)
             else
-                style = ''
+                style = theme_sgr(THEME_EDITOR_BG)
             end if
 
             if (style /= last_style) then
@@ -1924,7 +1910,7 @@ contains
 
         ! Clear row 1 left side (tree area on tab bar row, not covered by other components)
         call terminal_move_cursor(1, 1)
-        call terminal_write(repeat(' ', tree_width))
+        call terminal_write(theme_sgr(THEME_PANEL) // repeat(' ', tree_width) // theme_reset())
 
         ! Render tab bar if there are any tabs (positioned in editor pane area)
         call render_tab_bar(editor, editor_start_col, editor_width)
@@ -2071,7 +2057,8 @@ contains
         ! Clear the editor area first
         do i = first_content_row(editor), editor%screen_rows - 1
             call terminal_move_cursor(i, start_col)
-            call terminal_write(repeat(' ', width))
+            call terminal_write(theme_sgr(THEME_EDITOR_BG) // &
+                repeat(' ', width) // theme_reset())
         end do
 
         ! Render each pane with coordinates adjusted for tree offset
@@ -2154,13 +2141,14 @@ contains
                 write(line_num_str, '(i5)') buffer_line
                 if (buffer_line == editor%cursors(editor%active_cursor)%line) then
                     call terminal_write(theme_paint(THEME_LINE_NUMBER_ACTIVE, &
-                        adjustl(line_num_str(1:LINE_NUMBER_WIDTH))) // ' ')
+                        adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) // ' '))
                 else
                     call terminal_write(theme_paint(THEME_LINE_NUMBER, &
-                        adjustl(line_num_str(1:LINE_NUMBER_WIDTH))) // ' ')
+                        adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) // ' '))
                 end if
             else
-                call terminal_write(repeat(' ', line_num_width))
+                call terminal_write(theme_paint(THEME_LINE_NUMBER, &
+                    repeat(' ', line_num_width)))
             end if
         end if
 
@@ -2170,10 +2158,10 @@ contains
             call render_line_with_selections(buffer, editor, buffer_line, &
                                             editor%viewport_column, adjusted_width)
         else
-            ! Empty line beyond file content ('~' only; ESC[K clears)
-            call terminal_write('~')
+            call terminal_write(theme_sgr(THEME_EDITOR) // '~')
         end if
-        call terminal_write(char(27) // '[K')
+        call terminal_write(theme_sgr(THEME_EDITOR_BG) // &
+            char(27) // '[K' // theme_reset())
     end subroutine render_editor_row
 
     subroutine render_all_panes(editor)
@@ -2340,7 +2328,9 @@ contains
         ! Clear the pane area with subtle background for inactive panes
         do screen_row = content_start_row, content_start_row + content_height - 1
             call terminal_move_cursor(screen_row, col)
-            if (.not. pane%is_active) then
+            if (pane%is_active) then
+                call terminal_write(theme_sgr(THEME_EDITOR_BG))
+            else
                 call terminal_write(theme_sgr(THEME_SELECTION_INACTIVE))
             end if
             call terminal_write(repeat(' ', width))
@@ -2356,19 +2346,13 @@ contains
             else
                 ! Render empty line indicator for lines beyond file
                 call terminal_move_cursor(screen_row, col)
-
-                ! Render empty line number area if line numbers are enabled
-                if (show_line_numbers) then
-                    if (.not. pane%is_active) then
-                        call terminal_write(theme_sgr(THEME_SELECTION_INACTIVE))
-                    end if
-                    call terminal_write(repeat(' ', LINE_NUMBER_WIDTH + 1))
-                end if
-
-                ! Render the ~ indicator
-                if (.not. pane%is_active) then
+                if (pane%is_active) then
+                    call terminal_write(theme_sgr(THEME_EDITOR))
+                else
                     call terminal_write(theme_sgr(THEME_SELECTION_INACTIVE))
                 end if
+                if (show_line_numbers) &
+                    call terminal_write(repeat(' ', LINE_NUMBER_WIDTH + 1))
                 call terminal_write('~')
 
                 ! Calculate remaining width accounting for line numbers
@@ -2497,13 +2481,12 @@ contains
             end if
 
             if (pane%is_active) then
-                ! Active pane: line number on the default background.
                 if (is_current_line) then
                     call terminal_write(theme_paint(THEME_LINE_NUMBER_ACTIVE, &
-                        adjustl(line_num_str(1:LINE_NUMBER_WIDTH))) // ' ')
+                        adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) // ' '))
                 else
                     call terminal_write(theme_paint(THEME_LINE_NUMBER, &
-                        adjustl(line_num_str(1:LINE_NUMBER_WIDTH))) // ' ')
+                        adjustl(line_num_str(1:LINE_NUMBER_WIDTH)) // ' '))
                 end if
             else
                 ! Inactive pane: keep the dim background continuous across the
@@ -2687,8 +2670,11 @@ contains
                     style = theme_sgr(THEME_SELECTION_INACTIVE)
                 end if
             else
-                ! Syntax color only (empty for plain text)
-                style = token_color
+                if (len(token_color) > 0) then
+                    style = token_color // theme_background_sgr(THEME_EDITOR)
+                else
+                    style = theme_sgr(THEME_EDITOR)
+                end if
             end if
 
             if (style /= last_style) then
@@ -2709,7 +2695,7 @@ contains
             else if (is_current_line) then
                 style = theme_sgr(THEME_CURRENT_LINE)
             else
-                style = ''
+                style = theme_sgr(THEME_EDITOR_BG)
             end if
 
             if (style /= last_style) then
@@ -3112,9 +3098,9 @@ contains
         if (buffer_line <= line_count) then
             write(num_str, '(i5)') buffer_line
             call terminal_write(theme_paint(THEME_LINE_NUMBER, &
-                                adjustl(num_str(1:LINE_NUMBER_WIDTH))) // ' ')
+                                adjustl(num_str(1:LINE_NUMBER_WIDTH)) // ' '))
         else
-            call terminal_write(repeat(' ', gutter))
+            call terminal_write(theme_paint(THEME_LINE_NUMBER, repeat(' ', gutter)))
         end if
     end subroutine render_line_number
 

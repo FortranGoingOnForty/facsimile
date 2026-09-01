@@ -3,11 +3,11 @@ module file_tree_renderer_module
     use file_tree_module
     use terminal_io_module
     use clickable_region_module, only: region_add, REGION_TREE_ROW
-    use utf8_module, only: clip_to_cells
+    use utf8_module, only: clip_to_cells, utf8_display_width
     use theme_module, only: THEME_ACCENT, THEME_DIRECTORY, THEME_GIT_ADDED, &
         THEME_GIT_MODIFIED, THEME_HINT, THEME_MUTED, THEME_PANEL, &
         THEME_PANEL_HEADER, THEME_PANEL_SELECTION, THEME_WARNING, &
-        theme_glyph, theme_paint, theme_reset, theme_sgr
+        theme_foreground_sgr, theme_glyph, theme_reset, theme_sgr
     implicit none
     private
 
@@ -50,33 +50,41 @@ contains
             call terminal_move_cursor(current_row, start_col)
             block
                 character(len=256) :: repo_str, branch_str
-                integer :: vis_len, max_branch
+                character(len=:), allocatable :: prefix, shown
+                integer :: max_branch, prefix_cells, branch_cells, used
 
                 repo_str = trim(state%repo_name)
                 branch_str = trim(state%branch_name)
-                ! visible length: repo + ':' + branch
-                vis_len = len_trim(repo_str) + 1 + &
-                          len_trim(branch_str)
+                prefix = ' ' // trim(repo_str) // ' : '
+                prefix_cells = utf8_display_width(prefix)
 
-                if (vis_len > width) then
-                    ! Truncate branch to fit
-                    max_branch = width - len_trim(repo_str) - 4
-                    if (max_branch > 0) then
-                        branch_str = branch_str(1:max_branch) &
-                                     // '...'
+                if (prefix_cells < width) then
+                    max_branch = width - prefix_cells
+                    branch_cells = utf8_display_width(trim(branch_str))
+                    if (branch_cells > max_branch) then
+                        call clip_to_cells(trim(branch_str), max(0, max_branch - 1), &
+                                           shown, used)
+                        shown = shown // '…'
+                        branch_cells = used + 1
                     else
-                        ! Even repo is too long — truncate it
-                        repo_str = repo_str(1:max(1,width-4)) &
-                                   // '...'
-                        branch_str = ''
+                        shown = trim(branch_str)
                     end if
+                    call terminal_write(theme_sgr(THEME_PANEL_HEADER) // ' ' // &
+                        trim(repo_str) // theme_foreground_sgr(THEME_MUTED) // ' : ' // &
+                        theme_foreground_sgr(THEME_GIT_MODIFIED) // shown // &
+                        theme_sgr(THEME_PANEL_HEADER) // &
+                        repeat(' ', max(0, width - prefix_cells - branch_cells)) // &
+                        theme_reset())
+                else
+                    call clip_to_cells(' ' // trim(repo_str), max(0, width - 1), &
+                                       shown, used)
+                    if (used < utf8_display_width(' ' // trim(repo_str))) then
+                        shown = shown // '…'
+                        used = used + 1
+                    end if
+                    call terminal_write(theme_sgr(THEME_PANEL_HEADER) // shown // &
+                        repeat(' ', max(0, width - used)) // theme_reset())
                 end if
-
-                call terminal_write(theme_sgr(THEME_PANEL_HEADER) // ' ' // &
-                    trim(repo_str) // theme_sgr(THEME_MUTED))
-                if (len_trim(branch_str) > 0) call terminal_write(' : ' // &
-                    theme_paint(THEME_GIT_MODIFIED, trim(branch_str)))
-                call terminal_write(theme_reset())
             end block
             current_row = current_row + 2  ! Skip a line
         end if
@@ -84,7 +92,7 @@ contains
         ! Display root
         if (current_row <= end_row) then
             call terminal_move_cursor(current_row, start_col)
-            call terminal_write(theme_paint(THEME_ACCENT, ' WORKSPACE'))
+            call terminal_write(panel_paint(THEME_ACCENT, ' WORKSPACE'))
             current_row = current_row + 1
         end if
 
@@ -105,39 +113,39 @@ contains
             ! Expanded legend (six rows, short lines to fit pane)
             if (end_row >= start_row + 6) then
                 call terminal_move_cursor(end_row - 5, start_col)
-                call terminal_write(theme_paint(THEME_HINT, 'j/k:nav  o:open'))
+                call terminal_write(panel_paint(THEME_HINT, 'j/k:nav  o:open'))
 
                 call terminal_move_cursor(end_row - 4, start_col)
-                call terminal_write(theme_paint(THEME_HINT, '→:in  ←:up  .:hide'))
+                call terminal_write(panel_paint(THEME_HINT, '→:in  ←:up  .:hide'))
 
                 call terminal_move_cursor(end_row - 3, start_col)
-                call terminal_write(theme_paint(THEME_HINT, 'space:toggle'))
+                call terminal_write(panel_paint(THEME_HINT, 'space:toggle'))
 
                 if (git_mode) then
                     call terminal_move_cursor(end_row - 2, start_col)
-                    call terminal_write(theme_paint(THEME_WARNING, 'a:stage  u:unstage'))
+                    call terminal_write(panel_paint(THEME_WARNING, 'a:stage  u:unstage'))
 
                     call terminal_move_cursor(end_row - 1, start_col)
-                    call terminal_write(theme_paint(THEME_WARNING, 'd:diff  m:commit'))
+                    call terminal_write(panel_paint(THEME_WARNING, 'd:diff  m:commit'))
                 else
                     call terminal_move_cursor(end_row - 2, start_col)
-                    call terminal_write(theme_paint(THEME_HINT, 'alt-v:vs  alt-s:hs'))
+                    call terminal_write(panel_paint(THEME_HINT, 'alt-v:vs  alt-s:hs'))
 
                     call terminal_move_cursor(end_row - 1, start_col)
-                    call terminal_write(theme_paint(THEME_HINT, 'ctrl-g:git  type:search'))
+                    call terminal_write(panel_paint(THEME_HINT, 'ctrl-g:git  type:search'))
                 end if
 
                 call terminal_move_cursor(end_row, start_col)
-                call terminal_write(theme_paint(THEME_HINT, 'ctrl-/:less  esc:close'))
+                call terminal_write(panel_paint(THEME_HINT, 'ctrl-/:less  esc:close'))
             end if
         else
             ! Minimal legend (two rows)
             if (end_row >= start_row + 2) then
                 call terminal_move_cursor(end_row - 1, start_col)
-                call terminal_write(theme_paint(THEME_HINT, '.:hide  ctrl-/:hints'))
+                call terminal_write(panel_paint(THEME_HINT, '.:hide  ctrl-/:hints'))
 
                 call terminal_move_cursor(end_row, start_col)
-                call terminal_write(theme_paint(THEME_HINT, 'esc/F3:close'))
+                call terminal_write(panel_paint(THEME_HINT, 'esc/F3:close'))
             end if
         end if
     end subroutine render_file_tree
@@ -240,7 +248,7 @@ contains
                         role = THEME_PANEL
                     end if
                     call clip_to_cells(line, width, shown, used)
-                    call terminal_write(theme_paint(role, shown))
+                    call terminal_write(panel_paint(role, shown))
                 end if
 
                 ! Claim the row for this item. item_idx is the same index
@@ -274,5 +282,14 @@ contains
             end do
         end if
     end subroutine render_tree_node
+
+    function panel_paint(role, text) result(styled)
+        integer, intent(in) :: role
+        character(len=*), intent(in) :: text
+        character(len=:), allocatable :: styled
+
+        styled = theme_sgr(THEME_PANEL) // theme_foreground_sgr(role) // &
+            text // theme_reset()
+    end function panel_paint
 
 end module file_tree_renderer_module

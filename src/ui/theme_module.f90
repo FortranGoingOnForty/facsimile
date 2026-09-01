@@ -89,7 +89,8 @@ module theme_module
 
     public :: theme_init, theme_reload, theme_select
     public :: theme_current, theme_current_name, theme_current_id
-    public :: theme_style, theme_sgr, theme_background_sgr, theme_reset, theme_paint
+    public :: theme_style, theme_sgr, theme_background_sgr, &
+        theme_foreground_sgr, theme_reset, theme_paint
     public :: theme_color_mode, theme_icon_mode, theme_glyph
     public :: theme_list, theme_shadows_enabled, theme_role_name
 
@@ -220,6 +221,32 @@ contains
             sequence = indexed_sgr(style%bg, .true.)
         end if
     end function theme_background_sgr
+
+    function theme_foreground_sgr(role) result(sequence)
+        integer, intent(in) :: role
+        character(len=:), allocatable :: sequence
+        type(screen_style) :: style
+
+        style = theme_style(role)
+        ! Clear text variants from the surface role while retaining its
+        ! background, then apply the foreground role's own variants.
+        sequence = achar(27) // '[22;23;24;27;29m'
+        if (style%bold) sequence = sequence // achar(27) // '[1m'
+        if (style%dim) sequence = sequence // achar(27) // '[2m'
+        if (style%italic) sequence = sequence // achar(27) // '[3m'
+        if (style%underline) sequence = sequence // achar(27) // '[4m'
+        if (style%strikethrough) sequence = sequence // achar(27) // '[9m'
+        if (current_color_mode == SCREEN_COLOR_MONO) return
+        if (style%inverse .and. style%bg_truecolor) then
+            sequence = sequence // rgb_sgr(style%bg_rgb, .false.)
+        else if (style%inverse .and. style%bg >= 0) then
+            sequence = sequence // indexed_sgr(style%bg, .false.)
+        else if (style%fg_truecolor) then
+            sequence = sequence // rgb_sgr(style%fg_rgb, .false.)
+        else if (style%fg >= 0) then
+            sequence = sequence // indexed_sgr(style%fg, .false.)
+        end if
+    end function theme_foreground_sgr
 
     function theme_reset() result(sequence)
         character(len=:), allocatable :: sequence
