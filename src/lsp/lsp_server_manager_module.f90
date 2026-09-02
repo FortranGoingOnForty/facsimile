@@ -1212,13 +1212,15 @@ contains
         integer :: idx
 
         if (num_servers < 1) then
-            call note_lsp_error('No language server is running for this file')
+            call note_lsp_error('No language server running for this file ' // &
+                '(check it is installed and the file type is supported)')
             return
         end if
 
         idx = server_indices(1)
         if (idx < 1 .or. idx > manager%num_servers) then
-            call note_lsp_error('No language server is running for this file')
+            call note_lsp_error('No language server running for this file ' // &
+                '(check it is installed and the file type is supported)')
             return
         end if
 
