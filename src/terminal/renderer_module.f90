@@ -24,7 +24,8 @@ module renderer_module
         THEME_SELECTION_INACTIVE, THEME_STATUS, &
         THEME_STATUS_ACCENT, THEME_TAB_ACTIVE, THEME_TAB_BAR, &
         THEME_TAB_DRAG, THEME_TAB_INACTIVE, THEME_TAB_MODIFIED, THEME_TAB_ORPHAN, &
-        theme_background_sgr, theme_glyph, theme_paint, theme_reset, theme_sgr
+        theme_background_sgr, theme_foreground_sgr, theme_glyph, theme_paint, &
+        theme_reset, theme_sgr
     use context_menu_module, only: render_context_menu, is_context_menu_visible
     use group_picker_module, only: render_group_picker, is_group_picker_visible
     use fortress_navigator_module, only: render_fortress, is_fortress_visible
@@ -2982,7 +2983,12 @@ contains
         if (len(shown) == 0) return
 
         call terminal_move_cursor(screen_row, screen_col)
-        call terminal_write(theme_paint(THEME_GHOST, shown))
+        if (highlight_current_line) then
+            call terminal_write(theme_sgr(THEME_CURRENT_LINE))
+        else
+            call terminal_write(theme_sgr(THEME_EDITOR_BG))
+        end if
+        call terminal_write(theme_foreground_sgr(THEME_GHOST) // shown // theme_reset())
 
         ! Mid-line: redraw the real text right of the cursor, shifted past
         ! the suggestion, so nothing is hidden while the ghost is up.
@@ -3048,11 +3054,13 @@ contains
             if (.not. is_terminal_safe(text)) return
             call clip_to_cells(text, content_w, shown, used)
             call terminal_move_cursor(row, col0)
+            call terminal_write(theme_sgr(THEME_EDITOR_BG))
             ! Blank the gutter: these rows are not lines in the file yet, and
             ! leaving the number the base render put there would duplicate it
             ! against the real line pushed down below.
             if (gutter > 0) call terminal_write(repeat(' ', gutter))
-            call terminal_write(theme_sgr(THEME_GHOST) // shown // theme_reset())
+            call terminal_write(theme_foreground_sgr(THEME_GHOST) // shown)
+            call terminal_write(theme_sgr(THEME_EDITOR_BG))
             ! Pad to the pane's width rather than ESC[K.
             !
             ! [K clears to the end of the TERMINAL LINE, which in a vertical
@@ -3062,6 +3070,7 @@ contains
             ! while a pane spans the full width, which is why this only ever
             ! showed up in a split.
             call pad_to_pane(gutter + used, cwidth)
+            call terminal_write(theme_reset())
         end do
 
         ! The ghost occupies rows anchor_row .. anchor_row + n - 1, so the
@@ -3108,12 +3117,17 @@ contains
     subroutine render_block_overflow_marker(anchor_row, col0, cwidth, extra)
         integer, intent(in) :: anchor_row, col0, cwidth, extra
         character(len=32) :: marker
+        integer :: surface_role
 
         if (extra < 1) return
         write(marker, '(a,i0,a)') ' +', extra, ' more (Tab)'
         if (col0 + cwidth - 1 - len_trim(marker) < col0) return
+        surface_role = THEME_EDITOR_BG
+        if (highlight_current_line) surface_role = THEME_CURRENT_LINE
         call terminal_move_cursor(anchor_row, col0 + cwidth - len_trim(marker))
-        call terminal_write(theme_paint(THEME_HINT, trim(marker)))
+        call terminal_write(theme_sgr(surface_role) // &
+                            theme_foreground_sgr(THEME_HINT) // &
+                            trim(marker) // theme_reset())
     end subroutine render_block_overflow_marker
 
     ! Last row the editor may draw content on: above the status bar, and above
@@ -3216,9 +3230,12 @@ contains
         logical :: saved_mc, saved_ms
         character(len=4) :: saved_delim
         character(len=:), allocatable :: ch, style, prev_style
-        integer :: ci, off, w, byte_pos, ti
+        integer :: ci, off, w, byte_pos, ti, surface_role
 
         if (budget < 1) return
+
+        surface_role = THEME_EDITOR_BG
+        if (highlight_current_line) surface_role = THEME_CURRENT_LINE
 
         saved_mc = syntax_highlighter%in_multiline_comment
         saved_ms = syntax_highlighter%in_multiline_string
@@ -3253,6 +3270,11 @@ contains
                         exit
                     end if
                 end do
+            end if
+            if (len(style) > 0) then
+                style = style // theme_background_sgr(surface_role)
+            else
+                style = theme_sgr(surface_role)
             end if
             if (style /= prev_style) then
                 call terminal_write(char(27) // '[0m')

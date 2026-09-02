@@ -65,7 +65,7 @@ def find_binary():
 
 class Session:
     def __init__(self, binary, content, ai_on, name="s.c",
-                 rows=ROWS, cols=COLS, max_block_lines=4):
+                 rows=ROWS, cols=COLS, max_block_lines=4, truecolor=False):
         self.home = tempfile.mkdtemp(prefix="fac_aig_")
         cfg = os.path.join(self.home, ".config", "fac")
         os.makedirs(cfg)
@@ -80,13 +80,17 @@ class Session:
                         '  "ai.port": 11434,\n'
                         '  "ai.model": "%s",\n'
                         '  "ai.debounce_ms": 120,\n'
-                        '  "ai.max_block_lines": %d\n'
-                        '}\n' % (MODEL, max_block_lines))
+                        '  "ai.max_block_lines": %d%s\n'
+                        '}\n' % (MODEL, max_block_lines,
+                                 ',\n  "ui.color_mode": "truecolor"' if truecolor else ''))
         self.target = os.path.join(self.home, name)
         with open(self.target, "w") as f:
             f.write(content)
         env = {**os.environ, "TERM": "xterm-256color", "HOME": self.home}
         env.pop("XDG_CONFIG_HOME", None)
+        env.pop("NO_COLOR", None)
+        if truecolor:
+            env["COLORTERM"] = "truecolor"
         self.screen = pyte.Screen(cols, rows)
         self.stream = pyte.Stream(self.screen)
         self.child = pexpect.spawn(binary, [self.target], dimensions=(rows, cols),
@@ -221,7 +225,7 @@ def drive_to_block(s):
 
 
 def test_block_renders_without_hiding_the_file(binary):
-    s = Session(binary, BLOCK_SRC, ai_on=True, name="b.c")
+    s = Session(binary, BLOCK_SRC, ai_on=True, name="b.c", truecolor=True)
     try:
         if not drive_to_block(s):
             print("SKIP: model did not produce a block this run")
@@ -233,9 +237,39 @@ def test_block_renders_without_hiding_the_file(binary):
         check("int other" in disp,
               "and so is the code further down", disp)
 
+        # The first ghost row sits on the highlighted caret row. Its text must
+        # retain that row's surface instead of painting editor-background
+        # rectangles around only the generated characters.
+        for_row = next((i for i, row in enumerate(s.screen.display)
+                        if "for" in row), -1)
+        return_row = next((i for i, row in enumerate(s.screen.display)
+                           if i > for_row and "return sum" in row), -1)
+        if for_row >= 0:
+            text_start = s.screen.display[for_row].find("for")
+            row_bg = s.screen.buffer[for_row][COLS - 2].bg
+            text_cells = [s.screen.buffer[for_row][x]
+                          for x in range(text_start, text_start + 3)]
+            check(row_bg != "default" and
+                  all(cell.bg == row_bg for cell in text_cells),
+                  "the first ghost row keeps one current-line background",
+                  (row_bg, [cell.bg for cell in text_cells]))
+
+        # Continuation rows are virtual editor rows. Gutter, generated text,
+        # and right-side padding must all use the editor surface; resetting
+        # before the padding used to leave visible background fragments.
+        if return_row > for_row + 1:
+            continuation = [s.screen.buffer[y][x]
+                            for y in range(for_row + 1, return_row)
+                            for x in range(0, COLS - 1)]
+            continuation_bg = continuation[0].bg if continuation else "default"
+            check(continuation_bg != "default" and
+                  all(cell.bg == continuation_bg for cell in continuation),
+                  "multiline ghost rows keep one editor background",
+                  sorted({cell.bg for cell in continuation}))
+
         # every line number 1..8 appears exactly once: the block's own rows are
         # unnumbered, and the pushed-down lines keep their real numbers
-        nums = [r.strip().split()[0] for r in s.screen.display
+        nums = [r.strip().split()[0] for r in s.screen.display[1:]
                 if r.strip() and r.strip()[0].isdigit()]
         check(len(nums) == len(set(nums)),
               "no duplicated line numbers around the block", str(nums))
