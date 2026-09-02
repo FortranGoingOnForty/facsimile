@@ -4,7 +4,7 @@ module completion_popup_module
     use json_module, only: json_value_t, json_get_string, &
                            json_get_object, json_has_key, &
                            json_array_size, json_get_array_element, &
-                           json_get_array, json_get_number
+                           json_get_array, json_get_number, JSON_ARRAY
     use clickable_region_module, only: region_add, REGION_BLOCK
     use modal_box_module, only: box_shadow
     use utf8_module, only: clip_to_cells
@@ -88,13 +88,26 @@ contains
         type(json_value_t), intent(in) :: response
         type(json_value_t) :: items_array, item
         integer :: i, n_items, kind_num
+        logical :: have_items
         character(len=:), allocatable :: label, detail, insert_text
 
         call cleanup_completion_popup(popup)
 
-        ! Check if response has items array
+        ! textDocument/completion answers CompletionItem[] | CompletionList |
+        ! null (LSP 3.17 3.17.2). Only the CompletionList form was read, so a
+        ! server answering the bare array -- which wolf 0.2.1 does -- produced
+        ! zero items and no popup, indistinguishable from a server that had
+        ! nothing to say.
+        have_items = .false.
         if (json_has_key(response, "items")) then
             items_array = json_get_array(response, "items")
+            have_items = .true.
+        else if (response%value_type == JSON_ARRAY) then
+            items_array = response
+            have_items = .true.
+        end if
+
+        if (have_items) then
             n_items = json_array_size(items_array)
 
             ! Limit to max visible items for now

@@ -24,6 +24,7 @@ module lsp_protocol_module
     public :: create_rename_request
     public :: create_workspace_symbols_request
     public :: parse_lsp_message
+    public :: definition_target
     public :: format_json_rpc
 
     ! LSP message types
@@ -645,5 +646,54 @@ contains
             msg%error = json_get_object(json_obj, "error")
         end if
     end function parse_lsp_message
+
+    !> Where a textDocument/definition answer points, from either shape the
+    !> protocol allows.
+    !>
+    !> LSP 3.17 answers Location | Location[] | LocationLink[] | null, and a
+    !> client that declares textDocument.definition.linkSupport -- which
+    !> create_initialize_request does -- invites the LocationLink shape from
+    !> any server that honours the declaration. Reading only Location threw a
+    !> valid answer to our own declaration away, and the key did nothing while
+    !> the server had in fact replied.
+    !>
+    !> A LocationLink carries two ranges: targetSelectionRange names the
+    !> symbol and targetRange spans the whole declaration, doc comment and
+    !> attributes included, so the cursor follows the former.
+    !>
+    !> `line` and `col` come back 0-based, exactly as the protocol sends them.
+    subroutine definition_target(location, uri, line, col, ok)
+        type(json_value_t), intent(in) :: location
+        character(len=:), allocatable, intent(out) :: uri
+        integer, intent(out) :: line, col
+        logical, intent(out) :: ok
+        type(json_value_t) :: range_obj, start_obj
+
+        uri = ''
+        line = 0
+        col = 0
+        ok = .false.
+
+        if (json_has_key(location, 'targetUri')) then
+            uri = json_get_string(location, 'targetUri', '')
+            if (json_has_key(location, 'targetSelectionRange')) then
+                range_obj = json_get_object(location, 'targetSelectionRange')
+            else
+                range_obj = json_get_object(location, 'targetRange')
+            end if
+        else if (json_has_key(location, 'uri')) then
+            uri = json_get_string(location, 'uri', '')
+            range_obj = json_get_object(location, 'range')
+        else
+            return
+        end if
+
+        if (len(uri) == 0) return
+
+        start_obj = json_get_object(range_obj, 'start')
+        line = int(json_get_number(start_obj, 'line', 0.0d0))
+        col = int(json_get_number(start_obj, 'character', 0.0d0))
+        ok = .true.
+    end subroutine definition_target
 
 end module lsp_protocol_module

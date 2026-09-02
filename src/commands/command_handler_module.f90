@@ -13161,7 +13161,7 @@ contains
 
     ! Handle LSP textDocument/definition response
     subroutine handle_definition_response_impl(editor, response)
-        use lsp_protocol_module, only: lsp_message_t
+        use lsp_protocol_module, only: lsp_message_t, definition_target
         use json_module, only: json_value_t, json_get_object, json_get_string, &
                                json_get_number, json_array_size, json_get_array_element, &
                                json_has_key, json_stringify
@@ -13170,11 +13170,11 @@ contains
         use renderer_module, only: render_screen
         type(editor_state_t), intent(inout) :: editor
         type(lsp_message_t), intent(in) :: response
-        type(json_value_t) :: location_obj, range_obj, start_obj
+        type(json_value_t) :: location_obj
         character(len=:), allocatable :: uri, filepath
-        real(8) :: line_real, col_real
+        integer :: lsp_line, lsp_col
         integer :: target_line, target_col, i, num_locations
-        logical :: found_file
+        logical :: found_file, target_ok
 
         ! Try to treat result as array first
         num_locations = json_array_size(response%result)
@@ -13182,7 +13182,8 @@ contains
         if (num_locations > 0) then
             ! Array of locations - take first one
             location_obj = json_get_array_element(response%result, 0)
-        else if (json_has_key(response%result, "uri")) then
+        else if (json_has_key(response%result, "uri") .or. &
+                 json_has_key(response%result, "targetUri")) then
             ! Single location object
             location_obj = response%result
         else
@@ -13195,9 +13196,10 @@ contains
             return
         end if
 
-        ! Extract URI
-        uri = json_get_string(location_obj, 'uri', '')
-        if (len(uri) == 0) then
+        ! Both shapes the protocol allows, Location and LocationLink; see
+        ! definition_target.
+        call definition_target(location_obj, uri, lsp_line, lsp_col, target_ok)
+        if (.not. target_ok) then
             call terminal_move_cursor(editor%screen_rows, 1)
             call terminal_write('Invalid definition response                   ')
             if (associated(saved_buffer_for_callback)) then
@@ -13213,18 +13215,11 @@ contains
             filepath = uri
         end if
 
-        ! Get range
-        range_obj = json_get_object(location_obj, 'range')
-        start_obj = json_get_object(range_obj, 'start')
-
-        line_real = json_get_number(start_obj, 'line', 0.0d0)
-        col_real = json_get_number(start_obj, 'character', 0.0d0)
-
         ! Convert from 0-based LSP to 1-based editor coordinates. The
         ! column is refined to a char index per target buffer below (LSP
         ! sends UTF-16 code units).
-        target_line = int(line_real) + 1
-        target_col = int(col_real) + 1
+        target_line = lsp_line + 1
+        target_col = lsp_col + 1
 
         ! Check if the file is already open in a tab
         found_file = .false.
@@ -13300,7 +13295,7 @@ contains
 
                     ! Navigate to the definition position
                     target_col = char_col_from_lsp(editor%tabs(new_tab_idx)%panes(active_pane_of(editor, new_tab_idx))%buffer, &
-                        target_line, int(col_real))
+                        target_line, lsp_col)
                     editor%cursors(editor%active_cursor)%line = target_line
                     editor%cursors(editor%active_cursor)%column = target_col
                     editor%cursors(editor%active_cursor)%desired_column = target_col
@@ -13327,7 +13322,7 @@ contains
         end if
 
         ! File already open in tabs - jump to the line and column
-        target_col = char_col_from_lsp(editor%tabs(i)%panes(active_pane_of(editor, i))%buffer, target_line, int(col_real))
+        target_col = char_col_from_lsp(editor%tabs(i)%panes(active_pane_of(editor, i))%buffer, target_line, lsp_col)
         editor%cursors(editor%active_cursor)%line = target_line
         editor%cursors(editor%active_cursor)%column = target_col
         editor%cursors(editor%active_cursor)%desired_column = target_col
