@@ -1,4 +1,6 @@
 # Makefile for facsimile
+.DEFAULT_GOAL := all
+
 # Detect operating system
 UNAME_S := $(shell uname -s 2>/dev/null || echo Windows)
 UNAME_M := $(shell uname -m 2>/dev/null || echo x86_64)
@@ -165,6 +167,17 @@ SOURCES = vendor/fgof-screen/src/fgof_screen_types.f90 \
           app/main.f90
 
 OBJECTS = $(SOURCES:.f90=.o)
+
+# SOURCES is already topologically ordered for Fortran modules. Preserve that
+# ordering as actual prerequisites, not just recipe order: when a module
+# changes, its object and every possible consumer after it must be rebuilt.
+# A single predecessor per object keeps unrelated changes near the end of the
+# list incremental while preventing stale derived-type layouts in consumers.
+define add-ordered-object-dependencies
+$(if $(word 2,$1),$(eval $(word 2,$1): $(word 1,$1))$(call add-ordered-object-dependencies,$(wordlist 2,$(words $1),$1)))
+endef
+$(call add-ordered-object-dependencies,$(OBJECTS))
+
 C_SOURCES = src/terminal/termios_wrapper.c \
             src/terminal/pty_wrapper.c \
             src/terminal/vt100_grid.c \
@@ -382,6 +395,22 @@ check-render:
 	fi
 	@echo ok
 
+# A dry-run with syntax_highlighter_module treated as freshly changed must
+# include renderer_module, which consumes its public derived types. This is a
+# cheap guard against reducing the source order back to an undeclared promise.
+check-deps: all
+	@printf 'Checking incremental Fortran module dependencies... '
+	@plan=`mktemp`; \
+	trap 'rm -f "$$plan"' EXIT; \
+	$(MAKE) --no-print-directory -n \
+		-W src/syntax/syntax_highlighter_module.f90 all > "$$plan"; \
+	if ! grep -q 'renderer_module\.f90' "$$plan"; then \
+		echo; \
+		echo '  renderer_module would remain stale after a syntax module change'; \
+		exit 1; \
+	fi
+	@echo ok
+
 check-windows:
 	@echo "Syntax-checking the Windows branches..."
 	@for f in $(WIN_CHECK_SRC); do \
@@ -418,4 +447,4 @@ lsp-dev: clean-lsp
 	@echo "Building LSP modules with debug flags..."
 	@$(MAKE) lsp-modules FFLAGS="$(FFLAGS_DEBUG)" CFLAGS="$(CFLAGS_DEV)"
 
-.PHONY: all clean dev debug info install uninstall bump-patch bump-minor bump-major version release lsp-modules test-lsp test-lsp-editor clean-lsp lsp-dev compile-commands
+.PHONY: all clean dev debug info install uninstall bump-patch bump-minor bump-major version release lsp-modules test-lsp test-lsp-editor clean-lsp lsp-dev compile-commands check-render check-deps check-windows

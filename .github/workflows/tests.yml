@@ -48,6 +48,9 @@ jobs:
       - name: Nothing draws past the frame buffer
         run: make check-render
 
+      - name: Incremental module consumers rebuild
+        run: make check-deps
+
       - name: No compiler warnings
         run: |
           if grep -iE '(^|[^-])warning:' /tmp/build.log; then
