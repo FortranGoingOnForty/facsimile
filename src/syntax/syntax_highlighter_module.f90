@@ -14,7 +14,7 @@ module syntax_highlighter_module
     public :: detect_language
     public :: TOKEN_PLAIN, TOKEN_KEYWORD, TOKEN_STRING, TOKEN_NUMBER
     public :: TOKEN_COMMENT, TOKEN_OPERATOR, TOKEN_TYPE, TOKEN_FUNCTION
-    public :: TOKEN_PREPROCESSOR
+    public :: TOKEN_PREPROCESSOR, TOKEN_INTERP
 
     ! Token types as integer parameters
     integer, parameter :: TOKEN_PLAIN = 0
@@ -26,6 +26,13 @@ module syntax_highlighter_module
     integer, parameter :: TOKEN_TYPE = 6
     integer, parameter :: TOKEN_FUNCTION = 7
     integer, parameter :: TOKEN_PREPROCESSOR = 8
+    ! A `{expr}` interpolation inside a string. Its own class because the
+    ! span is code, not text: the reader needs to see where the string stops
+    ! being literal. sagitta paints the same span `string.interp`; this
+    ! editor has no interpolation colour of its own yet, so get_token_color
+    ! lends it the preprocessor role -- the existing "this stretch belongs
+    ! to another layer" colour -- until one is added.
+    integer, parameter :: TOKEN_INTERP = 9
 
     ! Token structure
     type :: token_t
@@ -48,6 +55,9 @@ module syntax_highlighter_module
         logical :: case_sensitive = .true.
         ! '#' at the start of a line begins a preprocessor directive (C/C++)
         logical :: has_preprocessor = .false.
+        ! Every string literal is an f-string: `{expr}` inside one is code,
+        ! `{{` and `}}` are literal braces (wolf, [gram.lex.str]).
+        logical :: interpolated_strings = .false.
     end type language_def_t
 
     ! Main highlighter type
@@ -57,6 +67,12 @@ module syntax_highlighter_module
         logical :: in_multiline_comment = .false.
         logical :: in_multiline_string = .false.
         character(len=4) :: string_delimiter = ""
+        ! Interpolation state, carried between lines the same way the
+        ! multiline-string state is -- an unclosed `{` inside a """ block
+        ! really does continue on the next line, and interp_depth is the
+        ! brace balance that says which `}` ends it.
+        logical :: in_interp = .false.
+        integer :: interp_depth = 0
     end type syntax_highlighter_t
 
 contains
@@ -68,6 +84,8 @@ contains
         highlighter%enabled = .false.
         highlighter%in_multiline_comment = .false.
         highlighter%in_multiline_string = .false.
+        highlighter%in_interp = .false.
+        highlighter%interp_depth = 0
 
         if (present(filename)) then
             call detect_language(highlighter, filename)
@@ -273,6 +291,12 @@ contains
         case(TOKEN_FUNCTION)
             color = theme_sgr(THEME_SYNTAX_FUNCTION)
         case(TOKEN_PREPROCESSOR)
+            color = theme_sgr(THEME_SYNTAX_PREPROCESSOR)
+        case(TOKEN_INTERP)
+            ! Borrowed, not chosen: the preprocessor role is the existing
+            ! "this stretch is handled by another layer" colour, and it is
+            ! distinct from the string colour in every shipped theme. A
+            ! dedicated syntax.interp role would be one line here.
             color = theme_sgr(THEME_SYNTAX_PREPROCESSOR)
         case(TOKEN_PLAIN)
             color = ""
@@ -480,31 +504,49 @@ contains
         end do
     end function check_string_start
 
-    subroutine process_string(highlighter, line, tokens, token_count, pos)
-        type(syntax_highlighter_t), intent(inout) :: highlighter
+    ! The delimiter that opens a string at `pos`, longest form first because
+    ! the list is ordered that way and the first match wins.
+    function matched_delimiter(highlighter, line, pos) result(delimiter)
+        type(syntax_highlighter_t), intent(in) :: highlighter
         character(len=*), intent(in) :: line
-        type(token_t), intent(inout) :: tokens(:)
-        integer, intent(inout) :: token_count, pos
-        integer :: i, start_pos, delim_len, line_len
+        integer, intent(in) :: pos
         character(len=:), allocatable :: delimiter
-        logical :: found_end, is_multiline
+        integer :: i, delim_len
 
-        line_len = len(line)
-        start_pos = pos
+        ! Defensive default - check_string_start has already said one matches
+        delimiter = '"'
 
-        ! Initialize delimiter (defensive programming - should always be set in loop below)
-        delimiter = '"'  ! Default fallback
-
-        ! Find which delimiter matches
         do i = 1, size(highlighter%current_lang%string_delimiters)
             delim_len = len_trim(highlighter%current_lang%string_delimiters(i))
-            if (pos + delim_len - 1 <= line_len) then
+            if (pos + delim_len - 1 <= len(line)) then
                 if (line(pos:pos+delim_len-1) == trim(highlighter%current_lang%string_delimiters(i))) then
                     delimiter = trim(highlighter%current_lang%string_delimiters(i))
                     exit
                 end if
             end if
         end do
+    end function matched_delimiter
+
+    subroutine process_string(highlighter, line, tokens, token_count, pos)
+        type(syntax_highlighter_t), intent(inout) :: highlighter
+        character(len=*), intent(in) :: line
+        type(token_t), intent(inout) :: tokens(:)
+        integer, intent(inout) :: token_count, pos
+        integer :: start_pos, line_len
+        character(len=:), allocatable :: delimiter
+        logical :: found_end, is_multiline
+
+        ! Languages whose strings are f-strings need the body split into
+        ! literal runs and interpolations, which is a different walk.
+        if (highlighter%current_lang%interpolated_strings) then
+            call process_interp_string(highlighter, line, tokens, token_count, pos)
+            return
+        end if
+
+        line_len = len(line)
+        start_pos = pos
+
+        delimiter = matched_delimiter(highlighter, line, pos)
 
         ! Check if this is a multiline-capable delimiter
         ! Python: """ or ''' (length 3)
@@ -550,6 +592,219 @@ contains
             pos = line_len + 1
         end if
     end subroutine process_string
+
+    ! ------------------------------------------------------------------
+    ! Interpolated strings (wolf).
+    !
+    ! [gram.lex.str]: STR_PART ::= STR_TEXT | '{{' | '}}' | INTERP, and
+    ! INTERP ::= '{' expr FORMAT_SPEC? '}'. So the body of a string is
+    ! literal text with holes in it, and the holes are code. Painting the
+    ! whole literal one colour hides where the code is; painting the holes
+    ! shows it. This is a line tokenizer, not a parser -- the expression
+    ! inside a hole is one span, not re-lexed -- so the only thing that has
+    ! to be got right is where each hole starts and stops.
+    ! ------------------------------------------------------------------
+
+    ! Bounds-safe two-character compare. Fortran's .and. does not
+    ! short-circuit, so the length test cannot ride in the same expression
+    ! as the substring compare.
+    function two_char_at(line, pos, pair) result(res)
+        character(len=*), intent(in) :: line
+        integer, intent(in) :: pos
+        character(len=*), intent(in) :: pair
+        logical :: res
+
+        res = .false.
+        if (pos < 1) return
+        if (pos + 1 > len(line)) return
+        res = (line(pos:pos+1) == pair)
+    end function two_char_at
+
+    ! Bounds-safe compare against a string delimiter of any length.
+    function delimiter_at(line, pos, delimiter) result(res)
+        character(len=*), intent(in) :: line
+        integer, intent(in) :: pos
+        character(len=*), intent(in) :: delimiter
+        logical :: res
+
+        res = .false.
+        if (len(delimiter) == 0) return
+        if (pos < 1) return
+        if (pos + len(delimiter) - 1 > len(line)) return
+        res = (line(pos:pos+len(delimiter)-1) == delimiter)
+    end function delimiter_at
+
+    ! One token, if it covers at least one column and there is room.
+    subroutine emit_token(tokens, token_count, tok_type, start_col, end_col)
+        type(token_t), intent(inout) :: tokens(:)
+        integer, intent(inout) :: token_count
+        integer, intent(in) :: tok_type, start_col, end_col
+
+        if (end_col < start_col) return
+        if (token_count >= size(tokens)) return
+        token_count = token_count + 1
+        tokens(token_count)%type = tok_type
+        tokens(token_count)%start_col = start_col
+        tokens(token_count)%end_col = end_col
+    end subroutine emit_token
+
+    ! Consume one `{expr}` from `pos` and emit it as a single TOKEN_INTERP.
+    ! Brace balance decides which `}` ends it, so `{a.b(c[0])}` closes at
+    ! its own brace and `{ {k: v} }` at the outer one. An expression that
+    ! does not close on this line paints to the end of the line and leaves
+    ! in_interp set -- inside a """ block that is the truth, and a one-line
+    ! string clears the flag when it ends at the newline.
+    subroutine process_interp_span(highlighter, line, tokens, token_count, pos)
+        type(syntax_highlighter_t), intent(inout) :: highlighter
+        character(len=*), intent(in) :: line
+        type(token_t), intent(inout) :: tokens(:)
+        integer, intent(inout) :: token_count, pos
+        integer :: line_len, start_col
+
+        line_len = len(line)
+        start_col = pos
+
+        do while (pos <= line_len)
+            select case (line(pos:pos))
+            case ('{')
+                highlighter%interp_depth = highlighter%interp_depth + 1
+                pos = pos + 1
+            case ('}')
+                if (highlighter%interp_depth <= 1) then
+                    pos = pos + 1
+                    call emit_token(tokens, token_count, TOKEN_INTERP, start_col, pos - 1)
+                    highlighter%in_interp = .false.
+                    highlighter%interp_depth = 0
+                    return
+                end if
+                highlighter%interp_depth = highlighter%interp_depth - 1
+                pos = pos + 1
+            case default
+                pos = pos + 1
+            end select
+        end do
+
+        call emit_token(tokens, token_count, TOKEN_INTERP, start_col, line_len)
+    end subroutine process_interp_span
+
+    ! Walk a string body from `pos`, emitting a TOKEN_STRING run for every
+    ! stretch of literal text and a TOKEN_INTERP span for every hole.
+    ! `run_start` is where the current literal run began: the opening
+    ! delimiter for a string that starts on this line, `pos` for a
+    ! continuation line inside a """ block.
+    subroutine scan_interp_body(highlighter, line, tokens, token_count, pos, &
+                                run_start_in, delimiter, closed)
+        type(syntax_highlighter_t), intent(inout) :: highlighter
+        character(len=*), intent(in) :: line
+        type(token_t), intent(inout) :: tokens(:)
+        integer, intent(inout) :: token_count, pos
+        integer, intent(in) :: run_start_in
+        character(len=*), intent(in) :: delimiter
+        logical, intent(out) :: closed
+        integer :: line_len, run_start
+
+        line_len = len(line)
+        run_start = run_start_in
+        closed = .false.
+
+        do while (pos <= line_len)
+            if (highlighter%in_interp) then
+                call process_interp_span(highlighter, line, tokens, token_count, pos)
+                run_start = pos
+                cycle
+            end if
+
+            if (delimiter_at(line, pos, delimiter)) then
+                pos = pos + len(delimiter)
+                closed = .true.
+                exit
+            else if (line(pos:pos) == '\') then
+                ! An escape hides the next character, `\"` and `\{` alike
+                if (pos < line_len) then
+                    pos = pos + 2
+                else
+                    pos = pos + 1
+                end if
+            else if (two_char_at(line, pos, '{{') .or. two_char_at(line, pos, '}}')) then
+                ! A literal brace, and part of the text around the holes
+                pos = pos + 2
+            else if (line(pos:pos) == '{') then
+                call emit_token(tokens, token_count, TOKEN_STRING, run_start, pos - 1)
+                highlighter%in_interp = .true.
+                highlighter%interp_depth = 0
+                ! The branch at the top of the loop consumes the span
+            else
+                pos = pos + 1
+            end if
+        end do
+
+        if (closed) then
+            call emit_token(tokens, token_count, TOKEN_STRING, run_start, pos - 1)
+        else if (.not. highlighter%in_interp) then
+            call emit_token(tokens, token_count, TOKEN_STRING, run_start, line_len)
+        end if
+
+        ! A one-line string ends at the newline whatever it was in the middle
+        ! of, so nothing it opened can bleed onto the next line.
+        if (closed .or. len(delimiter) < 3) then
+            highlighter%in_interp = .false.
+            highlighter%interp_depth = 0
+        end if
+    end subroutine scan_interp_body
+
+    ! A string that opens on this line, in a language whose strings
+    ! interpolate. Same contract as process_string: `pos` lands after the
+    ! literal, and an unclosed multiline form leaves the highlighter in
+    ! multiline string mode.
+    subroutine process_interp_string(highlighter, line, tokens, token_count, pos)
+        type(syntax_highlighter_t), intent(inout) :: highlighter
+        character(len=*), intent(in) :: line
+        type(token_t), intent(inout) :: tokens(:)
+        integer, intent(inout) :: token_count, pos
+        integer :: start_pos, line_len
+        character(len=:), allocatable :: delimiter
+        logical :: closed
+
+        line_len = len(line)
+        start_pos = pos
+        delimiter = matched_delimiter(highlighter, line, pos)
+
+        pos = pos + len(delimiter)
+        call scan_interp_body(highlighter, line, tokens, token_count, pos, &
+                              start_pos, delimiter, closed)
+
+        if (.not. closed) then
+            if (len(delimiter) >= 3) then
+                highlighter%in_multiline_string = .true.
+                highlighter%string_delimiter = delimiter
+            end if
+            pos = line_len + 1
+        end if
+    end subroutine process_interp_string
+
+    ! A continuation line of a """ block in a language whose strings
+    ! interpolate: the same walk, resumed, carrying any interpolation that
+    ! was still open at the end of the previous line.
+    subroutine process_multiline_interp(highlighter, line, tokens, token_count, pos)
+        type(syntax_highlighter_t), intent(inout) :: highlighter
+        character(len=*), intent(in) :: line
+        type(token_t), intent(inout) :: tokens(:)
+        integer, intent(inout) :: token_count, pos
+        character(len=:), allocatable :: delimiter
+        logical :: closed
+
+        delimiter = trim(highlighter%string_delimiter)
+
+        call scan_interp_body(highlighter, line, tokens, token_count, pos, &
+                              pos, delimiter, closed)
+
+        if (closed) then
+            highlighter%in_multiline_string = .false.
+            highlighter%string_delimiter = ""
+        else
+            pos = len(line) + 1
+        end if
+    end subroutine process_multiline_interp
 
     subroutine process_number(line, tokens, token_count, pos)
         character(len=*), intent(in) :: line
@@ -921,6 +1176,9 @@ contains
         allocate(highlighter%current_lang%string_delimiters(2))
         highlighter%current_lang%string_delimiters = ['""" ', '"   ']
 
+        ! Every wolf string is an f-string ([gram.lex.str]), both forms.
+        highlighter%current_lang%interpolated_strings = .true.
+
         allocate(highlighter%current_lang%operators(37))
         highlighter%current_lang%operators = [ &
             "<=> ", "<<= ", ">>= ", "..= ", "==  ", "!=  ", &
@@ -1272,6 +1530,13 @@ contains
         type(token_t), intent(inout) :: tokens(:)
         integer, intent(inout) :: token_count, pos
         integer :: end_pos, delim_len, line_len
+
+        ! f-string bodies need the interpolations picked out of the run, so
+        ! the continuation line takes the same walk the opening line took.
+        if (highlighter%current_lang%interpolated_strings) then
+            call process_multiline_interp(highlighter, line, tokens, token_count, pos)
+            return
+        end if
 
         line_len = len(line)
         ! string_delimiter is fixed width (len=4), so a stored """ arrives

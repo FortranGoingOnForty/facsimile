@@ -79,7 +79,8 @@ module command_handler_module
                                          request_references, request_code_actions, request_document_symbols, &
                                          request_signature_help, request_formatting, request_rename, &
                                          process_server_messages, filename_to_uri, &
-                                         get_server_with_capability, notify_file_opened, &
+                                         get_server_with_capability, note_unserved_capability, &
+                                         notify_file_opened, &
                                          CAP_COMPLETION, CAP_DEFINITION, CAP_REFERENCES, CAP_RENAME, &
                                          CAP_CODE_ACTIONS, CAP_FORMATTING, CAP_HOVER, CAP_DOCUMENT_SYMBOLS
     use rename_prompt_module, only: show_rename_prompt
@@ -375,24 +376,40 @@ contains
         if (allocated(editor%filename)) name = editor%filename
     end function ai_active_filename
 
-    ! Why rename cannot run right now. "Nothing happened" is the least
-    ! useful thing F2 can do, so name the actual obstacle.
-    function rename_unavailable_reason(editor) result(msg)
+    !> Say why a bound LSP key did nothing. "Nothing happened" is the least
+    !> useful thing any of these keys can do, so name the actual obstacle:
+    !> which server is answering for this file, and which feature it does not
+    !> serve (facsimile#4 item 2).
+    !>
+    !> It goes out on the LSP layer's own message channel rather than through
+    !> set_status_message, because the main loop redraws when it collects one
+    !> and does not redraw for a key that changed nothing otherwise -- which
+    !> is why the two messages already written here were never seen.
+    subroutine note_lsp_capability_gap(editor, capability)
         type(editor_state_t), intent(in) :: editor
-        character(len=:), allocatable :: msg
+        integer, intent(in) :: capability
         integer :: tab_idx
+        integer :: no_servers(1)
 
+        no_servers = 0
         tab_idx = editor%active_tab_index
+
         if (tab_idx < 1 .or. tab_idx > size(editor%tabs)) then
-            msg = '[F2] No file open'
-        else if (editor%tabs(tab_idx)%num_lsp_servers < 1 .or. &
-                 .not. allocated(editor%tabs(tab_idx)%lsp_server_indices)) then
-            msg = '[F2] No language server running for this file ' // &
-                  '(check it is installed and the file type is supported)'
-        else
-            msg = '[F2] The language server for this file does not support rename'
+            call note_unserved_capability(editor%lsp_manager, no_servers, 0, capability)
+            return
         end if
-    end function rename_unavailable_reason
+
+        if (editor%tabs(tab_idx)%num_lsp_servers < 1 .or. &
+            .not. allocated(editor%tabs(tab_idx)%lsp_server_indices)) then
+            call note_unserved_capability(editor%lsp_manager, no_servers, 0, capability)
+            return
+        end if
+
+        call note_unserved_capability(editor%lsp_manager, &
+            editor%tabs(tab_idx)%lsp_server_indices, &
+            editor%tabs(tab_idx)%num_lsp_servers, &
+            capability)
+    end subroutine note_lsp_capability_gap
 
     function get_lsp_server_for_cap(editor, capability) result(server_idx)
         type(editor_state_t), intent(in) :: editor
@@ -2228,6 +2245,8 @@ contains
                             lsp_line, lsp_char, &
                             handle_popup_completion_response_wrapper)
                     end block
+                else
+                    call note_lsp_capability_gap(editor, CAP_COMPLETION)
                 end if
             end block
 
@@ -2258,6 +2277,8 @@ contains
                                 editor%screen_rows, editor%screen_cols)
                         end if
                     end block
+                else
+                    call note_lsp_capability_gap(editor, CAP_HOVER)
                 end if
             end block
 
@@ -2303,6 +2324,8 @@ contains
                             diags_json)
                             ! Panel will be shown when response arrives in handle_code_actions_response_impl
                         end block
+                    else
+                        call note_lsp_capability_gap(editor, CAP_CODE_ACTIONS)
                     end if
                 end block
             end if
@@ -2347,8 +2370,7 @@ contains
                         end if
                     end block
                 else
-                    editor%timed_message = '[F12] No LSP server with definition support'
-                    editor%timed_message_ms = get_time_ms()
+                    call note_lsp_capability_gap(editor, CAP_DEFINITION)
                 end if
             end block
 
@@ -2509,6 +2531,8 @@ contains
                             end block
                         end if
                     end block
+                else
+                    call note_lsp_capability_gap(editor, CAP_REFERENCES)
                 end if
             end block
 
@@ -2654,7 +2678,7 @@ contains
                         if (allocated(line)) deallocate(line)
                     end block
                 else
-                    call set_status_message(rename_unavailable_reason(editor))
+                    call note_lsp_capability_gap(editor, CAP_RENAME)
                 end if
             end block
 
@@ -2689,6 +2713,8 @@ contains
                             call terminal_write('Formatting document...                     ')
                         end if
                     end block
+                else
+                    call note_lsp_capability_gap(editor, CAP_FORMATTING)
                 end if
             end block
 
@@ -2723,6 +2749,8 @@ contains
                                 call show_symbols_panel(editor%symbols_panel, editor%screen_cols, editor%screen_rows)
                             end if
                         end block
+                    else
+                        call note_lsp_capability_gap(editor, CAP_DOCUMENT_SYMBOLS)
                     end if
                 end block
             end if
@@ -2777,6 +2805,10 @@ contains
 
                     ! Get server with workspace symbols capability
                     ws_server = get_lsp_server_for_cap(editor, CAP_WORKSPACE_SYMBOLS_USE)
+                    if (ws_server <= 0) then
+                        ! The panel would sit there empty forever otherwise
+                        call note_lsp_capability_gap(editor, CAP_WORKSPACE_SYMBOLS_USE)
+                    end if
 
                     ! Save editor state for LSP callback
                     saved_editor_for_callback => editor
@@ -13129,7 +13161,7 @@ contains
 
     ! Handle LSP textDocument/definition response
     subroutine handle_definition_response_impl(editor, response)
-        use lsp_protocol_module, only: lsp_message_t
+        use lsp_protocol_module, only: lsp_message_t, definition_target
         use json_module, only: json_value_t, json_get_object, json_get_string, &
                                json_get_number, json_array_size, json_get_array_element, &
                                json_has_key, json_stringify
@@ -13138,11 +13170,11 @@ contains
         use renderer_module, only: render_screen
         type(editor_state_t), intent(inout) :: editor
         type(lsp_message_t), intent(in) :: response
-        type(json_value_t) :: location_obj, range_obj, start_obj
+        type(json_value_t) :: location_obj
         character(len=:), allocatable :: uri, filepath
-        real(8) :: line_real, col_real
+        integer :: lsp_line, lsp_col
         integer :: target_line, target_col, i, num_locations
-        logical :: found_file
+        logical :: found_file, target_ok
 
         ! Try to treat result as array first
         num_locations = json_array_size(response%result)
@@ -13150,7 +13182,8 @@ contains
         if (num_locations > 0) then
             ! Array of locations - take first one
             location_obj = json_get_array_element(response%result, 0)
-        else if (json_has_key(response%result, "uri")) then
+        else if (json_has_key(response%result, "uri") .or. &
+                 json_has_key(response%result, "targetUri")) then
             ! Single location object
             location_obj = response%result
         else
@@ -13163,9 +13196,10 @@ contains
             return
         end if
 
-        ! Extract URI
-        uri = json_get_string(location_obj, 'uri', '')
-        if (len(uri) == 0) then
+        ! Both shapes the protocol allows, Location and LocationLink; see
+        ! definition_target.
+        call definition_target(location_obj, uri, lsp_line, lsp_col, target_ok)
+        if (.not. target_ok) then
             call terminal_move_cursor(editor%screen_rows, 1)
             call terminal_write('Invalid definition response                   ')
             if (associated(saved_buffer_for_callback)) then
@@ -13181,18 +13215,11 @@ contains
             filepath = uri
         end if
 
-        ! Get range
-        range_obj = json_get_object(location_obj, 'range')
-        start_obj = json_get_object(range_obj, 'start')
-
-        line_real = json_get_number(start_obj, 'line', 0.0d0)
-        col_real = json_get_number(start_obj, 'character', 0.0d0)
-
         ! Convert from 0-based LSP to 1-based editor coordinates. The
         ! column is refined to a char index per target buffer below (LSP
         ! sends UTF-16 code units).
-        target_line = int(line_real) + 1
-        target_col = int(col_real) + 1
+        target_line = lsp_line + 1
+        target_col = lsp_col + 1
 
         ! Check if the file is already open in a tab
         found_file = .false.
@@ -13268,7 +13295,7 @@ contains
 
                     ! Navigate to the definition position
                     target_col = char_col_from_lsp(editor%tabs(new_tab_idx)%panes(active_pane_of(editor, new_tab_idx))%buffer, &
-                        target_line, int(col_real))
+                        target_line, lsp_col)
                     editor%cursors(editor%active_cursor)%line = target_line
                     editor%cursors(editor%active_cursor)%column = target_col
                     editor%cursors(editor%active_cursor)%desired_column = target_col
@@ -13295,7 +13322,7 @@ contains
         end if
 
         ! File already open in tabs - jump to the line and column
-        target_col = char_col_from_lsp(editor%tabs(i)%panes(active_pane_of(editor, i))%buffer, target_line, int(col_real))
+        target_col = char_col_from_lsp(editor%tabs(i)%panes(active_pane_of(editor, i))%buffer, target_line, lsp_col)
         editor%cursors(editor%active_cursor)%line = target_line
         editor%cursors(editor%active_cursor)%column = target_col
         editor%cursors(editor%active_cursor)%desired_column = target_col

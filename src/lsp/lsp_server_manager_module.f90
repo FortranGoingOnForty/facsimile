@@ -18,6 +18,7 @@ module lsp_server_manager_module
     public :: get_language_for_file, start_lsp_for_file
     public :: start_all_lsp_servers_for_file  ! NEW: multi-server support
     public :: get_server_with_capability       ! NEW: capability-based routing
+    public :: server_serves, note_unserved_capability
     public :: notify_file_opened, notify_file_changed, notify_file_saved, notify_file_closed
     public :: request_completion, request_hover, request_definition, request_references, request_code_actions
     public :: request_document_symbols, request_signature_help, request_formatting, request_rename
@@ -336,10 +337,14 @@ contains
 
         ! Wolf - the compiler is the language server, so `wolf lsp` is a
         ! subcommand of the toolchain rather than a separate download.
-        ! Only the features the server actually implements are enabled here:
-        ! these flags drive OUR request routing, not the server's advertised
-        ! capabilities, so an optimistic entry sends requests that come back
-        ! MethodNotFound and read to a user as a broken server.
+        !
+        ! What a server advertises in its initialize reply now decides where
+        ! requests go (server_serves); this entry is only the floor used
+        ! before that reply arrives. It is still conservative on purpose --
+        ! an optimistic floor sends requests that come back MethodNotFound
+        ! and read to a user as a broken server -- but it can no longer gate
+        ! off something the running server does serve, which is what happened
+        ! to completion at wolf 0.2.1 (facsimile#4).
         caps = .false.
         caps(CAP_HOVER) = .true.
         caps(CAP_FORMATTING) = .true.
@@ -1109,6 +1114,71 @@ contains
         end if
     end function start_new_server_from_config
 
+    ! The supports_* flags read out of the server's initialize reply, as a
+    ! capability vector.
+    !
+    ! CAP_DIAGNOSTICS is deliberately absent: diagnostics are pushed by the
+    ! server rather than requested, there is no provider key in the reply to
+    ! parse, and server_serves answers that one from the table instead.
+    function advertised_capabilities(server) result(caps)
+        type(lsp_server_t), intent(in) :: server
+        logical :: caps(NUM_CAPABILITIES)
+
+        caps = .false.
+        caps(CAP_COMPLETION) = server%supports_completion
+        caps(CAP_DEFINITION) = server%supports_definition
+        caps(CAP_REFERENCES) = server%supports_references
+        caps(CAP_RENAME) = server%supports_rename
+        caps(CAP_CODE_ACTIONS) = server%supports_code_actions
+        caps(CAP_FORMATTING) = server%supports_formatting
+        caps(CAP_HOVER) = server%supports_hover
+        caps(CAP_DOCUMENT_SYMBOLS) = server%supports_document_symbols
+        caps(CAP_WORKSPACE_SYMBOLS) = server%supports_workspace_symbols
+    end function advertised_capabilities
+
+    !> Does this server serve `capability`?
+    !>
+    !> The server's own answer, whenever it gave one: handle_initialize_response
+    !> parses what the process advertised in its `initialize` reply, and that
+    !> describes the server we are actually talking to. The static table in
+    !> load_default_configs is the floor underneath it -- it answers for a
+    !> server that has advertised nothing, which is every server before its
+    !> reply arrives and any server whose reply carries an empty capabilities
+    !> object; routing on server truth alone would switch every key off during
+    !> startup.
+    !>
+    !> Reading the reply is what keeps the table from going stale at a server
+    !> release. wolf 0.2.1 advertises completionProvider, the table predates
+    !> it, and Ctrl+Space was gated off on every .lu file (facsimile#4). The
+    !> table's own comment asks for MethodNotFound protection; the reply gives
+    !> exactly that, and keeps giving it as servers grow.
+    logical function server_serves(manager, server_index, capability)
+        type(lsp_manager_t), intent(in) :: manager
+        integer, intent(in) :: server_index
+        integer, intent(in) :: capability
+        logical :: advertised(NUM_CAPABILITIES)
+        integer :: cfg_idx
+
+        server_serves = .false.
+        if (capability < 1 .or. capability > NUM_CAPABILITIES) return
+        if (server_index < 1 .or. server_index > manager%num_servers) return
+
+        cfg_idx = manager%servers(server_index)%config_index
+
+        ! Pushed, never requested, so the reply says nothing about it
+        if (capability /= CAP_DIAGNOSTICS) then
+            advertised = advertised_capabilities(manager%servers(server_index))
+            if (any(advertised)) then
+                server_serves = advertised(capability)
+                return
+            end if
+        end if
+
+        if (cfg_idx > 0 .and. cfg_idx <= manager%num_configs) then
+            server_serves = manager%configs(cfg_idx)%capabilities(capability)
+        end if
+    end function server_serves
+
     ! Get the first server from a list of indices that has a specific capability
     function get_server_with_capability(manager, server_indices, num_servers, capability) result(server_index)
         type(lsp_manager_t), intent(in) :: manager
@@ -1116,22 +1186,85 @@ contains
         integer, intent(in) :: num_servers
         integer, intent(in) :: capability
         integer :: server_index
-        integer :: i, cfg_idx
+        integer :: i
 
         server_index = 0
 
         do i = 1, num_servers
-            if (server_indices(i) > 0 .and. server_indices(i) <= manager%num_servers) then
-                cfg_idx = manager%servers(server_indices(i))%config_index
-                if (cfg_idx > 0 .and. cfg_idx <= manager%num_configs) then
-                    if (manager%configs(cfg_idx)%capabilities(capability)) then
-                        server_index = server_indices(i)
-                        return
-                    end if
-                end if
+            if (server_serves(manager, server_indices(i), capability)) then
+                server_index = server_indices(i)
+                return
             end if
         end do
     end function get_server_with_capability
+
+    !> Say which server does not serve what a bound key just asked for.
+    !>
+    !> A key that does nothing at all reads as a broken server (facsimile#4
+    !> item 2); a sentence reads as a server that has not got there yet. Goes
+    !> out on the same channel as every other thing this module wants to say,
+    !> because this module cannot reach the status line itself.
+    subroutine note_unserved_capability(manager, server_indices, num_servers, capability)
+        type(lsp_manager_t), intent(in) :: manager
+        integer, intent(in) :: server_indices(:)
+        integer, intent(in) :: num_servers
+        integer, intent(in) :: capability
+        integer :: idx
+
+        if (num_servers < 1) then
+            call note_lsp_error('No language server running for this file ' // &
+                '(check it is installed and the file type is supported)')
+            return
+        end if
+
+        idx = server_indices(1)
+        if (idx < 1 .or. idx > manager%num_servers) then
+            call note_lsp_error('No language server running for this file ' // &
+                '(check it is installed and the file type is supported)')
+            return
+        end if
+
+        if (.not. allocated(manager%servers(idx)%name)) then
+            call note_lsp_error('This language server does not serve ' // &
+                capability_name(capability))
+            return
+        end if
+
+        call note_lsp_error(trim(manager%servers(idx)%name) // &
+            ' lsp does not serve ' // capability_name(capability))
+    end subroutine note_unserved_capability
+
+    !> A capability in the words the keybinding is documented in, so the
+    !> sentence names the thing the user just pressed a key for.
+    function capability_name(capability) result(name)
+        integer, intent(in) :: capability
+        character(len=:), allocatable :: name
+
+        select case (capability)
+        case (CAP_COMPLETION)
+            name = 'completion'
+        case (CAP_DEFINITION)
+            name = 'go-to-definition'
+        case (CAP_REFERENCES)
+            name = 'find-references'
+        case (CAP_RENAME)
+            name = 'rename'
+        case (CAP_CODE_ACTIONS)
+            name = 'code actions'
+        case (CAP_FORMATTING)
+            name = 'formatting'
+        case (CAP_DIAGNOSTICS)
+            name = 'diagnostics'
+        case (CAP_HOVER)
+            name = 'hover'
+        case (CAP_DOCUMENT_SYMBOLS)
+            name = 'document symbols'
+        case (CAP_WORKSPACE_SYMBOLS)
+            name = 'workspace symbols'
+        case default
+            name = 'that request'
+        end select
+    end function capability_name
 
     ! Send textDocument/didOpen notification
     subroutine notify_file_opened(manager, server_index, filename, content)
