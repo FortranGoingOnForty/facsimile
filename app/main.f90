@@ -402,9 +402,29 @@ program facsimile
     call backup_configure()
     running = .true.
 
-    ! Set LSP workspace root if explicit -w flag was provided
+    ! The opened filename is resolved through realpath above. Keep the LSP
+    ! root in the same namespace: on macOS /var is a symlink to /private/var,
+    ! and mixing the two makes clangd treat the document as outside the
+    ! workspace, so project-wide operations only reach the active file.
     if (explicit_lsp_workspace) then
-        call set_lsp_workspace_root(editor%lsp_manager, trim(lsp_workspace))
+        block
+            character(len=512) :: resolved_lsp_root
+            call workspace_get_path(trim(lsp_workspace), resolved_lsp_root)
+            call set_lsp_workspace_root(editor%lsp_manager, trim(resolved_lsp_root))
+        end block
+    else if (is_workspace_mode .and. len_trim(workspace_dir) > 0) then
+        call set_lsp_workspace_root(editor%lsp_manager, trim(workspace_dir))
+    else if (len_trim(filename) > 0) then
+        block
+            integer :: root_slash
+            root_slash = index(trim(filename), '/', back=.true.)
+            if (root_slash > 1) then
+                call set_lsp_workspace_root(editor%lsp_manager, &
+                    filename(1:root_slash - 1))
+            else if (root_slash == 1) then
+                call set_lsp_workspace_root(editor%lsp_manager, '/')
+            end if
+        end block
     end if
 
     ! Set up diagnostics handler for LSP

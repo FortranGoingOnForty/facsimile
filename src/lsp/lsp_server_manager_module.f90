@@ -293,8 +293,9 @@ contains
         caps(CAP_DIAGNOSTICS) = .true.
         caps(CAP_DOCUMENT_SYMBOLS) = .true.
         caps(CAP_FORMATTING) = .true.
-        call add_config(manager, "c", "clangd", "clangd", "*.c,*.h", caps)
-        call add_config(manager, "cpp", "clangd", "clangd", "*.cpp,*.cc,*.cxx,*.hpp,*.hxx", caps)
+        call add_config(manager, "c", "clangd", "clangd --background-index", "*.c,*.h", caps)
+        call add_config(manager, "cpp", "clangd", "clangd --background-index", &
+                        "*.cpp,*.cc,*.cxx,*.hpp,*.hxx", caps)
 
         ! Go
         caps = .false.

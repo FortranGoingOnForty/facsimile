@@ -92,7 +92,12 @@ class Session:
         with open(os.path.join(self.home, ".config", "fac", "state.json"), "w") as f:
             f.write('{"first_run_completed": true, "lsp_installer_seen": true,'
                     ' "version": "1.0"}\n')
-        self.work = tempfile.mkdtemp(prefix="fac_rw_work_")
+        # macOS exposes the temporary directory as /var/... while realpath
+        # resolves it to /private/var/.... Facsimile resolves opened files,
+        # and Apple clangd keys its background index by the compile database's
+        # spelling; mixing the aliases makes one symbol look like two projects
+        # and the rename response contains only the active file.
+        self.work = os.path.realpath(tempfile.mkdtemp(prefix="fac_rw_work_"))
         self.paths = {}
         for name, body in (("u.h", HEADER), ("u.c", IMPL), ("main.c", CALLER)):
             p = os.path.join(self.work, name)
