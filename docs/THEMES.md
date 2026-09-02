@@ -120,6 +120,7 @@ syntax.string           syntax.comment          syntax.number
 syntax.type             syntax.function         syntax.preprocessor
 search.match            search.match.active     current_line
 disabled                terminal.background     syntax.operator
+syntax.interp
 ```
 
 An invalid custom theme is rejected without replacing the active theme. Parse

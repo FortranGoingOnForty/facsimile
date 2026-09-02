@@ -58,7 +58,8 @@ module theme_module
     integer, parameter, public :: THEME_TERMINAL_BG = 46
     integer, parameter, public :: THEME_SYNTAX_OPERATOR = 47
     integer, parameter, public :: THEME_SEARCH_MATCH_ACTIVE = 48
-    integer, parameter, public :: THEME_ROLE_COUNT = 48
+    integer, parameter, public :: THEME_SYNTAX_INTERP = 49
+    integer, parameter, public :: THEME_ROLE_COUNT = 49
 
     integer, parameter, public :: ICONS_ASCII = 0
     integer, parameter, public :: ICONS_UNICODE = 1
@@ -75,7 +76,8 @@ module theme_module
         'ghost', 'line_number', 'line_number.active', 'syntax.keyword', &
         'syntax.string', 'syntax.comment', 'syntax.number', 'syntax.type', &
         'syntax.function', 'syntax.preprocessor', 'search.match', 'current_line', &
-        'disabled', 'terminal.background', 'syntax.operator', 'search.match.active']
+        'disabled', 'terminal.background', 'syntax.operator', 'search.match.active', &
+        'syntax.interp']
 
     type, public :: theme_t
         character(len=64) :: name = 'Facsimile Steel'
@@ -490,6 +492,7 @@ contains
         call set_rgb(theme, THEME_SYNTAX_TYPE, '#73c6c8', '')
         call set_rgb(theme, THEME_SYNTAX_FUNCTION, '#91b9e4', '')
         call set_rgb(theme, THEME_SYNTAX_PREPROCESSOR, '#d2a8e3', '')
+        call set_rgb(theme, THEME_SYNTAX_INTERP, '#e6b86a', '')
     end subroutine build_steel
 
     subroutine build_graphite(theme)
@@ -506,6 +509,7 @@ contains
         call set_rgb(theme, THEME_SYNTAX_TYPE, '#70b8b1', '')
         call set_rgb(theme, THEME_SYNTAX_FUNCTION, '#76a8c8', '')
         call set_rgb(theme, THEME_SYNTAX_PREPROCESSOR, '#c39bd3', '')
+        call set_rgb(theme, THEME_SYNTAX_INTERP, '#d9ad66', '')
     end subroutine build_graphite
 
     subroutine build_paper(theme)
@@ -523,6 +527,7 @@ contains
         call set_rgb(theme, THEME_SYNTAX_TYPE, '#176b73', '')
         call set_rgb(theme, THEME_SYNTAX_FUNCTION, '#315f91', '')
         call set_rgb(theme, THEME_SYNTAX_PREPROCESSOR, '#76518c', '')
+        call set_rgb(theme, THEME_SYNTAX_INTERP, '#9a681c', '')
     end subroutine build_paper
 
     subroutine build_legacy(theme)
@@ -562,6 +567,7 @@ contains
         theme%styles(THEME_SYNTAX_FUNCTION)%fg = 6
         theme%styles(THEME_SYNTAX_FUNCTION)%bold = .true.
         theme%styles(THEME_SYNTAX_PREPROCESSOR)%fg = 13
+        theme%styles(THEME_SYNTAX_INTERP)%fg = 3
         theme%styles(THEME_SEARCH_MATCH)%bg = 3
         theme%styles(THEME_SEARCH_MATCH_ACTIVE)%fg = 0
         theme%styles(THEME_SEARCH_MATCH_ACTIVE)%bg = 208

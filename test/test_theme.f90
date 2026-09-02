@@ -18,6 +18,8 @@ program test_theme
 
     call theme_init()
     call check(theme_current_id() == 'steel', 'steel is the default theme')
+    call check(theme_role_name(THEME_SYNTAX_INTERP) == 'syntax.interp', &
+               'string interpolation has a dedicated theme role')
     call check(theme_color_mode() == SCREEN_COLOR_256, &
                'xterm-256color selects the 256-color renderer')
     style = theme_style(THEME_TAB_ACTIVE)
@@ -66,6 +68,9 @@ program test_theme
                'custom palette references set the visible foreground')
     call check(style%bg_truecolor .and. all(style%bg_rgb == [1, 2, 3]), &
                'custom literal colors set the visible background')
+    style = theme_style(THEME_SYNTAX_INTERP)
+    call check(style%fg_truecolor .and. all(style%fg_rgb == [255, 112, 136]), &
+               'custom themes can style string interpolation independently')
 
     style = theme_style(THEME_PANEL_SELECTION)
     call check(style%inverse, 'custom selections may opt into reverse video')
@@ -156,6 +161,9 @@ contains
         write(unit, '(a)') ''
         write(unit, '(a)') '[styles.selection]'
         write(unit, '(a)') 'attrs = ["bold"]'
+        write(unit, '(a)') ''
+        write(unit, '(a)') '[styles.syntax.interp]'
+        write(unit, '(a)') 'fg = "coral"'
         close(unit)
     end subroutine write_custom_theme
 

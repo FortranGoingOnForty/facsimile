@@ -3,7 +3,7 @@ module syntax_highlighter_module
     use theme_module, only: THEME_SYNTAX_COMMENT, THEME_SYNTAX_OPERATOR, &
         THEME_SYNTAX_FUNCTION, THEME_SYNTAX_KEYWORD, THEME_SYNTAX_NUMBER, &
         THEME_SYNTAX_PREPROCESSOR, THEME_SYNTAX_STRING, THEME_SYNTAX_TYPE, &
-        theme_sgr
+        THEME_SYNTAX_INTERP, theme_sgr
     implicit none
     private
 
@@ -28,10 +28,7 @@ module syntax_highlighter_module
     integer, parameter :: TOKEN_PREPROCESSOR = 8
     ! A `{expr}` interpolation inside a string. Its own class because the
     ! span is code, not text: the reader needs to see where the string stops
-    ! being literal. sagitta paints the same span `string.interp`; this
-    ! editor has no interpolation colour of its own yet, so get_token_color
-    ! lends it the preprocessor role -- the existing "this stretch belongs
-    ! to another layer" colour -- until one is added.
+    ! being literal.
     integer, parameter :: TOKEN_INTERP = 9
 
     ! Token structure
@@ -293,11 +290,7 @@ contains
         case(TOKEN_PREPROCESSOR)
             color = theme_sgr(THEME_SYNTAX_PREPROCESSOR)
         case(TOKEN_INTERP)
-            ! Borrowed, not chosen: the preprocessor role is the existing
-            ! "this stretch is handled by another layer" colour, and it is
-            ! distinct from the string colour in every shipped theme. A
-            ! dedicated syntax.interp role would be one line here.
-            color = theme_sgr(THEME_SYNTAX_PREPROCESSOR)
+            color = theme_sgr(THEME_SYNTAX_INTERP)
         case(TOKEN_PLAIN)
             color = ""
         case default
