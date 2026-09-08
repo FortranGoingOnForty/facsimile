@@ -7,13 +7,15 @@ module terminal_io_module
                                raw_read_char_timeout => read_char_timeout, &
                                raw_read_char_escape => read_char_escape, &
                                raw_input_available_count => input_available_count, &
-                               raw_get_terminal_size => get_terminal_size
+                               raw_get_terminal_size => get_terminal_size, &
+                               raw_take_resize => take_terminal_resize_event
     implicit none
     private
 
     public :: terminal_init, terminal_cleanup, terminal_clear_screen
     public :: terminal_move_cursor, terminal_hide_cursor, terminal_show_cursor
     public :: terminal_get_size, terminal_enable_raw_mode, terminal_disable_raw_mode
+    public :: terminal_take_resize_event
     public :: terminal_write, terminal_flush, terminal_enable_mouse, terminal_disable_mouse
     public :: terminal_begin_sync, terminal_end_sync
     public :: terminal_set_motion_tracking
@@ -107,6 +109,12 @@ contains
         integer, intent(out) :: rows, cols
         call raw_get_terminal_size(rows, cols)
     end subroutine terminal_get_size
+
+    function terminal_take_resize_event() result(pending)
+        logical :: pending
+
+        pending = raw_take_resize()
+    end function terminal_take_resize_event
 
     subroutine terminal_enable_raw_mode()
         logical :: success

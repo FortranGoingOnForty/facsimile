@@ -113,12 +113,13 @@ program facsimile
     integer :: session_len
     logical :: explicit_lsp_workspace
     character(len=:), allocatable :: selected_path
-    integer :: status, argc, rows, cols, i
+    integer :: status, argc, rows, cols, i, resize_passes
     integer :: prev_active_tab, prev_active_pane
     character(len=4096) :: prev_active_name
     ! Snapshot for the caret-move fast path
     integer :: prev_cursor_line, prev_viewport_line, prev_viewport_col
     logical :: prev_ghost_visible, batch_caret_only, batch_no_change
+    logical :: resize_event, resize_repaint_pending
     integer :: coalesced_keys
     logical :: active_view_changed
     logical :: opened_existing_tab
@@ -657,6 +658,7 @@ program facsimile
     end if
 
     ! Initial render
+    resize_repaint_pending = .false.
     call render_screen(buffer, editor, allocated(search_pattern), match_case_sensitive)
 
     ! Outer loop: allows cancel-quit to resume editing
@@ -665,12 +667,22 @@ program facsimile
 
     ! Main event loop
     do while (running)
-        ! Detect terminal resize and reflow. The size is otherwise only read
-        ! at startup, so resizing would leave stale dimensions — e.g. split
-        ! panes cramped into a sub-region with the rest of the screen unused.
-        call terminal_get_size(rows, cols)
-        if (rows > 0 .and. cols > 0 .and. &
-            (rows /= editor%screen_rows .or. cols /= editor%screen_cols)) then
+        ! Detect terminal resize and reflow. A terminal is allowed to retain
+        ! and reflow the old alternate-screen cells when its grid changes, so
+        ! merely drawing the new layout over them is not a full repaint. Clear
+        ! the resized grid and present clear+draw as one synchronized update.
+        !
+        ! Docking can report several sizes while one frame is being emitted.
+        ! Re-sample after each repaint (with a small cap so a live resize does
+        ! not starve input) and converge on the newest geometry immediately.
+        resize_passes = 0
+        do
+            call terminal_get_size(rows, cols)
+            resize_event = terminal_take_resize_event()
+            if (rows <= 0 .or. cols <= 0) exit
+            if (.not. resize_event .and. rows == editor%screen_rows .and. &
+                cols == editor%screen_cols) exit
+
             editor%screen_rows = rows
             editor%screen_cols = cols
             ! Propagate the new size to every consumer that caches it: the
@@ -680,6 +692,9 @@ program facsimile
             call resize_renderer(rows, cols)
             call terminal_panel_resize(editor%terminal_panel, rows, cols)
             call update_viewport(editor)
+
+            call terminal_begin_sync()
+            call terminal_clear_screen()
             if (editor%fuss_mode_active) then
                 call render_screen_with_tree(buffer, editor, &
                     allocated(search_pattern), match_case_sensitive)
@@ -687,7 +702,17 @@ program facsimile
                 call render_screen(buffer, editor, &
                     allocated(search_pattern), match_case_sensitive)
             end if
-        end if
+            call terminal_end_sync()
+            call terminal_flush()
+
+            ! The first key after a resize must not use the caret-only path.
+            ! It is a cheap second full frame after a rare event, and repairs
+            ! the whole grid even if the terminal host applied its resize
+            ! after the last size sample or retained cells from an old frame.
+            resize_repaint_pending = .true.
+            resize_passes = resize_passes + 1
+            if (resize_passes >= 3) exit
+        end do
 
         ! Process any LSP messages
         call process_server_messages(editor%lsp_manager)
@@ -986,10 +1011,10 @@ program facsimile
                 ! Except when the shell has just printed something: the panel is
                 ! polled a few lines above, and its output is a change this
                 ! burst's keys knew nothing about.
-                if (batch_no_change .and. &
+                if (.not. resize_repaint_pending .and. batch_no_change .and. &
                     .not. editor%terminal_panel%has_new_output) then
                     continue
-                else if (batch_caret_only .and. &
+                else if (.not. resize_repaint_pending .and. batch_caret_only .and. &
                     caret_move_only(editor, prev_cursor_line, prev_viewport_line, &
                                     prev_viewport_col, prev_ghost_visible)) then
                     call render_caret_move(buffer, editor, prev_cursor_line, &
@@ -999,6 +1024,7 @@ program facsimile
                 else
                     call render_screen(buffer, editor, allocated(search_pattern), match_case_sensitive)
                 end if
+                resize_repaint_pending = .false.
             end if
         end if
     end do

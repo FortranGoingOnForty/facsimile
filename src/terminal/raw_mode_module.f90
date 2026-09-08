@@ -5,6 +5,7 @@ module raw_mode_module
 
     public :: enable_raw_mode, disable_raw_mode, input_available, read_char_timeout
     public :: read_char_escape, input_available_count, get_terminal_size
+    public :: take_terminal_resize_event
 
     ! C function interfaces
     interface
@@ -42,6 +43,11 @@ module raw_mode_module
             import :: c_int
             integer(c_int), intent(out) :: rows, cols
         end subroutine c_get_terminal_size
+
+        function c_take_terminal_resize_event() bind(C, name="take_terminal_resize_event") result(pending)
+            import :: c_int
+            integer(c_int) :: pending
+        end function c_take_terminal_resize_event
     end interface
 
 contains
@@ -104,5 +110,11 @@ contains
         rows = c_rows
         cols = c_cols
     end subroutine get_terminal_size
+
+    function take_terminal_resize_event() result(pending)
+        logical :: pending
+
+        pending = c_take_terminal_resize_event() /= 0
+    end function take_terminal_resize_event
 
 end module raw_mode_module

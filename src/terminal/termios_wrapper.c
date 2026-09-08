@@ -271,6 +271,11 @@ void flush_input_buffer(void) {
     flush_input();
 }
 
+// Windows resize events are observed through GetConsoleScreenBufferInfo.
+int take_terminal_resize_event(void) {
+    return 0;
+}
+
 // Get terminal size
 void get_terminal_size(int *rows, int *cols) {
     CONSOLE_SCREEN_BUFFER_INFO csbi;
@@ -321,6 +326,7 @@ void term_buf_flush(void) {
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
+#include <signal.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
 #include <string.h>
@@ -349,6 +355,14 @@ static void write_all(int fd, const void *data, size_t len) {
 
 static struct termios orig_termios;
 static int raw_mode_enabled = 0;
+static volatile sig_atomic_t terminal_resize_pending = 0;
+static struct sigaction orig_sigwinch;
+static int sigwinch_handler_installed = 0;
+
+static void note_terminal_resize(int signo) {
+    (void)signo;
+    terminal_resize_pending = 1;
+}
 
 // Input buffer for batching reads
 #define INPUT_BUFFER_SIZE 256
@@ -416,6 +430,18 @@ int enable_raw_mode(void) {
     raw_mode_enabled = 1;
     buffer_start = buffer_end = 0;
 
+    // A host may ask an embedded terminal to redraw without changing its
+    // final dimensions. Size polling cannot see that event, so retain it in
+    // a signal-safe latch for the main loop. No terminal work happens here.
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = note_terminal_resize;
+    sigemptyset(&action.sa_mask);
+    if (sigaction(SIGWINCH, &action, &orig_sigwinch) == 0) {
+        sigwinch_handler_installed = 1;
+    }
+    terminal_resize_pending = 0;
+
     // Flush any stale input that might be waiting
     flush_input();
 
@@ -425,6 +451,11 @@ int enable_raw_mode(void) {
 // Disable raw mode - returns 0 on success, -1 on failure
 int disable_raw_mode(void) {
     if (!raw_mode_enabled) return 0;
+
+    if (sigwinch_handler_installed) {
+        sigaction(SIGWINCH, &orig_sigwinch, NULL);
+        sigwinch_handler_installed = 0;
+    }
 
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios) == -1) {
         return -1;
@@ -552,6 +583,28 @@ int read_char_escape(void) {
 // Public function to flush input buffer (callable from Fortran)
 void flush_input_buffer(void) {
     flush_input();
+}
+
+// Return and clear the SIGWINCH latch. sig_atomic_t is the only shared state;
+// all querying and rendering remains in the ordinary main-loop context.
+int take_terminal_resize_event(void) {
+    sigset_t resize_set;
+    sigset_t old_set;
+    int blocked;
+    int pending;
+
+    sigemptyset(&resize_set);
+    sigaddset(&resize_set, SIGWINCH);
+    blocked = sigprocmask(SIG_BLOCK, &resize_set, &old_set) == 0;
+
+    pending = terminal_resize_pending != 0;
+    terminal_resize_pending = 0;
+
+    // If SIGWINCH arrived while blocked, restoring the mask delivers it and
+    // leaves the latch set for the next main-loop pass instead of losing it
+    // between the read and clear above.
+    if (blocked) sigprocmask(SIG_SETMASK, &old_set, NULL);
+    return pending;
 }
 
 // ============================================================
