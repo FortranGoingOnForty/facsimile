@@ -147,7 +147,8 @@ def snapshot(binary, keys, force_full, src=None, name="d.f90"):
              for y in range(ROWS) for x in range(COLS)
              if screen.buffer[y][x].fg != "default"
              or screen.buffer[y][x].bg != "default"
-             or screen.buffer[y][x].reverse]
+             or screen.buffer[y][x].reverse
+             or screen.buffer[y][x].italics]
     caret = (screen.cursor.y, screen.cursor.x)
     child.close(force=True)
     shutil.rmtree(root, ignore_errors=True)
