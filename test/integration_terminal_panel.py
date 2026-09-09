@@ -362,6 +362,38 @@ def test_wheel_scrolls_and_typing_still_works(binary):
         s.close()
 
 
+def test_ctrl_l_clear_keeps_visible_commands_in_scrollback(binary):
+    """Fish implements Ctrl-L as CSI H followed by CSI 2 J. The erase must
+    start a fresh viewport without throwing away commands which have not yet
+    scrolled off the live grid."""
+    s = Session(binary)
+    try:
+        s.send(ALT_T, 2.0)
+        s.send("printf 'KEEP_ALPHA\\nKEEP_BETA\\nKEEP_GAMMA\\n'\r", 1.5)
+        before = s.display()
+        check("KEEP_ALPHA" in before and "KEEP_GAMMA" in before,
+              "the pre-clear command is visible in the live terminal", before)
+
+        # Reproduce the escape sequence emitted by fish's Ctrl-L directly.
+        # This is deterministic under the /bin/sh used by the test harness.
+        s.send("printf '\\033[H\\033[2J'\r", 1.2)
+        prow = 0
+        for i, row in enumerate(s.screen.display):
+            if "TERMINAL" in row or "terminal" in row:
+                prow = i + 1
+                break
+        for _ in range(3):
+            s.child.send(f"\x1b[<64;10;{prow + 3}M")
+            s.drain(0.4)
+
+        history = s.display()
+        check("SCROLLBACK" in history and "KEEP_ALPHA" in history and
+              "KEEP_GAMMA" in history,
+              "Ctrl-L preserves the cleared viewport in scrollback", history)
+    finally:
+        s.close()
+
+
 # --- Non-ASCII output ---------------------------------------------------------
 #
 # The grid stored one byte per cell, and the parser put a space in place of any
@@ -441,6 +473,7 @@ def main():
                test_ctrl_shift_c_copies_from_the_keyboard,
                test_ctrl_shift_c_with_no_selection_reports_it,
                test_wheel_scrolls_and_typing_still_works,
+               test_ctrl_l_clear_keeps_visible_commands_in_scrollback,
                test_non_ascii_renders,
                test_non_ascii_copies_as_bytes):
         try:

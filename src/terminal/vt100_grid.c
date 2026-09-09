@@ -144,6 +144,43 @@ static void sb_push_line(vt100_grid_t *g, vt100_cell_t *row, int width) {
     g->scrollback[idx].width = width;
 }
 
+static void sb_clear(vt100_grid_t *g) {
+    for (int i = 0; i < g->sb_count; i++) {
+        int idx = (g->sb_head + i) % SCROLLBACK_MAX;
+        free(g->scrollback[idx].cells);
+        g->scrollback[idx].cells = NULL;
+        g->scrollback[idx].width = 0;
+    }
+    g->sb_count = 0;
+    g->sb_head = 0;
+    g->view_offset = 0;
+}
+
+static int row_has_content(vt100_grid_t *g, int row) {
+    for (int c = 0; c < g->cols; c++) {
+        vt100_cell_t *cell = cell_at(g, row, c);
+        if (cell->cp != ' ' || cell->fg != 0 || cell->bg != 0 ||
+            cell->attr != 0)
+            return 1;
+    }
+    return 0;
+}
+
+// A shell clear (typically CSI H, CSI 2 J) starts a new viewport without
+// erasing the user's command history. Preserve the meaningful portion of the
+// old viewport just as rows scrolling off the top are preserved. Leading and
+// trailing empty rows are omitted so every Ctrl-L does not add a screenful of
+// blank history.
+static void sb_archive_visible(vt100_grid_t *g) {
+    int first = 0;
+    int last = g->rows - 1;
+
+    while (first < g->rows && !row_has_content(g, first)) first++;
+    while (last >= first && !row_has_content(g, last)) last--;
+    for (int r = first; r <= last; r++)
+        sb_push_line(g, &g->cells[r * g->cols], g->cols);
+}
+
 static void scroll_up(vt100_grid_t *g, int top, int bottom, int n) {
     if (n <= 0 || top > bottom) return;
     if (n > bottom - top + 1) n = bottom - top + 1;
@@ -377,9 +414,16 @@ static void handle_csi(vt100_grid_t *g, char final) {
             clear_region(g, 0, 0, g->cursor_row - 1, g->cols - 1);
             clear_region(g, g->cursor_row, 0,
                          g->cursor_row, g->cursor_col);
-        } else if (p1 == 2 || p1 == 3) {
-            // Erase entire display
+        } else if (p1 == 2) {
+            // Erase the visible display. Shells use this for Ctrl-L; ordinary
+            // terminals retain the cleared viewport in scrollback.
+            if (!g->alt_screen) sb_archive_visible(g);
             clear_region(g, 0, 0, g->rows - 1, g->cols - 1);
+        } else if (p1 == 3) {
+            // Erase saved lines (xterm ED3). `clear` may deliberately send
+            // this after ED2; unlike Ctrl-L, that is an explicit request to
+            // discard scrollback and does not erase the live display itself.
+            sb_clear(g);
         }
         break;
     case 'K': // Erase line
@@ -805,10 +849,7 @@ void vt100_grid_create_f(void **handle, int *rows, int *cols) {
 void vt100_grid_destroy_f(void **handle) {
     vt100_grid_t *g = (vt100_grid_t *)*handle;
     if (!g) return;
-    for (int i = 0; i < g->sb_count; i++) {
-        int idx = (g->sb_head + i) % SCROLLBACK_MAX;
-        free(g->scrollback[idx].cells);
-    }
+    sb_clear(g);
     if (g->cells) free(g->cells);
     free(g);
     *handle = NULL;
