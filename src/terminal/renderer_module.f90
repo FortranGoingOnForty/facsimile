@@ -56,6 +56,7 @@ module renderer_module
     public :: resize_renderer
     public :: render_status_bar, render_cursor
     public :: set_status_message, clear_status_message, has_status_message
+    public :: format_status_line  ! exposed for unit tests
     public :: show_line_numbers, LINE_NUMBER_WIDTH
     ! clip_to_cells now lives in utf8_module; re-exported here so existing
     ! importers (and test_ghost_render_safety) keep resolving it
@@ -1511,51 +1512,55 @@ contains
         call write_status_message(editor%screen_cols, chevron // ' | ' // text)
     end subroutine write_bar_with_chevron
 
-    ! Write one status-bar line in inverse video. The text is forced to
-    ! exactly `width` columns: control characters are blanked (LSP
-    ! messages can carry newlines/tabs that would wrap the bar onto the
-    ! text area) and overlong text is ellipsized, never wrapped.
-    subroutine write_status_message(width, text)
+    ! Produce exactly `width` display cells for the status row. Control
+    ! characters are blanked because LSP messages can contain newlines and
+    ! tabs. Clipping is by cells and by character boundary. The old byte
+    ! budget counted UTF-8 bytes beyond the visible prefix, which let distant
+    ! multibyte punctuation inflate the prefix until it wrapped.
+    subroutine format_status_line(width, text, line)
         integer, intent(in) :: width
         character(len=*), intent(in) :: text
-        character(len=:), allocatable :: line
-        integer :: i, cut, budget
+        character(len=:), allocatable, intent(out) :: line
+        character(len=:), allocatable :: clipped
+        integer :: i, used, text_width
 
-        if (width < 1) return
+        if (width < 1) then
+            line = ''
+            return
+        end if
 
         line = text
         do i = 1, len(line)
             if (iachar(line(i:i)) < 32 .or. iachar(line(i:i)) == 127) line(i:i) = ' '
         end do
 
-        ! `width` is display columns but the comparisons below are on bytes,
-        ! so convert: the byte budget is `width` plus whatever extra bytes the
-        ! text's multibyte characters occupy. Without this a bar carrying one
-        ! two-byte character (the fuss chevron, or an accented filename) is
-        ! padded one column short and everything right of that character sits
-        ! one cell left of where byte arithmetic puts it. Pure ASCII gives
-        ! budget == width, exactly as before.
-        budget = width + (len(line) - utf8_char_count(line))
-
-        if (len(line) > budget) then
-            if (budget > 3) then
-                cut = budget - 3
-                ! Don't split a UTF-8 sequence at the cut point
-                do while (cut > 1 .and. iachar(line(cut+1:cut+1)) >= 128 .and. &
-                          iachar(line(cut+1:cut+1)) < 192)
-                    cut = cut - 1
-                end do
-                line = line(1:cut) // '...'
-                ! Re-measure: the cut may have dropped multibyte characters
-                if (utf8_char_count(line) < width) then
-                    line = line // repeat(' ', width - utf8_char_count(line))
-                end if
+        text_width = utf8_display_width(line)
+        if (text_width > width) then
+            if (width > 3) then
+                call clip_to_cells(line, width - 3, clipped, used)
+                line = clipped // '...'
+                used = used + 3
             else
-                line = line(1:budget)
+                call clip_to_cells(line, width, clipped, used)
+                line = clipped
             end if
-        else if (len(line) < budget) then
-            line = line // repeat(' ', budget - len(line))
+        else
+            used = text_width
         end if
+
+        if (used < width) line = line // repeat(' ', width - used)
+    end subroutine format_status_line
+
+    ! Write one status-bar line in inverse video. The formatted text is always
+    ! one physical terminal row, so later caret-only paints cannot inherit a
+    ! wrapped cursor and draw document lines in the wrong place.
+    subroutine write_status_message(width, text)
+        integer, intent(in) :: width
+        character(len=*), intent(in) :: text
+        character(len=:), allocatable :: line
+
+        if (width < 1) return
+        call format_status_line(width, text, line)
 
         call terminal_write(theme_sgr(THEME_STATUS))
         call terminal_write(line)

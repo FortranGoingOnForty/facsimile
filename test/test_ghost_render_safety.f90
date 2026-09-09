@@ -8,7 +8,8 @@ program test_ghost_render_safety
     ! line tail by the difference between bytes and cells.
     !
     ! These pin the two guards that make the renderer safe for arbitrary text.
-    use renderer_module, only: clip_to_cells, is_terminal_safe
+    use renderer_module, only: clip_to_cells, is_terminal_safe, format_status_line
+    use utf8_module, only: utf8_display_width
     implicit none
 
     ! 2-byte chars (1 cell each)
@@ -17,6 +18,8 @@ program test_ghost_render_safety
     character(len=*), parameter :: CJK = char(228) // char(184) // char(173)  ! 中
     ! 4-byte char, 2 cells wide (emoji)
     character(len=*), parameter :: EMOJI = char(240) // char(159) // char(152) // char(128)
+    character(len=*), parameter :: ELLIPSIS = char(226) // char(128) // char(166)
+    character(len=*), parameter :: EMDASH = char(226) // char(128) // char(148)
 
     integer :: nfail
     character(len=:), allocatable :: out
@@ -69,6 +72,23 @@ program test_ghost_render_safety
     ! --- Mixed run ---
     call clip_to_cells('a' // CJK // 'b', 3, out, used)
     call check(out == 'a' // CJK .and. used == 3, 'mixed narrow and wide', out)
+
+    ! Wolf's multiline diagnostic has only ASCII in the visible prefix, then
+    ! several multibyte punctuation characters later in the message. The old
+    ! status formatter counted those later bytes toward the prefix's budget,
+    ! emitted 101 cells into a 93-cell terminal, and every caret repaint then
+    ! dragged document rows through the wrapped status text.
+    call format_status_line(93, &
+        '» | this string never closes' // char(10) // &
+        'it opens here, and an interpolation `{` inside it is still open' // char(10) // &
+        'when the line ends; a "' // ELLIPSIS // '" string ' // EMDASH // &
+        ' and every interpolation ' // EMDASH // ' must close', out)
+    call check(utf8_display_width(out) == 93, &
+               'a multiline UTF-8 diagnostic occupies exactly one status row', out)
+    call check(len(out) >= 3 .and. out(len(out)-2:len(out)) == '...', &
+               'an overlong diagnostic ends with the clipping ellipsis', out)
+    call check(index(out, char(10)) == 0, &
+               'diagnostic line breaks become harmless spaces', out)
 
     ! --- Terminal safety: the guard that stops model text corrupting the screen ---
     call check(is_terminal_safe('normal text'), 'plain text is safe', '')
