@@ -8,6 +8,7 @@ module platform_module
     public :: get_config_dir, get_cwd
     public :: canonical_path
     public :: mkdir_p
+    public :: have_command
     public :: platform_copy_to_clipboard, platform_paste_from_clipboard
     public :: detect_system_pkg_mgr, detect_priv_prefix
     public :: platform_sleep_ms, platform_now_ms

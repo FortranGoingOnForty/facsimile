@@ -1,7 +1,6 @@
 module clipboard_module
-    use iso_fortran_env, only: int32, error_unit
     use platform_module, only: is_windows, get_temp_dir, &
-        platform_copy_to_clipboard, platform_paste_from_clipboard
+        platform_copy_to_clipboard, platform_paste_from_clipboard, have_command
     implicit none
     private
 
@@ -14,9 +13,8 @@ contains
 
     subroutine copy_to_clipboard(text)
         character(len=*), intent(in) :: text
-        integer :: unit, ios
-        character(len=512) :: command
-        character(len=:), allocatable :: temp_dir, temp_file
+        integer :: unit, ios, cmdstat
+        character(len=:), allocatable :: command, temp_dir, temp_file, quoted_file
 
         ! Guard against empty or invalid text
         if (len_trim(text) == 0) return
@@ -48,17 +46,41 @@ contains
 
         if (ios /= 0) return
 
-        ! Send to system clipboard using temp file
-        ! Try multiple clipboard tools via sh -c, suppress all output
-        command = "sh -c 'cat " // temp_file // " | xsel -b -i 2>/dev/null || " // &
-                  "cat " // temp_file // " | xclip -sel c 2>/dev/null || " // &
-                  "cat " // temp_file // " | pbcopy 2>/dev/null || " // &
-                  "cat " // temp_file // " | wl-copy 2>/dev/null || true'"
-        call execute_command_line(trim(command), wait=.true., exitstat=ios)
+        ! Feed an installed clipboard utility directly from the file. The old
+        ! `cat file | tool` chain tried missing Linux utilities before pbcopy
+        ! on macOS. Each missing reader closed its pipe and GNU cat printed a
+        ! broken-pipe diagnostic into the editor's live terminal surface.
+        ! Probing first and redirecting the whole utility keeps every fallback
+        ! silent, including installed tools that fail because no display is
+        ! available.
+        quoted_file = shell_quote(temp_file)
+        ios = 1
+        if (have_command('xsel')) then
+            command = 'xsel -b -i < ' // quoted_file // ' >/dev/null 2>&1'
+            call execute_command_line(command, wait=.true., exitstat=ios, cmdstat=cmdstat)
+        end if
+        if (ios /= 0) then
+            if (have_command('xclip')) then
+                command = 'xclip -sel c < ' // quoted_file // ' >/dev/null 2>&1'
+                call execute_command_line(command, wait=.true., exitstat=ios, cmdstat=cmdstat)
+            end if
+        end if
+        if (ios /= 0) then
+            if (have_command('pbcopy')) then
+                command = 'pbcopy < ' // quoted_file // ' >/dev/null 2>&1'
+                call execute_command_line(command, wait=.true., exitstat=ios, cmdstat=cmdstat)
+            end if
+        end if
+        if (ios /= 0) then
+            if (have_command('wl-copy')) then
+                command = 'wl-copy < ' // quoted_file // ' >/dev/null 2>&1'
+                call execute_command_line(command, wait=.true., exitstat=ios, cmdstat=cmdstat)
+            end if
+        end if
 
         ! Clean up temp file
-        command = 'rm -f ' // temp_file // ' 2>/dev/null'
-        call execute_command_line(trim(command), wait=.true.)
+        open(newunit=unit, file=temp_file, status='old', iostat=ios)
+        if (ios == 0) close(unit, status='delete', iostat=ios)
     end subroutine copy_to_clipboard
 
     function paste_from_clipboard() result(text)
@@ -128,5 +150,32 @@ contains
         ! Cut is just copy (caller handles deletion)
         call copy_to_clipboard(text)
     end subroutine cut_to_clipboard
+
+    !> Single-quote a path for a POSIX shell command.
+    pure function shell_quote(text) result(quoted)
+        character(len=*), intent(in) :: text
+        character(len=:), allocatable :: quoted
+        integer :: i, pos, n, quote_count
+
+        n = len_trim(text)
+        quote_count = 0
+        do i = 1, n
+            if (text(i:i) == "'") quote_count = quote_count + 1
+        end do
+
+        allocate(character(len=n + 2 + 3 * quote_count) :: quoted)
+        quoted(1:1) = "'"
+        pos = 2
+        do i = 1, n
+            if (text(i:i) == "'") then
+                quoted(pos:pos+3) = "'\''"
+                pos = pos + 4
+            else
+                quoted(pos:pos) = text(i:i)
+                pos = pos + 1
+            end if
+        end do
+        quoted(pos:pos) = "'"
+    end function shell_quote
 
 end module clipboard_module
