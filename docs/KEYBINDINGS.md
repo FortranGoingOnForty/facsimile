@@ -176,9 +176,9 @@ of them claims. `Alt+Click` avoids the question entirely.
 | `Ctrl+W` | Close Tab | Close the current tab, prompting if it has unsaved changes. `Alt+Q` is the one that closes a single pane |
 | `Ctrl+PageDown` or `Ctrl+Alt+Right` | Next Tab | Switch to next tab |
 | `Ctrl+PageUp` or `Ctrl+Alt+Left` | Previous Tab | Switch to previous tab |
-| `Alt+1` to `Alt+9` | Jump to Tab | Switch to that numbered tab. `Alt+0` is tab 10 |
+| `Alt+1` to `Alt+9` | Jump to Tab | Inside a tab group, switch to that visibly numbered member; otherwise switch to the global numbered tab. A missing local member falls through to the global tab. `Alt+0` means 10 |
 | `Ctrl+1` to `Ctrl+9` | Jump to Group | Switch to the Nth tab group from the left, ignoring loose tabs. `Ctrl+0` is group 10 |
-| ...then another digit | Extend the Jump | Within half a second a further digit greedily extends a tab or group number. If the composite does not exist, its final digit is retried as a fresh jump. After an Alt jump lands inside a group, the next digit instead picks the visibly numbered Nth member |
+| ...then another digit | Extend the Jump | Within half a second a further digit greedily extends a tab, active-group member, or group number. If the composite does not exist, its final digit is retried as a fresh jump. After a global Alt jump lands inside a group, the next digit instead picks the visibly numbered Nth member |
 | `Alt+V` | Split Vertical | Split current pane vertically |
 | `Alt+S` | Split Horizontal | Split current pane horizontally |
 | `Alt+Q` | Close Pane | Close current pane only |

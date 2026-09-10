@@ -129,7 +129,7 @@ contains
         call add_binding(lines, n_lines, 'Ctrl+S / Ctrl+Shift+S', 'Save this file / save every modified tab')
         call add_binding(lines, n_lines, 'Ctrl+O', 'Open the Fortress file navigator')
         call add_binding(lines, n_lines, 'Ctrl+T / Ctrl+W', 'New tab / close pane or tab')
-        call add_binding(lines, n_lines, 'Alt+1 ... Alt+0', 'Jump to a numbered tab, then a numbered group member')
+        call add_binding(lines, n_lines, 'Alt+1 ... Alt+0', 'Jump to an active-group member, otherwise a numbered tab')
         call add_binding(lines, n_lines, 'Ctrl+1 ... Ctrl+0', 'Jump to a tab group in left-to-right order')
         call add_binding(lines, n_lines, 'Ctrl+PgUp / PgDown', 'Previous / next tab or group member')
         call add_binding(lines, n_lines, 'Alt+V / Alt+S', 'Split vertically / horizontally')

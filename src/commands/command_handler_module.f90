@@ -245,11 +245,13 @@ module command_handler_module
 
     integer :: g_jump_value = 0
     integer(int64) :: g_jump_deadline = 0
-    integer, parameter :: JUMP_NONE = 0, JUMP_TAB = 1, JUMP_GROUP = 2
+    integer, parameter :: JUMP_NONE = 0, JUMP_TAB = 1, JUMP_GROUP = 2, &
+                          JUMP_MEMBER = 3
     integer :: g_jump_kind = JUMP_NONE
-    ! Non-zero when the tab the first Alt digit landed on belongs to a group.
-    ! Its NEXT digit picks one of the member ordinals now visible on row two,
-    ! rather than extending a global tab number hidden by the collapsed group.
+    ! Non-zero while an Alt jump is associated with a group. JUMP_MEMBER means
+    ! the jump started inside that active group and its value is a local member
+    ! ordinal. JUMP_TAB means a global jump landed on a grouped tab, whose NEXT
+    ! digit picks one of the member ordinals visible on row two.
     integer(int32) :: g_jump_group = 0
     integer, parameter :: JUMP_WINDOW_MS = 500
 
@@ -10480,13 +10482,35 @@ contains
     end subroutine swap_i32
 
     !> Jump to tab `n`, then wait briefly to see whether more digits follow.
+    !>
+    !> Inside a group, its visibly numbered member ordinals take precedence.
+    !> An ordinal the active group does not have falls through to the global
+    !> tab number, preserving the ordinary behavior wherever local resolution
+    !> cannot help.
     subroutine begin_tab_jump(editor, buffer, n)
         use platform_module, only: platform_now_ms
+        use editor_state_module, only: active_group_id, group_members
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         integer, intent(in) :: n
+        integer, allocatable :: members(:)
+        integer(int32) :: gid
 
         call clear_tab_jump()
+        gid = active_group_id(editor)
+        if (gid /= 0) then
+            call group_members(editor, gid, members)
+            if (n >= 1 .and. n <= size(members)) then
+                call switch_to_tab_with_buffer(editor, members(n), buffer)
+                g_jump_value = n
+                g_jump_deadline = platform_now_ms() + int(JUMP_WINDOW_MS, int64)
+                g_jump_kind = JUMP_MEMBER
+                g_jump_group = gid
+                call announce_tab_jump(editor)
+                return
+            end if
+        end if
+
         if (n < 1 .or. n > size(editor%tabs)) return
 
         call switch_to_tab_with_buffer(editor, n, buffer)
@@ -10549,6 +10573,35 @@ contains
         end if
 
         handled = .true.
+
+        if (g_jump_kind == JUMP_MEMBER) then
+            ! Stay in the active group's visible numbering. Composite member
+            ! ordinals are greedy, with the final digit retried as a fresh
+            ! local ordinal just like an ordinary global tab jump.
+            call group_members(editor, g_jump_group, members)
+            target = g_jump_value * 10 + digit
+            if (target >= 1 .and. target <= size(members)) then
+                call switch_to_tab_with_buffer(editor, members(target), buffer)
+                g_jump_value = target
+                g_jump_deadline = platform_now_ms() + int(JUMP_WINDOW_MS, int64)
+                call announce_tab_jump(editor)
+                return
+            end if
+
+            fallback = digit
+            if (fallback == 0) fallback = 10
+            if (fallback >= 1 .and. fallback <= size(members)) then
+                call switch_to_tab_with_buffer(editor, members(fallback), buffer)
+                g_jump_value = fallback
+                g_jump_deadline = platform_now_ms() + int(JUMP_WINDOW_MS, int64)
+                call announce_tab_jump(editor)
+            else
+                write(msg, '(a,i0,a)') 'This group has ', size(members), ' members'
+                call clear_tab_jump()
+                call set_status_message(trim(msg))
+            end if
+            return
+        end if
 
         if (g_jump_kind == JUMP_TAB .and. g_jump_group /= 0) then
             ! Into the group the first digit landed in. Its members are
@@ -10691,6 +10744,9 @@ contains
 
         if (g_jump_kind == JUMP_GROUP) then
             write(msg, '(a)') 'Group ' // digit_str(g_jump_value) // &
+                ' - another digit extends it'
+        else if (g_jump_kind == JUMP_MEMBER) then
+            write(msg, '(a)') 'Group member ' // digit_str(g_jump_value) // &
                 ' - another digit extends it'
         else if (g_jump_group /= 0) then
             call group_members(editor, g_jump_group, members)

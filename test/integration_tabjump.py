@@ -12,9 +12,10 @@ If the extended number does not exist, its last digit is retried as a fresh
 single-digit jump. Alt-2 then Alt-1 therefore tries tab 21 and falls back to
 tab 1 rather than leaving the user stranded on tab 2.
 
-When the tab the first digit landed on belongs to a group, the next digit picks
-a member of that group instead. A group entry carries no number on the tab bar,
-so there is nothing for a digit to extend towards.
+Inside a group, its visibly numbered member ordinals take priority over global
+tab indices. If that local ordinal is unavailable, ordinary global resolution
+still applies. When a global jump lands inside a group, the next digit picks a
+member of that group instead.
 
 The assertion that matters most is the one about the window EXPIRING: once it
 has, a digit must go back to being ordinary text. If it did not, every digit
@@ -55,7 +56,7 @@ def showing(s):
     when it matters.
     """
     for ln in s.screen.display:
-        m = re.search(r"(file\d+\.txt) line \d+", ln)
+        m = re.search(r"((?:file|member|loose)\d+\.txt) line \d+", ln)
         if m:
             return m.group(1)
     return None
@@ -210,6 +211,50 @@ def test_ctrl_group_jump_falls_back_and_rearms(binary):
               showing(s))
         check("Group 6" in s.status() and "another digit" in s.status(),
               "the fallback group starts a fresh extension window", s.status())
+    finally:
+        s.close()
+
+
+def test_alt_digits_favor_the_active_group(binary):
+    s = grouped_session(binary)
+    try:
+        ctrl(s, 2, 0.8)
+        check(showing(s) == "file02.txt",
+              "setup: ctrl-2 enters the second group", showing(s))
+
+        alt(s, 2, 0.8)
+        check(showing(s) == "member02.txt",
+              "alt-2 inside group 2 chooses its second member", showing(s))
+        alt(s, 1, 0.8)
+        check(showing(s) == "file02.txt",
+              "alt-1 in the same group chooses its first member", showing(s))
+    finally:
+        s.close()
+
+
+def test_missing_local_member_keeps_global_tab_behavior(binary):
+    s = grouped_session(binary)
+    try:
+        ctrl(s, 2, 0.8)
+        alt(s, 3, 0.8)                 # group 2 has two members; global tab 3 exists
+        check(showing(s) == "loose01.txt",
+              "an unavailable local ordinal falls through to global tab 3",
+              showing(s))
+    finally:
+        s.close()
+
+
+def test_local_member_fallback_rearms(binary):
+    s = grouped_session(binary)
+    try:
+        ctrl(s, 2, 0.8)
+        alt(s, 2)
+        alt(s, 1, 0.2)                 # member 21 is absent; member 1 exists
+        check(showing(s) == "file02.txt",
+              "an invalid local composite falls back to its final digit",
+              showing(s))
+        check("Group member 1" in s.status() and "another digit" in s.status(),
+              "the local fallback starts a fresh extension window", s.status())
     finally:
         s.close()
 
@@ -455,6 +500,9 @@ def main():
     for fn in (test_a_single_digit_still_jumps,
                test_ctrl_digits_jump_to_groups_in_bar_order,
                test_ctrl_group_jump_falls_back_and_rearms,
+               test_alt_digits_favor_the_active_group,
+               test_missing_local_member_keeps_global_tab_behavior,
+               test_local_member_fallback_rearms,
                test_the_modifier_may_stay_held_between_digits,
                test_a_modified_digit_after_the_window_is_its_own_jump,
                test_two_digits_reach_a_higher_tab,
