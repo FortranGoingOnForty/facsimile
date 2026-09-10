@@ -198,11 +198,12 @@ contains
         type(json_value_t) :: start_obj, end_obj
         character(len=:), allocatable :: uri
         integer :: i, n_diagnostics, file_idx, new_count, j
-        integer :: old_count = 0
+        integer :: old_count
         type(diagnostic_t) :: diag
         type(diagnostic_t), allocatable :: old_items(:)
 
-        ! Initialize old_items to prevent uninitialized warning
+        old_count = 0
+        ! Avoid gfortran's false uninitialized-bounds warning for the guarded copy.
         allocate(old_items(0))
 
         ! Get URI
@@ -223,6 +224,7 @@ contains
 
             ! Copy diagnostics NOT from this server
             if (old_count > 0) then
+                deallocate(old_items)
                 allocate(old_items(old_count))
                 j = 0
                 do i = 1, store%files(file_idx)%count
@@ -250,7 +252,7 @@ contains
             store%files(file_idx)%count = new_count
 
             ! Copy old diagnostics first
-            if (old_count > 0 .and. allocated(old_items)) then
+            if (old_count > 0) then
                 store%files(file_idx)%items(1:old_count) = old_items(1:old_count)
                 deallocate(old_items)
             end if
