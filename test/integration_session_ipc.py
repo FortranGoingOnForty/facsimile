@@ -22,6 +22,7 @@ Requires: pip3 install pexpect pyte
 """
 
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -77,9 +78,15 @@ class Session:
             with open(os.path.join(self.work, name), "w") as f:
                 f.write("int %s;\n" % name.split(".")[0])
         os.makedirs(os.path.join(self.work, "chapter"))
-        for name in ("one.c", "two.c"):
+        for name in ("one.c", "two.c", "three.c"):
             with open(os.path.join(self.work, "chapter", name), "w") as f:
                 f.write("int %s;\n" % name.split(".")[0])
+        os.makedirs(os.path.join(self.work, "chapter", "nested"))
+        with open(os.path.join(self.work, "chapter", "nested", "deep.c"), "w") as f:
+            f.write("int deep;\n")
+        os.makedirs(os.path.join(self.work, "chapter2"))
+        with open(os.path.join(self.work, "chapter2", "outside.c"), "w") as f:
+            f.write("int outside;\n")
 
         env = {**os.environ, "TERM": "xterm-256color", "HOME": self.home,
                "PS1": "$ ", "SHELL": "/bin/sh"}
@@ -130,6 +137,37 @@ class Session:
 
     def text(self):
         return "\n".join(self.screen.display)
+
+    def find(self, text):
+        for y, row in enumerate(self.screen.display):
+            col = row.find(text)
+            if col >= 0:
+                return y + 1, col + 1
+        return None
+
+    def click(self, row, col, button=0, w=0.8):
+        self.child.send(f"\x1b[<{button};{col};{row}M")
+        self.drain(0.2)
+        self.child.send(f"\x1b[<{button};{col};{row}m")
+        self.drain(w)
+
+    def group_count(self):
+        match = re.search(r"chapter/ \((\d+)\)", self.tab_bar())
+        return int(match.group(1)) if match else 0
+
+    def make_chapter_group(self):
+        """Create a two-member group through the same IPC route under test."""
+        self.send(ALT_T, 1.2)
+        self.run_in_panel(f"{self.binary} chapter", 2.0)
+        if "New Tab Group" not in self.text():
+            return False
+        for name in ("one.c", "two.c"):
+            hit = self.find("[ ] " + name)
+            if not hit:
+                return False
+            self.click(hit[0], hit[1] + 2)
+        self.send("\r", 2.0)
+        return self.group_count() == 2
 
     def close(self):
         try:
@@ -212,6 +250,52 @@ def test_a_directory_opens_as_a_tab_group(binary):
         s.close()
 
 
+def test_matching_files_join_their_tab_group(binary):
+    print("\nA file under a tab-group root joins that group")
+    s = Session(binary)
+    try:
+        check("the chapter group was created", s.make_chapter_group(),
+              s.tab_bar())
+
+        # The completed dialog lands inside the group. Alt-T re-focuses the
+        # still-visible terminal, where a relative path is resolved by the
+        # short-lived client before it reaches the editor.
+        s.send(ALT_T, 0.8)
+        s.run_in_panel(f"{binary} chapter/three.c")
+        check("a direct child joins the group", s.group_count() == 3,
+              s.tab_bar())
+        check("the new member is visible on the group row",
+              "three.c" in s.screen.display[1],
+              repr(s.screen.display[1]))
+
+        s.send(ALT_T, 0.8)
+        s.run_in_panel(f"{binary} chapter/nested/deep.c")
+        check("a nested child joins the same group", s.group_count() == 4,
+              s.tab_bar())
+        check("the nested member is visible on the group row",
+              "deep.c" in s.screen.display[1],
+              repr(s.screen.display[1]))
+    finally:
+        s.close()
+
+
+def test_an_adjacent_directory_stays_outside_the_group(binary):
+    print("\nA similarly named adjacent directory does not match the group")
+    s = Session(binary)
+    try:
+        check("the chapter group was created", s.make_chapter_group(),
+              s.tab_bar())
+        s.send(ALT_T, 0.8)
+        s.run_in_panel(f"{binary} chapter2/outside.c")
+
+        check("the group still has only its original members",
+              s.group_count() == 2, s.tab_bar())
+        check("the file opened as a loose tab", "outside.c" in s.tab_bar(),
+              repr(s.tab_bar()))
+    finally:
+        s.close()
+
+
 def test_a_normal_terminal_still_opens_a_workspace(binary):
     print("\nOutside the panel a directory still opens a whole workspace")
     home = tempfile.mkdtemp(prefix="fac_ipc_home_")
@@ -281,6 +365,8 @@ def main():
     print(f"Testing {binary}")
     test_a_file_opens_in_this_session(binary)
     test_a_directory_opens_as_a_tab_group(binary)
+    test_matching_files_join_their_tab_group(binary)
+    test_an_adjacent_directory_stays_outside_the_group(binary)
     test_a_normal_terminal_still_opens_a_workspace(binary)
     test_the_spool_is_cleaned_up(binary)
 

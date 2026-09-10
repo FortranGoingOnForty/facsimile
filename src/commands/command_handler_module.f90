@@ -10039,11 +10039,15 @@ contains
     !> with a terminal open does not repaint on every tick.
     subroutine session_requests_tick(editor, buffer, changed)
         use session_ipc_module, only: session_ipc_take
+        use editor_state_module, only: group_find, set_pending_group_root, &
+                                       clear_pending_group_root
         type(editor_state_t), intent(inout) :: editor
         type(buffer_t), intent(inout) :: buffer
         logical, intent(inout) :: changed
         character(len=:), allocatable :: kind, path
         logical :: found
+        integer(int32) :: target_gid
+        integer :: target_gidx, old_tab_count
 
         call session_ipc_take(kind, path, found)
         if (.not. found) return
@@ -10072,10 +10076,78 @@ contains
                 changed = .true.
             end if
         else
+            target_gid = session_group_for_path(editor, path)
+            target_gidx = group_find(editor, target_gid)
+            old_tab_count = size(editor%tabs)
+
+            ! create_tab chooses an LSP root before the new tab can be added
+            ! to its group. Announce the destination first so this file starts
+            ! on the group's server rather than being re-rooted afterwards.
+            if (target_gidx > 0) then
+                if (allocated(editor%groups(target_gidx)%dir_path)) &
+                    call set_pending_group_root( &
+                        editor%groups(target_gidx)%dir_path)
+            end if
             call open_file_in_editor(path, editor, buffer)
+            call clear_pending_group_root()
+
+            ! A cancelled binary prompt or the tab limit can leave the active
+            ! index pointing at an older tab. Only attach the tab when the
+            ! open actually appended one.
+            if (target_gid > 0 .and. size(editor%tabs) == old_tab_count + 1) &
+                call group_add_member(editor, target_gid, &
+                                      editor%active_tab_index)
             changed = .true.
         end if
     end subroutine session_requests_tick
+
+    !> The most specific tab-group root containing a path, or zero.
+    !>
+    !> Groups are allowed to overlap. A file under project/lib belongs to a
+    !> lib/ group ahead of a project/ group, regardless of their creation
+    !> order. Equal roots prefer the group the command was launched from.
+    function session_group_for_path(editor, path) result(gid)
+        use editor_state_module, only: active_group_id
+        type(editor_state_t), intent(in) :: editor
+        character(len=*), intent(in) :: path
+        integer(int32) :: gid, active_gid
+        character(len=:), allocatable :: file_path, root
+        integer :: i, best_len
+
+        gid = 0
+        best_len = 0
+        active_gid = active_group_id(editor)
+        file_path = canonical_path(path)
+
+        do i = 1, size(editor%groups)
+            if (.not. allocated(editor%groups(i)%dir_path)) cycle
+            root = canonical_path(editor%groups(i)%dir_path)
+            if (.not. path_is_below(file_path, root)) cycle
+
+            if (len(root) > best_len .or. &
+                (len(root) == best_len .and. &
+                 editor%groups(i)%id == active_gid)) then
+                gid = editor%groups(i)%id
+                best_len = len(root)
+            end if
+        end do
+    end function session_group_for_path
+
+    !> True only below a directory boundary: /src2 is not below /src.
+    pure logical function path_is_below(path, root)
+        character(len=*), intent(in) :: path, root
+        integer :: n
+
+        path_is_below = .false.
+        n = len_trim(root)
+        if (n == 0 .or. len_trim(path) <= n) return
+        if (path(1:n) /= root(1:n)) return
+        if (n == 1 .and. root(1:1) == '/') then
+            path_is_below = path(1:1) == '/'
+        else
+            path_is_below = path(n + 1:n + 1) == '/'
+        end if
+    end function path_is_below
 
     !> Turn a confirmed dialog into a real group.
     !>
