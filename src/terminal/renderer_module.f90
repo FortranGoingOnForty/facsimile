@@ -3762,7 +3762,10 @@ contains
             base = basename_of(editor%tabs(members(i))%filename)
             marker = ''
             if (editor%tabs(members(i))%modified) marker = theme_glyph('modified')
-            write(entries(i)%label, '(a,a,a,a)') ' ', trim(base), trim(marker), ' '
+            ! Member jumps use this ordinal after Alt lands on the group. Keep
+            ! it visible so the second digit is a direct read, not a count.
+            write(entries(i)%label, '(a,i0,a,a,a,a)') ' ', i, ' ', &
+                trim(base), trim(marker), ' '
             entries(i)%payload = members(i)
             entries(i)%dim = editor%tabs(members(i))%is_orphan
             entries(i)%modified = editor%tabs(members(i))%modified
@@ -3776,6 +3779,18 @@ contains
         ! inserted where it would land, and a member being moved within the
         ! group slides to its new place.
         call apply_drag_preview(entries, n_entries, 2, active_entry)
+
+        ! A preview is the prospective order, so its numbers must be prospective
+        ! too. The shuffled labels still carry their old ordinals, and an entry
+        ! arriving from row one has none until this pass rebuilds them.
+        do i = 1, n_entries
+            if (entries(i)%payload < 1 .or. entries(i)%payload > size(editor%tabs)) cycle
+            base = basename_of(editor%tabs(entries(i)%payload)%filename)
+            marker = ''
+            if (editor%tabs(entries(i)%payload)%modified) marker = theme_glyph('modified')
+            write(entries(i)%label, '(a,i0,a,a,a,a)') ' ', i, ' ', &
+                trim(base), trim(marker), ' '
+        end do
 
         call strip_layout(entries, n_entries, width, active_entry, &
                           g_group_scroll, spans, n_spans, more_left, more_right, &

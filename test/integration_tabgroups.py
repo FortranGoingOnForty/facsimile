@@ -117,7 +117,11 @@ class Session:
 
     def gutter_line(self, screen_row):
         """The buffer line number drawn in the gutter of `screen_row`, or None."""
-        m = re.match(r"\s*(\d+)\s", self.row(screen_row))
+        # The gutter owns exactly six cells (five for the number plus its
+        # separator). Group-member rows now also begin with a visible ordinal,
+        # so matching an arbitrary leading number would mistake member 1 for
+        # document line 1.
+        m = re.match(r"\s*(\d+)\s+$", self.row(screen_row)[:6])
         return int(m.group(1)) if m else None
 
     def palette(self, name):
@@ -177,6 +181,9 @@ def test_row_two_lists_the_members(binary):
         row2 = s.row(2)
         missing = [n for n in s.names if n not in row2]
         check(not missing, "row 2 lists every member", f"{row2!r} missing {missing}")
+        numbered = [f"{i} {name}" for i, name in enumerate(s.names, start=1)]
+        check(all(label in row2 for label in numbered),
+              "row 2 numbers members in their jump order", row2)
     finally:
         s.close()
 

@@ -194,13 +194,11 @@ module command_handler_module
     ! code path silently suppressed its own repaint.
     logical :: g_no_visible_change = .false.
 
-    ! A tab jump waiting to see whether another digit follows.
+    ! A tab or group jump waiting to see whether another digit follows.
     !
-    ! alt-N jumps at once and THEN arms this, rather than waiting to find out
-    ! whether the number has more digits. Waiting would put half a second of
-    ! lag on the overwhelmingly common single-digit case; superseding a jump
-    ! that already happened costs nothing, because switching tabs is cheap and
-    ! reversible.
+    ! alt-N and ctrl-N jump at once and THEN arm this, rather than waiting to
+    ! find out whether the number has more digits. Alt counts tabs; Ctrl counts
+    ! groups in their left-to-right row-one order.
     !
     ! 0 means nothing pending, which is why tab numbering starting at 1 is
     ! convenient here.
@@ -247,10 +245,11 @@ module command_handler_module
 
     integer :: g_jump_value = 0
     integer(int64) :: g_jump_deadline = 0
-    ! Non-zero when the tab the first digit landed on belongs to a group, in
-    ! which case the NEXT digit picks a member of that group rather than
-    ! extending the number. A group entry carries no number on the tab bar, so
-    ! there is nothing for a digit to extend towards anyway.
+    integer, parameter :: JUMP_NONE = 0, JUMP_TAB = 1, JUMP_GROUP = 2
+    integer :: g_jump_kind = JUMP_NONE
+    ! Non-zero when the tab the first Alt digit landed on belongs to a group.
+    ! Its NEXT digit picks one of the member ordinals now visible on row two,
+    ! rather than extending a global tab number hidden by the collapsed group.
     integer(int32) :: g_jump_group = 0
     integer, parameter :: JUMP_WINDOW_MS = 500
 
@@ -1714,27 +1713,48 @@ contains
             is_edit_action = .true.
 
         ! Tab navigation
-        case('alt-1', 'ctrl-1')
+        case('alt-1')
             call begin_tab_jump(editor, buffer, 1)
-        case('alt-2', 'ctrl-2')
+        case('alt-2')
             call begin_tab_jump(editor, buffer, 2)
-        case('alt-3', 'ctrl-3')
+        case('alt-3')
             call begin_tab_jump(editor, buffer, 3)
-        case('alt-4', 'ctrl-4')
+        case('alt-4')
             call begin_tab_jump(editor, buffer, 4)
-        case('alt-5', 'ctrl-5')
+        case('alt-5')
             call begin_tab_jump(editor, buffer, 5)
-        case('alt-6', 'ctrl-6')
+        case('alt-6')
             call begin_tab_jump(editor, buffer, 6)
-        case('alt-7', 'ctrl-7')
+        case('alt-7')
             call begin_tab_jump(editor, buffer, 7)
-        case('alt-8', 'ctrl-8')
+        case('alt-8')
             call begin_tab_jump(editor, buffer, 8)
-        case('alt-9', 'ctrl-9')
+        case('alt-9')
             call begin_tab_jump(editor, buffer, 9)
-        case('alt-0', 'ctrl-0')
+        case('alt-0')
             ! Tab 10, the way a keyboard's digit row runs.
             call begin_tab_jump(editor, buffer, 10)
+        case('ctrl-1')
+            call begin_group_jump(editor, buffer, 1)
+        case('ctrl-2')
+            call begin_group_jump(editor, buffer, 2)
+        case('ctrl-3')
+            call begin_group_jump(editor, buffer, 3)
+        case('ctrl-4')
+            call begin_group_jump(editor, buffer, 4)
+        case('ctrl-5')
+            call begin_group_jump(editor, buffer, 5)
+        case('ctrl-6')
+            call begin_group_jump(editor, buffer, 6)
+        case('ctrl-7')
+            call begin_group_jump(editor, buffer, 7)
+        case('ctrl-8')
+            call begin_group_jump(editor, buffer, 8)
+        case('ctrl-9')
+            call begin_group_jump(editor, buffer, 9)
+        case('ctrl-0')
+            ! Group 10, matching the digit-row convention used for tabs.
+            call begin_group_jump(editor, buffer, 10)
         ! Keep in step with is_file_navigation_key, which the integrated
         ! terminal consults to decide that these are not for the shell.
         case('ctrl-alt-left', 'alt-ctrl-left', 'super-ctrl-left', 'ctrl-pageup')
@@ -10472,9 +10492,33 @@ contains
         call switch_to_tab_with_buffer(editor, n, buffer)
         g_jump_value = n
         g_jump_deadline = platform_now_ms() + int(JUMP_WINDOW_MS, int64)
+        g_jump_kind = JUMP_TAB
         g_jump_group = editor%tabs(n)%group_id
         call announce_tab_jump(editor)
     end subroutine begin_tab_jump
+
+    !> Jump to group `n` in the order its collapsed entry appears on row one.
+    subroutine begin_group_jump(editor, buffer, n)
+        use platform_module, only: platform_now_ms
+        type(editor_state_t), intent(inout) :: editor
+        type(buffer_t), intent(inout) :: buffer
+        integer, intent(in) :: n
+        integer(int32) :: gid
+
+        call clear_tab_jump()
+        gid = group_id_at_ordinal(editor, n)
+        if (gid == 0) then
+            call set_status_message('No group ' // digit_str(n))
+            return
+        end if
+
+        call note_group_position(editor)
+        call enter_tab_group(editor, buffer, gid)
+        g_jump_value = n
+        g_jump_deadline = platform_now_ms() + int(JUMP_WINDOW_MS, int64)
+        g_jump_kind = JUMP_GROUP
+        call announce_tab_jump(editor)
+    end subroutine begin_group_jump
 
     !> A key arrived while a jump was pending. True when it was consumed.
     function continue_tab_jump(editor, buffer, key_str) result(handled)
@@ -10486,6 +10530,7 @@ contains
         logical :: handled
         integer, allocatable :: members(:)
         integer :: digit, target, fallback
+        integer(int32) :: gid
         character(len=48) :: msg
 
         handled = .false.
@@ -10505,7 +10550,7 @@ contains
 
         handled = .true.
 
-        if (g_jump_group /= 0) then
+        if (g_jump_kind == JUMP_TAB .and. g_jump_group /= 0) then
             ! Into the group the first digit landed in. Its members are
             ! numbered by their order in the group, not by their tab index --
             ! that order is what row 2 shows, so it is what the user is
@@ -10520,6 +10565,37 @@ contains
                 call clear_tab_jump()
                 call set_status_message(trim(msg))
             end if
+            return
+        end if
+
+        if (g_jump_kind == JUMP_GROUP) then
+            target = g_jump_value * 10 + digit
+            gid = group_id_at_ordinal(editor, target)
+            if (gid == 0) then
+                ! Just like tab chords, retry the final digit as a fresh
+                ! one-digit destination when the greedy composite is absent.
+                fallback = digit
+                if (fallback == 0) fallback = 10
+                gid = group_id_at_ordinal(editor, fallback)
+                if (gid /= 0) then
+                    call note_group_position(editor)
+                    call enter_tab_group(editor, buffer, gid)
+                    g_jump_value = fallback
+                    g_jump_deadline = platform_now_ms() + int(JUMP_WINDOW_MS, int64)
+                    call announce_tab_jump(editor)
+                else
+                    write(msg, '(a,i0)') 'No group ', target
+                    call clear_tab_jump()
+                    call set_status_message(trim(msg))
+                end if
+                return
+            end if
+
+            call note_group_position(editor)
+            call enter_tab_group(editor, buffer, gid)
+            g_jump_value = target
+            g_jump_deadline = platform_now_ms() + int(JUMP_WINDOW_MS, int64)
+            call announce_tab_jump(editor)
             return
         end if
 
@@ -10558,10 +10634,9 @@ contains
     !> The digit a key carries, or -1.
     !>
     !> A bare '5', and also alt-5 or ctrl-5. Holding the modifier down is the
-    !> natural way to type a two-digit tab number -- alt-1 then 5 without
-    !> letting go -- and only the bare form was accepted, so the second digit
-    !> fell through to the main dispatch and was taken as its own jump. The
-    !> sequence went to tab 1 and then to tab 5 rather than to tab 15.
+    !> natural way to type a two-digit tab or group number. All three spellings
+    !> must remain continuations rather than falling through to main dispatch
+    !> as a fresh jump.
     pure function digit_of_key(key_str) result(d)
         character(len=*), intent(in) :: key_str
         integer :: d
@@ -10586,6 +10661,7 @@ contains
     subroutine clear_tab_jump()
         g_jump_value = 0
         g_jump_deadline = 0
+        g_jump_kind = JUMP_NONE
         g_jump_group = 0
     end subroutine clear_tab_jump
 
@@ -10613,7 +10689,10 @@ contains
         integer, allocatable :: members(:)
         character(len=64) :: msg
 
-        if (g_jump_group /= 0) then
+        if (g_jump_kind == JUMP_GROUP) then
+            write(msg, '(a)') 'Group ' // digit_str(g_jump_value) // &
+                ' - another digit extends it'
+        else if (g_jump_group /= 0) then
             call group_members(editor, g_jump_group, members)
             write(msg, '(a,i0,a)') 'Tab ' // digit_str(g_jump_value) // &
                 ' - digit picks a member (1-', size(members), ')'
@@ -10623,6 +10702,33 @@ contains
         end if
         call set_status_message(trim(msg))
     end subroutine announce_tab_jump
+
+    !> Group id at the Nth collapsed group entry, ignoring loose tabs.
+    !>
+    !> row1_entries is also the renderer's ordering contract, so Ctrl+number
+    !> follows what the user sees even when groups and loose tabs interleave.
+    function group_id_at_ordinal(editor, ordinal) result(gid)
+        type(editor_state_t), intent(in) :: editor
+        integer, intent(in) :: ordinal
+        integer(int32) :: gid
+        integer(int32), allocatable :: ids(:)
+        integer :: n, here, i, group_n
+
+        gid = 0
+        if (ordinal < 1 .or. size(editor%tabs) == 0) return
+        allocate(ids(max(1, size(editor%tabs))))
+        call row1_entries(editor, ids, n, here)
+
+        group_n = 0
+        do i = 1, n
+            if (ids(i) >= 0) cycle
+            group_n = group_n + 1
+            if (group_n == ordinal) then
+                gid = -ids(i)
+                return
+            end if
+        end do
+    end function group_id_at_ordinal
 
     function digit_str(n) result(s)
         integer, intent(in) :: n
@@ -10848,7 +10954,9 @@ contains
 
         select case (trim(key_str))
         case ('ctrl-alt-left', 'alt-ctrl-left', 'super-ctrl-left', 'ctrl-pageup', &
-              'ctrl-alt-right', 'alt-ctrl-right', 'super-ctrl-right', 'ctrl-pagedown')
+              'ctrl-alt-right', 'alt-ctrl-right', 'super-ctrl-right', 'ctrl-pagedown', &
+              'ctrl-0', 'ctrl-1', 'ctrl-2', 'ctrl-3', 'ctrl-4', &
+              'ctrl-5', 'ctrl-6', 'ctrl-7', 'ctrl-8', 'ctrl-9')
             is_file_navigation_key = .true.
         case default
             is_file_navigation_key = .false.

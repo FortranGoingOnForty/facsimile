@@ -129,6 +129,10 @@ class Session:
     def row2(self):
         return self.screen.display[1].rstrip()
 
+    def member_names(self):
+        """Filenames on row 2, ignoring their visible jump ordinals."""
+        return re.findall(r"[\w.-]+\.[A-Za-z0-9]+", self.row2())
+
     def status(self):
         return self.screen.display[ROWS - 1].rstrip()
 
@@ -321,7 +325,7 @@ def test_reordering_within_a_group(binary):
         s.send("Group All Tabs", 0.6)
         s.send("\r", 1.5)
         before = s.row2()
-        names = before.split()
+        names = s.member_names()
         check(len(names) >= 3, "three members on the row", repr(before))
         if len(names) < 3:
             return
@@ -331,7 +335,7 @@ def test_reordering_within_a_group(binary):
         c_last = s.entry_col(last, row=2)
         s.drag(c_first, c_last, from_row=2)
 
-        after = s.row2().split()
+        after = s.member_names()
         check(after != names, "the member order changed",
               f"{names} -> {after}")
         check(set(after) == set(names), "with the same members",
@@ -353,7 +357,7 @@ def test_carrying_a_member_out_of_its_group(binary):
         s.send("\r", 1.6)
         check("(4)" in s.tab_bar(), "all four are in one group", s.tab_bar())
 
-        names = s.row2().split()
+        names = s.member_names()
         victim = names[-1]
         col = s.entry_col(victim, row=2)
         # Up onto row 1, landing on its blank tail -- with the group as the
@@ -386,7 +390,7 @@ def test_dwelling_over_a_group_opens_it_to_drop_into(binary):
         s.send("\r", 1.6)
 
         # Take one out first, so there is something to put back.
-        names = s.row2().split()
+        names = s.member_names()
         victim = names[-1]
         col = s.entry_col(victim, row=2)
         s.child.send(f"\x1b[<0;{col};2M")
@@ -434,7 +438,7 @@ def test_dwelling_over_a_group_opens_it_to_drop_into(binary):
 
         check("(4)" in s.tab_bar(), "dropping in put it back in the group",
               s.tab_bar())
-        after = s.row2().split()
+        after = s.member_names()
         check(victim in after, "it is on the member row", repr(s.row2()))
         check(after.index(victim) < after.index("beta.c"),
               "at the position it was dropped on, not appended",
@@ -555,7 +559,7 @@ def test_one_drag_from_one_group_into_another(binary):
             check(False, "found the target group", s.tab_bar())
             return
         s.click(1, g2 + 2)
-        after = s.row2().split()
+        after = s.member_names()
         check("b.c" in after, "the file is in the target group now",
               repr(s.row2()))
         if "b.c" in after and "y.c" in after:
@@ -803,7 +807,7 @@ def test_the_group_strip_closes_when_you_leave(binary):
         s.send("\x10", 0.7)
         s.send("Group All Tabs", 0.6)
         s.send("\r", 1.6)
-        names = s.row2().split()
+        names = s.member_names()
         victim = names[-1]
         c = s.entry_col(victim, row=2)
         s.child.send(f"\x1b[<0;{c};2M")
@@ -931,7 +935,7 @@ def stage_one_out(s):
     s.send("\x10", 0.7)
     s.send("Group All Tabs", 0.6)
     s.send("\r", 1.6)
-    names = s.row2().split()
+    names = s.member_names()
     victim = names[-1]
     c = s.entry_col(victim, row=2)
     s.child.send(f"\x1b[<0;{c};2M")
@@ -1038,7 +1042,7 @@ def test_row_two_shows_where_the_tab_will_land(binary):
             return
         s.child.send(f"\x1b[<32;{mid};2M")
         s.drain(0.5)
-        preview = s.row2().split()
+        preview = s.member_names()
         check(victim in preview and "beta.c" in preview,
               "and moves to the aimed position", repr(s.row2()))
         if victim in preview and "beta.c" in preview:
@@ -1047,7 +1051,7 @@ def test_row_two_shows_where_the_tab_will_land(binary):
 
         s.child.send(f"\x1b[<0;{mid};2m")
         s.drain(1.3)
-        landed = s.row2().split()
+        landed = s.member_names()
         check(landed == preview, "and the drop lands exactly where shown",
               f"{preview} -> {landed}")
     finally:

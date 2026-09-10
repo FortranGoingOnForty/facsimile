@@ -176,8 +176,9 @@ of them claims. `Alt+Click` avoids the question entirely.
 | `Ctrl+W` | Close Tab | Close the current tab, prompting if it has unsaved changes. `Alt+Q` is the one that closes a single pane |
 | `Ctrl+PageDown` or `Ctrl+Alt+Right` | Next Tab | Switch to next tab |
 | `Ctrl+PageUp` or `Ctrl+Alt+Left` | Previous Tab | Switch to previous tab |
-| `Alt+1` to `Alt+9` (or `Ctrl+1` to `Ctrl+9`) | Jump to Tab | Switch to that tab. `Alt+0` is tab 10 |
-| ...then another digit | Extend the Jump | Within half a second a further digit extends the number, so `Alt+1` `5` reaches tab 15. If the first digit landed on a tab inside a group, the digit picks that group's Nth member instead — the status bar says which of the two is on offer |
+| `Alt+1` to `Alt+9` | Jump to Tab | Switch to that numbered tab. `Alt+0` is tab 10 |
+| `Ctrl+1` to `Ctrl+9` | Jump to Group | Switch to the Nth tab group from the left, ignoring loose tabs. `Ctrl+0` is group 10 |
+| ...then another digit | Extend the Jump | Within half a second a further digit greedily extends a tab or group number. If the composite does not exist, its final digit is retried as a fresh jump. After an Alt jump lands inside a group, the next digit instead picks the visibly numbered Nth member |
 | `Alt+V` | Split Vertical | Split current pane vertically |
 | `Alt+S` | Split Horizontal | Split current pane horizontally |
 | `Alt+Q` | Close Pane | Close current pane only |
@@ -225,7 +226,9 @@ the same files in reverse. Stepping off the last member leaves the group.
 That means left/right alone will always get you out of a group, which matters
 because `Super+Ctrl+Up` is the binding a window manager is most likely to take.
 For a group with many members, `Super+Ctrl+Up` still leaves in a single press
-from wherever you are, and `Alt+1`–`Alt+9` jump by tab number.
+from wherever you are. `Ctrl+1`-`Ctrl+9` jump directly to groups from left to
+right; after an Alt jump lands in a group, its continuation digit uses the
+visible member numbers on row two.
 
 Super is reported by kitty, ghostty, foot and wezterm; elsewhere the window
 manager often takes `Super+Arrow` before the terminal sees it. The `Ctrl+PageUp`

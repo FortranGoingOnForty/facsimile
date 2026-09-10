@@ -24,8 +24,11 @@ Usage: python3 test/integration_tabjump.py [path-to-fac-binary]
 Requires: pip3 install pexpect pyte
 """
 
+import codecs
+import json
 import os
 import re
+import shutil
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -38,7 +41,7 @@ except ImportError as e:
     sys.exit(0)
 
 from integration_tabgroups import (                     # noqa: E402
-    Session, check, find_binary, failures, group_some_and_leave,
+    COLS, ROWS, Session, check, find_binary, failures, group_some_and_leave,
 )
 
 N_TABS = 16
@@ -94,6 +97,73 @@ def alt(s, digit, wait=0.25):
     s.send("\x1b" + str(digit), wait)
 
 
+def ctrl(s, digit, wait=0.25):
+    """Ctrl+digit as a kitty CSI-u key event."""
+    s.send(f"\x1b[{ord(str(digit))};5u", wait)
+
+
+def grouped_session(binary, n_groups=6):
+    """Restore interleaved loose tabs and groups with deliberately odd ids."""
+    s = Session(binary)
+    s.child.terminate(force=True)
+    shutil.rmtree(s.ws)
+    os.makedirs(s.ws)
+
+    labels = ("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
+    ids = (41, 3, 99, 7, 2, 80)
+    groups, tabs = [], []
+
+    def tab(path, gid, ordinal):
+        return {"filename": path, "is_orphan": False, "modified": False,
+                "group": gid, "group_ordinal": ordinal,
+                "panes": [{"x_start": 0.0, "y_start": 0.0, "x_end": 1.0,
+                           "y_end": 1.0, "filename": path, "cursor_line": 1,
+                           "cursor_column": 1, "viewport_line": 1,
+                           "viewport_column": 1}],
+                "active_pane": 1}
+
+    for position, (label, gid) in enumerate(zip(labels, ids), start=1):
+        if position > n_groups:
+            break
+        directory = os.path.join(s.ws, label)
+        os.makedirs(directory)
+        active_name = f"file{position:02d}.txt"
+        other_name = f"member{position:02d}.txt"
+        for name in (active_name, other_name):
+            with open(os.path.join(directory, name), "w") as f:
+                f.write("".join(f"{name} line {line}\n" for line in range(1, 30)))
+        active_rel = f"{label}/{active_name}"
+        other_rel = f"{label}/{other_name}"
+        groups.append({"id": gid, "label": label + "/", "dir_path": directory,
+                       "active_member": os.path.join(directory, active_name)})
+        tabs.extend((tab(active_rel, gid, 1), tab(other_rel, gid, 2)))
+
+        # Loose tabs are intentionally interleaved between group entries. They
+        # must not consume a Ctrl+number ordinal.
+        loose_name = f"loose{position:02d}.txt"
+        with open(os.path.join(s.ws, loose_name), "w") as f:
+            f.write(f"{loose_name} line 1\n")
+        tabs.append(tab(loose_name, 0, 0))
+
+    doc = {"version": "1.2", "workspace_path": s.ws,
+           "last_opened": "20260910", "tab_groups": groups, "tabs": tabs,
+           "active_tab": 1, "fuss_mode": False}
+    os.makedirs(os.path.join(s.ws, ".fac"))
+    with open(os.path.join(s.ws, ".fac", "workspace.json"), "w") as f:
+        json.dump(doc, f, indent=2)
+
+    env = {**os.environ, "TERM": "xterm-256color", "HOME": s.home}
+    env.pop("XDG_CONFIG_HOME", None)
+    env.pop("FAC_SESSION", None)
+    s.screen = pyte.Screen(COLS, ROWS)
+    s.stream = pyte.Stream(s.screen)
+    s.decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    s.child = pexpect.spawn(binary, [s.ws], dimensions=(ROWS, COLS),
+                            env=env, cwd=s.ws)
+    s.drain(2.5)
+    return s
+
+
 def many_tabs(binary, n=N_TABS):
     s = Session(binary)
     make_more_files(s, n)
@@ -113,6 +183,33 @@ def test_a_single_digit_still_jumps(binary):
         check(showing(s) == "file01.txt", "alt-1 goes to tab 1", showing(s))
         alt(s, 7, 0.9)
         check(showing(s) == "file07.txt", "alt-7 goes to tab 7", showing(s))
+    finally:
+        s.close()
+
+
+def test_ctrl_digits_jump_to_groups_in_bar_order(binary):
+    s = grouped_session(binary)
+    try:
+        ctrl(s, 2, 0.8)
+        check(showing(s) == "file02.txt",
+              "ctrl-2 enters the second group from the left", showing(s))
+        ctrl(s, 5, 0.8)
+        check(showing(s) == "file05.txt",
+              "loose tabs do not consume group ordinals", showing(s))
+    finally:
+        s.close()
+
+
+def test_ctrl_group_jump_falls_back_and_rearms(binary):
+    s = grouped_session(binary)
+    try:
+        ctrl(s, 2)
+        ctrl(s, 6, 0.2)                    # group 26 is absent; group 6 exists
+        check(showing(s) == "file06.txt",
+              "ctrl-2 then ctrl-6 falls back from group 26 to group 6",
+              showing(s))
+        check("Group 6" in s.status() and "another digit" in s.status(),
+              "the fallback group starts a fresh extension window", s.status())
     finally:
         s.close()
 
@@ -356,6 +453,8 @@ def test_a_modified_digit_after_the_window_is_its_own_jump(binary):
 def main():
     binary = find_binary()
     for fn in (test_a_single_digit_still_jumps,
+               test_ctrl_digits_jump_to_groups_in_bar_order,
+               test_ctrl_group_jump_falls_back_and_rearms,
                test_the_modifier_may_stay_held_between_digits,
                test_a_modified_digit_after_the_window_is_its_own_jump,
                test_two_digits_reach_a_higher_tab,
