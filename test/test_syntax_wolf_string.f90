@@ -11,6 +11,7 @@ program test_syntax_wolf_string
 
     type(syntax_highlighter_t) :: hl
     type(token_t), allocatable :: tokens(:)
+    character(len=:), allocatable :: sample
     integer :: nfail
 
     nfail = 0
@@ -63,16 +64,19 @@ program test_syntax_wolf_string
 
     ! --- wolf: string interpolation, [gram.lex.str].
     ! Every wolf string is an f-string: STR_PART ::= STR_TEXT | '{{' | '}}'
-    ! | INTERP, so a `{expr}` hole is code inside a literal and gets its own
-    ! token class. One case per spelling in the production.
+    ! | INTERP, so a `{expr}` hole is code inside a literal. Its boundary
+    ! braces get an accent while its expression uses ordinary code tokens.
 
     ! The '"..."' form: literal run, hole, literal run
     !                    123456789012345678901
     call tokenize_line(hl, 'let g = "hi {name}"', tokens)
     call check(covers(tokens, TOKEN_STRING, 9, 12), &
                'wolf: text before a hole is string')
-    call check(covers(tokens, TOKEN_INTERP, 13, 18), &
-               'wolf: {name} is one interpolation token, braces included')
+    call check(covers(tokens, TOKEN_INTERP, 13, 13) .and. &
+               covers(tokens, TOKEN_INTERP, 18, 18), &
+               'wolf: interpolation braces retain their accent')
+    call check(covers(tokens, TOKEN_PLAIN, 14, 17), &
+               'wolf: an interpolated identifier is ordinary code')
     call check(covers(tokens, TOKEN_STRING, 19, 19), &
                'wolf: the closing quote is string again')
 
@@ -85,18 +89,26 @@ program test_syntax_wolf_string
 
     ! Brace balance inside the expression: calls and indexing
     call tokenize_line(hl, 'let g = "{a.b(c[0])}"', tokens)
-    call check(covers(tokens, TOKEN_INTERP, 10, 20), &
+    call check(covers(tokens, TOKEN_INTERP, 10, 10) .and. &
+               covers(tokens, TOKEN_INTERP, 20, 20), &
                'wolf: {a.b(c[0])} closes at its own brace')
+    call check(at_type(tokens, TOKEN_OPERATOR, 12) .and. &
+               at_type(tokens, TOKEN_NUMBER, 17), &
+               'wolf: operators and numbers inside a hole are code')
 
     ! ... and a nested brace does not end the hole early
     call tokenize_line(hl, 'let g = "{ {k} }"', tokens)
-    call check(covers(tokens, TOKEN_INTERP, 10, 16), &
+    call check(covers(tokens, TOKEN_INTERP, 10, 10) .and. &
+               covers(tokens, TOKEN_INTERP, 16, 16), &
                'wolf: a nested { } inside the expression is balanced')
+    call check(count_type(tokens, TOKEN_INTERP) == 2, &
+               'wolf: structural braces inside a hole are ordinary code')
 
     ! An escaped quote does not close the string, and the hole after it is
     ! still found
     call tokenize_line(hl, 'let g = "\"{x}"', tokens)
-    call check(covers(tokens, TOKEN_INTERP, 12, 14), &
+    call check(covers(tokens, TOKEN_INTERP, 12, 12) .and. &
+               covers(tokens, TOKEN_INTERP, 14, 14), &
                'wolf: an escaped quote does not hide the next hole')
 
     ! An escape swallows the brace it precedes, so no hole opens
@@ -104,10 +116,11 @@ program test_syntax_wolf_string
     call check(.not. has_type(tokens, TOKEN_INTERP), &
                'wolf: an escaped brace does not open an interpolation')
 
-    ! Unterminated '{': paints to end of line and no further
+    ! Unterminated '{': tokenizes to end of line and no further
     call tokenize_line(hl, 'let g = "hi {name', tokens)
-    call check(covers(tokens, TOKEN_INTERP, 13, 17), &
-               'wolf: an unterminated { paints to end of line')
+    call check(covers(tokens, TOKEN_INTERP, 13, 13) .and. &
+               covers(tokens, TOKEN_PLAIN, 14, 17), &
+               'wolf: an unterminated { tokenizes its expression to end of line')
     call check(.not. hl%in_interp, &
                'wolf: a one-line string never carries a hole past its line')
     call check(.not. hl%in_multiline_string, &
@@ -119,6 +132,45 @@ program test_syntax_wolf_string
     call check(covers(tokens, TOKEN_KEYWORD, 1, 3), &
                'wolf: var is a keyword again after an unterminated {')
 
+    ! A real expression in a hole uses the ordinary Wolf token classes.
+    sample = 'let g = "value {if n > 2 { n * 3 } else { 0 }}"'
+    call tokenize_line(hl, sample, tokens)
+    call check(at_type(tokens, TOKEN_KEYWORD, index(sample, 'if')) .and. &
+               at_type(tokens, TOKEN_KEYWORD, index(sample, 'else')), &
+               'wolf: control words inside a hole are keywords')
+    call check(at_type(tokens, TOKEN_OPERATOR, index(sample, '>')) .and. &
+               at_type(tokens, TOKEN_OPERATOR, index(sample, '*')), &
+               'wolf: operators inside a hole retain their colors')
+    call check(at_type(tokens, TOKEN_NUMBER, index(sample, '2')) .and. &
+               at_type(tokens, TOKEN_NUMBER, index(sample, '3')), &
+               'wolf: numeric literals inside a hole are numbers')
+    call check(count_type(tokens, TOKEN_INTERP) == 2, &
+               'wolf: only the outer interpolation braces use the accent')
+
+    ! A string literal inside the expression is still a string, and its
+    ! braces do not close the interpolation around it.
+    sample = 'let g = "value {choose("yes }", n + 2)} tail"'
+    call tokenize_line(hl, sample, tokens)
+    call check(at_type(tokens, TOKEN_STRING, index(sample, '"yes }"')), &
+               'wolf: a quoted literal inside a hole remains a string')
+    call check(at_type(tokens, TOKEN_OPERATOR, index(sample, '+')) .and. &
+               at_type(tokens, TOKEN_NUMBER, index(sample, '2')), &
+               'wolf: code after an inner string stays in the expression')
+    call check(covers(tokens, TOKEN_STRING, len(sample)-5, len(sample)), &
+               'wolf: text after the hole returns to string highlighting')
+
+    ! Adjacent holes with format specifications are common in real Wolf code.
+    sample = 'print("{k:<10}{totals[k]:>5}")'
+    call tokenize_line(hl, sample, tokens)
+    call check(count_type(tokens, TOKEN_INTERP) == 4, &
+               'wolf: adjacent formatted holes keep distinct boundaries')
+    call check(at_type(tokens, TOKEN_OPERATOR, index(sample, '<')) .and. &
+               at_type(tokens, TOKEN_OPERATOR, index(sample, '>')), &
+               'wolf: format alignment operators use their code color')
+    call check(at_type(tokens, TOKEN_NUMBER, index(sample, '10')) .and. &
+               at_type(tokens, TOKEN_NUMBER, index(sample, '5')), &
+               'wolf: format widths are numeric literals')
+
     ! The '"""..."""' form: same holes, carried across lines
     call tokenize_line(hl, 'let rows = """', tokens)
     call check(hl%in_multiline_string, 'wolf: block string opens for interp')
@@ -127,8 +179,11 @@ program test_syntax_wolf_string
     call tokenize_line(hl, '    total {sum} items', tokens)
     call check(covers(tokens, TOKEN_STRING, 1, 10), &
                'wolf: block-string text before a hole is string')
-    call check(covers(tokens, TOKEN_INTERP, 11, 15), &
-               'wolf: {sum} is an interpolation inside a """ block')
+    call check(covers(tokens, TOKEN_INTERP, 11, 11) .and. &
+               covers(tokens, TOKEN_INTERP, 15, 15), &
+               'wolf: {sum} has accented boundaries inside a """ block')
+    call check(covers(tokens, TOKEN_PLAIN, 12, 14), &
+               'wolf: block-string interpolation contents are ordinary code')
     call check(covers(tokens, TOKEN_STRING, 16, 21), &
                'wolf: block-string text after a hole is string again')
     call check(hl%in_multiline_string, &
@@ -141,14 +196,16 @@ program test_syntax_wolf_string
 
     ! An expression really can continue on the next line inside a block
     call tokenize_line(hl, '    {a +', tokens)
-    call check(covers(tokens, TOKEN_INTERP, 5, 8), &
-               'wolf: an unclosed hole paints to end of line in a block')
+    call check(covers(tokens, TOKEN_INTERP, 5, 5) .and. &
+               at_type(tokens, TOKEN_OPERATOR, 8), &
+               'wolf: an unclosed hole tokenizes to end of line in a block')
     call check(hl%in_interp, &
                'wolf: an unclosed hole in a """ block carries to the next line')
 
     call tokenize_line(hl, '     b} tail', tokens)
-    call check(covers(tokens, TOKEN_INTERP, 1, 7), &
-               'wolf: the continued hole ends at its closing brace')
+    call check(covers(tokens, TOKEN_PLAIN, 6, 6) .and. &
+               covers(tokens, TOKEN_INTERP, 7, 7), &
+               'wolf: the continued hole is code through its closing brace')
     call check(covers(tokens, TOKEN_STRING, 8, 12), &
                'wolf: text after the continued hole is string again')
     call check(.not. hl%in_interp, 'wolf: the continued hole is closed')
@@ -224,6 +281,30 @@ contains
             end if
         end do
     end function covers
+
+    logical function at_type(toks, tok_type, col)
+        type(token_t), intent(in) :: toks(:)
+        integer, intent(in) :: tok_type, col
+        integer :: i
+        at_type = .false.
+        do i = 1, size(toks)
+            if (toks(i)%type == tok_type .and. &
+                col >= toks(i)%start_col .and. col <= toks(i)%end_col) then
+                at_type = .true.
+                return
+            end if
+        end do
+    end function at_type
+
+    integer function count_type(toks, tok_type)
+        type(token_t), intent(in) :: toks(:)
+        integer, intent(in) :: tok_type
+        integer :: i
+        count_type = 0
+        do i = 1, size(toks)
+            if (toks(i)%type == tok_type) count_type = count_type + 1
+        end do
+    end function count_type
 
     subroutine check(cond, name)
         logical, intent(in) :: cond

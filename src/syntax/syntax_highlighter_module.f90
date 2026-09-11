@@ -591,11 +591,9 @@ contains
     !
     ! [gram.lex.str]: STR_PART ::= STR_TEXT | '{{' | '}}' | INTERP, and
     ! INTERP ::= '{' expr FORMAT_SPEC? '}'. So the body of a string is
-    ! literal text with holes in it, and the holes are code. Painting the
-    ! whole literal one colour hides where the code is; painting the holes
-    ! shows it. This is a line tokenizer, not a parser -- the expression
-    ! inside a hole is one span, not re-lexed -- so the only thing that has
-    ! to be got right is where each hole starts and stops.
+    ! literal text with holes in it, and the holes are code. The outer
+    ! braces retain the interpolation accent while the expression between
+    ! them is lexed with the ordinary Wolf token classes.
     ! ------------------------------------------------------------------
 
     ! Bounds-safe two-character compare. Fortran's .and. does not
@@ -641,52 +639,103 @@ contains
         tokens(token_count)%end_col = end_col
     end subroutine emit_token
 
-    ! Consume one `{expr}` from `pos` and emit it as a single TOKEN_INTERP.
-    ! Brace balance decides which `}` ends it, so `{a.b(c[0])}` closes at
-    ! its own brace and `{ {k: v} }` at the outer one. An expression that
-    ! does not close on this line paints to the end of the line and leaves
-    ! in_interp set -- inside a """ block that is the truth, and a one-line
-    ! string clears the flag when it ends at the newline.
-    subroutine process_interp_span(highlighter, line, tokens, token_count, pos)
+    ! Consume one `{expr}` from `pos`. Only the outer braces use the
+    ! interpolation accent; the expression between them is ordinary Wolf
+    ! code and therefore goes through the same lexical classes as code
+    ! outside a string. Brace balance decides which `}` ends it.
+    recursive subroutine process_interp_span(highlighter, line, tokens, token_count, pos)
         type(syntax_highlighter_t), intent(inout) :: highlighter
         character(len=*), intent(in) :: line
         type(token_t), intent(inout) :: tokens(:)
         integer, intent(inout) :: token_count, pos
-        integer :: line_len, start_col
+        integer :: line_len
+        character(len=1) :: ch
 
         line_len = len(line)
-        start_col = pos
 
         do while (pos <= line_len)
-            select case (line(pos:pos))
+            ch = line(pos:pos)
+            select case (ch)
             case ('{')
+                if (highlighter%interp_depth == 0) then
+                    call emit_token(tokens, token_count, TOKEN_INTERP, pos, pos)
+                else
+                    call emit_token(tokens, token_count, TOKEN_PLAIN, pos, pos)
+                end if
                 highlighter%interp_depth = highlighter%interp_depth + 1
                 pos = pos + 1
             case ('}')
                 if (highlighter%interp_depth <= 1) then
+                    call emit_token(tokens, token_count, TOKEN_INTERP, pos, pos)
                     pos = pos + 1
-                    call emit_token(tokens, token_count, TOKEN_INTERP, start_col, pos - 1)
                     highlighter%in_interp = .false.
                     highlighter%interp_depth = 0
                     return
                 end if
+                call emit_token(tokens, token_count, TOKEN_PLAIN, pos, pos)
                 highlighter%interp_depth = highlighter%interp_depth - 1
                 pos = pos + 1
             case default
-                pos = pos + 1
+                if (check_comment_start(highlighter, line, pos)) then
+                    call emit_token(tokens, token_count, TOKEN_COMMENT, pos, line_len)
+                    pos = line_len + 1
+                else if (check_string_start(highlighter, line, pos)) then
+                    call process_interp_code_string(highlighter, line, tokens, &
+                                                    token_count, pos)
+                else if (is_digit(ch) .or. &
+                         (ch == '.' .and. next_is_digit(line, pos, line_len))) then
+                    call process_number(line, tokens, token_count, pos)
+                else if (is_alpha(ch) .or. ch == '_') then
+                    call process_word(highlighter, line, tokens, token_count, pos)
+                else if (is_operator_char(highlighter, ch)) then
+                    call emit_token(tokens, token_count, TOKEN_OPERATOR, pos, pos)
+                    pos = pos + 1
+                else
+                    call emit_token(tokens, token_count, TOKEN_PLAIN, pos, pos)
+                    pos = pos + 1
+                end if
             end select
         end do
-
-        call emit_token(tokens, token_count, TOKEN_INTERP, start_col, line_len)
     end subroutine process_interp_span
+
+    ! Tokenize a string nested inside an interpolation without letting its
+    ! own string/interpolation state replace the surrounding expression's
+    ! state. This also makes braces inside the nested literal invisible to
+    ! the outer brace balancer.
+    recursive subroutine process_interp_code_string(highlighter, line, tokens, &
+                                                    token_count, pos)
+        type(syntax_highlighter_t), intent(inout) :: highlighter
+        character(len=*), intent(in) :: line
+        type(token_t), intent(inout) :: tokens(:)
+        integer, intent(inout) :: token_count, pos
+        logical :: saved_ms, saved_interp
+        integer :: saved_depth
+        character(len=4) :: saved_delimiter
+
+        saved_ms = highlighter%in_multiline_string
+        saved_delimiter = highlighter%string_delimiter
+        saved_interp = highlighter%in_interp
+        saved_depth = highlighter%interp_depth
+
+        highlighter%in_multiline_string = .false.
+        highlighter%string_delimiter = ''
+        highlighter%in_interp = .false.
+        highlighter%interp_depth = 0
+        call process_interp_string(highlighter, line, tokens, token_count, pos)
+
+        highlighter%in_multiline_string = saved_ms
+        highlighter%string_delimiter = saved_delimiter
+        highlighter%in_interp = saved_interp
+        highlighter%interp_depth = saved_depth
+    end subroutine process_interp_code_string
 
     ! Walk a string body from `pos`, emitting a TOKEN_STRING run for every
     ! stretch of literal text and a TOKEN_INTERP span for every hole.
     ! `run_start` is where the current literal run began: the opening
     ! delimiter for a string that starts on this line, `pos` for a
     ! continuation line inside a """ block.
-    subroutine scan_interp_body(highlighter, line, tokens, token_count, pos, &
-                                run_start_in, delimiter, closed)
+    recursive subroutine scan_interp_body(highlighter, line, tokens, token_count, pos, &
+                                          run_start_in, delimiter, closed)
         type(syntax_highlighter_t), intent(inout) :: highlighter
         character(len=*), intent(in) :: line
         type(token_t), intent(inout) :: tokens(:)
@@ -749,7 +798,7 @@ contains
     ! interpolate. Same contract as process_string: `pos` lands after the
     ! literal, and an unclosed multiline form leaves the highlighter in
     ! multiline string mode.
-    subroutine process_interp_string(highlighter, line, tokens, token_count, pos)
+    recursive subroutine process_interp_string(highlighter, line, tokens, token_count, pos)
         type(syntax_highlighter_t), intent(inout) :: highlighter
         character(len=*), intent(in) :: line
         type(token_t), intent(inout) :: tokens(:)

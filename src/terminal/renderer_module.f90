@@ -122,7 +122,7 @@ module renderer_module
     ! menu's visibility every frame.
     logical, save :: g_motion_tracking = .false.
 
-    ! ---- multi-line comment seeding -------------------------------------
+    ! ---- multi-line lexical-state seeding -------------------------------
     !
     ! Whether a line sits inside a /* */ block depends on every line above it,
     ! and tokenize_line carries that as state from one call to the next. The
@@ -141,6 +141,8 @@ module renderer_module
     logical :: g_hl_anchor_mc = .false.
     logical :: g_hl_anchor_ms = .false.
     character(len=4) :: g_hl_anchor_delim = ''
+    logical :: g_hl_anchor_interp = .false.
+    integer :: g_hl_anchor_interp_depth = 0
     integer(int64) :: g_hl_key_rev = -1     ! doc revision the anchor was built from
     integer :: g_hl_key_tab = -1
     ! WHICH DOCUMENT the anchor was built from.
@@ -912,15 +914,21 @@ contains
             syntax_highlighter%in_multiline_comment = g_hl_anchor_mc
             syntax_highlighter%in_multiline_string = g_hl_anchor_ms
             syntax_highlighter%string_delimiter = g_hl_anchor_delim
+            syntax_highlighter%in_interp = g_hl_anchor_interp
+            syntax_highlighter%interp_depth = g_hl_anchor_interp_depth
         else
             syntax_highlighter%in_multiline_comment = .false.
             syntax_highlighter%in_multiline_string = .false.
             syntax_highlighter%string_delimiter = ''
+            syntax_highlighter%in_interp = .false.
+            syntax_highlighter%interp_depth = 0
             ! Remember where this scan starts, so a later line can resume.
             g_hl_anchor_line = 1
             g_hl_anchor_mc = .false.
             g_hl_anchor_ms = .false.
             g_hl_anchor_delim = ''
+            g_hl_anchor_interp = .false.
+            g_hl_anchor_interp_depth = 0
             g_hl_key_rev = rev
             g_hl_key_tab = tab_idx
             if (allocated(g_hl_surface)) then
@@ -941,6 +949,8 @@ contains
         g_hl_anchor_mc = syntax_highlighter%in_multiline_comment
         g_hl_anchor_ms = syntax_highlighter%in_multiline_string
         g_hl_anchor_delim = syntax_highlighter%string_delimiter
+        g_hl_anchor_interp = syntax_highlighter%in_interp
+        g_hl_anchor_interp_depth = syntax_highlighter%interp_depth
         g_hl_key_rev = rev
         g_hl_key_tab = tab_idx
     end subroutine seed_comment_state
@@ -3228,16 +3238,16 @@ contains
     ! stopping when budget screen cells are used. start_off is the display
     ! offset of the first cell from the line's on-screen start (keeps tab
     ! stops aligned). Colors come from a fresh tokenization of the real line;
-    ! the highlighter's multiline scan state is saved and restored so the
+    ! the highlighter's lexical scan state is saved and restored so the
     ! frame-sequential state machine is untouched.
     subroutine render_line_tail_shifted(buffer_line, start_char, start_off, budget)
         character(len=*), intent(in) :: buffer_line
         integer, intent(in) :: start_char, start_off, budget
         type(token_t), allocatable :: tokens(:)
-        logical :: saved_mc, saved_ms
+        logical :: saved_mc, saved_ms, saved_interp
         character(len=4) :: saved_delim
         character(len=:), allocatable :: ch, style, prev_style
-        integer :: ci, off, w, byte_pos, ti, surface_role
+        integer :: ci, off, w, byte_pos, ti, surface_role, saved_interp_depth
 
         if (budget < 1) return
 
@@ -3247,12 +3257,18 @@ contains
         saved_mc = syntax_highlighter%in_multiline_comment
         saved_ms = syntax_highlighter%in_multiline_string
         saved_delim = syntax_highlighter%string_delimiter
+        saved_interp = syntax_highlighter%in_interp
+        saved_interp_depth = syntax_highlighter%interp_depth
         syntax_highlighter%in_multiline_comment = .false.
         syntax_highlighter%in_multiline_string = .false.
+        syntax_highlighter%in_interp = .false.
+        syntax_highlighter%interp_depth = 0
         call tokenize_line(syntax_highlighter, buffer_line, tokens)
         syntax_highlighter%in_multiline_comment = saved_mc
         syntax_highlighter%in_multiline_string = saved_ms
         syntax_highlighter%string_delimiter = saved_delim
+        syntax_highlighter%in_interp = saved_interp
+        syntax_highlighter%interp_depth = saved_interp_depth
 
         prev_style = ''
         off = 0
