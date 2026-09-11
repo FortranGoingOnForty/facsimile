@@ -111,7 +111,10 @@ contains
         call add_binding(lines, n_lines, 'Alt+Shift+Up / Down', 'Duplicate the current line')
         call add_binding(lines, n_lines, 'Alt+Shift+J', 'Join the next line onto this one')
         call add_binding(lines, n_lines, 'Ctrl+Shift+K', 'Delete lines without using the clipboard')
-        call add_binding(lines, n_lines, "Alt+' / Alt+Shift+'", 'Cycle quotes / remove surrounding delimiters')
+        call add_binding(lines, n_lines, "Alt+'", 'Cycle the surrounding quote style')
+        call add_binding(lines, n_lines, 'Ctrl+Alt+Backspace', &
+                         'Remove the innermost surrounding delimiters')
+        call add_binding(lines, n_lines, "Alt+Shift+'", 'Portable alternate for delimiter removal')
         call add_binding(lines, n_lines, 'Ctrl+X / C / V', 'Cut / copy / paste line or selection')
         call add_blank(lines, n_lines)
 

@@ -2923,13 +2923,15 @@ contains
             call cycle_quotes(editor%cursors(editor%active_cursor), buffer)
             is_edit_action = .true.
 
-        case('ctrl-opt-backspace', 'ctrl-alt-backspace', 'alt-shift-backspace', 'alt-shift-apostrophe')
+        case('ctrl-opt-backspace', 'ctrl-alt-backspace', 'alt-ctrl-backspace', &
+             'alt-shift-backspace', 'alt-shift-apostrophe')
             ! Remove surrounding brackets/quotes
-            ! ctrl-alt-backspace: Doesn't work (terminals send alt-backspace)
-            ! alt-shift-backspace: Doesn't work (terminals send alt-backspace)
-            ! alt-shift-': Alternative binding (Alt+Shift+' = Alt+")
+            ! The enhanced keyboard protocol spells Ctrl+Alt as alt-ctrl;
+            ! the other spellings remain aliases for older input paths.
             call note_edit_kind(EDIT_STRUCTURAL, buffer, editor)
             call remove_brackets(editor%cursors(editor%active_cursor), buffer)
+            call sync_editor_to_pane(editor)
+            call update_viewport(editor)
             is_edit_action = .true.
 
         case('ctrl-d')
@@ -5608,79 +5610,206 @@ contains
         type(cursor_t), intent(inout) :: cursor
         type(buffer_t), intent(inout) :: buffer
         character(len=:), allocatable :: line
-        integer :: bracket_start, bracket_end, byte_pos
-        character :: open_bracket, close_bracket
+        integer :: start_line, start_col, end_line, end_col
+        integer :: quote_start, quote_end, byte_pos, open_pos, close_pos
 
+        call find_enclosing_brackets(buffer, cursor, start_line, start_col, &
+                                     end_line, end_col)
+
+        ! Quotes are line-scoped. If both a quote and bracket pair enclose the
+        ! caret, whichever opener is later is the innermost delimiter.
         line = buffer_get_line(buffer, cursor%line)
-
-        ! Find surrounding brackets (byte positions; cursor column is chars)
         byte_pos = utf8_char_to_byte_index(line, cursor%column)
         if (byte_pos == 0) byte_pos = len(line) + 1
-        call find_surrounding_brackets(line, byte_pos, bracket_start, bracket_end, &
-                                       open_bracket, close_bracket)
-
-        if (bracket_start > 0 .and. bracket_end > 0) then
-            ! Buffer edits below take char columns
-            bracket_start = utf8_byte_to_char_index(line, bracket_start)
-            bracket_end = utf8_byte_to_char_index(line, bracket_end)
-            ! Delete closing bracket first (to maintain positions)
-            cursor%column = bracket_end
-            call buffer_delete_at_cursor(buffer, cursor)
-
-            ! Delete opening bracket
-            cursor%column = bracket_start
-            call buffer_delete_at_cursor(buffer, cursor)
-
-            buffer%modified = .true.
+        call find_enclosing_quotes(line, byte_pos, quote_start, quote_end)
+        if (quote_start > 0) then
+            quote_start = utf8_byte_to_char_index(line, quote_start)
+            quote_end = utf8_byte_to_char_index(line, quote_end)
+            if (start_line == 0 .or. start_line < cursor%line .or. &
+                (start_line == cursor%line .and. quote_start > start_col)) then
+                start_line = cursor%line
+                start_col = quote_start
+                end_line = cursor%line
+                end_col = quote_end
+            end if
         end if
-
         if (allocated(line)) deallocate(line)
+
+        if (start_line == 0) return
+
+        ! Delete the later byte first so the opening delimiter's position is
+        ! unchanged. Delimiters are ASCII, hence each deletion is one byte.
+        close_pos = get_buffer_position(buffer, end_line, end_col)
+        open_pos = get_buffer_position(buffer, start_line, start_col)
+        if (open_pos <= 0 .or. close_pos <= open_pos) return
+        call buffer_delete(buffer, close_pos, 1)
+        call buffer_delete(buffer, open_pos, 1)
+
+        ! Keep the caret on the same interior character. An opener on an
+        ! earlier line does not alter this line's character column.
+        if (start_line == cursor%line) cursor%column = max(1, cursor%column - 1)
+        cursor%desired_column = cursor%column
     end subroutine remove_brackets
 
-    ! pos, start_pos, end_pos are BYTE positions in line
-    subroutine find_surrounding_brackets(line, pos, start_pos, end_pos, open_br, close_br)
+    ! Find the nearest balanced (), [] or {} pair strictly around the caret.
+    ! Scanning backward with one depth per bracket type skips pairs that ended
+    ! before the caret; validating the candidate forward supports multiline
+    ! pairs and rejects unmatched openers.
+    subroutine find_enclosing_brackets(buffer, cursor, start_line, start_col, &
+                                       end_line, end_col)
+        type(buffer_t), intent(in) :: buffer
+        type(cursor_t), intent(in) :: cursor
+        integer, intent(out) :: start_line, start_col, end_line, end_col
+        character(len=:), allocatable :: line
+        character :: ch
+        integer :: depth(3), line_no, byte_col, cursor_byte, kind, candidate_col
+        integer :: match_line, match_col
+        logical :: found
+
+        start_line = 0
+        start_col = 0
+        end_line = 0
+        end_col = 0
+        depth = 0
+
+        do line_no = cursor%line, 1, -1
+            line = buffer_get_line(buffer, line_no)
+            if (line_no == cursor%line) then
+                cursor_byte = utf8_char_to_byte_index(line, cursor%column)
+                if (cursor_byte == 0) cursor_byte = len(line) + 1
+                byte_col = cursor_byte - 1
+            else
+                byte_col = len(line)
+            end if
+
+            do while (byte_col >= 1)
+                ch = line(byte_col:byte_col)
+                kind = closing_bracket_kind(ch)
+                if (kind > 0) then
+                    depth(kind) = depth(kind) + 1
+                else
+                    kind = opening_bracket_kind(ch)
+                    if (kind > 0) then
+                        if (depth(kind) > 0) then
+                            depth(kind) = depth(kind) - 1
+                        else
+                            candidate_col = utf8_byte_to_char_index(line, byte_col)
+                            call find_matching_bracket(buffer, line_no, candidate_col, &
+                                                       found, match_line, match_col)
+                            if (found .and. position_after_caret(match_line, match_col, cursor)) then
+                                start_line = line_no
+                                start_col = candidate_col
+                                end_line = match_line
+                                end_col = match_col
+                                if (allocated(line)) deallocate(line)
+                                return
+                            end if
+                        end if
+                    end if
+                end if
+                byte_col = byte_col - 1
+            end do
+            if (allocated(line)) deallocate(line)
+        end do
+    end subroutine find_enclosing_brackets
+
+    integer function opening_bracket_kind(ch) result(kind)
+        character, intent(in) :: ch
+
+        select case(ch)
+        case('(')
+            kind = 1
+        case('[')
+            kind = 2
+        case('{')
+            kind = 3
+        case default
+            kind = 0
+        end select
+    end function opening_bracket_kind
+
+    integer function closing_bracket_kind(ch) result(kind)
+        character, intent(in) :: ch
+
+        select case(ch)
+        case(')')
+            kind = 1
+        case(']')
+            kind = 2
+        case('}')
+            kind = 3
+        case default
+            kind = 0
+        end select
+    end function closing_bracket_kind
+
+    logical function position_after_caret(line, column, cursor) result(after)
+        integer, intent(in) :: line, column
+        type(cursor_t), intent(in) :: cursor
+
+        after = line > cursor%line .or. &
+                (line == cursor%line .and. column > cursor%column)
+    end function position_after_caret
+
+    ! Return BYTE positions for the innermost ordinary quote pair around pos.
+    ! A single active quote type prevents apostrophes inside double-quoted
+    ! text from masquerading as their own pair. Repeated quote runs are left
+    ! alone rather than partially dismantling triple-quoted strings.
+    subroutine find_enclosing_quotes(line, pos, start_pos, end_pos)
         character(len=*), intent(in) :: line
         integer, intent(in) :: pos
         integer, intent(out) :: start_pos, end_pos
-        character, intent(out) :: open_br, close_br
-        integer :: i
+        character :: active_quote, ch
+        integer :: i, open_pos
 
         start_pos = 0
         end_pos = 0
-        open_br = ' '
-        close_br = ' '
+        active_quote = ' '
+        open_pos = 0
 
-        ! Search backward for opening bracket
-        do i = pos - 1, 1, -1
-            select case(line(i:i))
-            case('(')
-                start_pos = i
-                open_br = '('
-                close_br = ')'
-                exit
-            case('[')
-                start_pos = i
-                open_br = '['
-                close_br = ']'
-                exit
-            case('{')
-                start_pos = i
-                open_br = '{'
-                close_br = '}'
-                exit
-            end select
-        end do
+        do i = 1, len(line)
+            ch = line(i:i)
+            if (ch /= '"' .and. ch /= "'" .and. ch /= '`') cycle
+            if (quote_is_escaped(line, i) .or. quote_is_repeated(line, i)) cycle
 
-        if (start_pos > 0) then
-            ! Search forward for matching closing bracket
-            do i = pos, len(line)
-                if (line(i:i) == close_br) then
+            if (active_quote == ' ') then
+                active_quote = ch
+                open_pos = i
+            else if (ch == active_quote) then
+                if (open_pos < pos .and. pos < i) then
+                    start_pos = open_pos
                     end_pos = i
-                    exit
                 end if
-            end do
-        end if
-    end subroutine find_surrounding_brackets
+                active_quote = ' '
+                open_pos = 0
+            end if
+        end do
+    end subroutine find_enclosing_quotes
+
+    logical function quote_is_escaped(line, pos) result(escaped)
+        character(len=*), intent(in) :: line
+        integer, intent(in) :: pos
+        integer :: i, slash_count
+
+        slash_count = 0
+        i = pos - 1
+        do while (i >= 1)
+            if (line(i:i) /= '\') exit
+            slash_count = slash_count + 1
+            i = i - 1
+        end do
+        escaped = mod(slash_count, 2) == 1
+    end function quote_is_escaped
+
+    logical function quote_is_repeated(line, pos) result(repeated)
+        character(len=*), intent(in) :: line
+        integer, intent(in) :: pos
+
+        repeated = .false.
+        if (pos > 1) repeated = line(pos - 1:pos - 1) == line(pos:pos)
+        if (pos < len(line)) repeated = repeated .or. &
+            line(pos + 1:pos + 1) == line(pos:pos)
+    end function quote_is_repeated
 
     subroutine init_cursor(cursor)
         type(cursor_t), intent(out) :: cursor

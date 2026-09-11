@@ -36,6 +36,10 @@ program test_csi_u_keys
     call expect('104;5', 'ctrl-h',     'ctrl+h')
     call expect('93;5',  'ctrl-]',     'ctrl+] (redo)')
     call expect('32;5',  'ctrl-space', 'ctrl+space (completion)')
+    call expect('127;7', 'alt-ctrl-backspace', &
+                'ctrl+alt+backspace keeps both modifiers')
+    call expect('8;7',   'alt-ctrl-backspace', &
+                'ctrl+alt+ctrl-h backspace spelling')
 
     ! --- Chords whose control bytes WERE Tab/Enter/Escape keep that meaning,
     !     so nothing a user had in muscle memory changes under the protocol ---

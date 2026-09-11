@@ -44,9 +44,12 @@ useful entries from this list.
 | `Ctrl+K` / `Ctrl+U` | Kill Line | Cut forward to end of line / back to line start, onto the yank stack |
 | `Alt+Shift+J` | Join Lines | Pull the next line onto this one |
 | `Alt+'` | Cycle Quotes | Rotate the quoting around the caret: `"` → `'` → `` ` `` → `"` |
-| `Alt+Shift+'` | Unwrap | Remove the surrounding brackets or quotes |
+| `Ctrl+Alt+Backspace` or `Alt+Shift+'` | Unwrap | Remove the innermost surrounding brackets or quotes while keeping the caret on its content |
 | `Shift+Tab` | Dedent | Dedent the selection, or the current line |
 | `Ctrl+Shift+S` | Save All | Write every modified tab |
+
+`Ctrl+Alt+Backspace` needs a terminal that speaks CSI-u (kitty, foot, WezTerm,
+recent Ghostty). Use `Alt+Shift+'` for the same command elsewhere.
 
 ### Inline completion
 
