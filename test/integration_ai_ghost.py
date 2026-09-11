@@ -227,6 +227,7 @@ def drive_to_block(s):
 def test_block_renders_without_hiding_the_file(binary):
     s = Session(binary, BLOCK_SRC, ai_on=True, name="b.c", truecolor=True)
     try:
+        editor_bg = s.screen.buffer[ROWS - 2][COLS - 2].bg
         if not drive_to_block(s):
             print("SKIP: model did not produce a block this run")
             return
@@ -236,6 +237,19 @@ def test_block_renders_without_hiding_the_file(binary):
               "the real line below the block is still visible", disp)
         check("int other" in disp,
               "and so is the code further down", disp)
+
+        # The block renderer pushes every real row below the suggestion down
+        # and repaints the remaining post-EOF rows. Those clears must retain
+        # the editor surface instead of exposing the terminal's background.
+        other_row = next((i for i, row in enumerate(s.screen.display)
+                          if "int other" in row), ROWS - 2)
+        post_eof = [s.screen.buffer[y][x]
+                    for y in range(other_row + 1, ROWS - 1)
+                    for x in range(0, COLS - 1)]
+        check(editor_bg != "default" and post_eof and
+              all(cell.bg == editor_bg for cell in post_eof),
+              "post-EOF rows keep the editor background while ghosting",
+              sorted({cell.bg for cell in post_eof}))
 
         # The first ghost row sits on the highlighted caret row. Its text must
         # retain that row's surface instead of painting editor-background

@@ -3088,6 +3088,7 @@ contains
             ! Blank this row's slice of the pane first, for the same reason:
             ! the row has to be cleared, but only as far as the pane goes.
             call terminal_move_cursor(row, col0)
+            call terminal_write(theme_sgr(THEME_EDITOR_BG))
             call terminal_write(repeat(' ', cwidth))
             call terminal_move_cursor(row, col0)
             call render_line_number(src_line, line_count, gutter)
@@ -3095,8 +3096,9 @@ contains
                 call render_line_with_selections(buffer, editor, src_line, &
                                                  editor%viewport_column, content_w)
             else
-                call terminal_write('~')
+                call terminal_write(theme_sgr(THEME_EDITOR) // '~')
             end if
+            call terminal_write(theme_reset())
         end do
     end subroutine render_ghost_block
 
