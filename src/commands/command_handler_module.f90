@@ -285,8 +285,8 @@ module command_handler_module
     ! case where you type the ')' auto-close already put there. Only
     ! auto-inserted closers are tracked, so typing ')' in front of a ')' you
     ! wrote yourself still inserts a character.
-    integer, parameter :: MAX_PENDING_CLOSERS = 32
-    character :: g_pending_closers(MAX_PENDING_CLOSERS) = ' '
+    integer, parameter :: INITIAL_PENDING_CLOSER_CAPACITY = 8
+    character, allocatable :: g_pending_closers(:)
     integer :: g_pending_closer_count = 0
 
     ! Module-level storage for LSP callbacks
@@ -4025,7 +4025,7 @@ contains
         ! must close, not open a new pair.
         if (len(ch) == 1) then
             if (overtypes_pending_closer(cursor, buffer, ch(1:1))) then
-                g_pending_closer_count = g_pending_closer_count - 1
+                call pop_pending_closer()
                 cursor%column = cursor%column + 1
                 cursor%desired_column = cursor%column
                 return
@@ -4186,11 +4186,31 @@ contains
 
     subroutine push_pending_closer(ch)
         character, intent(in) :: ch
+        character, allocatable :: grown(:)
+        integer :: new_capacity
 
-        if (g_pending_closer_count >= MAX_PENDING_CLOSERS) return
+        if (.not. allocated(g_pending_closers)) then
+            allocate(g_pending_closers(INITIAL_PENDING_CLOSER_CAPACITY))
+        else if (g_pending_closer_count >= size(g_pending_closers)) then
+            new_capacity = max(INITIAL_PENDING_CLOSER_CAPACITY, &
+                               2 * size(g_pending_closers))
+            allocate(grown(new_capacity))
+            grown = ' '
+            grown(1:g_pending_closer_count) = &
+                g_pending_closers(1:g_pending_closer_count)
+            call move_alloc(grown, g_pending_closers)
+        end if
+
         g_pending_closer_count = g_pending_closer_count + 1
         g_pending_closers(g_pending_closer_count) = ch
     end subroutine push_pending_closer
+
+    subroutine pop_pending_closer()
+        if (g_pending_closer_count <= 0) return
+
+        g_pending_closers(g_pending_closer_count) = ' '
+        g_pending_closer_count = g_pending_closer_count - 1
+    end subroutine pop_pending_closer
 
     ! Anything other than typing text breaks the association between the
     ! caret and the closer auto-close put in front of it
@@ -4228,7 +4248,7 @@ contains
         if (.not. overtypes_pending_closer(editor%cursors(c), buffer, last_ch)) return
 
         call buffer_delete_at_cursor(buffer, editor%cursors(c))
-        g_pending_closer_count = g_pending_closer_count - 1
+        call pop_pending_closer()
     end subroutine absorb_closer_the_completion_supplied
 
     function overtypes_pending_closer(cursor, buffer, ch) result(res)
@@ -4294,7 +4314,7 @@ contains
                 end if
             end do
             if (all_overtype) then
-                g_pending_closer_count = g_pending_closer_count - 1
+                call pop_pending_closer()
                 do i = 1, size(editor%cursors)
                     editor%cursors(i)%column = editor%cursors(i)%column + 1
                     editor%cursors(i)%desired_column = editor%cursors(i)%column

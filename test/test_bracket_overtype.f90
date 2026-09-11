@@ -35,8 +35,18 @@ program test_bracket_overtype
     call check_text('f([a])', 'mixed bracket kinds')
 
     call setup('')
+    call typed('print({})')
+    call check_text('print({})', 'mixed nested closers advance all the way out')
+    call check_cursor(1, 10, 'caret ends past every mixed closer')
+
+    call setup('')
     call typed('((()))')
     call check_text('((()))', 'three deep, every closer typed')
+
+    call setup('')
+    call typed(repeat('(', 40) // repeat(')', 40))
+    call check_text(repeat('(', 40) // repeat(')', 40), &
+                    'pending closer memory grows with nesting depth')
 
     ! --- A quote is both opener and closer; the second one must close ---
     call setup('')
@@ -46,6 +56,10 @@ program test_bracket_overtype
     call setup('')
     call typed('x = ''a''')
     call check_text('x = ''a''', 'single quotes too')
+
+    call setup('')
+    call typed('`code`')
+    call check_text('`code`', 'backticks overtype too')
 
     ! --- Closing immediately after opening ---
     call setup('')
@@ -74,6 +88,10 @@ program test_bracket_overtype
     call typed(')')
     call check_text('())', 'pre-existing pair in the file is not stepped over')
 
+    call setup('')
+    call typed('))')
+    call check_text('))', 'two unpaired closers are both inserted')
+
     ! --- Moving the caret breaks the association ---
     call setup('')
     call typed('f(a')
@@ -94,6 +112,11 @@ program test_bracket_overtype
     call typed('f(a)')
     call typed(')')
     call check_text('f(a))', 'the second typed closer inserts normally')
+
+    call setup('')
+    call typed('(())')
+    call typed(')')
+    call check_text('(()))', 'same-kind candidates are consumed once each')
 
     ! --- Non-pair characters are untouched ---
     call setup('')
